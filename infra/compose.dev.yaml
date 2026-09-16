@@ -1,0 +1,5 @@
+# Local dev overlay: publish PostgreSQL on the host for pytest outside containers.
+services:
+  db:
+    ports:
+      - "5432:5432"

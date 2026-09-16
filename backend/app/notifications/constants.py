@@ -1,0 +1,13 @@
+NOTIFICATION_PRIORITIES = frozenset({"low", "normal", "high", "urgent"})
+NOTIFICATION_STATUSES = frozenset({"new", "read", "accepted", "ignored", "resolved"})
+
+NOTIFICATION_STATUS_NEW = "new"
+NOTIFICATION_STATUS_READ = "read"
+NOTIFICATION_STATUS_ACCEPTED = "accepted"
+NOTIFICATION_STATUS_IGNORED = "ignored"
+NOTIFICATION_STATUS_RESOLVED = "resolved"
+
+NOTIFICATION_FILTER_UNRESOLVED = "unresolved"
+
+DEFAULT_LIST_LIMIT = 50
+MAX_LIST_LIMIT = 100

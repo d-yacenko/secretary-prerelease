@@ -1,0 +1,2 @@
+# VDS overlay: set SECRETARY_API_BIND in /opt/secretary/.env (see .env.example).
+# No extra services; DB stays on the internal Docker network only.

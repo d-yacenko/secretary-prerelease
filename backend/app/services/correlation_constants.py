@@ -1,0 +1,44 @@
+"""PHASE 26A correlation constants."""
+
+CORRELATION_VERSION = "26a"
+
+CORRELATION_BACKGROUND_REASONING_EFFORT = "low"
+CORRELATION_BACKGROUND_VERBOSITY = "low"
+
+CORRELATION_TRIGGER_KINDS = frozenset(
+    {
+        "email",
+        "calendar_event",
+        "event",
+        "file",
+        "document",
+        "dataset",
+        "web_page",
+        "note",
+    }
+)
+
+CORRELATION_ALLOWED_TYPES = frozenset({"related_to", "references"})
+
+CORRELATION_MIN_CONFIDENCE = 0.80
+CORRELATION_MAX_PROPOSED_EDGES = 5
+CORRELATION_MAX_FINAL_CANDIDATES = 16
+CORRELATION_HARD_MAX_CANDIDATES = 20
+
+CANDIDATE_MAX_EXACT_THREAD = 8
+CANDIDATE_MAX_PARTICIPANT_TIME = 8
+CANDIDATE_MAX_SEMANTIC = 8
+
+MAX_MAIL_REFERENCE_IDS = 20
+MAX_MAIL_PEER_LOOKUP_ROWS = 200
+
+SEMANTIC_SUMMARY_INPUT_MAX_CHARS = 4000
+SEMANTIC_SUMMARY_MAX_CHARS = 500
+SEMANTIC_SUMMARY_METADATA_KEY = "semantic_summary"
+SEMANTIC_SUMMARY_REVISION_KEY = "semantic_summary_revision"
+
+EDGE_TYPE_CONTAINS = "contains"
+EDGE_TYPE_RELATED_TO = "related_to"
+EDGE_TYPE_REFERENCES = "references"
+
+FOLDER_KIND = "folder"

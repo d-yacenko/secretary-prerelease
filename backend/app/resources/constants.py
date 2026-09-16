@@ -1,0 +1,33 @@
+PROVIDER_GOOGLE_DRIVE = "google_drive"
+PROVIDER_YANDEX_DISK = "yandex_disk"
+PROVIDER_UPLOAD = "upload"
+PROVIDER_WEB = "web"
+
+CLOUD_PROVIDERS = frozenset({PROVIDER_GOOGLE_DRIVE, PROVIDER_YANDEX_DISK})
+
+REVISION_METADATA_KEYS = (
+    "etag",
+    "revision",
+    "content_hash",
+    "modified_at",
+    "provider_revision",
+)
+
+CONTENT_INGESTED_REVISION_KEY = "content_ingested_revision"
+CONTENT_INGESTED_POLICY_KEY = "content_ingested_policy"
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_REGISTER_TEXT_CHARS = 8000
+MAX_REGISTER_PAYLOAD_BYTES = 256 * 1024
+MAX_MULTIPART_PAYLOAD_BYTES = 64 * 1024
+MAX_WEB_FETCH_BYTES = 3 * 1024 * 1024
+MAX_WEB_BODY_CHARS = 8000
+MAX_WEB_REDIRECTS = 5
+WEB_FETCH_TIMEOUT_SECONDS = 15.0
+UPLOAD_CHUNK_BYTES = 64 * 1024
+
+ALLOWED_UPLOAD_SUFFIXES = frozenset({".txt", ".md", ".csv", ".parquet"})
+
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
+DEFAULT_RESOURCE_UPLOAD_ROOT = "/var/lib/secretary/resources"

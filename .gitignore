@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+!client/lib/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Environment
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+
+# Docker
+*.log
+db_data/
+
+# Runtime, debug, and user-data artifacts
+/diagnostics/
+/screenshots/
+/backups/
+/exports/
+/artifacts/
+/.tmp_*.png
+*.dump
+*.sqlite
+*.sqlite3
+
+# Secrets
+*.pem
+*.key
+credentials.json
+secrets/
+
+# Retired/private planning artifacts
+personal_secretary_llm_build_playbook.md
+*_architect_context*.md

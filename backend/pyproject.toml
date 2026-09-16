@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "personal-secretary"
+version = "0.1.0"
+description = "Personal Secretary OS backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic-settings>=2.6.0",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14.0",
+    "psycopg[binary]>=3.2.0",
+    "pgvector>=0.3.6",
+    "httpx>=0.28.0",
+    "openai>=1.55.0",
+    "pyarrow>=18.0.0",
+    "pypdf>=5.0.0",
+    "mcp>=2,<3",
+    "cryptography>=43.0.0",
+    "PyJWT[crypto]>=2.9.0",
+    "python-dateutil>=2.9.0.post0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "live: optional tests that call external APIs (require RUN_LIVE_OPENAI=1)",
+]
