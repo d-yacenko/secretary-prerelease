@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
@@ -11,9 +11,12 @@ from starlette.responses import JSONResponse, Response
 
 from app.api.deps import get_current_user, get_db
 from app.connectors.telegram.mtproto_errors import (
+    TelegramMtprotoAccountNotConnectedError,
+    TelegramMtprotoAuthorizationInvalidError,
     TelegramMtprotoChallengeExpiredError,
     TelegramMtprotoChallengeNotFoundError,
     TelegramMtprotoConfigurationError,
+    TelegramMtprotoGroupUnavailableError,
     TelegramMtprotoIdentityConflictError,
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
@@ -25,6 +28,10 @@ from app.services.telegram_mtproto_auth_service import (
     TelegramMtprotoAccountSummary,
     TelegramMtprotoAuthService,
     mtproto_is_configured,
+)
+from app.services.telegram_mtproto_group_service import (
+    TelegramMtprotoGroup,
+    TelegramMtprotoGroupService,
 )
 
 INVALID_MTPROTO_REQUEST_DETAIL = "Invalid Telegram MTProto request"
@@ -84,6 +91,30 @@ class TelegramMtprotoStatusOut(BaseModel):
     configured: bool
     connected: bool
     account: TelegramMtprotoAccountOut | None = None
+
+
+class TelegramMtprotoGroupOut(BaseModel):
+    peer_id: int
+    kind: Literal["group", "supergroup"]
+    title: str
+    username: str | None
+    is_forum: bool
+    selected: bool
+    available: bool
+
+
+class TelegramMtprotoGroupsOut(BaseModel):
+    groups: list[TelegramMtprotoGroupOut]
+    truncated: bool
+
+
+class TelegramMtprotoGroupSelectionIn(BaseModel):
+    selected: bool = Field(strict=True)
+
+
+class TelegramMtprotoGroupSelectionOut(BaseModel):
+    peer_id: int
+    selected: bool
 
 
 @router.post("/telegram/mtproto/auth/start", response_model=TelegramMtprotoAuthStartOut)
@@ -181,6 +212,56 @@ def telegram_mtproto_status(
     )
 
 
+@router.get("/telegram/mtproto/groups", response_model=TelegramMtprotoGroupsOut)
+async def telegram_mtproto_groups(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoGroupsOut:
+    _require_configured()
+    try:
+        result = await TelegramMtprotoGroupService(session).list_groups(current_user.user_id)
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoConfigurationError as exc:
+        raise _configuration_response() from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return TelegramMtprotoGroupsOut(
+        groups=[_group_out(group) for group in result.groups], truncated=result.truncated
+    )
+
+
+@router.patch(
+    "/telegram/mtproto/groups/{peer_id}", response_model=TelegramMtprotoGroupSelectionOut
+)
+async def telegram_mtproto_group_selection(
+    payload: TelegramMtprotoGroupSelectionIn,
+    peer_id: int = Path(),
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoGroupSelectionOut:
+    _require_configured()
+    try:
+        group = await TelegramMtprotoGroupService(session).set_selection(
+            current_user.user_id, peer_id, payload.selected
+        )
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoGroupUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
+    except TelegramMtprotoConfigurationError as exc:
+        raise _configuration_response() from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return TelegramMtprotoGroupSelectionOut(
+        peer_id=peer_id, selected=group is not None
+    )
+
+
 def _account_out(account: TelegramMtprotoAccountSummary | None) -> TelegramMtprotoAccountOut | None:
     if account is None:
         return None
@@ -189,6 +270,18 @@ def _account_out(account: TelegramMtprotoAccountSummary | None) -> TelegramMtpro
         telegram_user_id=account.telegram_user_id,
         username=account.username,
         display_name=account.display_name,
+    )
+
+
+def _group_out(group: TelegramMtprotoGroup) -> TelegramMtprotoGroupOut:
+    return TelegramMtprotoGroupOut(
+        peer_id=group.peer_id,
+        kind=group.kind,
+        title=group.title,
+        username=group.username,
+        is_forum=group.is_forum,
+        selected=group.selected,
+        available=group.available,
     )
 
 

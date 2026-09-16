@@ -1,22 +1,33 @@
+import json
 from dataclasses import dataclass
 from typing import Protocol
 
-from telethon import TelegramClient
+from telethon import TelegramClient, utils
 from telethon.errors import (
+    AuthKeyUnregisteredError,
     FloodWaitError,
     PasswordHashInvalidError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     SessionPasswordNeededError,
+    SessionRevokedError,
+    UnauthorizedError,
+    UserDeactivatedBanError,
+    UserDeactivatedError,
 )
+from telethon.errors.common import AuthKeyNotFound
 from telethon.sessions import StringSession
+from telethon.tl import types
 
 from app.connectors.telegram.mtproto_errors import (
+    TelegramMtprotoAuthorizationInvalidError,
     TelegramMtprotoError,
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoProviderUnavailableError,
 )
+
+DISCOVERY_DIALOG_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -40,6 +51,22 @@ class TelegramMtprotoAuthorizationResult:
     password_required: bool = False
 
 
+@dataclass(frozen=True)
+class TelegramMtprotoGroupDescriptor:
+    peer_id: int
+    kind: str
+    title: str
+    username: str | None
+    is_forum: bool
+    provider_peer_reference: str
+
+
+@dataclass(frozen=True)
+class TelegramMtprotoGroupDiscoveryResult:
+    groups: tuple[TelegramMtprotoGroupDescriptor, ...]
+    truncated: bool
+
+
 class TelegramMtprotoTransport(Protocol):
     async def send_login_code(self, phone: str) -> TelegramMtprotoAuthState:
         ...
@@ -52,6 +79,11 @@ class TelegramMtprotoTransport(Protocol):
     async def submit_password(
         self, state: TelegramMtprotoAuthState, password: str
     ) -> TelegramMtprotoAuthorizationResult:
+        ...
+
+    async def discover_groups(
+        self, session: str, limit: int
+    ) -> TelegramMtprotoGroupDiscoveryResult:
         ...
 
 
@@ -150,6 +182,57 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
+    async def discover_groups(
+        self, session: str, limit: int
+    ) -> TelegramMtprotoGroupDiscoveryResult:
+        client: TelegramClient | None = None
+        scan_limit = max(1, min(limit, DISCOVERY_DIALOG_LIMIT))
+        try:
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoAuthorizationInvalidError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            groups: list[TelegramMtprotoGroupDescriptor] = []
+            seen = 0
+            async for dialog in client.iter_dialogs(limit=scan_limit):
+                if seen >= scan_limit:
+                    break
+                seen += 1
+                descriptor = _group_from_dialog(dialog)
+                if descriptor is not None:
+                    groups.append(descriptor)
+            return TelegramMtprotoGroupDiscoveryResult(
+                groups=tuple(groups),
+                truncated=seen >= scan_limit,
+            )
+        except (
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError as exc:
+            raise _flood_wait_error(exc) from None
+        except TelegramMtprotoError:
+            raise
+        except (ValueError, TypeError):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except Exception as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram authorization provider is temporarily unavailable"
+            ) from exc
+        finally:
+            await _disconnect(client)
+
 
 def _state_from_client(
     client: TelegramClient, state: TelegramMtprotoAuthState
@@ -180,6 +263,50 @@ def _identity_from_me(me: object) -> TelegramMtprotoIdentity:
         telegram_user_id=telegram_user_id,
         username=username,
         display_name=display_name,
+    )
+
+
+def _group_from_dialog(dialog: object) -> TelegramMtprotoGroupDescriptor | None:
+    entity = getattr(dialog, "entity", None)
+    if isinstance(entity, types.Chat):
+        kind = "group"
+        is_forum = False
+        entity_type = "chat"
+    elif isinstance(entity, types.Channel) and entity.megagroup and not entity.broadcast:
+        kind = "supergroup"
+        is_forum = bool(entity.forum)
+        entity_type = "channel"
+    else:
+        return None
+    if any(
+        bool(getattr(entity, field, False))
+        for field in ("left", "kicked", "deactivated")
+    ):
+        return None
+    title = getattr(entity, "title", None)
+    if not isinstance(title, str) or not title.strip():
+        return None
+    username = getattr(entity, "username", None)
+    if not isinstance(username, str) or not username.strip():
+        username = None
+    else:
+        username = username.strip()
+    entity_id = getattr(entity, "id", None)
+    if not isinstance(entity_id, int) or isinstance(entity_id, bool):
+        return None
+    peer_id = utils.get_peer_id(entity)
+    reference: dict[str, int | str] = {"entity_type": entity_type, "id": entity_id}
+    if entity_type == "channel":
+        access_hash = getattr(entity, "access_hash", None)
+        if isinstance(access_hash, int) and not isinstance(access_hash, bool):
+            reference["access_hash"] = access_hash
+    return TelegramMtprotoGroupDescriptor(
+        peer_id=peer_id,
+        kind=kind,
+        title=title.strip(),
+        username=username,
+        is_forum=is_forum,
+        provider_peer_reference=json.dumps(reference, separators=(",", ":")),
     )
 
 

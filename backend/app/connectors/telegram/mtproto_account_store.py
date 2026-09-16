@@ -6,8 +6,15 @@ from sqlalchemy.orm import Session
 
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.mtproto_errors import TelegramMtprotoIdentityConflictError
-from app.connectors.telegram.mtproto_transport import TelegramMtprotoIdentity
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoAuthChallenge
+from app.connectors.telegram.mtproto_transport import (
+    TelegramMtprotoGroupDescriptor,
+    TelegramMtprotoIdentity,
+)
+from app.db.models import (
+    TelegramMtprotoAccount,
+    TelegramMtprotoAuthChallenge,
+    TelegramMtprotoChatSelection,
+)
 
 
 def utcnow() -> datetime:
@@ -23,6 +30,61 @@ class TelegramMtprotoAccountStore:
         return self._session.scalar(
             select(TelegramMtprotoAccount).where(TelegramMtprotoAccount.user_id == user_id)
         )
+
+    def decrypt_session(self, account: TelegramMtprotoAccount) -> str:
+        return self._encryption.decrypt(account.session_encrypted)
+
+    def list_selections(self, account_id: UUID) -> list[TelegramMtprotoChatSelection]:
+        return list(
+            self._session.scalars(
+                select(TelegramMtprotoChatSelection)
+                .where(TelegramMtprotoChatSelection.account_id == account_id)
+                .order_by(TelegramMtprotoChatSelection.created_at, TelegramMtprotoChatSelection.id)
+            )
+        )
+
+    def get_selection(
+        self, account_id: UUID, peer_id: int
+    ) -> TelegramMtprotoChatSelection | None:
+        return self._session.scalar(
+            select(TelegramMtprotoChatSelection).where(
+                TelegramMtprotoChatSelection.account_id == account_id,
+                TelegramMtprotoChatSelection.peer_id == peer_id,
+            )
+        )
+
+    def save_selection(
+        self, account_id: UUID, descriptor: TelegramMtprotoGroupDescriptor
+    ) -> TelegramMtprotoChatSelection:
+        selection = self.get_selection(account_id, descriptor.peer_id)
+        encrypted_reference = self._encryption.encrypt(descriptor.provider_peer_reference)
+        if selection is None:
+            selection = TelegramMtprotoChatSelection(
+                id=uuid4(),
+                account_id=account_id,
+                peer_id=descriptor.peer_id,
+                peer_kind=descriptor.kind,
+                provider_peer_reference_encrypted=encrypted_reference,
+                title=descriptor.title,
+                username=descriptor.username,
+                is_forum=descriptor.is_forum,
+            )
+            self._session.add(selection)
+        else:
+            selection.peer_kind = descriptor.kind
+            selection.provider_peer_reference_encrypted = encrypted_reference
+            selection.title = descriptor.title
+            selection.username = descriptor.username
+            selection.is_forum = descriptor.is_forum
+            selection.updated_at = utcnow()
+        self._session.flush()
+        return selection
+
+    def delete_selection(self, account_id: UUID, peer_id: int) -> None:
+        selection = self.get_selection(account_id, peer_id)
+        if selection is not None:
+            self._session.delete(selection)
+            self._session.flush()
 
     def get_challenge(
         self, user_id: UUID, challenge_id: UUID

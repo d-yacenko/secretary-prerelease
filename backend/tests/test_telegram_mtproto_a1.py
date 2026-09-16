@@ -375,10 +375,10 @@ def test_api_responses_are_sanitized_for_authorization_and_status(
             assert secret not in response.text
 
 
-def test_migration_0042_is_the_single_alembic_head() -> None:
+def test_migration_0043_is_the_single_alembic_head() -> None:
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0042"]
+    assert script.get_heads() == ["0043"]
 
 
 @pytest.mark.asyncio

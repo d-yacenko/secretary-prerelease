@@ -32,6 +32,18 @@ class TelegramMtprotoIdentityConflictError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoAccountNotConnectedError(TelegramMtprotoError):
+    pass
+
+
+class TelegramMtprotoAuthorizationInvalidError(TelegramMtprotoError):
+    pass
+
+
+class TelegramMtprotoGroupUnavailableError(TelegramMtprotoError):
+    pass
+
+
 class TelegramMtprotoProviderUnavailableError(TelegramMtprotoError):
     def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
         super().__init__(message)

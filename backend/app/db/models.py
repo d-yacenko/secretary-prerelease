@@ -763,6 +763,37 @@ class TelegramMtprotoAccount(Base):
     )
 
 
+class TelegramMtprotoChatSelection(Base):
+    __tablename__ = "telegram_mtproto_chat_selections"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_mtproto_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    peer_id: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    peer_kind: Mapped[str] = mapped_column(sa.String(length=32), nullable=False)
+    provider_peer_reference_encrypted: Mapped[str] = mapped_column(nullable=False)
+    title: Mapped[str] = mapped_column(nullable=False)
+    username: Mapped[str | None] = mapped_column(nullable=True)
+    is_forum: Mapped[bool] = mapped_column(nullable=False, server_default=sa.false())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "account_id", "peer_id", name="uq_telegram_mtproto_chat_selections_account_peer"
+        ),
+        sa.CheckConstraint(
+            "peer_kind IN ('group', 'supergroup')",
+            name="ck_telegram_mtproto_chat_selections_peer_kind",
+        ),
+    )
+
+
 class TelegramMtprotoAuthChallenge(Base):
     __tablename__ = "telegram_mtproto_auth_challenges"
 
