@@ -268,6 +268,74 @@ def test_mtproto_config_absent_returns_controlled_503(auth_client, monkeypatch) 
     assert PHONE not in response.text
 
 
+@pytest.mark.parametrize(
+    ("path", "payload", "secret"),
+    [
+        (
+            "/telegram/mtproto/auth/start",
+            {"phone": "+" + "7" * 32},
+            "+" + "7" * 32,
+        ),
+        (
+            "/telegram/mtproto/auth/code",
+            {"challenge_id": str(uuid4()), "code": "1" * 33},
+            "1" * 33,
+        ),
+        (
+            "/telegram/mtproto/auth/password",
+            {"challenge_id": str(uuid4()), "password": "p" * 257},
+            "p" * 257,
+        ),
+    ],
+)
+def test_overlength_mtproto_fields_have_sanitized_422(
+    auth_client, path: str, payload: dict, secret: str
+) -> None:
+    response = auth_client.post(path, json=payload)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid Telegram MTProto request"}
+    assert secret not in response.text
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "secret"),
+    [
+        (
+            "/telegram/mtproto/auth/start",
+            {"phone": 79991234567},
+            "79991234567",
+        ),
+        (
+            "/telegram/mtproto/auth/code",
+            {"challenge_id": str(uuid4()), "code": 12345},
+            "12345",
+        ),
+        (
+            "/telegram/mtproto/auth/password",
+            {"challenge_id": str(uuid4()), "password": 123456},
+            "123456",
+        ),
+    ],
+)
+def test_nonstring_mtproto_fields_have_sanitized_422(
+    auth_client, path: str, payload: dict, secret: str
+) -> None:
+    response = auth_client.post(path, json=payload)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid Telegram MTProto request"}
+    assert secret not in response.text
+
+
+def test_malformed_phone_is_a_nonsensitive_400(auth_client) -> None:
+    malformed_phone = "+not-a-phone-79991234567"
+    response = auth_client.post(
+        "/telegram/mtproto/auth/start", json={"phone": malformed_phone}
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Telegram phone number is invalid"}
+    assert malformed_phone not in response.text
+
+
 def test_api_responses_are_sanitized_for_authorization_and_status(
     auth_client, monkeypatch
 ) -> None:

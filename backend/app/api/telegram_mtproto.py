@@ -3,8 +3,11 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.responses import JSONResponse, Response
 
 from app.api.deps import get_current_user, get_db
 from app.connectors.telegram.mtproto_errors import (
@@ -14,6 +17,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoIdentityConflictError,
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
+    TelegramMtprotoInvalidPhoneError,
     TelegramMtprotoProviderUnavailableError,
 )
 from app.core.current_user import CurrentUserContext
@@ -23,11 +27,30 @@ from app.services.telegram_mtproto_auth_service import (
     mtproto_is_configured,
 )
 
-router = APIRouter(tags=["telegram-mtproto"])
+INVALID_MTPROTO_REQUEST_DETAIL = "Invalid Telegram MTProto request"
+
+
+class TelegramMtprotoRoute(APIRoute):
+    def get_route_handler(self):
+        route_handler = super().get_route_handler()
+
+        async def handle(request) -> Response:
+            try:
+                return await route_handler(request)
+            except RequestValidationError:
+                return JSONResponse(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    content={"detail": INVALID_MTPROTO_REQUEST_DETAIL},
+                )
+
+        return handle
+
+
+router = APIRouter(route_class=TelegramMtprotoRoute, tags=["telegram-mtproto"])
 
 
 class TelegramMtprotoAuthStartIn(BaseModel):
-    phone: str = Field(min_length=1, max_length=32)
+    phone: str = Field(min_length=1, max_length=32, strict=True)
 
 
 class TelegramMtprotoAuthStartOut(BaseModel):
@@ -37,12 +60,12 @@ class TelegramMtprotoAuthStartOut(BaseModel):
 
 class TelegramMtprotoCodeIn(BaseModel):
     challenge_id: UUID
-    code: str = Field(min_length=1, max_length=32)
+    code: str = Field(min_length=1, max_length=32, strict=True)
 
 
 class TelegramMtprotoPasswordIn(BaseModel):
     challenge_id: UUID
-    password: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=256, strict=True)
 
 
 class TelegramMtprotoAccountOut(BaseModel):
@@ -76,6 +99,8 @@ async def telegram_mtproto_auth_start(
         )
     except TelegramMtprotoConfigurationError as exc:
         raise _configuration_response() from exc
+    except TelegramMtprotoInvalidPhoneError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
     except TelegramMtprotoProviderUnavailableError as exc:
         raise _provider_response(exc) from exc
     return TelegramMtprotoAuthStartOut(

@@ -16,6 +16,10 @@ class TelegramMtprotoChallengeExpiredError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoInvalidPhoneError(TelegramMtprotoError):
+    pass
+
+
 class TelegramMtprotoInvalidCodeError(TelegramMtprotoError):
     pass
 

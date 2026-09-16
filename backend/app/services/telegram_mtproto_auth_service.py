@@ -12,6 +12,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoChallengeExpiredError,
     TelegramMtprotoChallengeNotFoundError,
     TelegramMtprotoConfigurationError,
+    TelegramMtprotoInvalidPhoneError,
 )
 from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoAuthorizationResult,
@@ -152,7 +153,7 @@ class TelegramMtprotoAuthService:
 def normalize_phone(phone: str) -> str:
     normalized = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
     if not _PHONE_RE.fullmatch(normalized):
-        raise TelegramMtprotoConfigurationError("Telegram phone number is invalid")
+        raise TelegramMtprotoInvalidPhoneError("Telegram phone number is invalid")
     return normalized if normalized.startswith("+") else f"+{normalized}"
 
 
