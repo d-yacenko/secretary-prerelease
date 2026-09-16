@@ -2,12 +2,12 @@
 
 ## Status
 
-Repository migration completed / awaiting Architect verification.
+Repository Migration: PUBLIC BASELINE ACCEPTED / CLOSED.
 
-## Scope
+Accepted prerelease baseline root:
+`a25623cae625b4efd446e8659fc04efaf00551e4`.
 
-The prerelease repository is a clean public baseline imported from the exact
-accepted application snapshot. No application changes were authorized in this
-maintenance task.
+The old Alpha repository `d-yacenko/secretary_alpha` is retired as private and
+archived. No application work was performed in this closure.
 
-Telegram Depth has not started. The next phase is chosen only by the Architect.
+The next phase is not authorized. Telegram Depth has not started.

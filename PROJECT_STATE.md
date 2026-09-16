@@ -1,9 +1,11 @@
 # Project state
 
-- Prerelease baseline imported from the accepted Alpha application tree:
-  `bdf6da89e2d05d6c98f1f406f8665be561a0316d`.
-- Production remains on the previous production runtime until separate deploy
-  authorization.
-- Alembic: `0041 / 0041`.
-- Yandex Sync Resilience A: CODE ACCEPTED, not yet production-deployed.
+- Active public development repository: `d-yacenko/secretary-prerelease`.
+- Prerelease baseline accepted:
+  `a25623cae625b4efd446e8659fc04efaf00551e4`.
+- Alpha repository: `d-yacenko/secretary_alpha` — private / archived.
+- Production remains on the previous production runtime; this repository
+  baseline has not been separately deployed.
+- Yandex Sync Resilience A: CODE ACCEPTED / NOT YET PRODUCTION DEPLOYED.
+- Alembic remains `0041 / 0041`.
 - Telegram Depth: not started.
