@@ -44,6 +44,14 @@ class TelegramMtprotoGroupUnavailableError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoGroupNotSelectedError(TelegramMtprotoError):
+    pass
+
+
+class TelegramMtprotoProviderReferenceInvalidError(TelegramMtprotoError):
+    pass
+
+
 class TelegramMtprotoProviderUnavailableError(TelegramMtprotoError):
     def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
         super().__init__(message)

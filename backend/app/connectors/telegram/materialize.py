@@ -46,6 +46,24 @@ class TelegramObjectMaterializer:
         if normalized is None:
             return TelegramMaterializeResult(obj=None, change="unchanged", jobs_enqueued=0)
 
+        return self._upsert_normalized(user_id=user_id, normalized=normalized, skip_hidden=skip_hidden)
+
+    def upsert_mtproto_message(
+        self,
+        *,
+        user_id: UUID,
+        normalized: dict[str, Any],
+        skip_hidden: bool = True,
+    ) -> TelegramMaterializeResult:
+        return self._upsert_normalized(user_id=user_id, normalized=normalized, skip_hidden=skip_hidden)
+
+    def _upsert_normalized(
+        self,
+        *,
+        user_id: UUID,
+        normalized: dict[str, Any],
+        skip_hidden: bool,
+    ) -> TelegramMaterializeResult:
         existing = self.find_existing(user_id, normalized["external_id"])
         if existing is not None:
             return self._apply_existing(existing, normalized, skip_hidden=skip_hidden)

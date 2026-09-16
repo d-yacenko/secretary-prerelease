@@ -16,11 +16,13 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoChallengeExpiredError,
     TelegramMtprotoChallengeNotFoundError,
     TelegramMtprotoConfigurationError,
+    TelegramMtprotoGroupNotSelectedError,
     TelegramMtprotoGroupUnavailableError,
     TelegramMtprotoIdentityConflictError,
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoInvalidPhoneError,
+    TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
 )
 from app.core.current_user import CurrentUserContext
@@ -32,6 +34,10 @@ from app.services.telegram_mtproto_auth_service import (
 from app.services.telegram_mtproto_group_service import (
     TelegramMtprotoGroup,
     TelegramMtprotoGroupService,
+)
+from app.services.telegram_mtproto_history_service import (
+    TelegramMtprotoHistoryService,
+    TelegramMtprotoHistorySummary,
 )
 
 INVALID_MTPROTO_REQUEST_DETAIL = "Invalid Telegram MTProto request"
@@ -115,6 +121,18 @@ class TelegramMtprotoGroupSelectionIn(BaseModel):
 class TelegramMtprotoGroupSelectionOut(BaseModel):
     peer_id: int
     selected: bool
+
+
+class TelegramMtprotoHistorySyncOut(BaseModel):
+    peer_id: int
+    scanned: int
+    materialized: int
+    created: int
+    updated: int
+    unchanged: int
+    skipped: int
+    jobs_enqueued: int
+    history_complete: bool
 
 
 @router.post("/telegram/mtproto/auth/start", response_model=TelegramMtprotoAuthStartOut)
@@ -262,6 +280,40 @@ async def telegram_mtproto_group_selection(
     )
 
 
+@router.post(
+    "/telegram/mtproto/groups/{peer_id}/sync",
+    response_model=TelegramMtprotoHistorySyncOut,
+)
+async def telegram_mtproto_group_sync(
+    peer_id: int = Path(ge=-(2**63), le=-1),
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoHistorySyncOut:
+    _require_configured()
+    try:
+        result = await TelegramMtprotoHistoryService(session).sync_group(
+            current_user.user_id, peer_id
+        )
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoGroupNotSelectedError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoGroupUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoProviderReferenceInvalidError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Telegram selected group is no longer available",
+        ) from exc
+    except TelegramMtprotoConfigurationError as exc:
+        raise _configuration_response() from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return _history_sync_out(result)
+
+
 def _account_out(account: TelegramMtprotoAccountSummary | None) -> TelegramMtprotoAccountOut | None:
     if account is None:
         return None
@@ -282,6 +334,20 @@ def _group_out(group: TelegramMtprotoGroup) -> TelegramMtprotoGroupOut:
         is_forum=group.is_forum,
         selected=group.selected,
         available=group.available,
+    )
+
+
+def _history_sync_out(result: TelegramMtprotoHistorySummary) -> TelegramMtprotoHistorySyncOut:
+    return TelegramMtprotoHistorySyncOut(
+        peer_id=result.peer_id,
+        scanned=result.scanned,
+        materialized=result.materialized,
+        created=result.created,
+        updated=result.updated,
+        unchanged=result.unchanged,
+        skipped=result.skipped,
+        jobs_enqueued=result.jobs_enqueued,
+        history_complete=result.history_complete,
     )
 
 

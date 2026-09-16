@@ -179,7 +179,7 @@ def test_migration_0040_revises_0039(db_session) -> None:
         for path in (Path(__file__).resolve().parents[1] / "alembic" / "versions").glob("*.py")
         if path.name[0].isdigit()
     )
-    assert versions[-1].startswith("0043")
+    assert versions[-1].startswith("0044")
     module_path = Path(__file__).resolve().parents[1] / "alembic/versions/0040_teams_accounts.py"
     text_src = module_path.read_text(encoding="utf-8")
     assert 'revision: str = "0040"' in text_src

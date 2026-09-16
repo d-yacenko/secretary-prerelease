@@ -530,4 +530,4 @@ class FakeTelethonDiscoveryClient:
 def test_migration_0043_is_the_single_alembic_head() -> None:
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0043"]
+    assert script.get_heads() == ["0044"]
