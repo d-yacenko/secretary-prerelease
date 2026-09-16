@@ -16,9 +16,6 @@ from app.api.intake import router as intake_router
 from app.api.labels import router as labels_router
 from app.api.local import router as local_router
 from app.api.mattermost import router as mattermost_router
-from app.api.telegram import router as telegram_router
-from app.api.teams import router as teams_router
-from app.api.teams_webhook import router as teams_webhook_router
 from app.api.me import router as me_router
 from app.api.object_bookmarks import router as object_bookmarks_router
 from app.api.routes.graph import router as graph_router
@@ -29,6 +26,10 @@ from app.api.routes.resources import router as resources_router
 from app.api.routes.tasks import router as tasks_router
 from app.api.source_preferences import router as source_preferences_router
 from app.api.sources import router as sources_router
+from app.api.teams import router as teams_router
+from app.api.teams_webhook import router as teams_webhook_router
+from app.api.telegram import router as telegram_router
+from app.api.telegram_mtproto import router as telegram_mtproto_router
 from app.api.today import router as today_router
 from app.api.week import router as week_router
 from app.api.yandex import router as yandex_router
@@ -102,6 +103,7 @@ app.include_router(sources_router)
 app.include_router(yandex_router)
 app.include_router(mattermost_router)
 app.include_router(telegram_router)
+app.include_router(telegram_mtproto_router)
 app.include_router(teams_router)
 app.include_router(teams_webhook_router)
 app.include_router(today_router)

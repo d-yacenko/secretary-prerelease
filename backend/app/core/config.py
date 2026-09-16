@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     telegram_bot_username: str = ""
     telegram_webhook_secret: str = ""
     telegram_webhook_url: str = ""
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
     microsoft_oauth_client_id: str = ""
     microsoft_oauth_client_secret: str = ""
     microsoft_redirect_uri: str = "http://localhost:18080/auth/teams/callback"

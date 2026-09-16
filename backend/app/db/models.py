@@ -737,6 +737,51 @@ class TelegramLinkState(Base):
     )
 
 
+class TelegramMtprotoAccount(Base):
+    __tablename__ = "telegram_mtproto_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    telegram_user_id: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    session_encrypted: Mapped[str] = mapped_column(nullable=False)
+    username: Mapped[str | None] = mapped_column(nullable=True)
+    display_name: Mapped[str | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", name="uq_telegram_mtproto_accounts_user_id"),
+        sa.UniqueConstraint(
+            "telegram_user_id", name="uq_telegram_mtproto_accounts_telegram_user_id"
+        ),
+    )
+
+
+class TelegramMtprotoAuthChallenge(Base):
+    __tablename__ = "telegram_mtproto_auth_challenges"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    auth_state_encrypted: Mapped[str] = mapped_column(nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", name="uq_telegram_mtproto_auth_challenges_user_id"),
+        Index("ix_telegram_mtproto_auth_challenges_expires_at", "expires_at"),
+    )
+
+
 class TeamsAccount(Base):
     __tablename__ = "teams_accounts"
 

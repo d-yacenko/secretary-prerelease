@@ -24,6 +24,7 @@ dependencies = [
     "cryptography>=43.0.0",
     "PyJWT[crypto]>=2.9.0",
     "python-dateutil>=2.9.0.post0,<3",
+    "Telethon>=1.45,<2",
 ]
 
 [project.optional-dependencies]
