@@ -24,6 +24,8 @@ from app.jobs.constants import (
     JOB_STATUS_RUNNING,
     JOB_TYPE_INGEST_LOCAL_FILE,
     JOB_TYPE_PROACTIVE_REVIEW,
+    JOB_TYPE_SYNC_YANDEX_CALENDAR,
+    JOB_TYPE_SYNC_YANDEX_MAIL,
     MAX_JOB_ATTEMPTS,
     MAX_LAST_ERROR_LENGTH,
     RECURRING_FAILED_REARM_SECONDS,
@@ -37,6 +39,11 @@ from app.services.background_ai_errors import (
 )
 from app.services.openai_daily_budget import OPENAI_DAILY_BUDGET_PARKED_ERROR
 from app.services.user_openai_credential_errors import UserOpenAICredentialConfigurationError
+
+YANDEX_TRANSIENT_RETRY_JOB_TYPES = frozenset(
+    {JOB_TYPE_SYNC_YANDEX_MAIL, JOB_TYPE_SYNC_YANDEX_CALENDAR}
+)
+YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS = (10, 30, 60)
 
 
 def utcnow() -> datetime:
@@ -190,6 +197,17 @@ class JobQueueService:
             job.status == JOB_STATUS_RUNNING
             and job.attempts >= MAX_JOB_ATTEMPTS
         ):
+            payload = job.payload or {}
+            if (
+                job.type in YANDEX_TRANSIENT_RETRY_JOB_TYPES
+                and payload.get("last_error_kind") == "transient"
+                and payload.get("last_error_retryable") is True
+            ):
+                self.mark_recurring_transient_retry(
+                    job.id,
+                    job.last_error or "Yandex transient synchronization failure",
+                )
+                return None
             job.status = JOB_STATUS_FAILED
             job.last_error = (job.last_error or "stale lock exceeded max attempts")[
                 :MAX_LAST_ERROR_LENGTH
@@ -452,6 +470,30 @@ class JobQueueService:
         job.locked_at = None
         job.updated_at = utcnow()
         self._apply_recurring_failure_cooldown(job)
+
+    def mark_recurring_transient_retry(self, job_id: UUID, error: str) -> None:
+        """Keep a Yandex transient source failure pending on a short bounded retry."""
+        job = self._require_job(job_id)
+        if job.type not in YANDEX_TRANSIENT_RETRY_JOB_TYPES:
+            raise ValueError("short transient retry is only valid for Yandex sources")
+        now = utcnow()
+        payload = dict(job.payload or {})
+        payload["last_error_kind"] = "transient"
+        payload["last_error_retryable"] = True
+        job.payload = payload
+        failure_number = max(job.attempts, 1)
+        delay_index = min(failure_number - 1, len(YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS) - 1)
+        job.status = JOB_STATUS_PENDING
+        job.last_error = error[:MAX_LAST_ERROR_LENGTH]
+        job.locked_at = None
+        job.run_after = now + timedelta(
+            seconds=YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS[delay_index]
+        )
+        # Keep the consecutive-failure tier at the third step so repeated outages
+        # do not make attempts grow without bound or re-enter generic exhaustion.
+        job.attempts = min(job.attempts, len(YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS) - 1)
+        job.updated_at = now
+        self._session.flush()
 
     def recurring_interval_seconds(self, job_type: str, user_id: UUID | None = None) -> int:
         if user_id is not None:

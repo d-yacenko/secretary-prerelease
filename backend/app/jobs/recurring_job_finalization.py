@@ -2,8 +2,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.jobs.constants import JOB_TYPE_SYNC_YANDEX_CALENDAR, JOB_TYPE_SYNC_YANDEX_MAIL
-from app.services.job_queue_service import JobQueueService
+from app.services.job_queue_service import (
+    YANDEX_TRANSIENT_RETRY_JOB_TYPES,
+    JobQueueService,
+)
 from app.services.source_sync_preference_service import SourceSyncPreferenceService
 
 
@@ -44,7 +46,10 @@ def finalize_recurring_job_failure(
     if not preferences.is_job_type_enabled(user_id, job_type):
         queue.retire_recurring_source_job(job)
         return
-    if job_type in {JOB_TYPE_SYNC_YANDEX_MAIL, JOB_TYPE_SYNC_YANDEX_CALENDAR}:
+    if job_type in YANDEX_TRANSIENT_RETRY_JOB_TYPES:
+        if failure_kind == "transient" and retryable:
+            queue.mark_recurring_transient_retry(job_id, error)
+            return
         queue.mark_recurring_failure(
             job_id,
             error,
