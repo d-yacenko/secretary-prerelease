@@ -238,7 +238,7 @@ async def telegram_mtproto_groups(
 )
 async def telegram_mtproto_group_selection(
     payload: TelegramMtprotoGroupSelectionIn,
-    peer_id: int = Path(),
+    peer_id: int = Path(ge=-(2**63), le=-1),
     session: Session = Depends(get_db),
     current_user: CurrentUserContext = Depends(get_current_user),
 ) -> TelegramMtprotoGroupSelectionOut:

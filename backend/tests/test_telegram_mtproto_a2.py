@@ -20,6 +20,7 @@ from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccount
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAccountNotConnectedError,
     TelegramMtprotoAuthorizationInvalidError,
+    TelegramMtprotoGroupUnavailableError,
     TelegramMtprotoProviderUnavailableError,
 )
 from app.connectors.telegram.mtproto_transport import (
@@ -299,6 +300,31 @@ def test_api_validation_is_sanitized_for_selection(auth_client) -> None:
     assert "true" not in response.text
 
 
+@pytest.mark.parametrize(
+    "peer_id",
+    [0, 1, -(2**63) - 1, 10**100],
+)
+def test_invalid_peer_ids_are_sanitized_and_never_reach_service(
+    auth_client, monkeypatch, peer_id: int
+) -> None:
+    calls = 0
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("invalid peer ID reached selection service")
+
+    monkeypatch.setattr(TelegramMtprotoGroupService, "set_selection", fail_if_called)
+    response = auth_client.patch(
+        f"/telegram/mtproto/groups/{peer_id}", json={"selected": True}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid Telegram MTProto request"}
+    assert str(peer_id) not in response.text
+    assert calls == 0
+
+
 def _chat_dialog(
     chat_id: int, title: str, *, left: bool = False, deactivated: bool = False
 ) -> SimpleNamespace:
@@ -324,6 +350,7 @@ def _channel_dialog(
     broadcast: bool = False,
     megagroup: bool = True,
     left: bool = False,
+    access_hash: int | None = 123456,
 ) -> SimpleNamespace:
     entity = types.Channel(
         id=channel_id,
@@ -335,7 +362,7 @@ def _channel_dialog(
         broadcast=broadcast,
         megagroup=megagroup,
         left=left,
-        access_hash=123456,
+        access_hash=access_hash,
     )
     return SimpleNamespace(entity=entity, message=SimpleNamespace(body="must not be read"))
 
@@ -374,9 +401,43 @@ async def test_transport_filters_only_eligible_groups_and_disconnects(monkeypatc
     assert [group.title for group in result.groups] == ["Basic", "Supergroup", "Forum"]
     assert [group.peer_id for group in result.groups] == [-4, -1000000000005, -1000000000006]
     assert [group.kind for group in result.groups] == ["group", "supergroup", "supergroup"]
+    assert "access_hash" not in json.loads(result.groups[0].provider_peer_reference)
+    assert json.loads(result.groups[1].provider_peer_reference)["access_hash"] == 123456
     assert result.groups[-1].is_forum is True
     assert all(group.peer_id != 42 for group in result.groups)
     assert clients[0].disconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_channel_access_hash_is_not_selectable_or_persisted(
+    monkeypatch, db_session
+) -> None:
+    dialogs = (_channel_dialog(7, "No access hash", access_hash=None),)
+    clients: list[FakeTelethonDiscoveryClient] = []
+
+    def factory(*args):
+        client = FakeTelethonDiscoveryClient(dialogs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("app.connectors.telegram.mtproto_transport.TelegramClient", factory)
+    result = await TelethonMtprotoTransport(123, API_HASH).discover_groups(
+        TELETHON_SESSION, 500
+    )
+
+    assert result.groups == ()
+    assert clients[0].disconnect_calls == 1
+
+    user = _user(db_session, "no-access-hash")
+    account = _account(db_session, user.id)
+    fake = FakeDiscoveryTransport(result.groups)
+    with pytest.raises(TelegramMtprotoGroupUnavailableError):
+        await _service(db_session, fake).set_selection(user.id, -1000000000007, True)
+    assert db_session.scalar(
+        select(TelegramMtprotoChatSelection).where(
+            TelegramMtprotoChatSelection.account_id == account.id
+        )
+    ) is None
 
 
 @pytest.mark.asyncio

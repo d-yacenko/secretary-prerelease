@@ -298,8 +298,9 @@ def _group_from_dialog(dialog: object) -> TelegramMtprotoGroupDescriptor | None:
     reference: dict[str, int | str] = {"entity_type": entity_type, "id": entity_id}
     if entity_type == "channel":
         access_hash = getattr(entity, "access_hash", None)
-        if isinstance(access_hash, int) and not isinstance(access_hash, bool):
-            reference["access_hash"] = access_hash
+        if not isinstance(access_hash, int) or isinstance(access_hash, bool):
+            return None
+        reference["access_hash"] = access_hash
     return TelegramMtprotoGroupDescriptor(
         peer_id=peer_id,
         kind=kind,
