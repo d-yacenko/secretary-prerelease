@@ -1,13 +1,14 @@
-# Current task — Repository Migration
+# Current task — Yandex Sync Resilience A
 
 ## Status
 
-Repository Migration: PUBLIC BASELINE ACCEPTED / CLOSED.
+DEPLOYED / AWAITING ARCHITECT REVIEW.
 
-Accepted prerelease baseline root:
-`a25623cae625b4efd446e8659fc04efaf00551e4`.
-
-The old Alpha repository `d-yacenko/secretary_alpha` is retired as private and
-archived. No application work was performed in this closure.
-
-The next phase is not authorized. Telegram Depth has not started.
+- Production application SHA: `6d69d936a7e5e08c427598bc8d659d3c7fe6b4ae`.
+- Production health after rollout: PASS.
+- Alembic: `0041 / 0041`.
+- Yandex Mail and Yandex Calendar synchronized successfully after deploy and
+  returned to scheduled state.
+- Failed-source rearm runtime setting: 3600 seconds.
+- Telegram Depth has not started.
+- The next phase is not authorized.
