@@ -14,19 +14,14 @@
 - Telegram A4 integration baseline: ACCEPTED on `review/telegram-depth-a4-folder-scope` at `4f1a9012145faa66baf499ad4fc9c08b759e9a5f`.
 - Telegram A4.1: ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
 - Telegram A4.2: ACCEPTED through `5de67b6a6cf746c9af911ddfcc671833d1d3d62e`.
-- Telegram A4.3: ACCEPTED through final SHA `6e6120d38cc3b1e3b677b1ca16cf97a002ea91d3` on `review/telegram-depth-a4-folder-scope`.
-- A4.3 accepted semantics: Telegram MTProto active discovery/retrieval is query-time gated by the same-user durable account + exact account/peer selection + `scope_active=true`; `manual_selected` does not grant visibility; malformed/missing linkage fails closed; legacy non-MTProto Telegram remains unaffected; explicit exact by-id retained history remains readable while automatic inactive expansion is hidden.
-- A4.3 includes retained-history correction `84efe88d31e10acd6852acf59a85636834582026`, expanded acceptance candidate `d9007c2d5a717d26428df8056b3d6d2734fd99dc`, and final test commit `6e6120d38cc3b1e3b677b1ca16cf97a002ea91d3`.
-- The previously requested two-MTProto-accounts-for-one-Secretary-user scenario is structurally impossible under current schema constraint `uq_telegram_mtproto_accounts_user_id`; it is not an A4.3 blocker. The visibility predicate nevertheless matches exact account id, peer id, and same-user ownership.
-- Current authorized work: Telegram Depth A4.4 recurring scope + history sync only, on `review/telegram-depth-a4-folder-scope`.
-- A4.4 must extend the existing Postgres-backed `SourceSyncScheduler` / `JobQueueService` / source-sync worker lane. No Telegram-specific scheduler daemon, queue, worker, broker, or microservice is authorized.
-- A4.4 recurring identity: one `sync_telegram_mtproto`-style recurring Job per connected MTProto account, not per peer.
-- A4.4 deployment interval: 300 seconds through a Telegram-specific source-sync setting; generic `UserSourcePreference` / `history_days` exposure is explicitly deferred because MTProto already has the accepted fixed 14-day durable history cutoff.
-- Every A4.4 run must reconcile Telegram folder/mute scope before any history work. Failed/truncated/unavailable reconciliation means zero peer history sync in that run.
-- After successful reconciliation, A4.4 may attempt at most 10 currently active peers per run and must persist fair round-robin progress in safe non-secret recurring Job payload metadata. Peer-local failures must not starve later peers; provider/account-wide failures stop the run.
-- A4.4 must reuse `TelegramMtprotoHistoryService.sync_scope_peer()` and all existing A3/A4 history cursors/materialization behavior; it must not reset cursors or duplicate the importer.
-- A4.4 requires no schema migration. Review Alembic head remains `0046`.
-- No UI/Flutter changes, generic Telegram source-preference exposure, legacy Bot API removal, merge to main, production deployment, production migration, or provider-side Telegram mutation is authorized in A4.4.
+- Telegram A4.3: ACCEPTED through `6e6120d38cc3b1e3b677b1ca16cf97a002ea91d3`.
+- Telegram A4.4: ACCEPTED at `153f663a1ca0f787ec0be2cbb90d28758e539d39` on `review/telegram-depth-a4-folder-scope`.
+- A4.4 accepted recurring architecture: existing Postgres `SourceSyncScheduler` / `JobQueueService` / recurring source-sync worker lane; one `sync_telegram_mtproto` Job per MTProto account; 300-second deployment interval; reconcile-before-history; fail-closed reconcile means zero peer sync; only current `scope_active=true` rows considered; max 10 peers per run; safe `telegram_peer_cursor` round-robin in Job payload; peer-local failures continue; provider/account-wide failures stop; Telegram Retry-After is propagated; Job errors are sanitized; existing `sync_scope_peer()` and A3/A4 cursors/materializer are reused without reset.
+- Generic Telegram `UserSourcePreference` / `history_days` exposure remains intentionally deferred because MTProto retains the accepted fixed 14-day durable cutoff.
+- A4.4 added no migration; review Alembic head remains `0046`.
+- Executor A4.4 verification reported: `alembic upgrade head` PASS; Telegram A1-A4.4 `137 passed`; A4.4 focused `12 passed`; scheduler/queue/worker/source-preference `89 passed`; Ruff PASS; `git diff --check` PASS; clean worktree. Architect independently reviewed exact ancestry/diff and runtime paths before accepting.
+- Current authorized work: **none**. Executor must STOP. No A4.5 or other Telegram phase is authorized.
+- No UI/Flutter changes, generic Telegram source-preference expansion, legacy Bot API removal, merge to main, production deployment, production migration, SSH, production Compose, provider-side Telegram mutations, or independent cleanup is authorized.
 - Main code still does not contain A3/A4 Telegram migrations `0044+`; production remains at Alembic `0041`.
 - Telegram eventual production rollout remains migration-bearing and requires a separate explicit migration deployment plan.
 - IMAP IDLE: NOT STARTED.
