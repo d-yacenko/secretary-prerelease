@@ -278,8 +278,8 @@ def main() -> int:
             raise DeployError("failed to select clean authorized release")
 
         compose("build", "api", "worker")
-        compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")
         recreated = True
+        compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")
 
         if service_id("db") != db_id:
             raise DeployError("DB container changed during application rollout")
