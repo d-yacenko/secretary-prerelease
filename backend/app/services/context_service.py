@@ -188,7 +188,11 @@ class ContextService:
                     )
                 )
 
-            neighbor_rows = self._graph.get_neighbors(object_id, limit=MAX_NEIGHBORS)
+            neighbor_rows = self._graph.get_neighbors(
+                object_id,
+                limit=MAX_NEIGHBORS,
+                require_active_seed=False,
+            )
             neighbor_rows = sorted(
                 neighbor_rows,
                 key=lambda row: (

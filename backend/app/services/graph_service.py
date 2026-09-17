@@ -227,8 +227,12 @@ class GraphService:
         object_id: UUID,
         include_rejected: bool = False,
         limit: int | None = None,
+        require_active_seed: bool = True,
     ) -> list[tuple[Object, Edge, str]]:
-        self._get_active_read_object(object_id)
+        if require_active_seed:
+            self._get_active_read_object(object_id)
+        else:
+            self.get_object(object_id)
         if limit is not None:
             return self._get_neighbors_limited(object_id, include_rejected, limit)
 

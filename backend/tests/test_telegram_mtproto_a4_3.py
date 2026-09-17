@@ -189,6 +189,12 @@ def test_wrong_user_selection_does_not_grant_visibility(db_session):
 
 def test_neighbors_and_context_expansion_exclude_inactive_but_exact_target_remains(db_session):
     user, _, _, inactive = _scope_fixture(db_session, active=False)
+    db_session.add(
+        Representation(
+            id=uuid4(), object_id=inactive.id, kind="full", text="retained target representation"
+        )
+    )
+    db_session.flush()
     graph = GraphService(db_session, user.id)
     anchor = graph.create_object(ObjectCreate(kind="note", title="anchor", origin="user"))
     graph.create_edge(EdgeCreate(
@@ -198,6 +204,8 @@ def test_neighbors_and_context_expansion_exclude_inactive_but_exact_target_remai
     assert graph.get_neighbors(anchor.id) == []
     context = ContextService(db_session, user.id).build_context(object_id=anchor.id)
     assert inactive.id not in {item.object_id for item in context.items}
+    retained_context = ContextService(db_session, user.id).build_context(object_id=inactive.id)
+    assert inactive.id in {item.object_id for item in retained_context.items}
     assert graph.get_object(inactive.id).id == inactive.id
     with pytest.raises(NotFoundError):
         graph.get_neighbors(inactive.id)
