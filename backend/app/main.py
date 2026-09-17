@@ -78,7 +78,11 @@ async def register_multipart_size_handler(
             status_code=413,
             content={"detail": "register payload exceeds size limit"},
         )
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
 
 
 app.include_router(me_router)
