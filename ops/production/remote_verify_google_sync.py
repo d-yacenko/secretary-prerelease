@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -67,23 +68,30 @@ def resolved_environment() -> dict[str, dict[str, str]]:
 
 
 def require_db_auth(db: str, environment: dict[str, str]) -> None:
-    command = ["docker", "exec", "-e", f"PGPASSWORD={environment['POSTGRES_PASSWORD']}", db,
+    child_environment = os.environ.copy()
+    child_environment["PGPASSWORD"] = environment["POSTGRES_PASSWORD"]
+    command = ["docker", "exec", "-e", "PGPASSWORD", db,
                "psql", "-U", environment.get("POSTGRES_USER", "secretary"), "-d",
-               environment.get("POSTGRES_DB", "secretary"), "-tAc", "SELECT 1"]
-    require(run(command, sensitive=True) == "1", "database authentication failed")
+               environment.get("POSTGRES_DB", "secretary"), "-h", "127.0.0.1", "-tAc", "SELECT 1"]
+    result = subprocess.run(command, text=True, capture_output=True, check=False, env=child_environment)
+    require(result.returncode == 0 and result.stdout.strip() == "1", "database authentication failed")
 
 
 def query(db: str, environment: dict[str, str], sql: str) -> list[str]:
-    command = ["docker", "exec", "-e", f"PGPASSWORD={environment['POSTGRES_PASSWORD']}", db,
+    child_environment = os.environ.copy()
+    child_environment["PGPASSWORD"] = environment["POSTGRES_PASSWORD"]
+    command = ["docker", "exec", "-e", "PGPASSWORD", db,
                "psql", "-U", environment.get("POSTGRES_USER", "secretary"), "-d",
-               environment.get("POSTGRES_DB", "secretary"), "-At", "-c", sql]
-    return [line.strip() for line in run(command, sensitive=True).splitlines() if line.strip()]
+               environment.get("POSTGRES_DB", "secretary"), "-h", "127.0.0.1", "-At", "-c", sql]
+    result = subprocess.run(command, text=True, capture_output=True, check=False, env=child_environment)
+    require(result.returncode == 0, "database aggregate query failed")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 def assert_runtime(worker: str) -> None:
     code = """
 from datetime import UTC, datetime, timedelta
-from app.connectors.google.api_errors import parse_google_retry_after
+from app.connectors.google.api_errors import is_google_error_retryable, parse_google_retry_after
 from app.connectors.google.errors import GoogleApiError, GoogleOAuthError, classify_google_sync_failure
 from app.services.job_queue_service import GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS, YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS
 assert GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS == (10, 30, 60)
@@ -91,7 +99,9 @@ assert YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS == (10, 30, 60)
 oauth = GoogleOAuthError('temporary', retryable=True, retry_after_seconds=91)
 assert classify_google_sync_failure(oauth) == ('transient', True, 91)
 assert classify_google_sync_failure(GoogleOAuthError('credentials')) == ('authentication', False, None)
-assert classify_google_sync_failure(GoogleApiError('rate', status_code=403, reason='userRateLimitExceeded', retryable=True))[:2] == ('transient', True)
+rate_retryable = is_google_error_retryable(403, 'userRateLimitExceeded')
+assert rate_retryable is True
+assert classify_google_sync_failure(GoogleApiError('rate', status_code=403, reason='userRateLimitExceeded', retryable=rate_retryable))[:2] == ('transient', True)
 assert classify_google_sync_failure(GoogleApiError('denied', api_status='PERMISSION_DENIED')) == ('permission', False, None)
 assert parse_google_retry_after('91') == 91
 assert parse_google_retry_after((datetime.now(UTC) + timedelta(seconds=30)).strftime('%a, %d %b %Y %H:%M:%S GMT')) is not None
@@ -114,7 +124,6 @@ def main() -> int:
         require(0 <= args.observation_seconds <= 360, "observation duration is out of bounds")
         require(run(["git", "remote", "get-url", "origin"]) == args.origin_url, "Git origin mismatch")
         require(run(["git", "status", "--porcelain"]) == "", "production checkout is not clean")
-        run(["git", "fetch", "--prune", "origin"])
         require(run(["git", "rev-parse", "HEAD"]) == args.release_sha, "runtime release mismatch")
         require(run(["git", "rev-parse", "origin/production"]) == args.release_sha, "production ref mismatch")
         db, api, worker = (service_id(name) for name in ("db", "api", "worker"))
@@ -128,12 +137,15 @@ def main() -> int:
         require(any(line.strip() == f"{args.expected_alembic} (head)" for line in current.splitlines()), "Alembic revision mismatch")
         assert_runtime(worker)
         type_list = "('sync_google_gmail','sync_google_calendar')"
-        rows = query(db, environment["api"], f"SELECT type || '|' || status || '|' || count(*) FROM jobs WHERE type IN {type_list} GROUP BY type,status ORDER BY type,status")
+        aggregate_sql = f"SELECT type || '|' || status || '|' || count(*) FROM jobs WHERE type IN {type_list} GROUP BY type,status ORDER BY type,status"
+        rows = query(db, environment["api"], aggregate_sql)
         statuses: set[str] = set()
+        baseline: dict[str, int] = {}
         for row in rows:
             parts = row.split("|")
             require(len(parts) == 3 and parts[0] in JOB_TYPES and parts[1] in {"pending", "running", "failed", "done"} and parts[2].isdigit(), "unexpected job aggregate")
             statuses.add(parts[1])
+            baseline[f"{parts[0]}:{parts[1]}"] = int(parts[2])
             print(f"GOOGLE_JOB_COUNT={parts[0]}:{parts[1]}:{parts[2]}")
         for status in ("pending", "running", "failed"):
             print(f"GOOGLE_JOBS_{status.upper()}={'true' if status in statuses else 'false'}")
@@ -148,7 +160,15 @@ def main() -> int:
             deadline = time.monotonic() + args.observation_seconds
             while time.monotonic() < deadline:
                 time.sleep(min(2, deadline - time.monotonic()))
-            print("NATURAL_GOOGLE_OBSERVATION=DUE_AGGREGATE_ONLY")
+            after_rows = query(db, environment["api"], aggregate_sql)
+            after: dict[str, int] = {}
+            for row in after_rows:
+                parts = row.split("|")
+                require(len(parts) == 3 and parts[0] in JOB_TYPES and parts[1] in {"pending", "running", "failed", "done"} and parts[2].isdigit(), "unexpected post-observation aggregate")
+                after[f"{parts[0]}:{parts[1]}"] = int(parts[2])
+                print(f"GOOGLE_JOB_AFTER={parts[0]}:{parts[1]}:{parts[2]}")
+            print(f"GOOGLE_OBSERVATION_AGGREGATE_TRANSITION={'true' if baseline != after else 'false'}")
+            print("NATURAL_GOOGLE_OBSERVATION=OBSERVED_AGGREGATES")
         return 0
     except (VerificationError, OSError, ValueError, json.JSONDecodeError):
         print("GOOGLE_RUNTIME_VERIFICATION=FAILED", file=sys.stderr)

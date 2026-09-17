@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -58,9 +59,13 @@ def environment() -> dict[str, str]:
 
 
 def db_auth(db: str, env: dict[str, str]) -> None:
-    result = run(["docker", "exec", "-e", f"PGPASSWORD={env['POSTGRES_PASSWORD']}", db, "psql", "-U",
-                  env.get("POSTGRES_USER", "secretary"), "-d", env.get("POSTGRES_DB", "secretary"), "-tAc", "SELECT 1"], sensitive=True)
-    require(result == "1", "database authentication failed")
+    child_environment = os.environ.copy()
+    child_environment["PGPASSWORD"] = env["POSTGRES_PASSWORD"]
+    command = ["docker", "exec", "-e", "PGPASSWORD", db, "psql", "-U",
+               env.get("POSTGRES_USER", "secretary"), "-d", env.get("POSTGRES_DB", "secretary"),
+               "-h", "127.0.0.1", "-tAc", "SELECT 1"]
+    result = subprocess.run(command, text=True, capture_output=True, check=False, env=child_environment)
+    require(result.returncode == 0 and result.stdout.strip() == "1", "database authentication failed")
 
 
 def health(url: str) -> None:
