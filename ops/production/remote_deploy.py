@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -33,8 +34,19 @@ class DeployError(RuntimeError):
     pass
 
 
-def run(cmd: list[str], *, sensitive: bool = False) -> str:
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+def run(
+    cmd: list[str],
+    *,
+    sensitive: bool = False,
+    env: dict[str, str] | None = None,
+) -> str:
+    proc = subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
     if proc.returncode != 0:
         if sensitive:
             raise DeployError("sensitive preflight command failed")
@@ -150,12 +162,14 @@ def require_db_tcp_auth(db_id: str, api_env: dict[str, str]) -> None:
     password = api_env["POSTGRES_PASSWORD"]
     user = api_env.get("POSTGRES_USER") or "secretary"
     database = api_env.get("POSTGRES_DB") or "secretary"
+    child_env = dict(os.environ)
+    child_env["PGPASSWORD"] = password
     output = run(
         [
             "docker",
             "exec",
             "-e",
-            f"PGPASSWORD={password}",
+            "PGPASSWORD",
             db_id,
             "psql",
             "-h",
@@ -168,6 +182,7 @@ def require_db_tcp_auth(db_id: str, api_env: dict[str, str]) -> None:
             "SELECT 1",
         ],
         sensitive=True,
+        env=child_env,
     )
     if output.strip() != "1":
         raise DeployError("production DB TCP authentication probe failed")
