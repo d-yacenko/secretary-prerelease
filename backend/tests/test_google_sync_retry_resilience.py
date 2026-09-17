@@ -14,6 +14,7 @@ from app.connectors.google.errors import (
     classify_google_sync_failure,
 )
 from app.connectors.google.gmail_transport import GmailTransport
+from app.connectors.google.oauth_service import GoogleOAuthService
 from app.db.models import Job
 from app.jobs.constants import (
     JOB_STATUS_PENDING,
@@ -156,6 +157,86 @@ def test_google_auth_and_transport_failure_classification() -> None:
         False,
         None,
     )
+
+
+def test_google_oauth_default_is_authentication_nonretryable() -> None:
+    assert classify_google_sync_failure(GoogleOAuthError("invalid grant")) == (
+        "authentication",
+        False,
+        None,
+    )
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_google_oauth_refresh_transient_failure_is_retryable(tmp_path, status: int) -> None:
+    client_file = tmp_path / "client.json"
+    client_file.write_text(
+        '{"web":{"client_id":"client","client_secret":"secret"}}',
+        encoding="utf-8",
+    )
+
+    class Client:
+        def post(self, *args, **kwargs):
+            return _google_response(status, "server_error", headers={"Retry-After": "90"})
+
+    service = GoogleOAuthService(str(client_file), "http://localhost/callback", http_client=Client())
+    with pytest.raises(GoogleOAuthError) as exc_info:
+        service.refresh_access_token("refresh-token")
+    error = exc_info.value
+    assert error.status_code == status
+    assert error.retryable is True
+    assert error.retry_after_seconds == 90
+    assert classify_google_sync_failure(error) == ("transient", True, 90)
+
+
+def test_google_oauth_refresh_invalid_grant_is_authentication(tmp_path) -> None:
+    client_file = tmp_path / "client.json"
+    client_file.write_text(
+        '{"web":{"client_id":"client","client_secret":"secret"}}',
+        encoding="utf-8",
+    )
+
+    class Client:
+        def post(self, *args, **kwargs):
+            return httpx.Response(400, json={"error": "invalid_grant"})
+
+    service = GoogleOAuthService(str(client_file), "http://localhost/callback", http_client=Client())
+    with pytest.raises(GoogleOAuthError) as exc_info:
+        service.refresh_access_token("refresh-token")
+    assert classify_google_sync_failure(exc_info.value) == ("authentication", False, None)
+
+
+def test_google_oauth_transient_failure_uses_recurring_short_retry(db_session) -> None:
+    job = _recurring_job(db_session, JOB_TYPE_SYNC_GOOGLE_GMAIL)
+    error = GoogleOAuthError(
+        "failed to refresh access token",
+        status_code=503,
+        retryable=True,
+        retry_after_seconds=90,
+    )
+    failure_kind, retryable, retry_after_seconds = classify_google_sync_failure(error)
+    finalize_recurring_job_failure(
+        db_session,
+        job.id,
+        BOOTSTRAP_USER_ID,
+        JOB_TYPE_SYNC_GOOGLE_GMAIL,
+        "failed to refresh access token",
+        failure_kind=failure_kind,
+        retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
+    )
+    assert job.status == JOB_STATUS_PENDING
+    assert 89 <= (job.run_after - utcnow()).total_seconds() <= 91
+
+
+def test_google_permission_denied_without_reason_is_permission() -> None:
+    error = GoogleApiError(
+        "denied",
+        status_code=403,
+        api_status="PERMISSION_DENIED",
+        retryable=False,
+    )
+    assert classify_google_sync_failure(error) == ("permission", False, None)
 
 
 def test_gmail_read_http_errors_are_structured_and_retryable() -> None:
