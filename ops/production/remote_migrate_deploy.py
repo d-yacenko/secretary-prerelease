@@ -64,6 +64,16 @@ def running(container: str) -> bool:
     return (inspect_json(container).get("State") or {}).get("Running") is True
 
 
+def require_stopped(api: str, worker: str) -> None:
+    if running(api) or running(worker):
+        raise DeployError("api/worker did not stop before migration")
+
+
+def stop_applications(api: str, worker: str) -> None:
+    compose("stop", "api", "worker")
+    require_stopped(api, worker)
+
+
 def require_db(container: str) -> None:
     state = inspect_json(container).get("State") or {}
     if state.get("Running") is not True or (state.get("Health") or {}).get("Status") != "healthy":
@@ -97,15 +107,38 @@ def resolved_environment() -> tuple[dict[str, str], dict[str, str]]:
     return result[0], result[1]
 
 
-def require_environment(api: dict[str, str], worker: dict[str, str]) -> None:
+def require_environment(api: dict[str, str], worker: dict[str, str], *, require_telegram: bool) -> None:
     for name, values in (("api", api), ("worker", worker)):
         if not values.get("POSTGRES_PASSWORD") or not values.get("SECRETARY_CREDENTIAL_KEY"):
             raise DeployError(f"{name} required environment is empty")
-        if not values.get("TELEGRAM_API_HASH") or not values.get("TELEGRAM_API_ID", "").isdigit() or int(values["TELEGRAM_API_ID"]) <= 0:
+        if require_telegram and (
+            not values.get("TELEGRAM_API_HASH")
+            or not values.get("TELEGRAM_API_ID", "").isdigit()
+            or int(values["TELEGRAM_API_ID"]) <= 0
+        ):
             raise DeployError(f"{name} Telegram credentials are unavailable")
     for key in ("POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "SECRETARY_CREDENTIAL_KEY"):
         if api.get(key) != worker.get(key):
             raise DeployError("api/worker environment mismatch")
+
+
+def require_release_environment(
+    rollback_api: dict[str, str],
+    rollback_worker: dict[str, str],
+    release_api: dict[str, str],
+    release_worker: dict[str, str],
+) -> None:
+    require_environment(release_api, release_worker, require_telegram=True)
+    for key in (
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "SECRETARY_CREDENTIAL_KEY",
+    ):
+        if release_api.get(key) != rollback_api.get(key) or release_worker.get(key) != rollback_worker.get(key):
+            raise DeployError("release environment changes DB or credential settings")
 
 
 def db_auth(db: str, values: dict[str, str]) -> None:
@@ -186,7 +219,7 @@ def main() -> int:
     before_volume = volume(db)
     before_env = env_hash()
     api_env, worker_env = resolved_environment()
-    require_environment(api_env, worker_env)
+    require_environment(api_env, worker_env, require_telegram=False)
     db_auth(db, api_env)
     revision(args.from_alembic)
 
@@ -195,13 +228,13 @@ def main() -> int:
     live = False
     try:
         git("switch", "--detach", args.release_sha)
+        release_api_env, release_worker_env = resolved_environment()
+        require_release_environment(api_env, worker_env, release_api_env, release_worker_env)
         compose("build", "api", "worker")
         if service_id("db") != db or volume(db) != before_volume or env_hash() != before_env:
             raise DeployError("database or environment changed before downtime")
         stopped = True
-        compose("stop", "api", "worker")
-        if running(service_id("api")) or running(service_id("worker")):
-            raise DeployError("api/worker did not stop before migration")
+        stop_applications(api, worker)
         require_db(db)
         if service_id("db") != db or volume(db) != before_volume or env_hash() != before_env:
             raise DeployError("database or environment changed during downtime")

@@ -85,9 +85,10 @@ def test_remote_uses_explicit_compose_and_only_application_rollout():
 
 def test_build_stop_migrate_verify_start_order():
     source = (ROOT / "ops/production/remote_migrate_deploy.py").read_text()
+    main_position = source.index("def main()")
     positions = [
-        source.index('compose("build", "api", "worker")'),
-        source.index('compose("stop", "api", "worker")'),
+        source.index('compose("build", "api", "worker")', main_position),
+        source.index("stop_applications(api, worker)", main_position),
         source.index('compose("run", "--rm", "--no-deps", "api", "alembic", "upgrade", args.to_alembic)'),
         source.index('revision(args.to_alembic)', source.index('compose("run"')),
         source.rindex('compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")'),
@@ -101,6 +102,47 @@ def test_db_auth_is_tcp_and_password_is_environment_only():
     assert '"-h", "127.0.0.1"' in source
     assert 'f"PGPASSWORD=' not in source
     assert "PGPASSWORD={" not in source
+
+
+def test_stopped_verification_uses_captured_ids_not_compose_ps(monkeypatch):
+    states = {"api-before": False, "worker-before": False}
+    calls = []
+    monkeypatch.setattr(remote, "running", lambda container: states[container])
+    monkeypatch.setattr(remote, "service_id", lambda _: pytest.fail("compose ps must not be used"))
+    monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args))
+    remote.stop_applications("api-before", "worker-before")
+    assert calls == [("stop", "api", "worker")]
+
+
+def test_release_telegram_environment_is_checked_after_switch():
+    rollback = {
+        "POSTGRES_HOST": "db",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_DB": "secretary",
+        "POSTGRES_USER": "secretary",
+        "POSTGRES_PASSWORD": "db-password",
+        "SECRETARY_CREDENTIAL_KEY": "credential-key",
+    }
+    release = {**rollback, "TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "hash"}
+    remote.require_release_environment(rollback, rollback, release, release)
+
+
+def test_release_environment_change_is_rejected_before_stop():
+    rollback = {"POSTGRES_PASSWORD": "old", "SECRETARY_CREDENTIAL_KEY": "key"}
+    release = {
+        "POSTGRES_PASSWORD": "new",
+        "SECRETARY_CREDENTIAL_KEY": "key",
+        "TELEGRAM_API_ID": "123",
+        "TELEGRAM_API_HASH": "hash",
+    }
+    with pytest.raises(remote.DeployError, match="DB or credential"):
+        remote.require_release_environment(rollback, rollback, release, release)
+
+
+def test_release_environment_without_telegram_credentials_is_rejected():
+    values = {"POSTGRES_PASSWORD": "db-password", "SECRETARY_CREDENTIAL_KEY": "credential-key"}
+    with pytest.raises(remote.DeployError, match="Telegram credentials"):
+        remote.require_release_environment(values, values, values, values)
 
 
 def test_mtproto_uncertainty_refuses_downgrade(monkeypatch):
