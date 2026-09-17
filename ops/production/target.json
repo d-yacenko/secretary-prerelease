@@ -1,0 +1,12 @@
+{
+  "ssh_target": "",
+  "ssh_port": 22,
+  "host_key_sha256": "",
+  "repository_path": "/opt/secretary",
+  "origin_url": "https://github.com/d-yacenko/secretary-prerelease.git",
+  "health_url": "http://127.0.0.1:18080/health",
+  "compose_files": [
+    "infra/compose.yaml",
+    "infra/compose.deploy.yaml"
+  ]
+}
