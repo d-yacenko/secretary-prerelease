@@ -48,8 +48,7 @@ class GmailTransport:
             params=params,
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        if response.status_code >= 400:
-            raise GoogleApiError("failed to list gmail messages")
+        raise_for_google_response(response, "list_message_ids_page")
         payload = response.json()
         messages = payload.get("messages", [])
         message_ids = [str(item["id"]) for item in messages if item.get("id")]
@@ -79,8 +78,7 @@ class GmailTransport:
             params={"format": "full"},
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        if response.status_code >= 400:
-            raise GoogleApiError(f"failed to fetch gmail message {message_id}")
+        raise_for_google_response(response, "get_message")
         return response.json()
 
     def send_message(self, access_token: str, user_id: str, raw: str) -> dict[str, Any]:
@@ -112,8 +110,7 @@ class GmailTransport:
             f"{GMAIL_API_BASE}/users/{user_id}/messages/{message_id}/attachments/{attachment_id}",
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        if response.status_code >= 400:
-            raise GoogleApiError(f"failed to fetch gmail attachment {attachment_id}")
+        raise_for_google_response(response, "get_attachment")
         payload = response.json()
         data = payload.get("data")
         if not data:
@@ -126,8 +123,7 @@ class GmailTransport:
             f"{GMAIL_API_BASE}/users/{user_id}/profile",
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        if response.status_code >= 400:
-            raise GoogleApiError("failed to fetch gmail profile")
+        raise_for_google_response(response, "fetch_account_email")
         payload = response.json()
         email = payload.get("emailAddress")
         if not email:

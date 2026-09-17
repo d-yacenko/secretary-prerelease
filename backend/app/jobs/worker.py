@@ -3,11 +3,17 @@ from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 
 from app.ai_audit.context import reset_current_job_id, set_current_job_id
+from app.connectors.google.errors import classify_google_sync_failure
 from app.connectors.teams.constants import DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
 from app.connectors.teams.errors import TeamsRateLimitedError
 from app.connectors.yandex.errors import classify_yandex_sync_failure
 from app.db.session import SessionLocal
-from app.jobs.constants import JOB_TYPE_SYNC_YANDEX_CALENDAR, JOB_TYPE_SYNC_YANDEX_MAIL
+from app.jobs.constants import (
+    JOB_TYPE_SYNC_GOOGLE_CALENDAR,
+    JOB_TYPE_SYNC_GOOGLE_GMAIL,
+    JOB_TYPE_SYNC_YANDEX_CALENDAR,
+    JOB_TYPE_SYNC_YANDEX_MAIL,
+)
 from app.jobs.handlers import get_handler
 from app.jobs.recurring_job_finalization import (
     finalize_recurring_job_failure,
@@ -169,6 +175,14 @@ def process_one_job(
             queue = JobQueueService(session)
             failure_kind = None
             failure_retryable = is_job_error_retryable(exc)
+            retry_after_seconds = None
+            if claimed.type in {
+                JOB_TYPE_SYNC_GOOGLE_GMAIL,
+                JOB_TYPE_SYNC_GOOGLE_CALENDAR,
+            }:
+                failure_kind, failure_retryable, retry_after_seconds = (
+                    classify_google_sync_failure(exc)
+                )
             if claimed.type in {
                 JOB_TYPE_SYNC_YANDEX_MAIL,
                 JOB_TYPE_SYNC_YANDEX_CALENDAR,
@@ -183,6 +197,7 @@ def process_one_job(
                     sanitize_job_error(exc),
                     retryable=failure_retryable,
                     failure_kind=failure_kind,
+                    retry_after_seconds=retry_after_seconds,
                 )
             else:
                 queue.mark_retry(

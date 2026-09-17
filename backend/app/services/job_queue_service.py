@@ -24,6 +24,8 @@ from app.jobs.constants import (
     JOB_STATUS_RUNNING,
     JOB_TYPE_INGEST_LOCAL_FILE,
     JOB_TYPE_PROACTIVE_REVIEW,
+    JOB_TYPE_SYNC_GOOGLE_CALENDAR,
+    JOB_TYPE_SYNC_GOOGLE_GMAIL,
     JOB_TYPE_SYNC_YANDEX_CALENDAR,
     JOB_TYPE_SYNC_YANDEX_MAIL,
     MAX_JOB_ATTEMPTS,
@@ -44,6 +46,10 @@ YANDEX_TRANSIENT_RETRY_JOB_TYPES = frozenset(
     {JOB_TYPE_SYNC_YANDEX_MAIL, JOB_TYPE_SYNC_YANDEX_CALENDAR}
 )
 YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS = (10, 30, 60)
+GOOGLE_TRANSIENT_RETRY_JOB_TYPES = frozenset(
+    {JOB_TYPE_SYNC_GOOGLE_GMAIL, JOB_TYPE_SYNC_GOOGLE_CALENDAR}
+)
+GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS = (10, 30, 60)
 
 
 def utcnow() -> datetime:
@@ -206,6 +212,16 @@ class JobQueueService:
                 self.mark_recurring_transient_retry(
                     job.id,
                     job.last_error or "Yandex transient synchronization failure",
+                )
+                return None
+            if (
+                job.type in GOOGLE_TRANSIENT_RETRY_JOB_TYPES
+                and payload.get("last_error_kind") == "transient"
+                and payload.get("last_error_retryable") is True
+            ):
+                self.mark_google_recurring_transient_retry(
+                    job.id,
+                    job.last_error or "Google transient synchronization failure",
                 )
                 return None
             job.status = JOB_STATUS_FAILED
@@ -492,6 +508,38 @@ class JobQueueService:
         # Keep the consecutive-failure tier at the third step so repeated outages
         # do not make attempts grow without bound or re-enter generic exhaustion.
         job.attempts = min(job.attempts, len(YANDEX_TRANSIENT_RETRY_DELAYS_SECONDS) - 1)
+        job.updated_at = now
+        self._session.flush()
+
+    def mark_google_recurring_transient_retry(
+        self,
+        job_id: UUID,
+        error: str,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        """Keep a Google transient source failure pending on a bounded retry."""
+        job = self._require_job(job_id)
+        if job.type not in GOOGLE_TRANSIENT_RETRY_JOB_TYPES:
+            raise ValueError("short transient retry is only valid for Google sources")
+        now = utcnow()
+        payload = dict(job.payload or {})
+        payload["last_error_kind"] = "transient"
+        payload["last_error_retryable"] = True
+        job.payload = payload
+        failure_number = max(job.attempts, 1)
+        delay_index = min(
+            failure_number - 1,
+            len(GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS) - 1,
+        )
+        delay = GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS[delay_index]
+        if retry_after_seconds is not None and retry_after_seconds >= 0:
+            delay = retry_after_seconds
+        job.status = JOB_STATUS_PENDING
+        job.last_error = error[:MAX_LAST_ERROR_LENGTH]
+        job.locked_at = None
+        job.run_after = now + timedelta(seconds=delay)
+        job.attempts = min(job.attempts, len(GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS) - 1)
         job.updated_at = now
         self._session.flush()
 
