@@ -1,74 +1,147 @@
-# Current task — Telegram Depth A4.4 accepted / STOP
+# Current task — Telegram Integration Gate I1
 
 ## Status
 
-- Telegram A4.1: ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
-- Telegram A4.2: ACCEPTED through `5de67b6a6cf746c9af911ddfcc671833d1d3d62e`.
+- Telegram A4.1: ACCEPTED.
+- Telegram A4.2: ACCEPTED.
 - Telegram A4.3: ACCEPTED through `6e6120d38cc3b1e3b677b1ca16cf97a002ea91d3`.
-- Telegram A4.4: **ACCEPTED** at exact SHA `153f663a1ca0f787ec0be2cbb90d28758e539d39` on `review/telegram-depth-a4-folder-scope`.
+- Telegram A4.4: ACCEPTED at `153f663a1ca0f787ec0be2cbb90d28758e539d39`.
+- Product feature work is paused. The active task is integration only.
 
-## A4.4 accepted result
+## Why this gate exists
 
-A4.4 adds recurring Telegram MTProto scope reconciliation and bounded history synchronization by extending the existing Postgres-backed source-sync scheduler/worker/queue.
+`main` and `review/telegram-depth-a4-folder-scope` currently diverge from merge-base `5ca5f93a3f88d1a17e2060319f6826766f2ff119`.
 
-Accepted contract:
+Architect comparison confirmed that the commits unique to `main` since that merge-base change only:
 
-- recurring job type `sync_telegram_mtproto`;
-- one recurring Job per connected `TelegramMtprotoAccount`, not per peer;
-- existing `SourceSyncScheduler`, `JobQueueService`, recurring source-sync lane and worker only;
-- deployment interval `300` seconds through `source_sync_telegram_mtproto_interval_seconds`;
-- generic `UserSourcePreference` / Telegram `history_days` exposure remains deferred;
-- every recurring run validates account ownership and reconciles folder/mute scope before history work;
-- failed/truncated/unavailable reconciliation performs zero peer history sync in that run;
-- only current `scope_active=true` peers for the payload account are considered;
-- max `10` peer attempts per run;
-- round-robin progress uses safe Job payload key `telegram_peer_cursor`;
-- peer-local stale/unavailable/reference/scope-race failures do not block later peers;
-- provider/account-wide failures stop the run;
-- Telegram provider Retry-After is propagated into recurring retry timing;
-- Job errors are sanitized and do not expose Telegram session/provider-reference/provider payload values;
-- existing `TelegramMtprotoHistoryService.sync_scope_peer()` and A3/A4 cursors/materializer are reused and not reset;
-- no migration was added; review Alembic head remains `0046`.
+- `CURRENT_TASK.md`;
+- `PROJECT_STATE.md`;
+- `secretary_architect_context_encrypted.md`.
 
-Executor reported:
+No main-only application/runtime code changes need to be reconciled.
 
-- `alembic upgrade head`: PASS;
-- Telegram A1–A4.4 suite: `137 passed`;
-- A4.4 focused suite: `12 passed`;
-- scheduler/queue/worker/source-preference suites: `89 passed`;
-- Ruff: PASS;
-- `git diff --check`: PASS;
-- clean worktree.
+The review branch contains the accepted A3/A4 implementation and migrations through Alembic `0046`.
 
-Architect independently reviewed exact commit ancestry/diff and the scheduler/orchestrator/worker/finalization paths before acceptance.
+## Objective
 
-## Current authorization
+Create a normal merge commit bringing current `origin/main` into `review/telegram-depth-a4-folder-scope`, preserve all accepted history, resolve bookkeeping files to the current Integration Gate state, and prove the merged review branch is safe to fast-forward into `main`.
 
-**No implementation work is currently authorized. Executor must STOP.**
+This is not a rebase and not a product implementation phase.
 
-Do not begin A4.5 or any other Telegram phase until this file is replaced by a new explicit Architect task.
+## Branch / history rules
 
-Do not independently start:
+Work only in:
 
-- UI/Flutter changes;
-- generic Telegram source-preference/history-days work;
-- legacy Bot API removal;
-- merge of A3/A4 code to `main`;
-- production deployment or runtime probing;
-- migration deployment planning/execution;
-- SSH or production Compose;
-- provider-side Telegram mutations/sends;
-- cleanup/refactor not explicitly authorized.
+`review/telegram-depth-a4-folder-scope`
 
-## Branch/state boundary
+Before work:
 
-- Accepted review implementation SHA: `153f663a1ca0f787ec0be2cbb90d28758e539d39`.
-- Review Alembic head: `0046`.
-- Production application/runtime remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production Alembic remains `0041 / 0041`.
-- A3/A4 Telegram code is not production deployed.
-- Eventual Telegram production rollout remains migration-bearing and requires a separate explicit Architect-authorized migration deployment plan.
+- `git fetch origin`;
+- worktree must be clean;
+- fast-forward local review branch to current `origin/review/telegram-depth-a4-folder-scope`;
+- confirm accepted A4.4 SHA `153f663a1ca0f787ec0be2cbb90d28758e539d39` remains in ancestry;
+- record exact `origin/main` and review starting SHAs.
 
-## Executor instruction
+Then merge current `origin/main` into review with a normal merge commit.
 
-If you are the Executor and reached this file after the A4.4 acceptance bookkeeping commits: report the exact current review HEAD if asked, make no code changes, and STOP.
+Do NOT:
+
+- rebase;
+- squash;
+- cherry-pick accepted Telegram commits;
+- reset/rewrite history;
+- force push;
+- merge review into `main` yourself;
+- change product/runtime code merely to clean up style.
+
+If conflicts occur, they are expected only in bookkeeping/recovery-context files. Resolve `CURRENT_TASK.md` and `PROJECT_STATE.md` to this Integration Gate authorization. Preserve the current canonical encrypted recovery context file; do not decrypt or rewrite it locally unless explicitly required by Architect.
+
+If any application/runtime/test/migration file conflicts, STOP and report before resolving it.
+
+## Expected code result
+
+After merge:
+
+- application/runtime code must remain exactly the accepted review implementation except for merge metadata;
+- migrations remain `0042/0043` already on main plus accepted Telegram `0044/0045/0046` from review;
+- `alembic heads` must report exactly one head: `0046`;
+- no new migration is allowed;
+- no UI/Flutter changes;
+- no source-preference expansion;
+- no legacy Bot API removal;
+- no production changes.
+
+## Required verification
+
+Use local development PostgreSQL only.
+
+From repository root:
+
+`docker compose -f infra/compose.yaml -f infra/compose.dev.yaml up -d db`
+
+Wait for DB healthy.
+
+From `backend`:
+
+1. Migration verification:
+
+`alembic upgrade head`
+
+`alembic heads`
+
+Expected head: `0046` only.
+
+2. Full backend regression gate:
+
+`pytest -q`
+
+This full-suite run is required for the main integration gate. Report pass/fail/deselected counts exactly. If the repository has a documented unavoidable environment-only exclusion, do not silently omit it; report it explicitly.
+
+3. Telegram focused regression must also remain green:
+
+`pytest -q tests/test_telegram_mtproto_a1.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py tests/test_telegram_mtproto_a4_3.py tests/test_telegram_mtproto_a4_4.py`
+
+4. Static checks:
+
+`ruff check app tests`
+
+`git diff --check`
+
+5. History/tree verification:
+
+- verify `origin/main` is an ancestor of final review HEAD after merge;
+- compare final review HEAD against the pre-merge review HEAD and confirm the only content changes from the merge are bookkeeping/recovery-context resolution, not application/runtime/test/migration code;
+- compare final review against `origin/main` and report the remaining files that would enter `main` on fast-forward.
+
+## Completion report
+
+Commit/push only the merge result to:
+
+`review/telegram-depth-a4-folder-scope`
+
+Return:
+
+- starting review SHA;
+- starting `origin/main` SHA;
+- merge commit SHA;
+- final remote review SHA;
+- confirmation A4.4 accepted SHA remains in ancestry;
+- conflict list and exact resolution summary;
+- confirmation no application/runtime/test/migration conflict was manually resolved;
+- `alembic upgrade head` result;
+- `alembic heads` result;
+- full `pytest -q` result;
+- Telegram focused suite result;
+- Ruff result;
+- `git diff --check` result;
+- final `git status --short`;
+- confirmation `origin/main` is ancestor of final review HEAD;
+- final review-vs-main file summary;
+- confirmation no production/main/UI/A4.5 work was performed;
+- final marker exactly: `TELEGRAM_INTEGRATION_GATE_I1_READY`.
+
+Then STOP.
+
+## After I1
+
+Architect will independently review the merge commit and test evidence. Only after acceptance will Architect fast-forward `main` to the integration HEAD. Production migration/deployment remains a separate later authorization.
