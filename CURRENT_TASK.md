@@ -1,178 +1,221 @@
-# Current task — Telegram Depth A4.2U remaining acceptance gaps
+# Current task — Telegram Depth A4.3 active retrieval-scope enforcement
 
 ## Status
 
 Telegram Depth A4.1 — ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
 
-Telegram Depth A4.2 implementation `e4202d1171f9a6552d2b276093cd39d6692d6e05`, A4.2R correction `28ca11160ce2b0ffcca651bfc2058b9344c379b1`, and A4.2T test hardening `88207034c5dbd0921b4eab30a419042eda36d9f1` — CODE DIRECTION VALID / ACCEPTANCE STILL PENDING A SMALL SET OF EXPLICIT REGRESSIONS.
+Telegram Depth A4.2 — ACCEPTED through final SHA `5de67b6a6cf746c9af911ddfcc671833d1d3d62e` on `review/telegram-depth-a4-folder-scope`.
 
-A4.2T is test-only and materially improves coverage: DB-backed private scoped sync, all cursor fields across re-entry, incomplete-scope preservation, muted deactivation, inactive scoped gate, complete-empty scope, and zero-ID boundary are now exercised. The required suite reports `98 passed`.
+A4.2 established the canonical durable peer state in `telegram_mtproto_chat_selections`: `manual_selected` is legacy compatibility, while `scope_active` is the A4 dynamic Telegram-folder scope gate. A4.2 also reuses the A3 history engine for private/group/supergroup peers and retains imported history/cursors when a peer becomes inactive.
 
-A4.2 is NOT yet accepted because several requirements from the A4.2T contract are still not represented by explicit tests in the pushed file.
+Telegram Depth A4.3 — ACTIVE / IMPLEMENTATION AUTHORIZED.
 
-Do NOT begin the next Telegram phase.
+A4.3 enforces `scope_active` at active read/retrieval time. A peer leaving the configured Telegram folders or becoming muted must immediately disappear from normal Secretary discovery/retrieval surfaces, while its already imported Objects/Representations remain stored. Re-entry must make those same stored Objects retrievable again without re-import, re-embedding, or object mutation.
+
+Do NOT begin scheduler/bulk synchronization. That is a later phase.
 
 ## Fixed branch and baseline
 
-- Repository: `d-yacenko/secretary-prerelease`
-- Work only in existing branch/worktree `review/telegram-depth-a4-folder-scope`.
-- Fetch and fast-forward only to current `origin/review/telegram-depth-a4-folder-scope`, including Architect bookkeeping commits.
-- Required implementation/test baseline includes `88207034c5dbd0921b4eab30a419042eda36d9f1` plus Architect bookkeeping.
-- Keep exact A3 SHA `4777c32deb055f5024f3dbced125b4dd6db97e85` in ancestry.
-- Do not rebase or rewrite prior commits.
-- Alembic head remains `0046`.
-- Production code is FROZEN unless one of the remaining tests exposes a real defect. If that happens, apply only the smallest same-phase fix and report it.
+- Repository: `d-yacenko/secretary-prerelease`.
+- Work only in the existing review branch/worktree: `review/telegram-depth-a4-folder-scope`.
+- Required accepted code baseline is A4.2 final SHA `5de67b6a6cf746c9af911ddfcc671833d1d3d62e` plus Architect bookkeeping commits already pushed to the review branch.
+- Exact accepted A3 SHA `4777c32deb055f5024f3dbced125b4dd6db97e85` must remain in ancestry.
+- Fetch and fast-forward only to current `origin/review/telegram-depth-a4-folder-scope` before implementation.
+- Do not rebase or rewrite accepted commits.
+- Alembic head remains `0046`; A4.3 requires NO schema migration.
 
-## Authorized work
+## Canonical visibility rule
 
-Primarily modify only `backend/tests/test_telegram_mtproto_a4_2.py`. Narrow updates to A2/A3 tests are allowed only when they are the clearer location for the legacy-compatibility case.
+The authoritative dynamic-read gate is the existing durable `telegram_mtproto_chat_selections.scope_active` flag.
 
-Add explicit regression coverage for the remaining gaps below. Do not duplicate already-passing A3/A4 mechanics unnecessarily.
+A stored Object is an A4 MTProto Telegram object only when it is the materialized Telegram message shape, including:
 
-### 1. Durable rows for all supported peer kinds + encryption
+- `provider == "telegram"`;
+- `kind == "chat_message"`;
+- `metadata.transport == "mtproto"`.
 
-One DB-backed test must reconcile three descriptors at once and inspect all three resulting rows:
+For such an MTProto Object to participate in ACTIVE discovery/retrieval, there must be a matching durable row where:
 
-- private peer;
-- basic group;
-- supergroup.
+- the Telegram MTProto account belongs to the same Secretary `user_id` as the Object;
+- Object `metadata.account_id` matches the account id;
+- Object `metadata.peer_id` matches the durable peer id;
+- `telegram_mtproto_chat_selections.scope_active = true`.
 
-Assert for every row:
+`manual_selected` MUST NOT grant retrieval visibility. It is irrelevant to A4 active retrieval.
 
-- `manual_selected is False`;
-- `scope_active is True`;
-- exact `peer_kind`;
-- stored `provider_peer_reference_encrypted` is not the plaintext provider reference;
-- decrypting it with the test credential key yields the original provider reference.
+For MTProto Objects, missing/malformed `account_id`, missing/malformed `peer_id`, missing account/selection row, wrong-user account association, or inactive durable row must fail closed from active retrieval.
 
-Use provider-shape-correct references:
+Do not perform unsafe JSON-to-UUID/bigint casts that can make a malformed metadata value crash a query. String/text comparison against canonical database ids is acceptable and preferred if it preserves fail-closed behavior.
 
-- private -> `user` + `access_hash`;
-- basic group -> `chat`;
-- supergroup -> `channel` + `access_hash`.
+Objects that are NOT A4 MTProto messages are unaffected by this new rule. In particular, do not accidentally hide legacy Telegram/Bot API objects merely because their provider is `telegram`; the `metadata.transport == "mtproto"` discriminator matters.
 
-The existing unsupported-kind test may remain as the defensive negative case.
+## Architectural implementation
 
-### 2. Manual deselect/reselect preserves durable state
+Create one shared/canonical implementation of the Telegram MTProto active-retrieval predicate rather than hand-copying subtly different rules into each service.
 
-Seed a real row with:
+It is acceptable for the shared implementation to expose both:
 
-- `manual_selected=True`;
-- `scope_active=True`;
-- non-empty values for all five A3 history state fields.
+- a SQLAlchemy predicate/helper for ORM queries; and
+- a raw-SQL fragment/helper for `RetrievalService`, whose candidate branches currently use textual SQL.
 
-Exercise legacy deselect/reselect semantics and prove:
+Both forms MUST encode the same semantics above and be regression-tested against each other through service behavior.
 
-- deselect changes only `manual_selected` to false;
-- row ID remains the same;
-- `list_selections()` omits it while deselected;
-- `scope_active` and all five cursor/history fields are unchanged;
-- reselect restores `manual_selected=True` on the same row;
-- `scope_active` and cursor/history fields still remain unchanged.
+Do NOT add an `active` flag to every Telegram Object. Do NOT rewrite stored Objects when scope changes. The query-time durable scope row is canonical.
 
-Prefer exercising the existing store/service path rather than mutating flags directly.
+## Active-read surfaces that MUST enforce the gate
 
-### 3. Legacy `sync_group()` gate on a retained row
+### 1. RetrievalService / SearchService
 
-Create a row that exists and has `scope_active=True` but `manual_selected=False`.
+All lexical/FTS/trigram/representation candidate branches in `RetrievalService` must exclude inactive MTProto Telegram Objects before they become candidates.
 
-Call `TelegramMtprotoHistoryService.sync_group()` and assert:
+Because `SearchService` delegates to `RetrievalService`, normal relevance/newest/oldest search must inherit the same gate. A caller specifying `provider=telegram` must not bypass it.
 
-- `TelegramMtprotoGroupNotSelectedError`;
-- fake history transport receives zero calls.
+### 2. ObjectQueryService / `query_objects`
 
-This is distinct from the old A3 test where no selection row exists.
+Structured object queries used by assistant/MCP must apply the same active gate. Provider/kind/date/status/label filters must not make an inactive MTProto object visible.
 
-### 4. Missing configured folder ID fails closed with persisted state unchanged
+### 3. RecentSourceService / inbox review
 
-Seed a real `scope_active=True` row with cursor/history state and a persisted configured folder ID that is absent from live discovery.
+`RecentSourceService` active inbox/feed eligibility must apply the same scope gate so a peer that leaves scope or becomes muted cannot continue appearing in recent-source/inbox-review discovery.
 
-Run `TelegramMtprotoScopeService.reconcile_scope()` and assert:
+This includes the frozen review-window/count paths because they all derive from the service eligibility predicate.
 
-- `TelegramMtprotoScopeUnavailableError`;
-- row remains `scope_active=True`;
-- row ID and all cursor/history state remain unchanged;
-- no `fetch_history` call occurs.
+### 4. ContextService automatic expansion
 
-The existing A4.2T truncation test already covers discovery-truncated and universe-truncated; do not duplicate those unless needed for test clarity.
+Query-driven ContextService retrieval already passes through SearchService, but automatic context expansion can also add pinned/contained/graph-neighbor Objects directly.
 
-### 5. Scoped group/supergroup uses the shared A3 history engine
+Apply the active Telegram scope gate to automatically discovered/expanded Objects so an inactive MTProto Telegram message cannot leak into assistant context as a pinned/folder/neighbor expansion.
 
-Add at least one DB-backed `sync_scope_peer()` test for a group or supergroup. Supergroup is preferred because it exercises channel provider reference reconstruction.
+The explicit target Object supplied by an exact `object_id` is different: retained imported history is intentionally not deleted. A direct, explicit by-id target may remain readable/auditable. Do not turn A4.3 into a physical access-control/delete mechanism.
 
-Use a correct encrypted provider reference (`channel` + `access_hash` for supergroup), fake history transport, and assert:
+Representations belonging to an inactive automatically discovered MTProto Object must likewise not be added to context.
 
-- provider reference reaching history transport is the expected decrypted reference;
-- shared bounded A3 page limit is used;
-- message materializes through the existing Telegram materializer;
-- the same durable row's A3 cursor advances;
-- generic peer metadata remains correct;
-- legacy group metadata fields remain present/compatible where currently emitted.
+### 5. Assistant/MCP neighbor discovery
 
-Do not create a separate history implementation.
+`list_neighbors` is an active discovery tool. It must not return inactive MTProto Telegram neighbor Objects. Prefer enforcing the shared predicate before/inside the query so filtering does not accidentally create a cross-user leak.
 
-### 6. Scoped API signed-ID routing boundaries
+Direct `get_object(object_id)` remains intentionally unchanged for exact explicit historical access.
 
-Through the FastAPI test client for:
+### 6. Conversation-member discovery
 
-`POST /telegram/mtproto/sync-scope/peers/{peer_id}/sync`
+If `list_conversation_members` can be called for a Telegram MTProto conversation, inactive MTProto members/conversations must not become an assistant/MCP discovery bypass. Apply the same active rule to the seed/member read path where needed.
 
-prove:
+Do not redesign conversation stacking; make only the minimal visibility integration.
 
-- `0` stays sanitized `422` with zero service calls (existing direct-function test may remain, but add actual HTTP boundary coverage if it does not already exist);
-- a valid positive private peer ID reaches `sync_scope_peer()` with exactly that ID;
-- a valid negative group/supergroup peer ID reaches `sync_scope_peer()` with exactly that ID;
-- below `-(2**63)` and above `2**63-1` return sanitized `422` without calling the history service.
+## Reactivation semantics
 
-No raw invalid peer value should be echoed in a provider error detail.
+Changing the durable row from `scope_active=false` back to `scope_active=true` must make already stored matching Objects visible again immediately on the next read.
 
-### 7. Remaining scoped API error mappings
+Reactivation MUST NOT require or trigger:
 
-Using the scoped endpoint, explicitly test:
+- Telegram history fetch;
+- materialization/upsert;
+- Object update;
+- Representation rewrite;
+- embedding/re-embedding job;
+- queue/scheduler activity.
 
-- `TelegramMtprotoProviderReferenceInvalidError` -> sanitized `409` with generic `Telegram peer is no longer available`;
-- `TelegramMtprotoAuthorizationInvalidError` -> controlled `409` using the existing sanitized domain message;
-- `TelegramMtprotoProviderUnavailableError` -> existing sanitized provider response;
-- a provider-unavailable error carrying retry-after/FloodWait metadata preserves the existing bounded Retry-After behavior used by the shared helper.
+The Object id, external id, body, metadata, timestamps and representations remain the same.
 
-The already-passing `TelegramMtprotoGroupUnavailableError -> 409` regression does not need duplication.
+## Deliberate boundaries
 
-## Acceptance note
+Do NOT implement in A4.3:
 
-The following A4.2T requirements are already adequately covered and should not be rewritten just to increase test count:
+- recurring Telegram scheduler/job registration;
+- automatic/bulk `sync all active peers`;
+- new history fetching;
+- provider-side Telegram mutations;
+- physical purge/delete of imported messages;
+- rewriting Object state/status/deleted_at to encode Telegram scope;
+- mass Object metadata updates;
+- embedding or representation invalidation on scope transitions;
+- UI/Flutter changes;
+- removal of legacy A2/A3 endpoints;
+- merge to `main`;
+- production deployment or production migrations.
 
-- full five-field cursor preservation across scope deactivate/re-entry;
-- unsupported descriptor does not persist;
-- inactive scoped peer rejected before history;
-- discovery/universe truncation fail closed against real persisted state;
-- muted active peer deactivates without row deletion;
-- private `sync_scope_peer()` materialization/cursors/metadata/external ID/idempotency;
-- explicit complete empty scope deactivation;
-- reconciliation does not fetch history;
-- migration head `0046`;
-- scoped unavailable-peer sanitized 409.
+A4.4 or later will address automatic synchronization only after active-read semantics are accepted.
+
+## Required tests
+
+Prefer a dedicated `backend/tests/test_telegram_mtproto_a4_3.py` plus focused additions to existing retrieval/context/inbox/tool tests where that is the natural home.
+
+Use real PostgreSQL-backed rows for the core scope behavior. Cover at minimum:
+
+1. **Canonical active predicate**
+   - active MTProto row is retrievable;
+   - same Object becomes non-retrievable when only `scope_active` changes to false;
+   - setting `manual_selected=true` while `scope_active=false` does NOT restore visibility;
+   - restoring `scope_active=true` restores the SAME Object without changing the Object row or its representations.
+
+2. **Supported peer kinds**
+   - private, group and supergroup MTProto Objects obey the same active gate.
+
+3. **Fail closed metadata/ownership**
+   - MTProto Object with missing account id, missing peer id, malformed values, missing selection, or mismatched account/user is excluded without query error;
+   - another user's active selection cannot make the Object visible.
+
+4. **Legacy/non-MTProto compatibility**
+   - non-Telegram Objects are unchanged;
+   - legacy Telegram/Bot API Object without `metadata.transport == "mtproto"` remains governed by its previous visibility rules.
+
+5. **Retrieval/Search**
+   - FTS/lexical candidate discovery excludes inactive MTProto Object;
+   - representation-backed retrieval also excludes it;
+   - `provider="telegram"` filter does not bypass the gate;
+   - reactivation restores it with the same Object id.
+
+6. **Structured query**
+   - `ObjectQueryService` / `query_objects` excludes inactive MTProto Object and returns it after reactivation;
+   - kind/provider/date filters cannot bypass the gate.
+
+7. **Recent source / inbox**
+   - inactive MTProto chat message is absent from `RecentSourceService` list/count/review eligibility;
+   - reactivation restores it without rematerialization;
+   - non-MTProto chat providers remain unaffected.
+
+8. **Context expansion**
+   - query-driven context does not include inactive MTProto Object;
+   - inactive MTProto Object linked/pinned/contained as an automatically expanded neighbor is not included;
+   - direct exact `object_id` target remains readable as retained history;
+   - inactive object's representations are not leaked through automatic context expansion.
+
+9. **Neighbor/conversation tool bypasses**
+   - `list_neighbors` does not return inactive MTProto neighbors;
+   - `list_conversation_members` cannot surface an inactive MTProto conversation/member as an active discovery bypass;
+   - active counterparts still work.
+
+10. **No side effects**
+   - toggling scope visibility causes no history transport call, no Job enqueue, no Object/Representation mutation and no deletion;
+   - Alembic remains single head `0046`.
+
+Preserve all existing A1/A2/A3/A4.1/A4.2 tests.
 
 ## Required verification
 
-Use only local development PostgreSQL:
+Use only the local development PostgreSQL:
 
 `docker compose -f infra/compose.yaml -f infra/compose.dev.yaml up -d db`
 
-Wait for healthy.
+Wait until healthy.
 
-From `backend`:
+From `backend` run:
 
 `alembic upgrade head`
 
-`pytest -q tests/test_telegram_mtproto_a1.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py`
+`pytest -q tests/test_telegram_mtproto_a1.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py tests/test_telegram_mtproto_a4_3.py`
+
+Also run the existing focused suites for every active-read service changed by this task (retrieval/search, object query, recent source/inbox, context, graph/tool/conversation-member as applicable). Do not silently skip an existing relevant suite because it is not named in the Telegram-only command above; report the exact additional test files selected and results.
+
+Run:
 
 `alembic heads`
 
-`ruff check app/api/telegram_mtproto.py app/connectors/telegram/mtproto_account_store.py app/connectors/telegram/mtproto_errors.py app/connectors/telegram/mtproto_transport.py app/db/models.py app/services/telegram_mtproto_history_service.py app/services/telegram_mtproto_scope_service.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py`
+Run `ruff check` over every changed Python file and every new/modified A4.3 test file.
+
+Run:
 
 `git diff --check`
-
-If a new test exposes a production-code defect, apply only the minimal correction, then rerun all commands above.
 
 ## Completion report
 
@@ -181,19 +224,25 @@ Commit and push only to `review/telegram-depth-a4-folder-scope`. Do not merge to
 Return:
 
 - starting branch HEAD after Architect bookkeeping fast-forward;
-- A4.2U commit SHA(s);
+- A4.3 implementation commit SHA(s);
 - final pushed branch HEAD;
 - changed files;
-- Alembic head;
-- exact DB startup/alembic/pytest/ruff/diff-check results;
-- mapping of cases 1–7 above to concrete test names;
-- production-code defect found? If yes, exact minimal fix; otherwise `none`;
-- confirmation no scheduler/bulk/retrieval/UI/production/next-phase work was started;
-- `git status --short`;
-- final marker exactly: `TELEGRAM_A4_2_REMAINING_TESTS_READY`.
+- confirmation no migration and Alembic remains `0046`;
+- exact local DB startup + `alembic upgrade head` result;
+- exact Telegram suite command/result;
+- exact additional active-read regression suites and results;
+- exact ruff and `git diff --check` results;
+- location/design of the shared MTProto active-retrieval predicate;
+- explicit evidence that Retrieval/Search, ObjectQuery, RecentSource, Context automatic expansion, neighbor discovery and conversation-member discovery cannot bypass inactive scope;
+- confirmation direct exact by-id retained-history access remains available;
+- confirmation reactivation exposes the same stored Object without history fetch, object/representation mutation, embedding job or queue work;
+- confirmation `manual_selected` alone does not grant retrieval visibility;
+- confirmation no scheduler/bulk sync/UI/production/next-phase work was started;
+- `git status --short` for the review worktree;
+- final marker exactly: `TELEGRAM_A4_3_RETRIEVAL_SCOPE_READY`.
 
-Then STOP.
+Then STOP. Do not begin A4.4.
 
 ## Production boundary
 
-No production deployment, production migration, rollback, SSH, production Compose, runtime probing, credential changes, or provider-side mutation is authorized.
+No production deployment, production migration application, rollback, SSH, production Compose, runtime probing, credential changes, or provider-side Telegram mutation is authorized.
