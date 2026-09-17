@@ -23,15 +23,15 @@
 - Telegram A4 integration baseline:
   ACCEPTED on `review/telegram-depth-a4-folder-scope`
   `4f1a9012145faa66baf499ad4fc9c08b759e9a5f`
-- Telegram A4.1 implementation:
-  REVIEWED / CHANGES REQUIRED / NOT ACCEPTED
-  reviewed SHA `814f75c330e9876ca9ee7f2da692c5d39d51ba40`.
-- A4.1 durable migration/configuration direction remains valid; review Alembic head remains expected `0045`.
-- Blocking provider-semantics findings:
-  custom Telegram `DialogFilter` IDs are not peer-folder IDs for `iter_dialogs(folder=...)`; `messages.getDialogFilters` current result is a wrapper with `.filters`; effective mute must be derived from raw notify settings rather than a presumed `Dialog.muted` property.
+- Telegram A4.1 initial implementation:
+  NOT ACCEPTED due provider-semantics defect at reviewed SHA `814f75c330e9876ca9ee7f2da692c5d39d51ba40`.
+- Telegram A4.1R provider-semantics correction:
+  CODE REVIEW PASSED at `0a987bc02a16eaea5aadc859ad631510579b0743`; acceptance pending required regression-test coverage.
+- Corrected A4.1 semantics:
+  custom `DialogFilter` definitions come from `messages.DialogFilters.filters`; one bounded all-dialog scan is used; custom filter IDs are not passed to `iter_dialogs(folder=...)`; membership is evaluated from filter definitions; final Secretary eligibility remains `member of configured filter AND currently not muted`.
 - Current authorized work:
-  Telegram Depth A4.1R provider-semantics correction only, on `review/telegram-depth-a4-folder-scope`.
-- A4.1R must evaluate custom filter membership from live dialog facts + Telegram filter definitions, keep final Secretary rule `member of configured filter AND currently not muted`, preserve stable filter-ID configuration, and remain read-only with respect to history/materialization/queue/scheduler.
+  Telegram Depth A4.1T acceptance-test hardening only, on `review/telegram-depth-a4-folder-scope`.
+- Review Alembic head remains `0045`; no new migration is authorized by A4.1T.
 - A4.2 is NOT STARTED / NOT AUTHORIZED.
 - Main code still does not contain A3/A4 Telegram migrations 0044/0045; production remains at Alembic 0041.
 - Telegram eventual production rollout remains migration-bearing and requires a separate explicit migration deployment plan.
