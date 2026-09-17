@@ -763,6 +763,30 @@ class TelegramMtprotoAccount(Base):
     )
 
 
+class TelegramMtprotoSyncFolder(Base):
+    __tablename__ = "telegram_mtproto_sync_folders"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_mtproto_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    folder_id: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    folder_name: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    ignore_muted: Mapped[bool] = mapped_column(nullable=False, server_default=sa.true())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "account_id", "folder_id", name="uq_telegram_mtproto_sync_folders_account_folder"
+        ),
+    )
+
+
 class TelegramMtprotoChatSelection(Base):
     __tablename__ = "telegram_mtproto_chat_selections"
 

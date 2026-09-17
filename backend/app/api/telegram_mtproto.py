@@ -16,6 +16,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoChallengeExpiredError,
     TelegramMtprotoChallengeNotFoundError,
     TelegramMtprotoConfigurationError,
+    TelegramMtprotoFolderConfigurationError,
     TelegramMtprotoGroupNotSelectedError,
     TelegramMtprotoGroupUnavailableError,
     TelegramMtprotoIdentityConflictError,
@@ -24,6 +25,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoInvalidPhoneError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoScopeUnavailableError,
 )
 from app.core.current_user import CurrentUserContext
 from app.services.telegram_mtproto_auth_service import (
@@ -38,6 +40,12 @@ from app.services.telegram_mtproto_group_service import (
 from app.services.telegram_mtproto_history_service import (
     TelegramMtprotoHistoryService,
     TelegramMtprotoHistorySummary,
+)
+from app.services.telegram_mtproto_scope_service import (
+    TelegramMtprotoConfiguredFolder,
+    TelegramMtprotoFoldersResult,
+    TelegramMtprotoScopeResult,
+    TelegramMtprotoScopeService,
 )
 
 INVALID_MTPROTO_REQUEST_DETAIL = "Invalid Telegram MTProto request"
@@ -112,6 +120,47 @@ class TelegramMtprotoGroupOut(BaseModel):
 class TelegramMtprotoGroupsOut(BaseModel):
     groups: list[TelegramMtprotoGroupOut]
     truncated: bool
+
+
+class TelegramMtprotoFolderOut(BaseModel):
+    folder_id: int
+    name: str
+
+
+class TelegramMtprotoFoldersOut(BaseModel):
+    folders: list[TelegramMtprotoFolderOut]
+    truncated: bool
+
+
+class TelegramMtprotoConfiguredFolderOut(BaseModel):
+    folder_id: int
+    name: str
+    ignore_muted: bool
+
+
+class TelegramMtprotoConfiguredFoldersOut(BaseModel):
+    folders: list[TelegramMtprotoConfiguredFolderOut]
+    ignore_muted: bool = True
+
+
+class TelegramMtprotoFolderConfigurationIn(BaseModel):
+    folder_names: list[str] = Field(default_factory=list, max_length=100)
+    ignore_muted: bool = Field(default=True, strict=True)
+
+
+class TelegramMtprotoScopeDialogOut(BaseModel):
+    peer_id: int
+    kind: Literal["private", "group", "supergroup"]
+    title: str
+    username: str | None
+    is_muted: bool
+
+
+class TelegramMtprotoScopePreviewOut(BaseModel):
+    dialogs: list[TelegramMtprotoScopeDialogOut]
+    truncated: bool
+    skipped_counts: dict[str, int]
+    configured_folder_count: int
 
 
 class TelegramMtprotoGroupSelectionIn(BaseModel):
@@ -251,6 +300,81 @@ async def telegram_mtproto_groups(
     )
 
 
+@router.get("/telegram/mtproto/folders", response_model=TelegramMtprotoFoldersOut)
+async def telegram_mtproto_folders(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoFoldersOut:
+    _require_configured()
+    try:
+        result = await TelegramMtprotoScopeService(session).list_available_folders(current_user.user_id)
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoFolderConfigurationError as exc:
+        raise _configuration_response() from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return _folders_out(result)
+
+
+@router.get("/telegram/mtproto/sync-folders", response_model=TelegramMtprotoConfiguredFoldersOut)
+def telegram_mtproto_sync_folders(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoConfiguredFoldersOut:
+    _require_configured()
+    try:
+        folders = TelegramMtprotoScopeService(session).configured_folders(current_user.user_id)
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoFolderConfigurationError as exc:
+        raise _configuration_response() from exc
+    return _configured_folders_out(folders)
+
+
+@router.put("/telegram/mtproto/sync-folders", response_model=TelegramMtprotoConfiguredFoldersOut)
+async def telegram_mtproto_replace_sync_folders(
+    payload: TelegramMtprotoFolderConfigurationIn,
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoConfiguredFoldersOut:
+    _require_configured()
+    try:
+        folders = await TelegramMtprotoScopeService(session).replace_folders(
+            current_user.user_id, payload.folder_names, ignore_muted=payload.ignore_muted
+        )
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoFolderConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return _configured_folders_out(folders)
+
+
+@router.get("/telegram/mtproto/sync-scope/preview", response_model=TelegramMtprotoScopePreviewOut)
+async def telegram_mtproto_scope_preview(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoScopePreviewOut:
+    _require_configured()
+    try:
+        result = await TelegramMtprotoScopeService(session).preview_scope(current_user.user_id)
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except (TelegramMtprotoFolderConfigurationError, TelegramMtprotoScopeUnavailableError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return _scope_out(result)
+
+
 @router.patch(
     "/telegram/mtproto/groups/{peer_id}", response_model=TelegramMtprotoGroupSelectionOut
 )
@@ -334,6 +458,45 @@ def _group_out(group: TelegramMtprotoGroup) -> TelegramMtprotoGroupOut:
         is_forum=group.is_forum,
         selected=group.selected,
         available=group.available,
+    )
+
+
+def _folders_out(result: TelegramMtprotoFoldersResult) -> TelegramMtprotoFoldersOut:
+    return TelegramMtprotoFoldersOut(
+        folders=[TelegramMtprotoFolderOut(folder_id=item.folder_id, name=item.name) for item in result.folders],
+        truncated=result.truncated,
+    )
+
+
+def _configured_folders_out(
+    folders: tuple[TelegramMtprotoConfiguredFolder, ...],
+) -> TelegramMtprotoConfiguredFoldersOut:
+    return TelegramMtprotoConfiguredFoldersOut(
+        folders=[
+            TelegramMtprotoConfiguredFolderOut(
+                folder_id=item.folder_id, name=item.name, ignore_muted=item.ignore_muted
+            )
+            for item in folders
+        ],
+        ignore_muted=True,
+    )
+
+
+def _scope_out(result: TelegramMtprotoScopeResult) -> TelegramMtprotoScopePreviewOut:
+    return TelegramMtprotoScopePreviewOut(
+        dialogs=[
+            TelegramMtprotoScopeDialogOut(
+                peer_id=item.peer_id,
+                kind=item.kind,
+                title=item.title,
+                username=item.username,
+                is_muted=item.is_muted,
+            )
+            for item in result.dialogs
+        ],
+        truncated=result.truncated,
+        skipped_counts=result.skipped_counts,
+        configured_folder_count=result.configured_folder_count,
     )
 
 

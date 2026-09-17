@@ -48,6 +48,14 @@ class TelegramMtprotoGroupNotSelectedError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoFolderConfigurationError(TelegramMtprotoError):
+    pass
+
+
+class TelegramMtprotoScopeUnavailableError(TelegramMtprotoError):
+    pass
+
+
 class TelegramMtprotoProviderReferenceInvalidError(TelegramMtprotoError):
     pass
 

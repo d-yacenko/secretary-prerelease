@@ -23,6 +23,7 @@ from telethon.errors import (
 from telethon.errors.common import AuthKeyNotFound
 from telethon.sessions import StringSession
 from telethon.tl import types
+from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from app.connectors.telegram.constants import MAX_TELEGRAM_MESSAGE_BODY_CHARS
 from app.connectors.telegram.mtproto_errors import (
@@ -77,6 +78,35 @@ class TelegramMtprotoGroupDiscoveryResult:
 
 
 @dataclass(frozen=True)
+class TelegramMtprotoFolderDescriptor:
+    folder_id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class TelegramMtprotoFolderDiscoveryResult:
+    folders: tuple[TelegramMtprotoFolderDescriptor, ...]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class TelegramMtprotoDialogDescriptor:
+    peer_id: int
+    kind: str
+    title: str
+    username: str | None
+    is_muted: bool
+    provider_peer_reference: str
+
+
+@dataclass(frozen=True)
+class TelegramMtprotoFolderDialogsResult:
+    dialogs: tuple[TelegramMtprotoDialogDescriptor, ...]
+    truncated: bool
+    skipped_counts: dict[str, int]
+
+
+@dataclass(frozen=True)
 class TelegramMtprotoHistoryEntry:
     message_id: int
     occurred_at: datetime | None
@@ -111,6 +141,16 @@ class TelegramMtprotoTransport(Protocol):
     async def discover_groups(
         self, session: str, limit: int
     ) -> TelegramMtprotoGroupDiscoveryResult:
+        ...
+
+    async def discover_folders(
+        self, session: str, limit: int
+    ) -> TelegramMtprotoFolderDiscoveryResult:
+        ...
+
+    async def fetch_folder_dialogs(
+        self, session: str, folder_id: int, limit: int
+    ) -> TelegramMtprotoFolderDialogsResult:
         ...
 
     async def fetch_history(
@@ -272,6 +312,97 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
+    async def discover_folders(
+        self, session: str, limit: int
+    ) -> TelegramMtprotoFolderDiscoveryResult:
+        client: TelegramClient | None = None
+        scan_limit = max(1, min(limit, DISCOVERY_DIALOG_LIMIT))
+        try:
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoAuthorizationInvalidError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            filters = await client(GetDialogFiltersRequest())
+            folders: list[TelegramMtprotoFolderDescriptor] = []
+            for item in filters:
+                folder_id = getattr(item, "id", None)
+                name = _folder_name(item)
+                if isinstance(folder_id, int) and not isinstance(folder_id, bool) and folder_id > 0 and name:
+                    folders.append(TelegramMtprotoFolderDescriptor(folder_id, name))
+                    if len(folders) >= scan_limit:
+                        break
+            return TelegramMtprotoFolderDiscoveryResult(tuple(folders), len(folders) >= scan_limit)
+        except (
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError as exc:
+            raise _flood_wait_error(exc) from None
+        except TelegramMtprotoError:
+            raise
+        except Exception as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram folder provider is temporarily unavailable"
+            ) from exc
+        finally:
+            await _disconnect(client)
+
+    async def fetch_folder_dialogs(
+        self, session: str, folder_id: int, limit: int
+    ) -> TelegramMtprotoFolderDialogsResult:
+        client: TelegramClient | None = None
+        scan_limit = max(1, min(limit, DISCOVERY_DIALOG_LIMIT))
+        try:
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoAuthorizationInvalidError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            dialogs: list[TelegramMtprotoDialogDescriptor] = []
+            skipped: dict[str, int] = {}
+            seen = 0
+            async for dialog in client.iter_dialogs(folder=folder_id, limit=scan_limit):
+                if seen >= scan_limit:
+                    break
+                seen += 1
+                descriptor, reason = _dialog_from_dialog(dialog)
+                if descriptor is None:
+                    skipped[reason or "unsupported"] = skipped.get(reason or "unsupported", 0) + 1
+                else:
+                    dialogs.append(descriptor)
+            return TelegramMtprotoFolderDialogsResult(tuple(dialogs), seen >= scan_limit, skipped)
+        except (
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError as exc:
+            raise _flood_wait_error(exc) from None
+        except TelegramMtprotoError:
+            raise
+        except Exception as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram folder provider is temporarily unavailable"
+            ) from exc
+        finally:
+            await _disconnect(client)
+
     async def fetch_history(
         self,
         session: str,
@@ -417,6 +548,71 @@ def _group_from_dialog(dialog: object) -> TelegramMtprotoGroupDescriptor | None:
     )
 
 
+def _folder_name(item: object) -> str | None:
+    title = getattr(item, "title", None)
+    if isinstance(title, str):
+        value = title.strip()
+    else:
+        value = str(getattr(title, "text", "") or "").strip()
+    return value or None
+
+
+def _dialog_from_dialog(
+    dialog: object,
+) -> tuple[TelegramMtprotoDialogDescriptor | None, str | None]:
+    entity = getattr(dialog, "entity", None)
+    if isinstance(entity, types.User):
+        if bool(getattr(entity, "bot", False)):
+            return None, "bot"
+        kind = "private"
+        entity_type = "user"
+    elif isinstance(entity, types.Chat):
+        kind = "group"
+        entity_type = "chat"
+    elif isinstance(entity, types.Channel) and entity.megagroup and not entity.broadcast:
+        kind = "supergroup"
+        entity_type = "channel"
+    elif isinstance(entity, types.Channel) and entity.broadcast:
+        return None, "broadcast"
+    else:
+        return None, "unsupported"
+    entity_id = getattr(entity, "id", None)
+    if not isinstance(entity_id, int) or isinstance(entity_id, bool):
+        return None, "unsupported"
+    title = _dialog_title(dialog, entity)
+    if not title:
+        return None, "unsupported"
+    reference: dict[str, int | str] = {"entity_type": entity_type, "id": entity_id}
+    if entity_type in {"user", "channel"}:
+        access_hash = getattr(entity, "access_hash", None)
+        if not isinstance(access_hash, int) or isinstance(access_hash, bool):
+            return None, "unsupported"
+        reference["access_hash"] = access_hash
+    try:
+        peer_id = utils.get_peer_id(entity)
+    except (TypeError, ValueError):
+        return None, "unsupported"
+    username = getattr(entity, "username", None)
+    if not isinstance(username, str) or not username.strip():
+        username = None
+    return TelegramMtprotoDialogDescriptor(
+        peer_id=peer_id,
+        kind=kind,
+        title=title,
+        username=username.strip() if username else None,
+        is_muted=bool(getattr(dialog, "muted", False)),
+        provider_peer_reference=json.dumps(reference, separators=(",", ":")),
+    ), None
+
+
+def _dialog_title(dialog: object, entity: object) -> str | None:
+    title = getattr(dialog, "name", None) or getattr(entity, "title", None)
+    if not title and isinstance(entity, types.User):
+        names = [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]
+        title = " ".join(value.strip() for value in names if isinstance(value, str) and value.strip())
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
 def _input_peer_from_reference(provider_peer_reference: str) -> object:
     try:
         payload = json.loads(provider_peer_reference)
@@ -437,6 +633,13 @@ def _input_peer_from_reference(provider_peer_reference: str) -> object:
     if entity_type == "chat" and set(payload) == {"entity_type", "id"}:
         return types.InputPeerChat(chat_id=entity_id)
     access_hash = payload.get("access_hash")
+    if (
+        entity_type == "user"
+        and set(payload) == {"entity_type", "id", "access_hash"}
+        and isinstance(access_hash, int)
+        and not isinstance(access_hash, bool)
+    ):
+        return types.InputPeerUser(user_id=entity_id, access_hash=access_hash)
     if (
         entity_type == "channel"
         and set(payload) == {"entity_type", "id", "access_hash"}

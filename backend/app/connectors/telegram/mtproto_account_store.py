@@ -14,6 +14,7 @@ from app.db.models import (
     TelegramMtprotoAccount,
     TelegramMtprotoAuthChallenge,
     TelegramMtprotoChatSelection,
+    TelegramMtprotoSyncFolder,
 )
 
 
@@ -42,6 +43,46 @@ class TelegramMtprotoAccountStore:
                 .order_by(TelegramMtprotoChatSelection.created_at, TelegramMtprotoChatSelection.id)
             )
         )
+
+    def list_sync_folders(self, account_id: UUID) -> list[TelegramMtprotoSyncFolder]:
+        return list(
+            self._session.scalars(
+                select(TelegramMtprotoSyncFolder)
+                .where(TelegramMtprotoSyncFolder.account_id == account_id)
+                .order_by(TelegramMtprotoSyncFolder.created_at, TelegramMtprotoSyncFolder.id)
+            )
+        )
+
+    def replace_sync_folders(
+        self,
+        account_id: UUID,
+        folders: list[tuple[int, str]],
+    ) -> list[TelegramMtprotoSyncFolder]:
+        self._session.query(TelegramMtprotoSyncFolder).filter(
+            TelegramMtprotoSyncFolder.account_id == account_id
+        ).delete(synchronize_session=False)
+        result = [
+            TelegramMtprotoSyncFolder(
+                account_id=account_id,
+                folder_id=folder_id,
+                folder_name=name,
+                ignore_muted=True,
+            )
+            for folder_id, name in folders
+        ]
+        self._session.add_all(result)
+        self._session.flush()
+        return result
+
+    def refresh_sync_folder_names(
+        self, account_id: UUID, names_by_id: dict[int, str]
+    ) -> None:
+        for folder in self.list_sync_folders(account_id):
+            current_name = names_by_id.get(folder.folder_id)
+            if current_name is not None and folder.folder_name != current_name:
+                folder.folder_name = current_name
+                folder.updated_at = utcnow()
+        self._session.flush()
 
     def get_selection(
         self, account_id: UUID, peer_id: int
