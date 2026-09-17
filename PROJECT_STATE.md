@@ -23,14 +23,17 @@
 - Telegram A4 integration baseline:
   ACCEPTED on `review/telegram-depth-a4-folder-scope`
   `4f1a9012145faa66baf499ad4fc9c08b759e9a5f`
-- The A4 baseline merge preserves exact A3 SHA in ancestry and had no manual conflict-resolution changes.
-- A4 baseline verification reported:
-  targeted A1/A2/A3 tests `65 passed`; review Alembic head `0044`; clean primary and review worktrees.
-- Telegram Depth A4.1 — folder configuration and eligibility resolver:
-  ACTIVE / IMPLEMENTATION AUTHORIZED on `review/telegram-depth-a4-folder-scope`.
-- A4.1 scope is backend-only durable folder configuration + read-only dynamic eligibility preview using stable folder IDs and the canonical rule `configured folder membership AND not muted`.
-- A4.1 does not authorize history import, materialization into active history scope, scheduler work, UI, merge to main, or production work.
-- Main code still does not contain A3/A4 Telegram migration 0044+; production remains at Alembic 0041.
+- Telegram A4.1 implementation:
+  REVIEWED / CHANGES REQUIRED / NOT ACCEPTED
+  reviewed SHA `814f75c330e9876ca9ee7f2da692c5d39d51ba40`.
+- A4.1 durable migration/configuration direction remains valid; review Alembic head remains expected `0045`.
+- Blocking provider-semantics findings:
+  custom Telegram `DialogFilter` IDs are not peer-folder IDs for `iter_dialogs(folder=...)`; `messages.getDialogFilters` current result is a wrapper with `.filters`; effective mute must be derived from raw notify settings rather than a presumed `Dialog.muted` property.
+- Current authorized work:
+  Telegram Depth A4.1R provider-semantics correction only, on `review/telegram-depth-a4-folder-scope`.
+- A4.1R must evaluate custom filter membership from live dialog facts + Telegram filter definitions, keep final Secretary rule `member of configured filter AND currently not muted`, preserve stable filter-ID configuration, and remain read-only with respect to history/materialization/queue/scheduler.
+- A4.2 is NOT STARTED / NOT AUTHORIZED.
+- Main code still does not contain A3/A4 Telegram migrations 0044/0045; production remains at Alembic 0041.
 - Telegram eventual production rollout remains migration-bearing and requires a separate explicit migration deployment plan.
 - IMAP IDLE:
   NOT STARTED
