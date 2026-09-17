@@ -2,16 +2,34 @@
 
 - Active development repository: `d-yacenko/secretary-prerelease`.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
-- Telegram Depth A: ACTIVE.
-- Telegram Depth A1: CODE ACCEPTED / MERGED.
-- Telegram Depth A2: CODE ACCEPTED / MERGED.
-- Accepted A2 SHA: `695da08f0ce648fffaf4723158b8636ede1de30c`.
-- Development Alembic head: `0043`.
-- Explicit Telegram group selection is default-OFF.
-- Accepted A1 SHA: `f05e3fe5a569ed64b9fd7495efdccbc7477e46f6`.
-- Production application SHA remains:
-  `6d69d936a7e5e08c427598bc8d659d3c7fe6b4ae`.
-- Production Alembic remains `0041 / 0041`.
-- Telegram Depth A is not yet production deployed.
-- Telegram Depth A3: NOT STARTED.
-- Yandex Sync Resilience A: ACCEPTED / CLOSED.
+- Development main:
+  5f2e7e8efafe8ab0270d0e24319e1ca2b9f5acf3
+- Development Alembic:
+  0043
+- Production application:
+  2c19512d11428920932ffec2267780699ae39d3b
+- Production Alembic:
+  0041 / 0041
+- Production health:
+  PASS
+- Yandex transient retry hotfix:
+  DEPLOYED / RUNTIME VERIFIED
+- Production Yandex Mail synchronized successfully after rollout and returned
+  to normal scheduling.
+- Production Compose execution requires explicit:
+  /opt/secretary/.env
+- Explicit DB authentication from resolved production env:
+  VERIFIED
+- File-backed DB password transport:
+  CANCELLED / NOT REQUIRED
+- Google Sync Resilience A:
+  ACTIVE
+- Telegram A1/A2:
+  MERGED / NOT PRODUCTION DEPLOYED
+- Telegram A3:
+  CODE ACCEPTED / UNMERGED / NOT DEPLOYED
+  4777c32deb055f5024f3dbced125b4dd6db97e85
+- IMAP IDLE:
+  NOT STARTED
+
+Do not invent or authorize additional roadmap items.
