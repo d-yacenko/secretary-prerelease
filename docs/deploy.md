@@ -51,6 +51,12 @@ python3 ops/production/deploy.py \
 
 The Architect task must assign those shell variables to exact authorized values before execution. Empty or malformed values fail closed.
 
+## Schema-neutral release limitation
+
+`ops/production/deploy.py` is only for schema-neutral, application-only releases. Before any SSH connection, it verifies that both supplied commits resolve locally and that the Alembic migration infrastructure is unchanged between the rollback and release commits.
+
+A release that changes migration files, Alembic environment configuration, or the migration template requires a separate Architect-authorized migration deployment plan with explicit forward and rollback semantics. It must not be bypassed with an automatic migration override flag in the normal deployment harness.
+
 ## What the deployment harness enforces
 
 The local entrypoint:

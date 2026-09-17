@@ -24,6 +24,12 @@ REMOTE_HELPER = HERE / "remote_deploy.py"
 CANONICAL_ORIGIN = "https://github.com/d-yacenko/secretary-prerelease.git"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+MIGRATION_PATHS = (
+    "backend/alembic/versions/",
+    "backend/alembic/env.py",
+    "backend/alembic.ini",
+    "backend/alembic/script.py.mako",
+)
 
 
 class DeployError(RuntimeError):
@@ -99,6 +105,37 @@ def _validate_sha(name: str, value: str) -> str:
     return value
 
 
+def _require_schema_neutral_release(rollback_sha: str, release_sha: str) -> None:
+    for name, sha in (("rollback", rollback_sha), ("release", release_sha)):
+        try:
+            _run_local(["git", "-C", str(REPOSITORY_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"])
+        except DeployError as exc:
+            raise DeployError(f"{name} SHA cannot be resolved locally") from exc
+
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "diff",
+            "--quiet",
+            rollback_sha,
+            release_sha,
+            "--",
+            *MIGRATION_PATHS,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode == 1:
+        raise DeployError(
+            "release changes migration infrastructure; separate migration deployment plan required"
+        )
+    if proc.returncode != 0:
+        raise DeployError("unable to compare release migration infrastructure")
+
+
 def _host_from_target(target: str) -> str:
     host = target.rsplit("@", 1)[-1]
     if host.startswith("[") and host.endswith("]"):
@@ -158,6 +195,7 @@ def main() -> int:
         target = _load_target()
         release_sha = _validate_sha("release-sha", args.release_sha)
         rollback_sha = _validate_sha("rollback-sha", args.rollback_sha)
+        _require_schema_neutral_release(rollback_sha, release_sha)
         expected_alembic = args.expected_alembic.strip()
         if not re.fullmatch(r"[0-9]{4}", expected_alembic):
             raise DeployError("expected-alembic must be a four-digit revision")
