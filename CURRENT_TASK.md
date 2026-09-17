@@ -1,162 +1,160 @@
-# Current task — Telegram Depth A4.2T final acceptance coverage
+# Current task — Telegram Depth A4.2U remaining acceptance gaps
 
 ## Status
 
 Telegram Depth A4.1 — ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
 
-Telegram Depth A4.2 implementation `e4202d1171f9a6552d2b276093cd39d6692d6e05` plus A4.2R correction `28ca11160ce2b0ffcca651bfc2058b9344c379b1` — CODE REVIEW PASSED FOR THE KNOWN 409 DEFECT / ACCEPTANCE STILL PENDING REQUIRED COVERAGE.
+Telegram Depth A4.2 implementation `e4202d1171f9a6552d2b276093cd39d6692d6e05`, A4.2R correction `28ca11160ce2b0ffcca651bfc2058b9344c379b1`, and A4.2T test hardening `88207034c5dbd0921b4eab30a419042eda36d9f1` — CODE DIRECTION VALID / ACCEPTANCE STILL PENDING A SMALL SET OF EXPLICIT REGRESSIONS.
 
-A4.2R correctly adds sanitized handling for `TelegramMtprotoGroupUnavailableError`, successfully runs the PostgreSQL-backed suite, and keeps Alembic at `0046`. However the dedicated A4.2 coverage still contains only seven tests total, and several mandatory behaviors from the A4.2/A4.2R contracts remain unproved.
+A4.2T is test-only and materially improves coverage: DB-backed private scoped sync, all cursor fields across re-entry, incomplete-scope preservation, muted deactivation, inactive scoped gate, complete-empty scope, and zero-ID boundary are now exercised. The required suite reports `98 passed`.
+
+A4.2 is NOT yet accepted because several requirements from the A4.2T contract are still not represented by explicit tests in the pushed file.
 
 Do NOT begin the next Telegram phase.
 
 ## Fixed branch and baseline
 
 - Repository: `d-yacenko/secretary-prerelease`
-- Work only in `review/telegram-depth-a4-folder-scope`.
+- Work only in existing branch/worktree `review/telegram-depth-a4-folder-scope`.
 - Fetch and fast-forward only to current `origin/review/telegram-depth-a4-folder-scope`, including Architect bookkeeping commits.
-- Keep A3 SHA `4777c32deb055f5024f3dbced125b4dd6db97e85` in ancestry.
+- Required implementation/test baseline includes `88207034c5dbd0921b4eab30a419042eda36d9f1` plus Architect bookkeeping.
+- Keep exact A3 SHA `4777c32deb055f5024f3dbced125b4dd6db97e85` in ancestry.
 - Do not rebase or rewrite prior commits.
 - Alembic head remains `0046`.
-- Production code is FROZEN for this task unless a required new test exposes a real defect. If so, make only the smallest correction and report it explicitly.
+- Production code is FROZEN unless one of the remaining tests exposes a real defect. If that happens, apply only the smallest same-phase fix and report it.
 
-## Why acceptance is still pending
+## Authorized work
 
-The required suite now reports `90 passed`, which is consistent with the prior accepted A1/A2/A3/A4 suite plus only seven A4.2 tests. Existing A3 tests prove the legacy `sync_group()` engine, but they do not prove that the new `sync_scope_peer()` gate and private/group/supergroup scoped paths actually reuse that engine correctly.
+Primarily modify only `backend/tests/test_telegram_mtproto_a4_2.py`. Narrow updates to A2/A3 tests are allowed only when they are the clearer location for the legacy-compatibility case.
 
-The following scenarios must be explicit regressions, not inferred from code inspection.
+Add explicit regression coverage for the remaining gaps below. Do not duplicate already-passing A3/A4 mechanics unnecessarily.
 
-## Required new tests
+### 1. Durable rows for all supported peer kinds + encryption
 
-Add focused DB-backed tests, primarily in `backend/tests/test_telegram_mtproto_a4_2.py`, with narrow A2/A3/API updates where that is the clearer home.
+One DB-backed test must reconcile three descriptors at once and inspect all three resulting rows:
 
-### 1. Durable scope-row creation
+- private peer;
+- basic group;
+- supergroup.
 
-Prove in the database that one reconciliation containing a private peer, basic group, and supergroup creates three durable rows and for each row:
+Assert for every row:
 
 - `manual_selected is False`;
 - `scope_active is True`;
-- `peer_kind` is correct;
-- provider reference is encrypted rather than stored as the supplied plaintext reference.
+- exact `peer_kind`;
+- stored `provider_peer_reference_encrypted` is not the plaintext provider reference;
+- decrypting it with the test credential key yields the original provider reference.
 
-Also prove an unsupported descriptor kind passed defensively to the store does not create a row.
+Use provider-shape-correct references:
 
-### 2. Full cursor preservation across deactivate/re-entry
+- private -> `user` + `access_hash`;
+- basic group -> `chat`;
+- supergroup -> `channel` + `access_hash`.
 
-The current test only checks `history_latest_message_id` and `history_complete`. Add coverage that deactivation and later re-entry preserve ALL A3 history state on the same row ID:
+The existing unsupported-kind test may remain as the defensive negative case.
 
-- `history_latest_message_id`;
-- `history_backfill_before_message_id`;
-- `history_cutoff_at`;
-- `history_complete`;
-- `history_last_synced_at`.
+### 2. Manual deselect/reselect preserves durable state
 
-Also prove `manual_selected=True` survives scope deactivation.
+Seed a real row with:
 
-### 3. Manual deselect/reselect durability
+- `manual_selected=True`;
+- `scope_active=True`;
+- non-empty values for all five A3 history state fields.
 
-With a real DB row that already has `scope_active=True` and non-empty history cursors:
+Exercise legacy deselect/reselect semantics and prove:
 
-- legacy deselect makes `manual_selected=False`;
-- row remains in DB;
-- `list_selections()` no longer returns it;
-- `scope_active` and every cursor field remain unchanged;
-- legacy reselect sets `manual_selected=True` again without resetting `scope_active` or cursor state.
+- deselect changes only `manual_selected` to false;
+- row ID remains the same;
+- `list_selections()` omits it while deselected;
+- `scope_active` and all five cursor/history fields are unchanged;
+- reselect restores `manual_selected=True` on the same row;
+- `scope_active` and cursor/history fields still remain unchanged.
 
-### 4. Legacy A3 manual gate on retained rows
+Prefer exercising the existing store/service path rather than mutating flags directly.
 
-Create a retained row with `manual_selected=False` (optionally `scope_active=True`) and assert:
+### 3. Legacy `sync_group()` gate on a retained row
 
-- `TelegramMtprotoHistoryService.sync_group()` raises `TelegramMtprotoGroupNotSelectedError`;
-- the fake history transport receives zero calls.
+Create a row that exists and has `scope_active=True` but `manual_selected=False`.
 
-This must prove the new retained-row behavior, not only the old “row absent” case.
+Call `TelegramMtprotoHistoryService.sync_group()` and assert:
 
-### 5. Complete empty scope reconciliation
-
-Using `TelegramMtprotoScopeService.reconcile_scope()` with zero configured folders and at least one pre-existing `scope_active=True` DB row, prove:
-
-- reconciliation is complete, not treated as truncation;
-- all scope-active rows become inactive;
-- rows and cursors remain present;
-- no history fetch occurs.
-
-### 6. Both truncation sources + missing folder fail closed
-
-Add separate tests for:
-
-- `discover_folders(...).truncated=True`;
-- `fetch_dialog_universe(...).truncated=True`;
-- configured stable folder ID missing from current discovery.
-
-For each, seed a real `scope_active=True` row and prove its active flag and cursor state are unchanged after the failure. It is insufficient only to assert that a fake store reconciliation callback was not invoked.
-
-### 7. Muted peer causes durable deactivation
-
-Seed an active peer that is still a member of a configured Telegram filter but appears currently muted in the live dialog universe. Run real scope reconciliation and prove the durable row becomes `scope_active=False` without deletion/cursor loss.
-
-### 8. Scoped inactive gate before provider history
-
-Create an existing row with `scope_active=False` and call `sync_scope_peer()`.
-
-Assert:
-
-- `TelegramMtprotoPeerNotInActiveScopeError`;
+- `TelegramMtprotoGroupNotSelectedError`;
 - fake history transport receives zero calls.
 
-### 9. Private scoped history uses the shared A3 engine
+This is distinct from the old A3 test where no selection row exists.
 
-Create an active `private` durable row with a real A4.1-style encrypted provider reference:
+### 4. Missing configured folder ID fails closed with persisted state unchanged
 
-`{"entity_type":"user","id":42,"access_hash":99}`
+Seed a real `scope_active=True` row with cursor/history state and a persisted configured folder ID that is absent from live discovery.
 
-Call `sync_scope_peer()` with a fake history transport returning at least one message.
+Run `TelegramMtprotoScopeService.reconcile_scope()` and assert:
 
-Prove:
+- `TelegramMtprotoScopeUnavailableError`;
+- row remains `scope_active=True`;
+- row ID and all cursor/history state remain unchanged;
+- no `fetch_history` call occurs.
 
-- provider call uses the decrypted user reference;
-- bounded A3 page limit is used;
-- message is materialized through the existing Telegram materializer;
-- cursor fields advance on the same durable row;
-- object metadata contains `peer_id`, `peer_kind=private`, `peer_title`, `peer_username`;
-- external ID remains the existing `mtproto|<account>|<peer>|<message>` scheme.
+The existing A4.2T truncation test already covers discovery-truncated and universe-truncated; do not duplicate those unless needed for test clarity.
 
-Then sync the same logical message again and prove idempotency (no duplicate Object; unchanged/no extra job behavior consistent with existing A3 semantics).
+### 5. Scoped group/supergroup uses the shared A3 history engine
 
-A parser-only `_input_peer_from_reference()` test is NOT sufficient for this requirement.
+Add at least one DB-backed `sync_scope_peer()` test for a group or supergroup. Supergroup is preferred because it exercises channel provider reference reconstruction.
 
-### 10. Scoped group/supergroup reuse the same engine
+Use a correct encrypted provider reference (`channel` + `access_hash` for supergroup), fake history transport, and assert:
 
-Add at least one scoped group or supergroup test showing `sync_scope_peer()` advances the same A3 cursor fields via the shared engine. Existing legacy `sync_group()` tests alone are not sufficient.
+- provider reference reaching history transport is the expected decrypted reference;
+- shared bounded A3 page limit is used;
+- message materializes through the existing Telegram materializer;
+- the same durable row's A3 cursor advances;
+- generic peer metadata remains correct;
+- legacy group metadata fields remain present/compatible where currently emitted.
 
-### 11. Scoped API peer-ID boundary
+Do not create a separate history implementation.
 
-Through the FastAPI test client, prove for the new scoped endpoint:
+### 6. Scoped API signed-ID routing boundaries
 
-- `0` => sanitized `422` without calling history service;
-- a valid positive private peer ID reaches `sync_scope_peer()`;
-- a valid negative group/supergroup marked ID reaches `sync_scope_peer()`;
-- values outside signed 64-bit bounds => sanitized `422` without calling service.
+Through the FastAPI test client for:
 
-### 12. Scoped API/domain error mappings
+`POST /telegram/mtproto/sync-scope/peers/{peer_id}/sync`
 
-In addition to the already added unavailable-peer 409 test, explicitly verify the scoped endpoint maps:
+prove:
 
-- `TelegramMtprotoProviderReferenceInvalidError` => sanitized `409` generic peer unavailable;
-- `TelegramMtprotoAuthorizationInvalidError` => controlled `409`;
-- `TelegramMtprotoProviderUnavailableError` (including retry-after behavior where existing helper applies) => existing sanitized provider response.
+- `0` stays sanitized `422` with zero service calls (existing direct-function test may remain, but add actual HTTP boundary coverage if it does not already exist);
+- a valid positive private peer ID reaches `sync_scope_peer()` with exactly that ID;
+- a valid negative group/supergroup peer ID reaches `sync_scope_peer()` with exactly that ID;
+- below `-(2**63)` and above `2**63-1` return sanitized `422` without calling the history service.
 
-No provider/raw exception text may leak.
+No raw invalid peer value should be echoed in a provider error detail.
 
-## Existing coverage that may be reused
+### 7. Remaining scoped API error mappings
 
-Do NOT duplicate already strong A3 tests for generic page bounds, cutoff/backfill mechanics, materializer rollback, or legacy `sync_group()` idempotency. The missing requirement is to connect the NEW scoped gate/path to those shared internals.
+Using the scoped endpoint, explicitly test:
 
-Likewise keep the existing A4.1 provider-filter tests unchanged.
+- `TelegramMtprotoProviderReferenceInvalidError` -> sanitized `409` with generic `Telegram peer is no longer available`;
+- `TelegramMtprotoAuthorizationInvalidError` -> controlled `409` using the existing sanitized domain message;
+- `TelegramMtprotoProviderUnavailableError` -> existing sanitized provider response;
+- a provider-unavailable error carrying retry-after/FloodWait metadata preserves the existing bounded Retry-After behavior used by the shared helper.
+
+The already-passing `TelegramMtprotoGroupUnavailableError -> 409` regression does not need duplication.
+
+## Acceptance note
+
+The following A4.2T requirements are already adequately covered and should not be rewritten just to increase test count:
+
+- full five-field cursor preservation across scope deactivate/re-entry;
+- unsupported descriptor does not persist;
+- inactive scoped peer rejected before history;
+- discovery/universe truncation fail closed against real persisted state;
+- muted active peer deactivates without row deletion;
+- private `sync_scope_peer()` materialization/cursors/metadata/external ID/idempotency;
+- explicit complete empty scope deactivation;
+- reconciliation does not fetch history;
+- migration head `0046`;
+- scoped unavailable-peer sanitized 409.
 
 ## Required verification
 
-Use the repository local development PostgreSQL only:
+Use only local development PostgreSQL:
 
 `docker compose -f infra/compose.yaml -f infra/compose.dev.yaml up -d db`
 
@@ -174,7 +172,7 @@ From `backend`:
 
 `git diff --check`
 
-If a new regression test exposes a product-code defect, apply only the minimal same-phase correction, rerun the full command set, and report it.
+If a new test exposes a production-code defect, apply only the minimal correction, then rerun all commands above.
 
 ## Completion report
 
@@ -183,17 +181,16 @@ Commit and push only to `review/telegram-depth-a4-folder-scope`. Do not merge to
 Return:
 
 - starting branch HEAD after Architect bookkeeping fast-forward;
-- A4.2T commit SHA(s);
+- A4.2U commit SHA(s);
 - final pushed branch HEAD;
 - changed files;
 - Alembic head;
 - exact DB startup/alembic/pytest/ruff/diff-check results;
-- explicit mapping from each numbered acceptance case above to test name(s);
-- any production-code defect found and exact minimal fix, or state `none`;
-- confirmation scoped private sync was exercised through `sync_scope_peer()` and materialization/cursors, not parser-only;
+- mapping of cases 1–7 above to concrete test names;
+- production-code defect found? If yes, exact minimal fix; otherwise `none`;
 - confirmation no scheduler/bulk/retrieval/UI/production/next-phase work was started;
 - `git status --short`;
-- final marker exactly: `TELEGRAM_A4_2_FINAL_TESTS_READY`.
+- final marker exactly: `TELEGRAM_A4_2_REMAINING_TESTS_READY`.
 
 Then STOP.
 
