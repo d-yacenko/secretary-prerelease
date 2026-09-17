@@ -48,6 +48,10 @@ class TelegramMtprotoGroupNotSelectedError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoPeerNotInActiveScopeError(TelegramMtprotoError):
+    pass
+
+
 class TelegramMtprotoFolderConfigurationError(TelegramMtprotoError):
     pass
 

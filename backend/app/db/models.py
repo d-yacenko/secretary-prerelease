@@ -800,6 +800,8 @@ class TelegramMtprotoChatSelection(Base):
     title: Mapped[str] = mapped_column(nullable=False)
     username: Mapped[str | None] = mapped_column(nullable=True)
     is_forum: Mapped[bool] = mapped_column(nullable=False, server_default=sa.false())
+    manual_selected: Mapped[bool] = mapped_column(nullable=False, server_default=sa.true())
+    scope_active: Mapped[bool] = mapped_column(nullable=False, server_default=sa.false())
     history_latest_message_id: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     history_backfill_before_message_id: Mapped[int | None] = mapped_column(
         sa.BigInteger, nullable=True
@@ -825,7 +827,7 @@ class TelegramMtprotoChatSelection(Base):
             "account_id", "peer_id", name="uq_telegram_mtproto_chat_selections_account_peer"
         ),
         sa.CheckConstraint(
-            "peer_kind IN ('group', 'supergroup')",
+            "peer_kind IN ('private', 'group', 'supergroup')",
             name="ck_telegram_mtproto_chat_selections_peer_kind",
         ),
     )

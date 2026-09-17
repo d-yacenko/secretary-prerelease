@@ -51,6 +51,15 @@ class TelegramMtprotoScopeResult:
     configured_folder_count: int
 
 
+@dataclass(frozen=True)
+class TelegramMtprotoScopeReconcileResult:
+    scope: TelegramMtprotoScopeResult
+    active: int
+    activated: int
+    deactivated: int
+    unchanged: int
+
+
 class TelegramMtprotoScopeService:
     def __init__(
         self,
@@ -128,6 +137,24 @@ class TelegramMtprotoScopeService:
             ):
                 dialogs.setdefault(dialog.peer_id, dialog)
         return TelegramMtprotoScopeResult(tuple(dialogs.values()), truncated, skipped, len(configured))
+
+    async def reconcile_scope(self, user_id: UUID) -> TelegramMtprotoScopeReconcileResult:
+        result = await self.preview_scope(user_id)
+        if result.truncated:
+            raise TelegramMtprotoScopeUnavailableError(
+                "Telegram sync scope could not be reconciled completely"
+            )
+        account, store, _ = self._account_context(user_id)
+        active, activated, deactivated, unchanged = store.reconcile_scope(
+            account.id, list(result.dialogs)
+        )
+        return TelegramMtprotoScopeReconcileResult(
+            scope=result,
+            active=active,
+            activated=activated,
+            deactivated=deactivated,
+            unchanged=unchanged,
+        )
 
     def _account_context(self, user_id: UUID):
         store = TelegramMtprotoAccountStore(self._session, self._encryption_or_raise())

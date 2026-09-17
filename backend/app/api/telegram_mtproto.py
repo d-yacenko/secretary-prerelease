@@ -23,6 +23,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoInvalidPhoneError,
+    TelegramMtprotoPeerNotInActiveScopeError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
     TelegramMtprotoScopeUnavailableError,
@@ -161,6 +162,14 @@ class TelegramMtprotoScopePreviewOut(BaseModel):
     truncated: bool
     skipped_counts: dict[str, int]
     configured_folder_count: int
+
+
+class TelegramMtprotoScopeReconcileOut(BaseModel):
+    active: int
+    activated: int
+    deactivated: int
+    unchanged: int
+    peers: list[TelegramMtprotoScopeDialogOut]
 
 
 class TelegramMtprotoGroupSelectionIn(BaseModel):
@@ -373,6 +382,71 @@ async def telegram_mtproto_scope_preview(
     except TelegramMtprotoProviderUnavailableError as exc:
         raise _provider_response(exc) from exc
     return _scope_out(result)
+
+
+@router.post("/telegram/mtproto/sync-scope/reconcile", response_model=TelegramMtprotoScopeReconcileOut)
+async def telegram_mtproto_scope_reconcile(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoScopeReconcileOut:
+    _require_configured()
+    try:
+        result = await TelegramMtprotoScopeService(session).reconcile_scope(current_user.user_id)
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except (TelegramMtprotoFolderConfigurationError, TelegramMtprotoScopeUnavailableError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return TelegramMtprotoScopeReconcileOut(
+        active=result.active,
+        activated=result.activated,
+        deactivated=result.deactivated,
+        unchanged=result.unchanged,
+        peers=[
+            TelegramMtprotoScopeDialogOut(
+                peer_id=item.peer_id,
+                kind=item.kind,
+                title=item.title,
+                username=item.username,
+                is_muted=item.is_muted,
+            )
+            for item in result.scope.dialogs
+        ],
+    )
+
+
+@router.post(
+    "/telegram/mtproto/sync-scope/peers/{peer_id}/sync",
+    response_model=TelegramMtprotoHistorySyncOut,
+)
+async def telegram_mtproto_scope_peer_sync(
+    peer_id: int = Path(ge=-(2**63), le=2**63 - 1),
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TelegramMtprotoHistorySyncOut:
+    _require_configured()
+    if peer_id == 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=INVALID_MTPROTO_REQUEST_DETAIL)
+    try:
+        result = await TelegramMtprotoHistoryService(session).sync_scope_peer(
+            current_user.user_id, peer_id
+        )
+    except TelegramMtprotoAccountNotConnectedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoPeerNotInActiveScopeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
+    except TelegramMtprotoAuthorizationInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoProviderReferenceInvalidError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Telegram peer is no longer available") from exc
+    except TelegramMtprotoConfigurationError as exc:
+        raise _configuration_response() from exc
+    except TelegramMtprotoProviderUnavailableError as exc:
+        raise _provider_response(exc) from exc
+    return _history_sync_out(result)
 
 
 @router.patch(

@@ -21,6 +21,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAccountNotConnectedError,
     TelegramMtprotoConfigurationError,
     TelegramMtprotoGroupNotSelectedError,
+    TelegramMtprotoPeerNotInActiveScopeError,
 )
 from app.connectors.telegram.mtproto_transport import (
     TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
@@ -90,8 +91,28 @@ class TelegramMtprotoHistoryService:
                 "Telegram MTProto account is not connected"
             )
         selection = store.get_selection(account.id, peer_id)
-        if selection is None:
+        if selection is None or not selection.manual_selected:
             raise TelegramMtprotoGroupNotSelectedError("Telegram group is not selected")
+        return await self._sync_selection(account, selection)
+
+    async def sync_scope_peer(self, user_id: UUID, peer_id: int) -> TelegramMtprotoHistorySummary:
+        store = self._store()
+        account = store.get_by_user_id(user_id)
+        if account is None:
+            raise TelegramMtprotoAccountNotConnectedError(
+                "Telegram MTProto account is not connected"
+            )
+        selection = store.get_selection(account.id, peer_id)
+        if selection is None or not selection.scope_active:
+            raise TelegramMtprotoPeerNotInActiveScopeError(
+                "Telegram peer is not in active Telegram sync scope"
+            )
+        return await self._sync_selection(account, selection)
+
+    async def _sync_selection(
+        self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection
+    ) -> TelegramMtprotoHistorySummary:
+        store = self._store()
         try:
             session = store.decrypt_session(account)
             provider_peer_reference = self._encryption_or_raise().decrypt(
@@ -169,7 +190,7 @@ class TelegramMtprotoHistoryService:
         selection.history_last_synced_at = _utcnow()
         self._session.flush()
         return TelegramMtprotoHistorySummary(
-            peer_id=peer_id,
+            peer_id=selection.peer_id,
             scanned=stats.scanned,
             materialized=stats.materialized,
             created=stats.created,
@@ -272,6 +293,8 @@ def _normalize_entry(
             "peer_id": selection.peer_id,
             "peer_kind": selection.peer_kind,
             "message_id": entry.message_id,
+            "peer_title": selection.title,
+            "peer_username": selection.username,
             "group_title": selection.title,
             "group_username": selection.username,
             "is_forum": selection.is_forum,

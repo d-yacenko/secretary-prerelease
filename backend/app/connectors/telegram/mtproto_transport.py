@@ -104,6 +104,7 @@ class TelegramMtprotoDialogDescriptor:
     is_archived: bool = False
     unread_count: int = 0
     unread_mark: bool = False
+    is_forum: bool = False
 
 
 @dataclass(frozen=True)
@@ -629,6 +630,7 @@ def _dialog_from_dialog(
         is_archived=_is_archived(dialog),
         unread_count=_nonnegative_int(getattr(dialog, "unread_count", 0)),
         unread_mark=bool(getattr(getattr(dialog, "dialog", None), "unread_mark", False)),
+        is_forum=bool(getattr(entity, "forum", False)) if kind == "supergroup" else False,
     ), None
 
 

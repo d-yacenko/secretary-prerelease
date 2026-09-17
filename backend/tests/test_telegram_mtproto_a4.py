@@ -112,10 +112,10 @@ def configured_mtproto(monkeypatch):
     monkeypatch.setattr(settings, "secretary_credential_key", KEY)
 
 
-def test_migration_0045_is_single_head():
+def test_migration_0046_is_single_head():
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0045"]
+    assert script.get_heads() == ["0046"]
 
 
 def _filter(filter_id=7, name="Team", **kwargs):

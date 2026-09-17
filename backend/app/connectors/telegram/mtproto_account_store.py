@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.mtproto_errors import TelegramMtprotoIdentityConflictError
 from app.connectors.telegram.mtproto_transport import (
+    TelegramMtprotoDialogDescriptor,
     TelegramMtprotoGroupDescriptor,
     TelegramMtprotoIdentity,
 )
@@ -39,7 +40,10 @@ class TelegramMtprotoAccountStore:
         return list(
             self._session.scalars(
                 select(TelegramMtprotoChatSelection)
-                .where(TelegramMtprotoChatSelection.account_id == account_id)
+                .where(
+                    TelegramMtprotoChatSelection.account_id == account_id,
+                    TelegramMtprotoChatSelection.manual_selected.is_(True),
+                )
                 .order_by(TelegramMtprotoChatSelection.created_at, TelegramMtprotoChatSelection.id)
             )
         )
@@ -109,6 +113,8 @@ class TelegramMtprotoAccountStore:
                 title=descriptor.title,
                 username=descriptor.username,
                 is_forum=descriptor.is_forum,
+                manual_selected=True,
+                scope_active=False,
             )
             self._session.add(selection)
         else:
@@ -117,6 +123,7 @@ class TelegramMtprotoAccountStore:
             selection.title = descriptor.title
             selection.username = descriptor.username
             selection.is_forum = descriptor.is_forum
+            selection.manual_selected = True
             selection.updated_at = utcnow()
         self._session.flush()
         return selection
@@ -124,8 +131,66 @@ class TelegramMtprotoAccountStore:
     def delete_selection(self, account_id: UUID, peer_id: int) -> None:
         selection = self.get_selection(account_id, peer_id)
         if selection is not None:
-            self._session.delete(selection)
+            selection.manual_selected = False
+            selection.updated_at = utcnow()
             self._session.flush()
+
+    def reconcile_scope(
+        self, account_id: UUID, descriptors: list[TelegramMtprotoDialogDescriptor]
+    ) -> tuple[int, int, int, int]:
+        rows = list(
+            self._session.scalars(
+                select(TelegramMtprotoChatSelection).where(
+                    TelegramMtprotoChatSelection.account_id == account_id
+                )
+            )
+        )
+        by_peer = {row.peer_id: row for row in rows}
+        active_peer_ids: set[int] = set()
+        activated = 0
+        unchanged = 0
+        for descriptor in descriptors:
+            if descriptor.kind not in {"private", "group", "supergroup"}:
+                continue
+            active_peer_ids.add(descriptor.peer_id)
+            row = by_peer.get(descriptor.peer_id)
+            encrypted_reference = self._encryption.encrypt(descriptor.provider_peer_reference)
+            if row is None:
+                row = TelegramMtprotoChatSelection(
+                    id=uuid4(),
+                    account_id=account_id,
+                    peer_id=descriptor.peer_id,
+                    peer_kind=descriptor.kind,
+                    provider_peer_reference_encrypted=encrypted_reference,
+                    title=descriptor.title,
+                    username=descriptor.username,
+                    is_forum=descriptor.is_forum,
+                    manual_selected=False,
+                    scope_active=True,
+                )
+                self._session.add(row)
+                by_peer[descriptor.peer_id] = row
+                activated += 1
+            else:
+                if not row.scope_active:
+                    activated += 1
+                else:
+                    unchanged += 1
+                row.peer_kind = descriptor.kind
+                row.provider_peer_reference_encrypted = encrypted_reference
+                row.title = descriptor.title
+                row.username = descriptor.username
+                row.is_forum = descriptor.is_forum
+                row.scope_active = True
+                row.updated_at = utcnow()
+        deactivated = 0
+        for row in rows:
+            if row.scope_active and row.peer_id not in active_peer_ids:
+                row.scope_active = False
+                row.updated_at = utcnow()
+                deactivated += 1
+        self._session.flush()
+        return len(active_peer_ids), activated, deactivated, unchanged
 
     def get_challenge(
         self, user_id: UUID, challenge_id: UUID
