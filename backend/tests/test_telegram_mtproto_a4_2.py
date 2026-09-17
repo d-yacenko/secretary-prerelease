@@ -1,17 +1,23 @@
 """Telegram Depth A4.2 — durable dynamic scope and explicit peer sync."""
 
+import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from cryptography.fernet import Fernet
+from sqlalchemy import select
 from telethon.tl import types
 
 from app.api import telegram_mtproto as telegram_api
+from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoGroupUnavailableError,
+    TelegramMtprotoPeerNotInActiveScopeError,
     TelegramMtprotoScopeUnavailableError,
 )
 from app.connectors.telegram.mtproto_transport import (
@@ -19,10 +25,22 @@ from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoFolderDialogsResult,
     TelegramMtprotoFolderDiscoveryResult,
+    TelegramMtprotoHistoryEntry,
+    TelegramMtprotoHistoryPage,
     _input_peer_from_reference,
 )
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection, User
+from app.db.models import (
+    Object,
+    TelegramMtprotoAccount,
+    TelegramMtprotoChatSelection,
+    TelegramMtprotoSyncFolder,
+    User,
+)
+from app.services.telegram_mtproto_history_service import TelegramMtprotoHistoryService
 from app.services.telegram_mtproto_scope_service import TelegramMtprotoScopeService
+
+KEY = Fernet.generate_key().decode()
+SESSION = "a4.2-test-session"
 
 
 def _dialog(peer_id: int, kind: str = "private") -> TelegramMtprotoDialogDescriptor:
@@ -32,7 +50,11 @@ def _dialog(peer_id: int, kind: str = "private") -> TelegramMtprotoDialogDescrip
         title=f"Peer {peer_id}",
         username=None,
         is_muted=False,
-        provider_peer_reference=f"peer:{peer_id}",
+        provider_peer_reference=json.dumps(
+            {"entity_type": "user", "id": abs(peer_id), "access_hash": 99}
+            if kind == "private"
+            else {"entity_type": "chat", "id": abs(peer_id)}
+        ),
     )
 
 
@@ -47,17 +69,20 @@ def _filter(folder_id: int = 7):
 
 
 class _Transport:
-    def __init__(self, *, truncated=False):
+    def __init__(self, *, truncated=False, discovery_truncated=False, dialogs=None):
         self.truncated = truncated
+        self.discovery_truncated = discovery_truncated
+        self.dialogs = tuple(dialogs or (_dialog(1),))
         self.history_called = False
 
     async def discover_folders(self, session, limit):
         return TelegramMtprotoFolderDiscoveryResult(
-            (TelegramMtprotoFolderDescriptor(7, "Configured", _filter()),), False
+            (TelegramMtprotoFolderDescriptor(7, "Configured", _filter()),),
+            self.discovery_truncated,
         )
 
     async def fetch_dialog_universe(self, session, limit):
-        return TelegramMtprotoFolderDialogsResult((_dialog(1),), self.truncated, {})
+        return TelegramMtprotoFolderDialogsResult(self.dialogs, self.truncated, {})
 
     async def fetch_history(self, *args, **kwargs):
         self.history_called = True
@@ -189,3 +214,191 @@ def test_scoped_unavailable_peer_is_sanitized_409(monkeypatch):
 def test_migration_0046_is_single_head():
     config = Config("alembic.ini")
     assert ScriptDirectory.from_config(config).get_heads() == ["0046"]
+
+
+def _db_account(db_session, name="A4.2 acceptance"):
+    user = User(id=uuid4(), display_name=name)
+    db_session.add(user)
+    db_session.flush()
+    account = TelegramMtprotoAccount(
+        id=uuid4(),
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted=CredentialEncryption(KEY).encrypt(SESSION),
+    )
+    db_session.add(account)
+    db_session.flush()
+    return user, account
+
+
+def _scope_seed(db_session, *, active=True):
+    user, account = _db_account(db_session)
+    db_session.add(TelegramMtprotoSyncFolder(
+        account_id=account.id, folder_id=7, folder_name="Configured"
+    ))
+    db_session.flush()
+    store = TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY))
+    store.reconcile_scope(account.id, [_dialog(1)])
+    row = store.get_selection(account.id, 1)
+    row.scope_active = active
+    row.history_latest_message_id = 22
+    row.history_backfill_before_message_id = 11
+    row.history_cutoff_at = datetime.now(UTC) - timedelta(days=2)
+    row.history_complete = False
+    row.history_last_synced_at = datetime.now(UTC)
+    db_session.flush()
+    return user, account, store, row
+
+
+def test_unsupported_scope_descriptor_is_not_persisted(db_session):
+    _, account = _db_account(db_session, "A4.2 unsupported")
+    store = TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY))
+    store.reconcile_scope(account.id, [_dialog(9, "broadcast")])
+    assert db_session.scalar(select(TelegramMtprotoChatSelection).where(
+        TelegramMtprotoChatSelection.account_id == account.id
+    )) is None
+
+
+def test_full_cursor_state_survives_scope_reentry(db_session):
+    _, _, store, row = _scope_seed(db_session)
+    original = {name: getattr(row, name) for name in (
+        "history_latest_message_id", "history_backfill_before_message_id",
+        "history_cutoff_at", "history_complete", "history_last_synced_at"
+    )}
+    store.reconcile_scope(row.account_id, [])
+    assert row.scope_active is False
+    store.reconcile_scope(row.account_id, [_dialog(1)])
+    assert row.scope_active is True
+    assert {name: getattr(row, name) for name in original} == original
+
+
+@pytest.mark.asyncio
+async def test_inactive_scoped_peer_is_rejected_before_history(db_session):
+    user, _, _, row = _scope_seed(db_session, active=False)
+    transport = _Transport()
+    with pytest.raises(TelegramMtprotoPeerNotInActiveScopeError):
+        await TelegramMtprotoHistoryService(
+            db_session, transport_factory=lambda: transport,
+            encryption=CredentialEncryption(KEY),
+        ).sync_scope_peer(user.id, row.peer_id)
+    assert transport.history_called is False
+
+
+@pytest.mark.asyncio
+async def test_scope_truncation_sources_leave_real_row_unchanged(db_session):
+    user, _, _, row = _scope_seed(db_session)
+    for transport in (_Transport(discovery_truncated=True), _Transport(truncated=True)):
+        service = TelegramMtprotoScopeService(
+            db_session, transport_factory=lambda transport=transport: transport,
+            encryption=CredentialEncryption(KEY),
+        )
+        with pytest.raises(TelegramMtprotoScopeUnavailableError):
+            await service.reconcile_scope(user.id)
+        assert row.scope_active is True
+        assert row.history_latest_message_id == 22
+
+
+@pytest.mark.asyncio
+async def test_muted_scope_member_is_deactivated_without_deleting_row(db_session):
+    user, _, _, row = _scope_seed(db_session)
+    transport = _Transport(dialogs=(SimpleNamespace(**{
+        **_dialog(1).__dict__, "is_muted": True
+    }),))
+    service = TelegramMtprotoScopeService(
+        db_session, transport_factory=lambda: transport, encryption=CredentialEncryption(KEY)
+    )
+    await service.reconcile_scope(user.id)
+    assert row.scope_active is False
+    assert db_session.get(TelegramMtprotoChatSelection, row.id) is row
+    assert row.history_latest_message_id == 22
+
+
+class _HistoryTransport:
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.calls = []
+
+    async def fetch_history(self, session, provider_peer_reference, **kwargs):
+        self.calls.append((session, provider_peer_reference, kwargs))
+        return self.pages.pop(0) if self.pages else TelegramMtprotoHistoryPage((), False)
+
+
+def _history_entry(message_id=1):
+    return TelegramMtprotoHistoryEntry(
+        message_id=message_id,
+        occurred_at=datetime.now(UTC) - timedelta(days=1),
+        text="private scoped message",
+        sender_peer_id=42,
+        reply_to_message_id=None,
+        topic_id=None,
+        edited_at=None,
+        is_service=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_private_scope_sync_uses_shared_engine_and_is_idempotent(db_session):
+    user, account = _db_account(db_session, "A4.2 private history")
+    reference = json.dumps({"entity_type": "user", "id": 42, "access_hash": 99})
+    store = TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY))
+    row = store.save_selection(account.id, SimpleNamespace(
+        peer_id=42, kind="private", provider_peer_reference=reference,
+        title="Private peer", username="private_user", is_forum=False,
+    ))
+    row.scope_active = True
+    db_session.flush()
+    entry = _history_entry()
+    transport = _HistoryTransport([
+        TelegramMtprotoHistoryPage((entry,), False),
+        TelegramMtprotoHistoryPage((entry,), False),
+    ])
+    service = TelegramMtprotoHistoryService(
+        db_session, transport_factory=lambda: transport, encryption=CredentialEncryption(KEY)
+    )
+    first = await service.sync_scope_peer(user.id, 42)
+    second = await service.sync_scope_peer(user.id, 42)
+    assert json.loads(transport.calls[0][1])["entity_type"] == "user"
+    assert transport.calls[0][2]["limit"] > 0
+    assert first.created == 1
+    assert second.unchanged == 1
+    assert row.history_latest_message_id == 1
+    obj = db_session.scalar(select(Object).where(Object.user_id == user.id))
+    assert obj.metadata_["peer_kind"] == "private"
+    assert obj.metadata_["peer_title"] == "Private peer"
+    assert obj.metadata_["peer_username"] == "private_user"
+    assert obj.external_id == f"mtproto|{account.id}|42|1"
+
+
+@pytest.mark.asyncio
+async def test_complete_empty_scope_deactivates_but_retains_row(db_session):
+    user, _, _, row = _scope_seed(db_session)
+    db_session.query(TelegramMtprotoSyncFolder).filter(
+        TelegramMtprotoSyncFolder.account_id == row.account_id
+    ).delete(synchronize_session=False)
+    db_session.flush()
+    await TelegramMtprotoScopeService(
+        db_session, transport_factory=lambda: _Transport(), encryption=CredentialEncryption(KEY)
+    ).reconcile_scope(user.id)
+    assert row.scope_active is False
+    assert db_session.get(TelegramMtprotoChatSelection, row.id) is row
+    assert row.history_latest_message_id == 22
+
+
+def test_scoped_zero_peer_is_rejected_before_service(monkeypatch):
+    monkeypatch.setattr(telegram_api, "mtproto_is_configured", lambda: True)
+    called = False
+
+    class FakeHistory:
+        def __init__(self, session):
+            nonlocal called
+            called = True
+
+    monkeypatch.setattr(telegram_api, "TelegramMtprotoHistoryService", FakeHistory)
+    with pytest.raises(telegram_api.HTTPException) as raised:
+        import asyncio
+
+        asyncio.run(telegram_api.telegram_mtproto_scope_peer_sync(
+            peer_id=0, session=object(), current_user=SimpleNamespace(user_id=uuid4())
+        ))
+    assert raised.value.status_code == 422
+    assert called is False
