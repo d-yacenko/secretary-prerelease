@@ -11,41 +11,27 @@
   PASS
 - Google Sync Resilience A:
   COMPLETE / DEPLOYED / RUNTIME VERIFIED
-- Google runtime retry-policy assertions:
-  PASS
-- Google recurring jobs at runtime verification:
-  Gmail pending: 1
-  Calendar pending: 1
-  Failed: 0
-- Natural six-minute Google aggregate observation:
-  COMPLETED / NO AGGREGATE STATUS-COUNT TRANSITION OBSERVED
-- Rollback after Google rollout:
-  NOT REQUIRED
 - Production Deploy Contract v2:
   MERGED / MANDATORY FOR NORMAL PRODUCTION DEPLOYMENT
-- Canonical Google runtime verifier:
-  `ops/production/verify_google_sync.py`
-- Canonical explicit application rollback:
-  `ops/production/rollback.py`
-- Production Compose execution requires explicit:
-  `/opt/secretary/.env`
-- Explicit DB authentication from resolved production env:
-  VERIFIED
-- File-backed DB password transport:
-  CANCELLED / NOT REQUIRED
 - Yandex transient retry hotfix:
   DEPLOYED / RUNTIME VERIFIED
-- Production Yandex Mail synchronized successfully after rollout and returned to normal scheduling.
 - Telegram A1/A2:
-  MERGED / NOT PRODUCTION DEPLOYED
+  MERGED TO MAIN / NOT PRODUCTION DEPLOYED
 - Telegram A3:
-  CODE ACCEPTED / UNMERGED / NOT DEPLOYED
+  CODE ACCEPTED / NOT MERGED TO MAIN / NOT DEPLOYED
   `4777c32deb055f5024f3dbced125b4dd6db97e85`
-- Telegram A4 — Folder-scoped dialog ingestion:
-  ACTIVE / PREPARATION-INTEGRATION BASELINE AUTHORIZED
-- Current A4 preparation goal:
-  synchronize Executor `main` and construct `review/telegram-depth-a4-folder-scope` with exact accepted A3 preserved in ancestry; no folder-scope implementation yet.
-- Telegram production remains migration-bearing; production Alembic is still 0041, while Telegram development includes 0042/0043 and accepted A3 adds 0044.
+- Telegram A4 integration baseline:
+  ACCEPTED on `review/telegram-depth-a4-folder-scope`
+  `4f1a9012145faa66baf499ad4fc9c08b759e9a5f`
+- The A4 baseline merge preserves exact A3 SHA in ancestry and had no manual conflict-resolution changes.
+- A4 baseline verification reported:
+  targeted A1/A2/A3 tests `65 passed`; review Alembic head `0044`; clean primary and review worktrees.
+- Telegram Depth A4.1 — folder configuration and eligibility resolver:
+  ACTIVE / IMPLEMENTATION AUTHORIZED on `review/telegram-depth-a4-folder-scope`.
+- A4.1 scope is backend-only durable folder configuration + read-only dynamic eligibility preview using stable folder IDs and the canonical rule `configured folder membership AND not muted`.
+- A4.1 does not authorize history import, materialization into active history scope, scheduler work, UI, merge to main, or production work.
+- Main code still does not contain A3/A4 Telegram migration 0044+; production remains at Alembic 0041.
+- Telegram eventual production rollout remains migration-bearing and requires a separate explicit migration deployment plan.
 - IMAP IDLE:
   NOT STARTED
 
