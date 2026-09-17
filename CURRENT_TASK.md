@@ -1,151 +1,146 @@
-# Current task — Telegram Depth A4.3T final acceptance coverage
+# Current task — Telegram Depth A4.3U remaining acceptance gaps
 
 ## Status
 
-Telegram Depth A4.1 — ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
-
-Telegram Depth A4.2 — ACCEPTED through `5de67b6a6cf746c9af911ddfcc671833d1d3d62e`.
-
-Telegram Depth A4.3 implementation candidate `a66fc167044ff3be7c1c207938b03367cea05dd8` introduced the shared query-time MTProto active-retrieval predicate.
-
-Telegram Depth A4.3R correction `84efe88d31e10acd6852acf59a85636834582026` — RUNTIME FIX ACCEPTED / A4.3 PHASE ACCEPTANCE STILL PENDING TEST COVERAGE.
-
-The retained-history defect is fixed correctly: `ContextService` alone may call `GraphService.get_neighbors(..., require_active_seed=False)` for an explicit retained-history target, while ordinary neighbor discovery keeps `require_active_seed=True` and inactive returned neighbors remain hidden.
-
-A4.3 is NOT yet accepted because the dedicated A4.3 file still contains only five tests and does not explicitly exercise most of the acceptance matrix required by A4.3/A4.3R.
-
-A4.3T is a TEST-ONLY final acceptance pass. Do NOT begin A4.4.
+- Telegram A4.2: ACCEPTED through `5de67b6a6cf746c9af911ddfcc671833d1d3d62e`.
+- Telegram A4.3 candidate `a66fc167044ff3be7c1c207938b03367cea05dd8`: implementation direction retained.
+- Telegram A4.3R `84efe88d31e10acd6852acf59a85636834582026`: retained-history runtime fix accepted.
+- Telegram A4.3T candidate `d9007c2d5a717d26428df8056b3d6d2734fd99dc`: direct child of Architect bookkeeping `cdd7a53a6c67f9d5317a2e5160a6a4f31f4d1166`; code/test direction valid, acceptance still pending a small explicit regression set.
+- `d9007c2...` added peer-kind, metadata matrix, Retrieval/Search, ObjectQuery/RecentSource, and conversation-anchor coverage. It also exposed/fixed one minimal production defect in `conversation_member_read.py`: `NotFoundError` now uses the canonical `NotFoundError("object", object_id)` constructor.
+- A4.3 is NOT yet accepted.
+- A4.3U is TEST-FOCUSED final remaining acceptance work only. Do NOT begin A4.4.
 
 ## Fixed branch and baseline
 
 - Repository: `d-yacenko/secretary-prerelease`.
 - Work only in `review/telegram-depth-a4-folder-scope`.
 - Fetch and fast-forward only to current `origin/review/telegram-depth-a4-folder-scope`, including Architect bookkeeping.
-- Preserve `a66fc167044ff3be7c1c207938b03367cea05dd8` and `84efe88d31e10acd6852acf59a85636834582026` in ancestry.
+- Preserve in ancestry: `a66fc167...`, `84efe88d...`, and `d9007c2...`.
 - No reset/rebase/squash/rewrite.
 - Alembic remains `0046`; no migration.
-- Production code is FROZEN unless a new required regression exposes a concrete defect. If so, make only the smallest same-phase fix and report it explicitly.
+- Production code is FROZEN unless one of the remaining tests exposes a concrete A4.3 defect. Any such fix must be minimal and reported exactly.
 
-## Existing coverage to keep/reuse
+## Already adequate — do not rewrite
 
-The current five A4.3 tests already cover:
+Keep/reuse the existing A4.3 tests for:
 
-- canonical active/inactive toggle for one private peer;
-- `manual_selected=true` does not restore visibility;
-- same Object/Representation identity survives reactivation;
-- one Retrieval/ObjectQuery/RecentSource happy-path visibility case;
-- legacy Telegram row without `metadata.transport=mtproto` remains visible;
-- one malformed metadata case;
-- other-user isolation case;
-- inactive graph neighbor hidden;
-- explicit inactive ContextService target remains readable after A4.3R;
-- ordinary `GraphService.get_neighbors(inactive_seed)` still rejects active discovery from an inactive seed.
+- private/group/supergroup active -> inactive -> reactivated visibility;
+- `manual_selected=true` not granting visibility;
+- same Object/Representation identity across visibility toggles;
+- missing account/peer metadata, malformed scalar shapes, nonexistent account/peer, and other-user isolation currently covered by the metadata matrix;
+- legacy Telegram row without `metadata.transport=mtproto` remaining visible;
+- body/representation retrieval and Search facade baseline;
+- provider/kind/state/date ObjectQuery baseline;
+- list-page/get-inbox/list-review RecentSource baseline;
+- query-driven Context baseline;
+- inactive explicit conversation anchor rejection and active anchor success;
+- inactive graph neighbor hiding;
+- explicit inactive retained-history Context target remaining readable.
 
-Do not rewrite these merely to increase test count.
+## Remaining required regressions
 
-## Required missing regressions
+### 1. Same-user wrong-account selection isolation
 
-Use real PostgreSQL-backed A4 MTProto rows. Prefer extending `backend/tests/test_telegram_mtproto_a4_3.py`; focused additions to the existing service test files are allowed when they better prove the public service/tool path.
+The current metadata matrix uses foreign/other-user accounts for its "different account" cases. Add one explicit same-Secretary-user case:
 
-### 1. All supported peer kinds
+- create two MTProto accounts owned by the same Secretary `user_id`;
+- Object metadata points to account A + peer X;
+- the active peer-X selection exists only under account B;
+- Object must remain hidden;
+- adding/activating the matching selection under account A restores visibility.
 
-Exercise private, basic group and supergroup rows with matching Objects. For each kind prove:
+This proves account identity is part of the scope key, not only user+peer.
 
-- `scope_active=true` => active visibility;
-- `scope_active=false` => hidden from active query;
-- `manual_selected=true` while inactive does not restore visibility;
-- reactivation returns the same Object id.
+### 2. Isolate the title-trigram candidate + filtered retrieval + all Search sorts while inactive
 
-### 2. Complete fail-closed metadata/ownership matrix
+Strengthen the retrieval test so it proves the title trigram branch rather than an exact title/body FTS match. Use a fuzzy/misspelled title query that is expected to qualify through the existing trigram behavior but not exact FTS wording.
 
-Add explicit cases for A4 MTProto Objects with:
+Also explicitly prove:
 
-- missing `account_id`;
-- missing `peer_id`;
-- malformed/non-scalar `account_id`;
-- malformed/non-scalar `peer_id`;
-- syntactically valid but nonexistent account id;
-- existing account with no matching peer selection;
-- peer selection under a different account;
-- active matching selection owned by another Secretary user.
+- `RetrievalService.retrieve(..., provider="telegram", kind="chat_message")` excludes the inactive Object;
+- `SearchService` with each supported sort used by the current API (`relevance`, `newest`, `oldest`) excludes the inactive Object, not only the default sort;
+- reactivation restores the same Object id.
 
-Every case must be excluded without SQL cast/query error.
+Do not change Retrieval/Search production code unless the regression exposes a real defect.
 
-### 3. RetrievalService candidate families + SearchService facade
+### 3. ObjectQuery `statuses` and `label_ids`
 
-Use distinguishable content so each path is actually exercised, not merely the common final rank step.
+The current `ObjectQueryService.query()` supports both `statuses` and `label_ids`; they were not covered by `d9007c2...`.
 
-Prove inactive exclusion and active re-entry for:
+Add an MTProto Object that legitimately matches:
 
-- body/object FTS or lexical candidate path;
-- title trigram candidate path;
-- Representation-backed candidate path;
-- retrieval with `provider="telegram"` and `kind="chat_message"` filters.
+- a non-empty `statuses` filter; and
+- an active label via the normal `labeled_with` path and `label_ids` filter.
 
-Also exercise `SearchService` for its supported ordering modes (relevance/newest/oldest or the exact current API equivalents) and prove inactive MTProto rows cannot reappear through the facade.
+For each filter (or one combined test), prove:
 
-### 4. ObjectQueryService filter combinations
+- active scope => same Object returned;
+- `scope_active=false` => hidden;
+- reactivation => same Object returned.
 
-Prove inactive MTProto exclusion when query uses the supported combinations that could otherwise bypass the base predicate, including:
+Use normal label service/graph helpers where practical; do not bypass label invariants by inventing an unsupported object shape.
 
-- provider + kind;
-- date/time bounds;
-- status filter if supported;
-- label filter if supported.
+### 4. RecentSource review count paths
 
-Use the actual current method signature; do not invent unsupported filters. Reactivation must return the same Object.
+The current test covers `list_page`, `get_inbox_eligible`, and `list_review_window` but not the count helpers.
 
-### 5. RecentSource / inbox review paths
+Against one inbox-eligible MTProto chat message, prove active/inactive/reactivated behavior for the current APIs:
 
-Seed an inbox-eligible MTProto chat message and prove inactive exclusion / active restoration through the actual APIs:
-
-- `list_recent` or `list_page`;
-- `get_inbox_eligible`;
-- `list_review_window`;
 - `count_review_window`;
-- newer/older review count helpers that are part of the current service API.
+- `count_older_in_review_window`;
+- `count_newer_in_review_window`.
 
-At least one non-MTProto chat provider/legacy Telegram row must remain unaffected.
+Use stable anchor/snapshot tuples so the expected count change is deterministic. Reactivation must restore the previous count.
 
-### 6. Context automatic expansion + representation leakage
+### 5. Context pinned + folder-contained expansion and representation leakage
 
-Beyond the existing graph-neighbor check, explicitly cover automatic expansion paths that exist in current ContextService:
+The existing test covers graph-neighbor and query-driven paths, but not the explicit pinned/folder automatic expansion paths required by A4.3.
 
-- query-driven SearchService result;
-- pinned reference expansion;
-- folder-contained expansion if supported by existing fixtures/helpers.
+Add focused ContextService regressions using existing repository conventions/helpers:
 
-Inactive MTProto automatic Objects and their Representation text must not appear. Active counterparts must work.
+- an inactive MTProto Object referenced as user-pinned context is NOT automatically added;
+- a matching active Object IS added;
+- an inactive MTProto Object contained in a folder is NOT automatically added through folder expansion;
+- a matching active contained Object IS added;
+- give the inactive automatic Object a unique Representation text and assert that text is absent from resulting context;
+- explicit exact inactive target behavior remains unchanged: the target itself and its own retained Representation remain readable.
 
-The explicit exact inactive `object_id` target must still include the retained target and its own retained Representation.
+Do not weaken the shared visibility predicate or the A4.3R explicit-target exception.
 
-### 7. Conversation-member discovery
+### 6. Conversation-member inactive-member bypass with an active anchor
 
-Use the actual conversation-member reconstruction/page function used by assistant/MCP. Prove:
+`d9007c2...` proves an inactive MTProto anchor is rejected, but does not prove an inactive member cannot leak when reconstruction starts from an otherwise active/visible anchor.
 
-- inactive MTProto anchor cannot be used as active conversation discovery;
-- inactive MTProto member is not surfaced through reconstruction/window membership;
-- active counterpart works.
+Add an actual `list_conversation_members_page` / reconstruction regression where the active visible anchor can form the same presentation conversation with another candidate member, but that candidate member is an inactive MTProto Object. A practical shape is allowed to use a legacy/non-MTProto Telegram anchor with the same conversation grouping key if two MTProto messages cannot differ in scope for the same durable peer.
 
-Do not substitute `RecentSourceService` alone for this test.
+Assert:
 
-### 8. No-side-effect reactivation
+- inactive MTProto member is absent;
+- active/legacy visible anchor remains usable;
+- after activating the matching durable peer scope, the same MTProto member may participate according to normal conversation grouping.
 
-Capture before/after persisted state and prove toggling only `scope_active` for visibility does not cause:
+Do not test only RecentSource as a proxy.
 
-- Object mutation/deletion;
-- Representation mutation/deletion;
-- new Job row/enqueue;
-- history transport/materialization call;
-- embedding/re-embedding call.
+### 7. No-side-effect visibility toggle
 
-Use the lightest reliable instrumentation available in existing tests. Do not add production hooks only for testing.
+Add one explicit regression around the real read paths that snapshots persistent state before and after `scope_active` false/true transitions and active reads.
 
-## Acceptance principle
+Prove:
 
-Passing old focused suites demonstrates compatibility but does NOT substitute for the explicit MTProto-scope regressions above. Every numbered section 1–8 must map to one or more concrete test names in the completion report.
+- same Object row/id/body/metadata/timestamps;
+- same Representation row/id/text;
+- neither row deleted;
+- no new Job row/enqueue appears;
+- no Telegram history/materialization call occurs;
+- no embedding/re-embedding call occurs.
 
-If a required current service API does not support a named sub-filter/path, document that fact in the report and test the nearest actual supported API rather than inventing behavior.
+Use lightweight existing test instrumentation/monkeypatching. It is acceptable to patch history/materialization/embedding methods to raise if called, provided those patches target real existing methods and no production hooks are added solely for testing.
+
+## Acceptance rule
+
+A4.3U is complete only when sections 1–7 above each map to one or more concrete test names. Passing unrelated old focused suites is compatibility evidence, not a substitute.
+
+Do not add new scope requirements beyond these remaining gaps.
 
 ## Verification
 
@@ -159,17 +154,17 @@ From `backend`:
 
 `alembic upgrade head`
 
-Run:
+Run the complete Telegram suite:
 
 `pytest -q tests/test_telegram_mtproto_a1.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py tests/test_telegram_mtproto_a4_3.py`
 
-Also rerun the existing focused regression suites for every production service exercised by A4.3/A4.3T: retrieval/search, object-query, recent-source/inbox, context, graph/tool/workspace, and conversation-member reconstruction. Report exact commands/files and results.
+Also rerun the existing focused regression suites for the A4.3 production surfaces: retrieval/search, object query/labels, recent-source/inbox review, context, graph/tools/workspace, and conversation-member reconstruction. Report exact test files/commands and results.
 
 Then:
 
 `alembic heads`
 
-Run `ruff check` over all A4.3 production files and every modified/new test file.
+Run `ruff check` over all A4.3 production files plus every modified/new test file.
 
 Run:
 
@@ -177,26 +172,26 @@ Run:
 
 ## Completion report
 
-Commit and push only to `review/telegram-depth-a4-folder-scope`. Do not merge to `main`.
+Commit and push only to `review/telegram-depth-a4-folder-scope`.
 
 Return:
 
 - starting Architect bookkeeping HEAD;
-- confirmation `a66fc167...` and `84efe88d...` remain in ancestry;
-- A4.3T commit SHA(s);
+- confirmation `a66fc167...`, `84efe88d...`, `d9007c2...` remain in ancestry;
+- A4.3U commit SHA(s);
 - final remote HEAD;
 - changed files;
-- mapping sections 1–8 above -> concrete test names;
-- any production defect found? If none, say `none`; if yes, exact minimal fix;
+- mapping sections 1–7 -> concrete test names;
+- production defect found? `none` or exact minimal fix;
 - exact DB startup/alembic/Telegram-suite/focused-suite/ruff/diff-check results;
 - `alembic heads` result;
 - confirmation no migration and head remains `0046`;
-- confirmation explicit retained-history Context target still works;
-- confirmation automatic inactive MTProto objects/representations cannot bypass through Search/ObjectQuery/RecentSource/Context/neighbor/conversation-member paths;
-- confirmation reactivation returns the same stored Object/Representation with no history/materialization/embedding/job work;
-- confirmation no A4.4/scheduler/bulk/UI/production work was started;
+- confirmation retained-history exact target remains readable;
+- confirmation no active-read bypass remains through Retrieval/Search/ObjectQuery/RecentSource/Context/neighbor/conversation-member paths covered above;
+- confirmation visibility reactivation returns the same persisted Object/Representation with no history/materialization/embedding/job side effect;
+- confirmation no A4.4/scheduler/bulk/UI/production work started;
 - `git status --short`;
-- final marker exactly: `TELEGRAM_A4_3_FINAL_TESTS_READY`.
+- final marker exactly: `TELEGRAM_A4_3_REMAINING_TESTS_READY`.
 
 Then STOP.
 
