@@ -10,6 +10,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.conversation_projection import project_inbox_object
 from app.services.conversation_stack import (
     ConversationStack,
@@ -189,7 +190,13 @@ def reconstruct_stack_members(
     user_id: UUID,
     object_id: UUID,
 ) -> tuple[Object, list[Object], str, str, str]:
-    anchor = session.get(Object, object_id)
+    anchor = session.scalar(
+        select(Object).where(
+            Object.id == object_id,
+            Object.user_id == user_id,
+            telegram_mtproto_active_object_predicate(),
+        )
+    )
     if (
         anchor is None
         or anchor.user_id != user_id

@@ -10,6 +10,7 @@ from app.api.schemas import ContextBuildResult, ContextItem
 from app.content_extraction.content_gating import filter_current_representations
 from app.db.models import Edge, Object, Representation
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.llm.embedding_service import EmbeddingService
 from app.services.capture_service import PINNED_ADDED_BY, PINNED_CONTEXT_ROLE
 from app.services.correlation_constants import (
@@ -154,6 +155,7 @@ class ContextService:
                     select(Object).where(
                         Object.id == edge.target_id,
                         Object.user_id == self._user_id,
+                        telegram_mtproto_active_object_predicate(),
                     )
                 )
                 if neighbor is None or neighbor.state == "rejected":
@@ -231,6 +233,7 @@ class ContextService:
                     select(Object).where(
                         Object.id == result.id,
                         Object.user_id == self._user_id,
+                        telegram_mtproto_active_object_predicate(),
                     )
                 )
                 if obj is None or obj.state == "rejected" or is_object_hidden_from_active_reads(obj):
@@ -587,6 +590,7 @@ class ContextService:
                     Object.user_id == self._user_id,
                     Object.id.in_(contained_ids),
                     Object.state != "rejected",
+                    telegram_mtproto_active_object_predicate(),
                 )
             ).all()
         )

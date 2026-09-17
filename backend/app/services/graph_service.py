@@ -8,6 +8,7 @@ from app.api.schemas import EdgeCreate, ObjectCreate, ObjectUpdate
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.planned_execution import validate_planned_execution_interval
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.llm.embedding_service import EmbeddingService
 from app.services.db_errors import is_external_object_unique_violation
 from app.services.embedding_index import refresh_object_embedding
@@ -47,10 +48,11 @@ class GraphService:
                 raise ConflictError("external object already exists") from exc
             raise
 
-    def _get_object_row(self, object_id: UUID) -> Object | None:
-        return self._session.scalar(
-            select(Object).where(Object.id == object_id, Object.user_id == self._user_id)
-        )
+    def _get_object_row(self, object_id: UUID, *, active_only: bool = False) -> Object | None:
+        filters = [Object.id == object_id, Object.user_id == self._user_id]
+        if active_only:
+            filters.append(telegram_mtproto_active_object_predicate())
+        return self._session.scalar(select(Object).where(*filters))
 
     def create_object(self, data: ObjectCreate) -> Object:
         reserved = reserved_label_create_reason(data.kind)
@@ -93,6 +95,12 @@ class GraphService:
 
     def get_object(self, object_id: UUID) -> Object:
         obj = self._get_object_row(object_id)
+        if obj is None or is_object_hidden_from_active_reads(obj):
+            raise NotFoundError("object", object_id)
+        return obj
+
+    def _get_active_read_object(self, object_id: UUID) -> Object:
+        obj = self._get_object_row(object_id, active_only=True)
         if obj is None or is_object_hidden_from_active_reads(obj):
             raise NotFoundError("object", object_id)
         return obj
@@ -220,7 +228,7 @@ class GraphService:
         include_rejected: bool = False,
         limit: int | None = None,
     ) -> list[tuple[Object, Edge, str]]:
-        self.get_object(object_id)
+        self._get_active_read_object(object_id)
         if limit is not None:
             return self._get_neighbors_limited(object_id, include_rejected, limit)
 
@@ -236,10 +244,10 @@ class GraphService:
             if not include_rejected and edge.state == "rejected":
                 continue
             if edge.source_id == object_id:
-                neighbor = self._get_object_row(edge.target_id)
+                neighbor = self._get_object_row(edge.target_id, active_only=True)
                 direction = "outgoing"
             else:
-                neighbor = self._get_object_row(edge.source_id)
+                neighbor = self._get_object_row(edge.source_id, active_only=True)
                 direction = "incoming"
             if neighbor is None:
                 continue
@@ -269,8 +277,8 @@ class GraphService:
         if not include_rejected:
             outgoing_filters.extend([Edge.state != "rejected", Object.state != "rejected"])
             incoming_filters.extend([Edge.state != "rejected", Object.state != "rejected"])
-        outgoing_filters.append(object_is_active(Object))
-        incoming_filters.append(object_is_active(Object))
+        outgoing_filters.extend([object_is_active(Object), telegram_mtproto_active_object_predicate()])
+        incoming_filters.extend([object_is_active(Object), telegram_mtproto_active_object_predicate()])
 
         outgoing = (
             select(Edge.id, literal("outgoing").label("direction"))
@@ -298,9 +306,9 @@ class GraphService:
             if edge is None:
                 continue
             if edge.source_id == object_id:
-                neighbor = self._get_object_row(edge.target_id)
+                neighbor = self._get_object_row(edge.target_id, active_only=True)
             else:
-                neighbor = self._get_object_row(edge.source_id)
+                neighbor = self._get_object_row(edge.source_id, active_only=True)
             if neighbor is None:
                 continue
             results.append((neighbor, edge, direction))
@@ -319,7 +327,7 @@ class GraphService:
         object_id: UUID,
         include_rejected: bool = False,
     ) -> tuple[Object, list[Edge], list[Object]]:
-        obj = self.get_object(object_id)
+        obj = self._get_active_read_object(object_id)
         edges = self._session.scalars(
             select(Edge).where(
                 Edge.user_id == self._user_id,
@@ -335,7 +343,7 @@ class GraphService:
             neighbor_id = (
                 edge.target_id if edge.source_id == object_id else edge.source_id
             )
-            neighbor = self._get_object_row(neighbor_id)
+            neighbor = self._get_object_row(neighbor_id, active_only=True)
             if neighbor is None:
                 continue
             if is_object_hidden_from_active_reads(neighbor):
@@ -352,6 +360,7 @@ class GraphService:
                     select(Object).where(
                         Object.user_id == self._user_id,
                         Object.id.in_(neighbor_ids),
+                        telegram_mtproto_active_object_predicate(),
                     )
                 ).all()
             )

@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, array
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import Object
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.inbox_feed_cursor import decode_inbox_feed_cursor, encode_inbox_feed_cursor
 
 RECENT_SOURCE_KINDS = frozenset(
@@ -253,6 +254,7 @@ class RecentSourceService:
             self._gmail_feed_eligible_clause(model),
             self._not_child_email_attachment_clause(model),
             self._not_outbound_chat_clause(model),
+            telegram_mtproto_active_object_predicate(model),
         )
 
     def _not_suppressed_future_recurrence_sibling(self) -> object:

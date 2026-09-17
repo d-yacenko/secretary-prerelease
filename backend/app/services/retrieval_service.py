@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.models import Object
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_sql_fragment
 from app.services.errors import ValidationError
 from app.services.evidence_snippet import (
     build_query_centered_snippet,
@@ -64,7 +65,12 @@ _BASE_WHERE = """
     AND (o.status IS NULL OR o.status != 'deleted')
     AND o.state != 'rejected'
     AND (o.kind != 'label' OR :include_labels)
+    {telegram_scope_clause}
 """
+
+_BASE_WHERE = _BASE_WHERE.format(
+    telegram_scope_clause=telegram_mtproto_active_sql_fragment()
+)
 
 
 def _build_filter_suffix(
