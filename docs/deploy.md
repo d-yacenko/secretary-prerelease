@@ -134,7 +134,22 @@ The harness never moves remote Git refs during deployment or rollback.
 
 ## Task-specific runtime verification
 
-Provider-specific or feature-specific runtime assertions are additional to this generic deployment contract. The Architect task may authorize sanitized read-only checks after the harness returns `DEPLOYMENT=PASS`.
+Provider-specific or feature-specific runtime assertions are additional to this generic deployment contract. The canonical Google Sync Resilience runtime check is:
+
+`ops/production/verify_google_sync.py`
+
+The explicit post-deployment application rollback entrypoint is:
+
+`ops/production/rollback.py`
+
+Both entrypoints reuse the committed target and SSH trust contract. Direct SSH
+or direct Compose remains forbidden for normal operation. A verification
+failure does not itself authorize ad-hoc SSH repair; use a separately
+authorized rollback or recovery task.
+
+The verifier performs sanitized, read-only checks after the harness returns
+`DEPLOYMENT=PASS`. It does not alter schedules or manufacture a provider
+failure.
 
 Those checks must not modify source schedules merely to manufacture evidence and must not print account identifiers, emails, payloads, provider credentials, or raw provider errors.
 
