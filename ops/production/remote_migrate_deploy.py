@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path("/opt/secretary")
@@ -177,8 +178,19 @@ def require_db_revision(db: str, values: dict[str, str], expected: str) -> None:
         raise DeployError("unexpected database Alembic revision")
 
 
-def health(url: str) -> None:
-    run(["curl", "--fail", "--silent", url])
+def health(url: str, *, attempts: int = 1) -> None:
+    if attempts < 1:
+        raise DeployError("health retry count is invalid")
+    last_error: DeployError | None = None
+    for attempt in range(attempts):
+        try:
+            run(["curl", "--fail", "--silent", url])
+            return
+        except DeployError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(2)
+    raise DeployError("production health check failed") from last_error
 
 
 def mtproto_empty(db: str, values: dict[str, str]) -> bool:
@@ -214,7 +226,7 @@ def restore_old(
         if service_id("api") == api or service_id("worker") == worker:
             return False
         require_db(db)
-        health(url)
+        health(url, attempts=30)
         require_db_revision(db, db_values, expected)
         return True
     except RECOVERABLE_ERRORS:
@@ -280,7 +292,7 @@ def main() -> int:
             raise DeployError("database or environment changed after cutover")
         if service_id("api") == api or service_id("worker") == worker or not running(service_id("api")) or not running(service_id("worker")):
             raise DeployError("release application containers are not recreated and running")
-        health(args.health_url)
+        health(args.health_url, attempts=30)
         require_db_revision(db, release_api_env, args.to_alembic)
         print("MIGRATION_DEPLOYMENT=PASS")
         print("ALEMBIC=0046")

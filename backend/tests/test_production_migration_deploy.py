@@ -183,7 +183,7 @@ def test_rollback_restore_continues_after_direct_0041_check(monkeypatch):
     monkeypatch.setattr(remote, "volume", lambda _: ("volume", "name", "source"))
     monkeypatch.setattr(remote, "env_hash", lambda: "env")
     monkeypatch.setattr(remote, "require_db", lambda _: None)
-    monkeypatch.setattr(remote, "health", lambda _: None)
+    monkeypatch.setattr(remote, "health", lambda _, **kwargs: None)
     monkeypatch.setattr(remote, "require_db_revision", lambda db, values, expected: calls.append(("revision", expected)))
     assert remote.restore_old(
         "r" * 40,
@@ -197,6 +197,53 @@ def test_rollback_restore_continues_after_direct_0041_check(monkeypatch):
         "old-worker",
     ) is True
     assert ("revision", "0041") in calls
+
+
+def test_health_succeeds_immediately_with_one_probe(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remote, "run", lambda cmd, **kwargs: calls.append(cmd) or "ok")
+    remote.health("http://health")
+    assert len(calls) == 1
+
+
+def test_health_retries_then_succeeds(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def probe(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) < 3:
+            raise remote.DeployError("suppressed curl failure")
+        return "ok"
+
+    monkeypatch.setattr(remote, "run", probe)
+    monkeypatch.setattr(remote.time, "sleep", sleeps.append)
+    remote.health("http://health", attempts=5)
+    assert len(calls) == 3
+    assert sleeps == [2, 2]
+
+
+def test_health_fails_after_exact_bounded_attempts_without_raw_error(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def probe(cmd, **kwargs):
+        calls.append(cmd)
+        raise remote.DeployError("secret curl/provider detail")
+
+    monkeypatch.setattr(remote, "run", probe)
+    monkeypatch.setattr(remote.time, "sleep", sleeps.append)
+    with pytest.raises(remote.DeployError, match="production health check failed") as failure:
+        remote.health("http://health", attempts=4)
+    assert len(calls) == 4
+    assert sleeps == [2, 2, 2]
+    assert "secret curl/provider detail" not in str(failure.value)
+
+
+def test_release_and_rollback_health_use_bounded_startup_wait():
+    source = (ROOT / "ops/production/remote_migrate_deploy.py").read_text()
+    assert 'health(args.health_url, attempts=30)' in source
+    assert 'health(url, attempts=30)' in source
 
 
 def test_mtproto_uncertainty_refuses_downgrade(monkeypatch):
