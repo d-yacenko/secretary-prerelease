@@ -90,7 +90,7 @@ def test_build_stop_migrate_verify_start_order():
         source.index('compose("build", "api", "worker")', main_position),
         source.index("stop_applications(api, worker)", main_position),
         source.index('compose("run", "--rm", "--no-deps", "api", "alembic", "upgrade", args.to_alembic)'),
-        source.index('revision(args.to_alembic)', source.index('compose("run"')),
+        source.index('require_db_revision(db, release_api_env, args.to_alembic)', main_position),
         source.rindex('compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")'),
     ]
     assert positions == sorted(positions)
@@ -143,6 +143,60 @@ def test_release_environment_without_telegram_credentials_is_rejected():
     values = {"POSTGRES_PASSWORD": "db-password", "SECRETARY_CREDENTIAL_KEY": "credential-key"}
     with pytest.raises(remote.DeployError, match="Telegram credentials"):
         remote.require_release_environment(values, values, values, values)
+
+
+def test_direct_db_revision_accepts_0041_with_release_scripts(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return " 0041\n"
+
+    monkeypatch.setattr(remote, "run", fake_run)
+    remote.require_db_revision("db", {"POSTGRES_PASSWORD": "secret"}, "0041")
+    assert "SELECT version_num FROM alembic_version" in captured["cmd"]
+    assert "PGPASSWORD=secret" not in captured["cmd"]
+
+
+@pytest.mark.parametrize("output", ["0045\n", "0041\n0046\n", ""])
+def test_direct_db_revision_rejects_wrong_multiple_or_missing(output, monkeypatch):
+    monkeypatch.setattr(remote, "run", lambda *args, **kwargs: output)
+    with pytest.raises(remote.DeployError, match="database Alembic"):
+        remote.require_db_revision("db", {"POSTGRES_PASSWORD": "secret"}, "0041")
+
+
+def test_direct_db_revision_query_failure_is_fail_closed(monkeypatch):
+    def fail(*args, **kwargs):
+        raise remote.DeployError("sensitive preflight failed")
+
+    monkeypatch.setattr(remote, "run", fail)
+    with pytest.raises(remote.DeployError):
+        remote.require_db_revision("db", {"POSTGRES_PASSWORD": "secret"}, "0041")
+
+
+def test_rollback_restore_continues_after_direct_0041_check(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remote, "git", lambda *args: calls.append(("git", args)) or "")
+    monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(("compose", args)) or "")
+    monkeypatch.setattr(remote, "service_id", lambda name: {"db": "db", "api": "new-api", "worker": "new-worker"}[name])
+    monkeypatch.setattr(remote, "volume", lambda _: ("volume", "name", "source"))
+    monkeypatch.setattr(remote, "env_hash", lambda: "env")
+    monkeypatch.setattr(remote, "require_db", lambda _: None)
+    monkeypatch.setattr(remote, "health", lambda _: None)
+    monkeypatch.setattr(remote, "require_db_revision", lambda db, values, expected: calls.append(("revision", expected)))
+    assert remote.restore_old(
+        "r" * 40,
+        "0041",
+        "http://health",
+        "db",
+        {"POSTGRES_PASSWORD": "secret"},
+        ("volume", "name", "source"),
+        "env",
+        "old-api",
+        "old-worker",
+    ) is True
+    assert ("revision", "0041") in calls
 
 
 def test_mtproto_uncertainty_refuses_downgrade(monkeypatch):

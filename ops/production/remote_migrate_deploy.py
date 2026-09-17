@@ -149,9 +149,32 @@ def db_auth(db: str, values: dict[str, str]) -> None:
         raise DeployError("database TCP authentication failed")
 
 
-def revision(expected: str) -> None:
-    if f"{expected} (head)" not in compose("run", "--rm", "--no-deps", "api", "alembic", "current"):
-        raise DeployError("unexpected Alembic revision")
+def require_db_revision(db: str, values: dict[str, str], expected: str) -> None:
+    child = dict(os.environ)
+    child["PGPASSWORD"] = values["POSTGRES_PASSWORD"]
+    output = run(
+        [
+            "docker",
+            "exec",
+            "-e",
+            "PGPASSWORD",
+            db,
+            "psql",
+            "-h",
+            "127.0.0.1",
+            "-U",
+            values.get("POSTGRES_USER", "secretary"),
+            "-d",
+            values.get("POSTGRES_DB", "secretary"),
+            "-tAc",
+            "SELECT version_num FROM alembic_version",
+        ],
+        env=child,
+        sensitive=True,
+    )
+    revisions = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(revisions) != 1 or revisions[0] != expected:
+        raise DeployError("unexpected database Alembic revision")
 
 
 def health(url: str) -> None:
@@ -171,7 +194,17 @@ def mtproto_empty(db: str, values: dict[str, str]) -> bool:
     return True
 
 
-def restore_old(rollback: str, expected: str, url: str, db: str, db_volume: tuple[str, str, str], before_env: str, api: str, worker: str) -> bool:
+def restore_old(
+    rollback: str,
+    expected: str,
+    url: str,
+    db: str,
+    db_values: dict[str, str],
+    db_volume: tuple[str, str, str],
+    before_env: str,
+    api: str,
+    worker: str,
+) -> bool:
     try:
         git("switch", "--detach", rollback)
         compose("build", "api", "worker")
@@ -182,7 +215,7 @@ def restore_old(rollback: str, expected: str, url: str, db: str, db_volume: tupl
             return False
         require_db(db)
         health(url)
-        revision(expected)
+        require_db_revision(db, db_values, expected)
         return True
     except RECOVERABLE_ERRORS:
         return False
@@ -221,7 +254,7 @@ def main() -> int:
     api_env, worker_env = resolved_environment()
     require_environment(api_env, worker_env, require_telegram=False)
     db_auth(db, api_env)
-    revision(args.from_alembic)
+    require_db_revision(db, api_env, args.from_alembic)
 
     stopped = False
     migration_started = False
@@ -240,7 +273,7 @@ def main() -> int:
             raise DeployError("database or environment changed during downtime")
         migration_started = True
         compose("run", "--rm", "--no-deps", "api", "alembic", "upgrade", args.to_alembic)
-        revision(args.to_alembic)
+        require_db_revision(db, release_api_env, args.to_alembic)
         live = True
         compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")
         if service_id("db") != db or volume(db) != before_volume or env_hash() != before_env:
@@ -248,7 +281,7 @@ def main() -> int:
         if service_id("api") == api or service_id("worker") == worker or not running(service_id("api")) or not running(service_id("worker")):
             raise DeployError("release application containers are not recreated and running")
         health(args.health_url)
-        revision(args.to_alembic)
+        require_db_revision(db, release_api_env, args.to_alembic)
         print("MIGRATION_DEPLOYMENT=PASS")
         print("ALEMBIC=0046")
         print("DB_CONTAINER_UNCHANGED=true")
@@ -273,11 +306,21 @@ def main() -> int:
             if migration_started:
                 try:
                     compose("run", "--rm", "--no-deps", "api", "alembic", "downgrade", args.from_alembic)
-                    revision(args.from_alembic)
+                    require_db_revision(db, api_env, args.from_alembic)
                 except RECOVERABLE_ERRORS:
                     print("MIGRATION_ROLLBACK=FAILED", file=sys.stderr)
                     return 2
-            ok = restore_old(args.rollback_sha, args.from_alembic, args.health_url, db, before_volume, before_env, api, worker)
+            ok = restore_old(
+                args.rollback_sha,
+                args.from_alembic,
+                args.health_url,
+                db,
+                api_env,
+                before_volume,
+                before_env,
+                api,
+                worker,
+            )
             print(f"MIGRATION_ROLLBACK={'PASS' if ok else 'FAILED'}", file=sys.stderr)
             return 0 if ok else 2
         try:
