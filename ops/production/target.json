@@ -1,7 +1,7 @@
 {
-  "ssh_target": "",
+  "ssh_target": "root@web-itx.duckdns.org",
   "ssh_port": 22,
-  "host_key_sha256": "",
+  "host_key_sha256": "SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs",
   "repository_path": "/opt/secretary",
   "origin_url": "https://github.com/d-yacenko/secretary-prerelease.git",
   "health_url": "http://127.0.0.1:18080/health",
