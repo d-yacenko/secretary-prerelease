@@ -1,147 +1,117 @@
-# Current task — Telegram Integration Gate I1
+# Current task — Telegram Integration Gate I1R baseline attribution
 
 ## Status
 
-- Telegram A4.1: ACCEPTED.
-- Telegram A4.2: ACCEPTED.
-- Telegram A4.3: ACCEPTED through `6e6120d38cc3b1e3b677b1ca16cf97a002ea91d3`.
-- Telegram A4.4: ACCEPTED at `153f663a1ca0f787ec0be2cbb90d28758e539d39`.
-- Product feature work is paused. The active task is integration only.
-
-## Why this gate exists
-
-`main` and `review/telegram-depth-a4-folder-scope` currently diverge from merge-base `5ca5f93a3f88d1a17e2060319f6826766f2ff119`.
-
-Architect comparison confirmed that the commits unique to `main` since that merge-base change only:
-
-- `CURRENT_TASK.md`;
-- `PROJECT_STATE.md`;
-- `secretary_architect_context_encrypted.md`.
-
-No main-only application/runtime code changes need to be reconciled.
-
-The review branch contains the accepted A3/A4 implementation and migrations through Alembic `0046`.
+- Telegram A4.1–A4.4: ACCEPTED.
+- Integration merge `origin/main` -> `review/telegram-depth-a4-folder-scope` completed at `2a4da0cf7d1bb1cfd2e83c39b3b4dd1e24a938b4`.
+- Architect independently verified that merge commit has parents `db8c0d196666f3ffb2a32db6e60c284fda31d12a` and `1be75b6d4329e25baaf158b9c61dafa3029b0184`, with zero first-parent content diff. The merge itself introduced no file-content changes.
+- Telegram focused suite after merge: 137 passed.
+- Full backend run reported `2935 passed, 98 failed, 8 errors, 3 skipped`.
+- `ruff check app tests` reported 107 violations.
+- The Executor called those full-suite/Ruff results baseline, but that attribution has not yet been proven against the pre-Telegram `main` tree.
+- I1 is therefore PENDING, not rejected. `main` fast-forward is NOT authorized yet.
 
 ## Objective
 
-Create a normal merge commit bringing current `origin/main` into `review/telegram-depth-a4-folder-scope`, preserve all accepted history, resolve bookkeeping files to the current Integration Gate state, and prove the merged review branch is safe to fast-forward into `main`.
+Prove whether the full pytest failures/errors and Ruff violations already exist on the `main` baseline, or whether any are introduced/exposed by the accepted Telegram A3/A4 tree.
 
-This is not a rebase and not a product implementation phase.
+This is an evidence-only integration gate. Do not modify application/runtime/test/migration code.
 
-## Branch / history rules
+## Fixed refs
 
-Work only in:
+Use these exact refs for comparison:
 
-`review/telegram-depth-a4-folder-scope`
+- integrated review candidate: `2a4da0cf7d1bb1cfd2e83c39b3b4dd1e24a938b4`;
+- pre-integration main baseline: `1be75b6d4329e25baaf158b9c61dafa3029b0184`;
+- pre-merge review first parent: `db8c0d196666f3ffb2a32db6e60c284fda31d12a`.
 
-Before work:
+The integrated candidate and pre-merge review have identical trees; do not waste time rerunning both unless needed to diagnose nondeterminism.
 
-- `git fetch origin`;
-- worktree must be clean;
-- fast-forward local review branch to current `origin/review/telegram-depth-a4-folder-scope`;
-- confirm accepted A4.4 SHA `153f663a1ca0f787ec0be2cbb90d28758e539d39` remains in ancestry;
-- record exact `origin/main` and review starting SHAs.
+## Required method
 
-Then merge current `origin/main` into review with a normal merge commit.
+Work from the review worktree, clean state, and use a temporary **detached Git worktree** for exact main SHA `1be75b6d...`. Do not move/reset/rebase the review branch.
 
-Do NOT:
+Use the same local development PostgreSQL/runtime environment for both refs so the comparison is apples-to-apples. Do not touch production.
 
-- rebase;
-- squash;
-- cherry-pick accepted Telegram commits;
-- reset/rewrite history;
-- force push;
-- merge review into `main` yourself;
-- change product/runtime code merely to clean up style.
+### 1. Capture exact review failure signature
 
-If conflicts occur, they are expected only in bookkeeping/recovery-context files. Resolve `CURRENT_TASK.md` and `PROJECT_STATE.md` to this Integration Gate authorization. Preserve the current canonical encrypted recovery context file; do not decrypt or rewrite it locally unless explicitly required by Architect.
-
-If any application/runtime/test/migration file conflicts, STOP and report before resolving it.
-
-## Expected code result
-
-After merge:
-
-- application/runtime code must remain exactly the accepted review implementation except for merge metadata;
-- migrations remain `0042/0043` already on main plus accepted Telegram `0044/0045/0046` from review;
-- `alembic heads` must report exactly one head: `0046`;
-- no new migration is allowed;
-- no UI/Flutter changes;
-- no source-preference expansion;
-- no legacy Bot API removal;
-- no production changes.
-
-## Required verification
-
-Use local development PostgreSQL only.
-
-From repository root:
-
-`docker compose -f infra/compose.yaml -f infra/compose.dev.yaml up -d db`
-
-Wait for DB healthy.
-
-From `backend`:
-
-1. Migration verification:
-
-`alembic upgrade head`
-
-`alembic heads`
-
-Expected head: `0046` only.
-
-2. Full backend regression gate:
+At integrated review candidate, run the same full command:
 
 `pytest -q`
 
-This full-suite run is required for the main integration gate. Report pass/fail/deselected counts exactly. If the repository has a documented unavoidable environment-only exclusion, do not silently omit it; report it explicitly.
+Capture the complete terminal output to a temporary local file outside the repository (for example `/tmp/telegram_i1r_review_pytest.txt`). Do not commit logs.
 
-3. Telegram focused regression must also remain green:
+Extract/report:
 
-`pytest -q tests/test_telegram_mtproto_a1.py tests/test_telegram_mtproto_a2.py tests/test_telegram_mtproto_a3.py tests/test_telegram_mtproto_a4.py tests/test_telegram_mtproto_a4_2.py tests/test_telegram_mtproto_a4_3.py tests/test_telegram_mtproto_a4_4.py`
+- every FAILED nodeid;
+- every ERROR nodeid / collection/setup error identity;
+- summary counts.
 
-4. Static checks:
+If rerun counts/signatures differ materially from the prior `98 failed, 8 errors`, report nondeterminism explicitly and STOP before any code change.
 
-`ruff check app tests`
+### 2. Capture exact main baseline failure signature
 
-`git diff --check`
+In a detached temporary worktree at exact `1be75b6d4329e25baaf158b9c61dafa3029b0184`, run:
 
-5. History/tree verification:
+`pytest -q`
 
-- verify `origin/main` is an ancestor of final review HEAD after merge;
-- compare final review HEAD against the pre-merge review HEAD and confirm the only content changes from the merge are bookkeeping/recovery-context resolution, not application/runtime/test/migration code;
-- compare final review against `origin/main` and report the remaining files that would enter `main` on fast-forward.
+Capture output outside both repositories.
 
-## Completion report
+Report every FAILED/ERROR identity and counts.
 
-Commit/push only the merge result to:
+Compare signatures by common test nodeid/error identity:
 
-`review/telegram-depth-a4-folder-scope`
+- failures/errors present in both => baseline;
+- present only on integrated review => candidate regression/blocker;
+- present only on main => not a Telegram blocker, but report.
 
-Return:
+Do not treat count equality alone as proof; compare identities.
 
-- starting review SHA;
-- starting `origin/main` SHA;
-- merge commit SHA;
-- final remote review SHA;
-- confirmation A4.4 accepted SHA remains in ancestry;
-- conflict list and exact resolution summary;
-- confirmation no application/runtime/test/migration conflict was manually resolved;
-- `alembic upgrade head` result;
-- `alembic heads` result;
-- full `pytest -q` result;
-- Telegram focused suite result;
-- Ruff result;
-- `git diff --check` result;
-- final `git status --short`;
-- confirmation `origin/main` is ancestor of final review HEAD;
-- final review-vs-main file summary;
-- confirmation no production/main/UI/A4.5 work was performed;
-- final marker exactly: `TELEGRAM_INTEGRATION_GATE_I1_READY`.
+### 3. Ruff attribution
+
+Run on integrated review candidate:
+
+`ruff check app tests --output-format concise`
+
+Capture exact violations outside repository.
+
+Run the same command at exact main baseline worktree.
+
+Normalize by `path:line:column code` (message may also be reported) and compare.
+
+Report:
+
+- common baseline violations;
+- review-only violations;
+- main-only violations.
+
+Any review-only violation in A3/A4-added/modified files is an I1 blocker until Architect decides otherwise.
+
+### 4. No changes
+
+Do not edit code/tests/migrations to make failures disappear during I1R.
+
+If a review-only pytest or Ruff issue exists, report the exact nodeid/file/rule and STOP. Architect will authorize the smallest integration correction separately if required.
+
+If all review failures/errors and Ruff violations are proven baseline (or review has fewer), report that evidence and STOP. Architect will then decide I1 acceptance and main fast-forward.
+
+## Verification / hygiene
+
+Also report:
+
+- current review HEAD;
+- `git status --short` before and after;
+- detached main worktree exact HEAD;
+- confirmation no repository-tracked files changed;
+- confirmation no commits/pushes were made for test evidence;
+- confirmation no production/UI/A4.5 work occurred.
+
+Temporary worktree and `/tmp` logs may be removed after extracting the report.
+
+## Completion marker
+
+Final line exactly:
+
+`TELEGRAM_INTEGRATION_GATE_I1R_ATTRIBUTION_READY`
 
 Then STOP.
-
-## After I1
-
-Architect will independently review the merge commit and test evidence. Only after acceptance will Architect fast-forward `main` to the integration HEAD. Production migration/deployment remains a separate later authorization.
