@@ -114,6 +114,82 @@ def test_stopped_verification_uses_captured_ids_not_compose_ps(monkeypatch):
     assert calls == [("stop", "api", "worker")]
 
 
+def test_post_cutover_uses_stopped_aware_current_ids_and_orders_guards(monkeypatch):
+    calls = []
+    states = {"api-current": False, "worker-current": False}
+
+    def fake_compose(*args, **kwargs):
+        calls.append(("compose", args))
+        if args[:3] == ("ps", "--all", "-q"):
+            return {"api": "api-current", "worker": "worker-current"}[args[3]]
+        return ""
+
+    monkeypatch.setattr(remote, "compose", fake_compose)
+    monkeypatch.setattr(remote, "running", lambda container: states[container])
+    monkeypatch.setattr(
+        remote,
+        "require_db_revision",
+        lambda db, values, expected: calls.append(("revision", expected)),
+    )
+    monkeypatch.setattr(
+        remote,
+        "mtproto_empty",
+        lambda db, values: calls.append(("empty", None)) or True,
+    )
+    remote.prove_post_cutover_rollback_safe("db", {"POSTGRES_PASSWORD": "secret"})
+    assert [kind for kind, _ in calls] == ["compose", "compose", "revision", "empty"]
+    assert calls[2] == ("revision", "0046")
+
+
+@pytest.mark.parametrize("running_container", ["api-current", "worker-current"])
+def test_post_cutover_running_writer_blocks_before_empty_query(monkeypatch, running_container):
+    states = {"api-current": running_container == "api-current", "worker-current": running_container == "worker-current"}
+    empty_called = []
+    monkeypatch.setattr(
+        remote,
+        "compose",
+        lambda *args, **kwargs: {"api": "api-current", "worker": "worker-current"}[args[3]]
+        if args[:3] == ("ps", "--all", "-q")
+        else "",
+    )
+    monkeypatch.setattr(remote, "running", lambda container: states[container])
+    monkeypatch.setattr(remote, "mtproto_empty", lambda *args: empty_called.append(True) or True)
+    with pytest.raises(remote.DeployError, match="did not stop"):
+        remote.prove_post_cutover_rollback_safe("db", {"POSTGRES_PASSWORD": "secret"})
+    assert empty_called == []
+
+
+def test_post_cutover_lookup_uncertainty_blocks_before_revision_or_empty(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args) or "")
+    monkeypatch.setattr(remote, "require_db_revision", lambda *args: pytest.fail("revision must not run"))
+    monkeypatch.setattr(remote, "mtproto_empty", lambda *args: pytest.fail("empty must not run"))
+    with pytest.raises(remote.DeployError, match="current container"):
+        remote.prove_post_cutover_rollback_safe("db", {"POSTGRES_PASSWORD": "secret"})
+
+
+def test_post_cutover_revision_uncertainty_blocks_before_empty(monkeypatch):
+    monkeypatch.setattr(remote, "current_service_id", lambda name: f"{name}-current")
+    monkeypatch.setattr(remote, "running", lambda _: False)
+    monkeypatch.setattr(remote, "require_db_revision", lambda *args: (_ for _ in ()).throw(remote.DeployError("revision query failed")))
+    monkeypatch.setattr(remote, "mtproto_empty", lambda *args: pytest.fail("empty must not run"))
+    with pytest.raises(remote.DeployError, match="revision query"):
+        remote.prove_post_cutover_rollback_safe("db", {"POSTGRES_PASSWORD": "secret"})
+
+
+def test_post_cutover_stop_failure_blocks_before_empty_or_downgrade(monkeypatch):
+    empty_called = []
+
+    def stop_failure(*args, **kwargs):
+        raise remote.DeployError("stop failed")
+
+    monkeypatch.setattr(remote, "compose", stop_failure)
+    monkeypatch.setattr(remote, "mtproto_empty", lambda *args: empty_called.append(True) or True)
+    with pytest.raises(remote.DeployError, match="stop failed"):
+        remote.stop_and_prove_post_cutover_rollback_safe("db", {"POSTGRES_PASSWORD": "secret"})
+    assert empty_called == []
+
+
 def test_release_telegram_environment_is_checked_after_switch():
     rollback = {
         "POSTGRES_HOST": "db",

@@ -75,6 +75,34 @@ def stop_applications(api: str, worker: str) -> None:
     require_stopped(api, worker)
 
 
+def current_service_id(name: str) -> str:
+    result = compose("ps", "--all", "-q", name)
+    ids = [line.strip() for line in result.splitlines() if line.strip()]
+    if len(ids) != 1:
+        raise DeployError(f"current container is unavailable: {name}")
+    return ids[0]
+
+
+def prove_post_cutover_rollback_safe(
+    db: str,
+    db_values: dict[str, str],
+) -> None:
+    current_api = current_service_id("api")
+    current_worker = current_service_id("worker")
+    require_stopped(current_api, current_worker)
+    require_db_revision(db, db_values, "0046")
+    if not mtproto_empty(db, db_values):
+        raise DeployError("post-cutover MTProto data exists")
+
+
+def stop_and_prove_post_cutover_rollback_safe(
+    db: str,
+    db_values: dict[str, str],
+) -> None:
+    compose("stop", "api", "worker")
+    prove_post_cutover_rollback_safe(db, db_values)
+
+
 def require_db(container: str) -> None:
     state = inspect_json(container).get("State") or {}
     if state.get("Running") is not True or (state.get("Health") or {}).get("Status") != "healthy":
@@ -306,11 +334,7 @@ def main() -> int:
         if stopped:
             if live:
                 try:
-                    compose("stop", "api", "worker")
-                    if not mtproto_empty(db, api_env):
-                        print("MIGRATION_ROLLBACK_BLOCKED=post_cutover_mtproto_data", file=sys.stderr)
-                        print("BREAK_GLASS_REQUIRED=true", file=sys.stderr)
-                        return 2
+                    stop_and_prove_post_cutover_rollback_safe(db, release_api_env)
                 except RECOVERABLE_ERRORS:
                     print("MIGRATION_ROLLBACK_BLOCKED=post_cutover_mtproto_data", file=sys.stderr)
                     print("BREAK_GLASS_REQUIRED=true", file=sys.stderr)
