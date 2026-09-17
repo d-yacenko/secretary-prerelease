@@ -6,11 +6,13 @@ from app.ai_audit.context import reset_current_job_id, set_current_job_id
 from app.connectors.google.errors import classify_google_sync_failure
 from app.connectors.teams.constants import DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
 from app.connectors.teams.errors import TeamsRateLimitedError
+from app.connectors.telegram.mtproto_errors import classify_telegram_sync_failure
 from app.connectors.yandex.errors import classify_yandex_sync_failure
 from app.db.session import SessionLocal
 from app.jobs.constants import (
     JOB_TYPE_SYNC_GOOGLE_CALENDAR,
     JOB_TYPE_SYNC_GOOGLE_GMAIL,
+    JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
     JOB_TYPE_SYNC_YANDEX_CALENDAR,
     JOB_TYPE_SYNC_YANDEX_MAIL,
 )
@@ -188,6 +190,10 @@ def process_one_job(
                 JOB_TYPE_SYNC_YANDEX_CALENDAR,
             }:
                 failure_kind, failure_retryable = classify_yandex_sync_failure(exc)
+            if claimed.type == JOB_TYPE_SYNC_TELEGRAM_MTPROTO:
+                failure_kind, failure_retryable, retry_after_seconds = (
+                    classify_telegram_sync_failure(exc)
+                )
             if queue.is_recurring_source_job(claimed.type):
                 finalize_recurring_job_failure(
                     session,

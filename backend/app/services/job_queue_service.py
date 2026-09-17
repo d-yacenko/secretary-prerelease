@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.connectors.google.api_errors import format_google_api_error
 from app.connectors.google.errors import GoogleApiError, GoogleConnectorError
 from app.connectors.teams.errors import TeamsRateLimitedError, TeamsReconnectRequiredError
+from app.connectors.telegram.mtproto_errors import TelegramMtprotoError
 from app.connectors.yandex.caldav_api_errors import format_yandex_caldav_error
 from app.connectors.yandex.errors import (
     YandexCalDavError,
@@ -26,6 +27,7 @@ from app.jobs.constants import (
     JOB_TYPE_PROACTIVE_REVIEW,
     JOB_TYPE_SYNC_GOOGLE_CALENDAR,
     JOB_TYPE_SYNC_GOOGLE_GMAIL,
+    JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
     JOB_TYPE_SYNC_YANDEX_CALENDAR,
     JOB_TYPE_SYNC_YANDEX_MAIL,
     MAX_JOB_ATTEMPTS,
@@ -59,6 +61,8 @@ def utcnow() -> datetime:
 def sanitize_job_error(exc: BaseException) -> str:
     if isinstance(exc, GoogleApiError):
         return format_google_api_error(exc)
+    if isinstance(exc, TelegramMtprotoError):
+        return type(exc).__name__
     if isinstance(exc, YandexCalDavError):
         return format_yandex_caldav_error(exc)
     message = str(exc).strip() or type(exc).__name__
@@ -540,6 +544,34 @@ class JobQueueService:
         job.locked_at = None
         job.run_after = now + timedelta(seconds=delay)
         job.attempts = min(job.attempts, len(GOOGLE_TRANSIENT_RETRY_DELAYS_SECONDS) - 1)
+        job.updated_at = now
+        self._session.flush()
+
+    def mark_telegram_recurring_transient_retry(
+        self,
+        job_id: UUID,
+        error: str,
+        *,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        job = self._require_job(job_id)
+        if job.type != JOB_TYPE_SYNC_TELEGRAM_MTPROTO:
+            raise ValueError("Telegram transient retry requires an MTProto job")
+        now = utcnow()
+        payload = dict(job.payload or {})
+        payload["last_error_kind"] = "transient"
+        payload["last_error_retryable"] = True
+        job.payload = payload
+        delay = (
+            retry_after_seconds
+            if retry_after_seconds is not None and retry_after_seconds >= 0
+            else 60
+        )
+        job.status = JOB_STATUS_PENDING
+        job.last_error = error[:MAX_LAST_ERROR_LENGTH]
+        job.locked_at = None
+        job.run_after = now + timedelta(seconds=delay)
+        job.attempts = 0
         job.updated_at = now
         self._session.flush()
 

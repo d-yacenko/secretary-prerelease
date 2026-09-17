@@ -66,8 +66,11 @@ def deployment_default_history_days(source: str) -> int:
 
 
 def deployment_default_interval_seconds_for_job_type(job_type: str) -> int:
+    from app.jobs.constants import JOB_TYPE_SYNC_TELEGRAM_MTPROTO
     from app.source_sync.constants import JOB_TYPE_TO_SOURCE
 
+    if job_type == JOB_TYPE_SYNC_TELEGRAM_MTPROTO:
+        return settings.source_sync_telegram_mtproto_interval_seconds
     source = JOB_TYPE_TO_SOURCE.get(job_type)
     if source is None:
         return settings.source_sync_gmail_interval_seconds

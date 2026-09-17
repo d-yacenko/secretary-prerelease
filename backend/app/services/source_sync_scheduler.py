@@ -17,6 +17,7 @@ from app.db.models import (
     Job,
     MattermostAccount,
     TeamsAccount,
+    TelegramMtprotoAccount,
     YandexCalendarAccount,
     YandexMailAccount,
 )
@@ -28,6 +29,7 @@ from app.jobs.constants import (
     JOB_TYPE_SYNC_GOOGLE_GMAIL,
     JOB_TYPE_SYNC_MATTERMOST,
     JOB_TYPE_SYNC_TEAMS,
+    JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
     JOB_TYPE_SYNC_YANDEX_CALENDAR,
     JOB_TYPE_SYNC_YANDEX_MAIL,
     RECURRING_SOURCE_JOB_TYPES,
@@ -45,6 +47,14 @@ from app.source_sync.constants import (
 )
 
 
+def _telegram_runtime_configured() -> bool:
+    return bool(
+        settings.secretary_credential_key.strip()
+        and settings.telegram_api_id > 0
+        and settings.telegram_api_hash.strip()
+    )
+
+
 class SourceSyncScheduler:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -53,6 +63,7 @@ class SourceSyncScheduler:
 
     def run_maintenance(self) -> None:
         if not settings.secretary_credential_key:
+            self._retire_telegram_jobs()
             return
         encryption = CredentialEncryption(settings.secretary_credential_key)
         self._maintain_google_accounts(GoogleAccountStore(self._session, encryption))
@@ -68,6 +79,7 @@ class SourceSyncScheduler:
         self._maintain_teams_accounts(
             TeamsAccountStore(self._session, encryption)
         )
+        self._maintain_telegram_accounts()
         self._retire_stale_recurring_jobs(encryption)
         self._rearm_failed_recurring_jobs()
 
@@ -139,6 +151,14 @@ class SourceSyncScheduler:
                 )
             ):
                 triggered.append(f"teams:{account.id}")
+        if _telegram_runtime_configured():
+            for account in self._session.scalars(
+                select(TelegramMtprotoAccount).where(TelegramMtprotoAccount.user_id == user_id)
+            ):
+                if self._queue.trigger_recurring_source_job(
+                    user_id, JOB_TYPE_SYNC_TELEGRAM_MTPROTO, account.id
+                ):
+                    triggered.append(f"telegram_mtproto:{account.id}")
         return triggered
 
     def reconcile_user_source(self, user_id: UUID, source: str) -> None:
@@ -270,6 +290,27 @@ class SourceSyncScheduler:
                 account.user_id,
             )
 
+    def _maintain_telegram_accounts(self) -> None:
+        if not _telegram_runtime_configured():
+            self._retire_telegram_jobs()
+            return
+        for account in self._session.scalars(select(TelegramMtprotoAccount)):
+            self._maintain_recurring_job(
+                JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
+                account.id,
+                account.user_id,
+            )
+
+    def _retire_telegram_jobs(self) -> None:
+        jobs = self._session.scalars(
+            select(Job).where(
+                Job.type == JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
+                Job.status.in_((JOB_STATUS_PENDING, JOB_STATUS_FAILED)),
+            )
+        )
+        for job in jobs:
+            self._queue.retire_recurring_source_job(job)
+
     def _collect_expected_recurring_jobs(
         self,
         encryption: CredentialEncryption,
@@ -319,6 +360,9 @@ class SourceSyncScheduler:
                 account.user_id, JOB_TYPE_SYNC_TEAMS
             ):
                 expected.add((JOB_TYPE_SYNC_TEAMS, account.id, account.user_id))
+        if _telegram_runtime_configured():
+            for account in self._session.scalars(select(TelegramMtprotoAccount)):
+                expected.add((JOB_TYPE_SYNC_TELEGRAM_MTPROTO, account.id, account.user_id))
         return expected
 
     def _retire_stale_recurring_jobs(self, encryption: CredentialEncryption) -> None:
@@ -367,6 +411,7 @@ class SourceSyncScheduler:
                             JOB_TYPE_SYNC_YANDEX_CALENDAR,
                             JOB_TYPE_SYNC_MATTERMOST,
                             JOB_TYPE_SYNC_TEAMS,
+                            JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
                         )
                     ),
                     Job.status == JOB_STATUS_FAILED,

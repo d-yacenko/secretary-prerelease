@@ -1,7 +1,9 @@
+import asyncio
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.ai_audit.context import get_current_job_id
 from app.connectors.google.calendar_sync import build_calendar_sync_service
 from app.connectors.google.gmail_sync import build_gmail_sync_service
 from app.connectors.mattermost.sync import build_mattermost_sync_service
@@ -12,7 +14,9 @@ from app.connectors.teams.sync import build_teams_sync_service
 from app.connectors.yandex.calendar_sync import build_yandex_calendar_sync_service
 from app.connectors.yandex.mail_sync import build_yandex_mail_sync_service
 from app.core.config import settings
+from app.db.models import Job
 from app.services.source_sync_preference_service import SourceSyncPreferenceService
+from app.services.telegram_mtproto_recurring_sync_service import TelegramMtprotoRecurringSyncService
 from app.source_sync.constants import (
     SOURCE_GMAIL,
     SOURCE_GOOGLE_CALENDAR,
@@ -196,6 +200,23 @@ def handle_sync_teams(
     if account is None or account.auth_status == AUTH_STATUS_RECONNECT_REQUIRED:
         return
     _teams_sync_service(session, user_id).sync_account(account_id, user_id=user_id)
+
+
+def handle_sync_telegram_mtproto(
+    session: Session,
+    _embedding_service,
+    payload: dict,
+    user_id: UUID,
+) -> None:
+    account_id = UUID(str(payload["account_id"]))
+    asyncio.run(
+        TelegramMtprotoRecurringSyncService(session).run(user_id, account_id, payload)
+    )
+    job_id = get_current_job_id()
+    if job_id is not None:
+        job = session.get(Job, job_id)
+        if job is not None:
+            job.payload = {**(job.payload or {}), **payload}
 
 
 def handle_process_teams_notification(

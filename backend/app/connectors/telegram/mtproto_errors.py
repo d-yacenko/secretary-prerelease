@@ -68,3 +68,21 @@ class TelegramMtprotoProviderUnavailableError(TelegramMtprotoError):
     def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retry_after_seconds = retry_after_seconds
+
+
+def classify_telegram_sync_failure(exc: BaseException) -> tuple[str, bool, int | None]:
+    if isinstance(exc, TelegramMtprotoProviderUnavailableError):
+        return "transient", True, exc.retry_after_seconds
+    if isinstance(exc, TelegramMtprotoScopeUnavailableError):
+        return "transient", True, None
+    if isinstance(
+        exc,
+        (
+            TelegramMtprotoAuthorizationInvalidError,
+            TelegramMtprotoAccountNotConnectedError,
+            TelegramMtprotoConfigurationError,
+            TelegramMtprotoFolderConfigurationError,
+        ),
+    ):
+        return "authentication", False, None
+    return "unknown", False, None

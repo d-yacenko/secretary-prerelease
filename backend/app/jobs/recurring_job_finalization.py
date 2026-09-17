@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.jobs.constants import JOB_TYPE_SYNC_TELEGRAM_MTPROTO
 from app.services.job_queue_service import (
     GOOGLE_TRANSIENT_RETRY_JOB_TYPES,
     YANDEX_TRANSIENT_RETRY_JOB_TYPES,
@@ -73,5 +74,20 @@ def finalize_recurring_job_failure(
             failure_kind=failure_kind or "unknown",
             retryable=retryable,
         )
+        return
+    if job_type == JOB_TYPE_SYNC_TELEGRAM_MTPROTO:
+        if failure_kind == "transient" and retryable:
+            queue.mark_telegram_recurring_transient_retry(
+                job_id,
+                error,
+                retry_after_seconds=retry_after_seconds,
+            )
+        else:
+            queue.mark_recurring_failure(
+                job_id,
+                error,
+                failure_kind=failure_kind or "unknown",
+                retryable=retryable,
+            )
         return
     queue.mark_retry(job_id, error, retryable=retryable, run_after=run_after)
