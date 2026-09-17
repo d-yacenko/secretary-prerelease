@@ -1,12 +1,17 @@
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 
 from telethon import TelegramClient, utils
 from telethon.errors import (
     AuthKeyUnregisteredError,
+    ChannelInvalidError,
+    ChannelPrivateError,
+    ChatIdInvalidError,
     FloodWaitError,
     PasswordHashInvalidError,
+    PeerIdInvalidError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     SessionPasswordNeededError,
@@ -19,15 +24,19 @@ from telethon.errors.common import AuthKeyNotFound
 from telethon.sessions import StringSession
 from telethon.tl import types
 
+from app.connectors.telegram.constants import MAX_TELEGRAM_MESSAGE_BODY_CHARS
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAuthorizationInvalidError,
     TelegramMtprotoError,
+    TelegramMtprotoGroupUnavailableError,
     TelegramMtprotoInvalidCodeError,
     TelegramMtprotoInvalidPasswordError,
+    TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
 )
 
 DISCOVERY_DIALOG_LIMIT = 500
+TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,24 @@ class TelegramMtprotoGroupDiscoveryResult:
     truncated: bool
 
 
+@dataclass(frozen=True)
+class TelegramMtprotoHistoryEntry:
+    message_id: int
+    occurred_at: datetime | None
+    text: str | None
+    sender_peer_id: int | None
+    reply_to_message_id: int | None
+    topic_id: int | None
+    edited_at: datetime | None
+    is_service: bool
+
+
+@dataclass(frozen=True)
+class TelegramMtprotoHistoryPage:
+    entries: tuple[TelegramMtprotoHistoryEntry, ...]
+    has_more: bool
+
+
 class TelegramMtprotoTransport(Protocol):
     async def send_login_code(self, phone: str) -> TelegramMtprotoAuthState:
         ...
@@ -84,6 +111,18 @@ class TelegramMtprotoTransport(Protocol):
     async def discover_groups(
         self, session: str, limit: int
     ) -> TelegramMtprotoGroupDiscoveryResult:
+        ...
+
+    async def fetch_history(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        limit: int,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
+        reverse: bool = False,
+    ) -> TelegramMtprotoHistoryPage:
         ...
 
 
@@ -233,6 +272,73 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
+    async def fetch_history(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        limit: int,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
+        reverse: bool = False,
+    ) -> TelegramMtprotoHistoryPage:
+        client: TelegramClient | None = None
+        page_limit = max(1, min(limit, TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE))
+        try:
+            input_peer = _input_peer_from_reference(provider_peer_reference)
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoAuthorizationInvalidError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            entries: list[TelegramMtprotoHistoryEntry] = []
+            async for message in client.iter_messages(
+                input_peer,
+                limit=page_limit,
+                min_id=min_message_id,
+                max_id=max_message_id,
+                reverse=reverse,
+            ):
+                entry = _history_entry_from_message(message)
+                if entry is None:
+                    raise TelegramMtprotoProviderUnavailableError(
+                        "Telegram history provider returned an invalid entry"
+                    )
+                entries.append(entry)
+            return TelegramMtprotoHistoryPage(
+                entries=tuple(entries), has_more=len(entries) >= page_limit
+            )
+        except (
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
+            raise TelegramMtprotoGroupUnavailableError(
+                "Telegram selected group is no longer available"
+            ) from None
+        except FloodWaitError as exc:
+            raise _flood_wait_error(exc) from None
+        except TelegramMtprotoError:
+            raise
+        except (ValueError, TypeError):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except Exception as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram history provider is temporarily unavailable"
+            ) from exc
+        finally:
+            await _disconnect(client)
+
 
 def _state_from_client(
     client: TelegramClient, state: TelegramMtprotoAuthState
@@ -309,6 +415,107 @@ def _group_from_dialog(dialog: object) -> TelegramMtprotoGroupDescriptor | None:
         is_forum=is_forum,
         provider_peer_reference=json.dumps(reference, separators=(",", ":")),
     )
+
+
+def _input_peer_from_reference(provider_peer_reference: str) -> object:
+    try:
+        payload = json.loads(provider_peer_reference)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise TelegramMtprotoProviderReferenceInvalidError(
+            "Telegram selected group reference is invalid"
+        ) from None
+    if not isinstance(payload, dict):
+        raise TelegramMtprotoProviderReferenceInvalidError(
+            "Telegram selected group reference is invalid"
+        )
+    entity_type = payload.get("entity_type")
+    entity_id = payload.get("id")
+    if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id <= 0:
+        raise TelegramMtprotoProviderReferenceInvalidError(
+            "Telegram selected group reference is invalid"
+        )
+    if entity_type == "chat" and set(payload) == {"entity_type", "id"}:
+        return types.InputPeerChat(chat_id=entity_id)
+    access_hash = payload.get("access_hash")
+    if (
+        entity_type == "channel"
+        and set(payload) == {"entity_type", "id", "access_hash"}
+        and isinstance(access_hash, int)
+        and not isinstance(access_hash, bool)
+    ):
+        return types.InputPeerChannel(channel_id=entity_id, access_hash=access_hash)
+    raise TelegramMtprotoProviderReferenceInvalidError(
+        "Telegram selected group reference is invalid"
+    )
+
+
+def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry | None:
+    message_id = getattr(message, "id", None)
+    if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+        return None
+    raw_text = getattr(message, "message", None)
+    text = _bound_history_text(raw_text) if isinstance(raw_text, str) and raw_text.strip() else None
+    occurred_at = _history_datetime(getattr(message, "date", None))
+    edited_at = _history_datetime(getattr(message, "edit_date", None))
+    sender_peer_id = _peer_id_from_message(message)
+    reply_header = getattr(message, "reply_to", None)
+    reply_to_message_id = _positive_int(getattr(message, "reply_to_msg_id", None))
+    if reply_to_message_id is None:
+        reply_to_message_id = _positive_int(getattr(reply_header, "reply_to_msg_id", None))
+    topic_id = _positive_int(getattr(message, "reply_to_top_id", None))
+    if topic_id is None:
+        topic_id = _positive_int(getattr(reply_header, "reply_to_top_id", None))
+    if topic_id is None and bool(getattr(reply_header, "forum_topic", False)):
+        topic_id = reply_to_message_id
+    return TelegramMtprotoHistoryEntry(
+        message_id=message_id,
+        occurred_at=occurred_at,
+        text=text,
+        sender_peer_id=sender_peer_id,
+        reply_to_message_id=reply_to_message_id,
+        topic_id=topic_id,
+        edited_at=edited_at,
+        is_service=getattr(message, "action", None) is not None,
+    )
+
+
+def _peer_id_from_message(message: object) -> int | None:
+    sender_id = _positive_or_negative_int(getattr(message, "sender_id", None))
+    if sender_id is not None:
+        return sender_id
+    sender_peer = getattr(message, "from_id", None)
+    if sender_peer is None:
+        return None
+    try:
+        peer_id = utils.get_peer_id(sender_peer)
+    except (TypeError, ValueError):
+        return None
+    return _positive_or_negative_int(peer_id)
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _positive_or_negative_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value != 0:
+        return value
+    return None
+
+
+def _history_datetime(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _bound_history_text(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized[:MAX_TELEGRAM_MESSAGE_BODY_CHARS]
 
 
 def _flood_wait_error(exc: FloodWaitError) -> TelegramMtprotoProviderUnavailableError:

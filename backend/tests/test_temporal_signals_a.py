@@ -277,7 +277,7 @@ def test_migration_0037_temporal_signals_default_false(db_session: Session) -> N
         for path in (Path(__file__).resolve().parents[1] / "alembic" / "versions").glob("*.py")
         if path.name[0].isdigit()
     )
-    assert versions[-1].startswith("0043")
+    assert versions[-1].startswith("0044")
     module_path = (
         Path(__file__).resolve().parents[1]
         / "alembic/versions/0037_user_settings_temporal_signals.py"

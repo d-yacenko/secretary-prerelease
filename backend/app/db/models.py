@@ -776,6 +776,19 @@ class TelegramMtprotoChatSelection(Base):
     title: Mapped[str] = mapped_column(nullable=False)
     username: Mapped[str | None] = mapped_column(nullable=True)
     is_forum: Mapped[bool] = mapped_column(nullable=False, server_default=sa.false())
+    history_latest_message_id: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    history_backfill_before_message_id: Mapped[int | None] = mapped_column(
+        sa.BigInteger, nullable=True
+    )
+    history_cutoff_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    history_complete: Mapped[bool] = mapped_column(
+        nullable=False, server_default=sa.false()
+    )
+    history_last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
