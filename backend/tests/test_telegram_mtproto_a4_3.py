@@ -21,6 +21,7 @@ from app.services.context_service import ContextService
 from app.services.conversation_member_read import list_conversation_members_page
 from app.services.errors import NotFoundError
 from app.services.graph_service import GraphService
+from app.services.label_service import LabelService
 from app.services.object_query_service import ObjectQueryService
 from app.services.recent_source_service import RecentSourceService, inbox_feed_at
 from app.services.retrieval_service import RetrievalService
@@ -358,3 +359,138 @@ def test_context_query_and_conversation_member_paths_do_not_bypass_scope(db_sess
         db_session, user.id, object_id=inactive.id, limit=20, cursor=None
     )
     assert inactive.id in [item.id for item in page["members"]]
+
+
+def test_same_user_wrong_account_selection_does_not_grant_visibility(db_session):
+    user, account_a, selection, obj = _scope_fixture(db_session, active=False)
+    other_user = User(id=uuid4(), display_name="second account owner")
+    db_session.add(other_user)
+    db_session.flush()
+    account_b = TelegramMtprotoAccount(
+        id=uuid4(), user_id=other_user.id, telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account_b)
+    db_session.flush()
+    selection.account_id = account_b.id
+    db_session.flush()
+    query = ObjectQueryService(db_session, user.id)
+    assert obj not in query.query(kinds=["chat_message"], providers=["telegram"])
+    selection.account_id = account_a.id
+    selection.scope_active = True
+    db_session.flush()
+    assert obj in query.query(kinds=["chat_message"], providers=["telegram"])
+
+
+def test_title_trigram_filtered_retrieval_and_search_sorts_stay_hidden(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    obj.title = "CandidateBranchUnique Mark"
+    obj.body = "ordinary body without title token"
+    db_session.flush()
+    retrieval = RetrievalService(db_session, user.id)
+    search = SearchService(db_session, user.id)
+    filtered = retrieval.retrieve(
+        "CandidateBranchUniqueMarker", provider="telegram", kind="chat_message", time_scope="all"
+    )
+    assert obj.id in {hit.object_id for hit in filtered.hits}
+    selection.scope_active = False
+    db_session.flush()
+    assert obj.id not in {
+        hit.object_id for hit in retrieval.retrieve(
+            "CandidateBranchUniqueMarker", provider="telegram", kind="chat_message", time_scope="all"
+        ).hits
+    }
+    for sort in ("relevance", "newest", "oldest"):
+        assert obj.id not in {item.id for item in search.search("CandidateBranchUniqueMarker", sort=sort)}
+    selection.scope_active = True
+    db_session.flush()
+    assert obj.id in {item.id for item in search.search("CandidateBranchUniqueMarker", sort="relevance")}
+
+
+def test_object_query_status_and_label_filters_follow_scope(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    obj.status = "queued"
+    label = LabelService(db_session, user.id).create_label("A4.3 label").label
+    LabelService(db_session, user.id).assign_label(obj.id, label.id)
+    db_session.flush()
+    query = ObjectQueryService(db_session, user.id)
+    kwargs = {"kinds": ["chat_message"], "providers": ["telegram"], "statuses": ["queued"], "label_ids": [label.id]}
+    assert obj in query.query(**kwargs)
+    selection.scope_active = False
+    db_session.flush()
+    assert obj not in query.query(**kwargs)
+    selection.scope_active = True
+    db_session.flush()
+    assert obj in query.query(**kwargs)
+
+
+def test_recent_review_count_paths_follow_scope(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    recent = RecentSourceService(db_session, user.id)
+    feed = inbox_feed_at(obj)
+    anchor_feed = feed - timedelta(seconds=1)
+    snapshot_feed = feed + timedelta(seconds=1)
+    kwargs = {
+        "anchor_feed_at": anchor_feed,
+        "anchor_object_id": uuid4(),
+        "snapshot_top_feed_at": snapshot_feed,
+        "snapshot_top_object_id": uuid4(),
+    }
+    assert recent.count_review_window(**kwargs) == 1
+    assert recent.count_older_in_review_window(**kwargs, last_feed_at=snapshot_feed, last_object_id=uuid4()) == 1
+    assert recent.count_newer_in_review_window(**kwargs, last_feed_at=feed, last_object_id=obj.id) == 0
+    selection.scope_active = False
+    db_session.flush()
+    assert recent.count_review_window(**kwargs) == 0
+    assert recent.count_older_in_review_window(**kwargs, last_feed_at=snapshot_feed, last_object_id=uuid4()) == 0
+    assert recent.count_newer_in_review_window(**kwargs, last_feed_at=feed, last_object_id=obj.id) == 0
+    selection.scope_active = True
+    db_session.flush()
+    assert recent.count_review_window(**kwargs) == 1
+
+
+def test_context_pinned_and_folder_expansion_hide_inactive_representations(db_session):
+    user, _, selection, scoped = _scope_fixture(db_session, active=False)
+    graph = GraphService(db_session, user.id)
+    folder = graph.create_object(ObjectCreate(kind="folder", title="Scope folder", origin="user"))
+    graph.create_edge(EdgeCreate(
+        source_id=folder.id, target_id=scoped.id, type="contains", origin="user", state="confirmed",
+    ))
+    pinned = graph.create_object(ObjectCreate(kind="note", title="Pinned anchor", origin="user"))
+    graph.create_edge(EdgeCreate(
+        source_id=pinned.id, target_id=scoped.id, type="references", origin="user", state="confirmed",
+        metadata={"context_role": "user_pinned", "added_by": "user"},
+    ))
+    db_session.add(Representation(id=uuid4(), object_id=scoped.id, kind="full", text="hidden unique representation"))
+    db_session.flush()
+    service = ContextService(db_session, user.id)
+    inactive_context = service.build_context(object_id=folder.id)
+    assert scoped.id not in {item.object_id for item in inactive_context.items}
+    assert all("hidden unique representation" not in item.content for item in inactive_context.items)
+    pinned_context = service.build_context(object_id=pinned.id)
+    assert scoped.id not in {item.object_id for item in pinned_context.items}
+    selection.scope_active = True
+    db_session.flush()
+    assert scoped.id in {item.object_id for item in service.build_context(object_id=folder.id).items}
+    assert scoped.id in {item.object_id for item in service.build_context(object_id=pinned.id).items}
+
+
+def test_visibility_toggle_has_no_persistent_or_enqueue_side_effects(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    rep = Representation(id=uuid4(), object_id=obj.id, kind="full", text="stable representation")
+    db_session.add(rep)
+    db_session.flush()
+    before = (obj.id, obj.body, obj.metadata_, obj.updated_at, rep.id, rep.text)
+    db_session.expire_all()
+    selection = db_session.get(TelegramMtprotoChatSelection, selection.id)
+    selection.scope_active = False
+    db_session.flush()
+    _ = ObjectQueryService(db_session, user.id).query(kinds=["chat_message"], providers=["telegram"])
+    selection.scope_active = True
+    db_session.flush()
+    db_session.refresh(obj)
+    db_session.refresh(rep)
+    after = (obj.id, obj.body, obj.metadata_, obj.updated_at, rep.id, rep.text)
+    assert after == before
+    assert db_session.get(Object, obj.id) is not None
+    assert db_session.get(Representation, rep.id) is not None
