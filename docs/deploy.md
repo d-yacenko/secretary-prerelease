@@ -174,3 +174,34 @@ Presence-only booleans and non-secret Git/container state are allowed.
 If the committed target, fingerprint, path, origin, environment, DB authentication, or container invariants do not match reality, STOP. Do not repair or bypass the mismatch during a normal deployment.
 
 A manual recovery path requires a new explicit Architect task marked BREAK-GLASS with its own narrowly scoped commands and verification.
+
+## Migration-bearing rollout
+
+The normal `ops/production/deploy.py` harness is schema-neutral and is limited
+to application-only releases whose Alembic migration infrastructure is
+unchanged. It intentionally rejects the Telegram MTProto release transition.
+
+The separately authorized M1 migration path is:
+
+```bash
+python3 ops/production/migrate_deploy.py \
+  --release-sha "$RELEASE_SHA" \
+  --rollback-sha "$ROLLBACK_SHA" \
+  --from-alembic 0041 \
+  --to-alembic 0046
+```
+
+It is restricted to the exact `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`
+chain. It builds before downtime, stops `api` and `worker`, migrates to
+exactly `0046`, verifies the database directly, and starts the application
+only after that verification. The database container, volume, and environment
+file are preserved.
+
+Migration rollback is guarded separately. Before release runtime starts, the
+harness may downgrade to `0041`. After cutover it may do so only when all new
+MTProto tables are directly proven empty. If data or query uncertainty exists,
+the harness leaves the application stopped and emits a break-glass marker;
+it does not delete data or perform a destructive downgrade. A schema-changing
+release therefore requires its own Architect-authorized migration deployment
+plan with explicit forward and rollback semantics; it cannot be enabled with a
+normal-deploy override.
