@@ -30,10 +30,9 @@ def upgrade() -> None:
     )
     op.alter_column("telegram_mtproto_chat_selections", "manual_selected", nullable=False)
     op.alter_column("telegram_mtproto_chat_selections", "scope_active", nullable=False)
-    op.drop_constraint(
-        "ck_telegram_mtproto_chat_selections_peer_kind",
-        "telegram_mtproto_chat_selections",
-        type_="check",
+    op.execute(
+        "ALTER TABLE telegram_mtproto_chat_selections "
+        "DROP CONSTRAINT IF EXISTS ck_telegram_mtproto_chat_selections_peer_kind"
     )
     op.create_check_constraint(
         "ck_telegram_mtproto_chat_selections_peer_kind",
@@ -43,10 +42,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_telegram_mtproto_chat_selections_peer_kind",
-        "telegram_mtproto_chat_selections",
-        type_="check",
+    op.execute(
+        "ALTER TABLE telegram_mtproto_chat_selections "
+        "DROP CONSTRAINT IF EXISTS ck_telegram_mtproto_chat_selections_peer_kind"
     )
     op.create_check_constraint(
         "ck_telegram_mtproto_chat_selections_peer_kind",

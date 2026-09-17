@@ -440,6 +440,11 @@ async def telegram_mtproto_scope_peer_sync(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
     except TelegramMtprotoAuthorizationInvalidError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except TelegramMtprotoGroupUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Telegram peer is no longer available",
+        ) from exc
     except TelegramMtprotoProviderReferenceInvalidError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Telegram peer is no longer available") from exc
     except TelegramMtprotoConfigurationError as exc:

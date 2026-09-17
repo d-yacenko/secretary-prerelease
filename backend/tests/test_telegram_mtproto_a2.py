@@ -192,11 +192,13 @@ async def test_deselection_is_idempotent_and_does_not_call_telegram(db_session) 
     assert await service.set_selection(user.id, -1001234567890, False) is None
     assert await service.set_selection(user.id, -1001234567890, False) is None
     assert len(fake.sessions) == calls_before
-    assert db_session.scalar(
+    selection = db_session.scalar(
         select(TelegramMtprotoChatSelection).where(
             TelegramMtprotoChatSelection.account_id == account.id
         )
-    ) is None
+    )
+    assert selection is not None
+    assert selection.manual_selected is False
 
 
 async def test_selected_group_absent_from_discovery_is_available_false(db_session) -> None:

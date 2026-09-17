@@ -8,14 +8,20 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from telethon.tl import types
 
-from app.connectors.telegram.mtproto_errors import TelegramMtprotoScopeUnavailableError
+from app.api import telegram_mtproto as telegram_api
+from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
+from app.connectors.telegram.mtproto_errors import (
+    TelegramMtprotoGroupUnavailableError,
+    TelegramMtprotoScopeUnavailableError,
+)
 from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoDialogDescriptor,
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoFolderDialogsResult,
     TelegramMtprotoFolderDiscoveryResult,
+    _input_peer_from_reference,
 )
-from app.db.models import TelegramMtprotoChatSelection
+from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection, User
 from app.services.telegram_mtproto_scope_service import TelegramMtprotoScopeService
 
 
@@ -115,6 +121,69 @@ async def test_incomplete_scope_fails_closed_without_reconciliation(monkeypatch)
 def test_durable_selection_flags_and_legacy_deselect_contract():
     assert "manual_selected" in TelegramMtprotoChatSelection.__table__.c
     assert "scope_active" in TelegramMtprotoChatSelection.__table__.c
+
+
+def test_private_provider_reference_becomes_input_peer_user():
+    peer = _input_peer_from_reference('{"entity_type":"user","id":42,"access_hash":99}')
+    assert isinstance(peer, types.InputPeerUser)
+    assert peer.user_id == 42
+    assert peer.access_hash == 99
+
+
+def test_reconciliation_rows_deactivate_and_reenter_without_cursor_loss(db_session):
+    user = User(id=uuid4(), display_name="A4.2 durable")
+    db_session.add(user)
+    db_session.flush()
+    account = TelegramMtprotoAccount(
+        id=uuid4(), user_id=user.id, telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted-session",
+    )
+    db_session.add(account)
+    db_session.flush()
+    store = TelegramMtprotoAccountStore(db_session, SimpleNamespace(encrypt=lambda value: f"enc:{value}"))
+    descriptors = [_dialog(1), _dialog(-2, "group"), _dialog(-3, "supergroup")]
+    store.reconcile_scope(account.id, descriptors)
+    row = store.get_selection(account.id, 1)
+    row.history_latest_message_id = 17
+    row.history_complete = True
+    row.manual_selected = True
+    db_session.flush()
+
+    store.reconcile_scope(account.id, [])
+    assert row.scope_active is False
+    assert row.history_latest_message_id == 17
+    assert db_session.get(TelegramMtprotoChatSelection, row.id) is row
+
+    store.reconcile_scope(account.id, [descriptors[0]])
+    assert row.scope_active is True
+    assert row.manual_selected is True
+    assert row.history_latest_message_id == 17
+
+
+def test_scoped_unavailable_peer_is_sanitized_409(monkeypatch):
+    async def fail(*args, **kwargs):
+        raise TelegramMtprotoGroupUnavailableError("provider details must not escape")
+
+    class FakeHistory:
+        def __init__(self, session):
+            self.session = session
+
+        sync_scope_peer = fail
+
+    monkeypatch.setattr(telegram_api, "TelegramMtprotoHistoryService", FakeHistory)
+    monkeypatch.setattr(telegram_api, "mtproto_is_configured", lambda: True)
+    with pytest.raises(telegram_api.HTTPException) as raised:
+        import asyncio
+
+        asyncio.run(
+            telegram_api.telegram_mtproto_scope_peer_sync(
+                peer_id=42,
+                session=object(),
+                current_user=SimpleNamespace(user_id=uuid4()),
+            )
+        )
+    assert raised.value.status_code == 409
+    assert raised.value.detail == "Telegram peer is no longer available"
 
 
 def test_migration_0046_is_single_head():
