@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.services.job_queue_service import (
+    GOOGLE_TRANSIENT_RETRY_JOB_TYPES,
     YANDEX_TRANSIENT_RETRY_JOB_TYPES,
     JobQueueService,
 )
@@ -37,6 +38,7 @@ def finalize_recurring_job_failure(
     retryable: bool,
     failure_kind: str | None = None,
     run_after=None,
+    retry_after_seconds: int | None = None,
 ) -> None:
     queue = JobQueueService(session)
     preferences = SourceSyncPreferenceService.build(session)
@@ -45,6 +47,21 @@ def finalize_recurring_job_failure(
         return
     if not preferences.is_job_type_enabled(user_id, job_type):
         queue.retire_recurring_source_job(job)
+        return
+    if job_type in GOOGLE_TRANSIENT_RETRY_JOB_TYPES:
+        if failure_kind == "transient" and retryable:
+            queue.mark_google_recurring_transient_retry(
+                job_id,
+                error,
+                retry_after_seconds=retry_after_seconds,
+            )
+            return
+        queue.mark_recurring_failure(
+            job_id,
+            error,
+            failure_kind=failure_kind or "unknown",
+            retryable=retryable,
+        )
         return
     if job_type in YANDEX_TRANSIENT_RETRY_JOB_TYPES:
         if failure_kind == "transient" and retryable:

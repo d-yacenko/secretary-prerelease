@@ -751,8 +751,11 @@ def test_google_api_errors_are_controlled(db_session, credential_key: str) -> No
     )
     from app.connectors.google.errors import GoogleApiError
 
-    with pytest.raises(GoogleApiError, match="failed to list gmail messages"):
+    with pytest.raises(GoogleApiError, match="denied") as exc_info:
         transport.list_message_ids("token", "me", "after:2026/01/01", 10)
+    assert exc_info.value.operation == "list_message_ids_page"
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.retryable is False
 
 
 def test_no_db_transaction_held_during_fake_network_wait(

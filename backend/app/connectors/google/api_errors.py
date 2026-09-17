@@ -1,5 +1,7 @@
 """Parse and classify Google API HTTP error responses."""
 
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -36,6 +38,26 @@ _FORBIDDEN_ERROR_SUBSTRINGS = (
     "refresh_token",
     "ya29.",
 )
+
+
+def parse_google_retry_after(value: str | None, *, now: datetime | None = None) -> int | None:
+    if not value:
+        return None
+    stripped = value.strip()
+    if stripped.isdigit():
+        return int(stripped)
+    try:
+        retry_at = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    else:
+        retry_at = retry_at.astimezone(UTC)
+    seconds = (retry_at - (now or datetime.now(UTC))).total_seconds()
+    if seconds <= 0:
+        return None
+    return int(seconds + 0.999999)
 
 
 def _sanitize_message(text: str) -> str:
@@ -112,6 +134,9 @@ def raise_for_google_response(response: httpx.Response, operation: str) -> None:
         message = f"HTTP {response.status_code}"
     safe_message = _sanitize_message(str(message))
     retryable = is_google_error_retryable(response.status_code, reason, api_status)
+    retry_after_seconds = (
+        parse_google_retry_after(response.headers.get("Retry-After")) if retryable else None
+    )
     raise GoogleApiError(
         safe_message,
         operation=operation,
@@ -119,6 +144,7 @@ def raise_for_google_response(response: httpx.Response, operation: str) -> None:
         reason=reason,
         api_status=api_status,
         retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
     )
 
 
