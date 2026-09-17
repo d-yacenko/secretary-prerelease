@@ -18,6 +18,7 @@ from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoTransport,
     TelethonMtprotoTransport,
+    dialog_matches_filter,
 )
 from app.core.config import settings
 from app.db.models import TelegramMtprotoSyncFolder
@@ -114,16 +115,18 @@ class TelegramMtprotoScopeService:
         dialogs: dict[int, TelegramMtprotoDialogDescriptor] = {}
         skipped: dict[str, int] = {}
         truncated = discovery.truncated
-        for item in configured:
-            result = await self._transport_factory().fetch_folder_dialogs(
-                session, item.folder_id, DISCOVERY_DIALOG_LIMIT
-            )
-            truncated = truncated or result.truncated
-            for key, value in result.skipped_counts.items():
-                skipped[key] = skipped.get(key, 0) + value
-            for dialog in result.dialogs:
-                if not dialog.is_muted:
-                    dialogs.setdefault(dialog.peer_id, dialog)
+        universe = await self._transport_factory().fetch_dialog_universe(
+            session, DISCOVERY_DIALOG_LIMIT
+        )
+        truncated = truncated or universe.truncated
+        for key, value in universe.skipped_counts.items():
+            skipped[key] = skipped.get(key, 0) + value
+        for dialog in universe.dialogs:
+            if not dialog.is_muted and any(
+                dialog_matches_filter(current_by_id[item.folder_id].definition, dialog)
+                for item in configured
+            ):
+                dialogs.setdefault(dialog.peer_id, dialog)
         return TelegramMtprotoScopeResult(tuple(dialogs.values()), truncated, skipped, len(configured))
 
     def _account_context(self, user_id: UUID):

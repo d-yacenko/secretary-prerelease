@@ -81,6 +81,7 @@ class TelegramMtprotoGroupDiscoveryResult:
 class TelegramMtprotoFolderDescriptor:
     folder_id: int
     name: str
+    definition: object | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,12 @@ class TelegramMtprotoDialogDescriptor:
     username: str | None
     is_muted: bool
     provider_peer_reference: str
+    is_contact: bool = False
+    is_bot: bool = False
+    is_broadcast: bool = False
+    is_archived: bool = False
+    unread_count: int = 0
+    unread_mark: bool = False
 
 
 @dataclass(frozen=True)
@@ -148,8 +155,8 @@ class TelegramMtprotoTransport(Protocol):
     ) -> TelegramMtprotoFolderDiscoveryResult:
         ...
 
-    async def fetch_folder_dialogs(
-        self, session: str, folder_id: int, limit: int
+    async def fetch_dialog_universe(
+        self, session: str, limit: int
     ) -> TelegramMtprotoFolderDialogsResult:
         ...
 
@@ -324,13 +331,14 @@ class TelethonMtprotoTransport:
                 raise TelegramMtprotoAuthorizationInvalidError(
                     "Telegram MTProto authorization is no longer valid"
                 )
-            filters = await client(GetDialogFiltersRequest())
+            response = await client(GetDialogFiltersRequest())
+            filters = _custom_filter_definitions(response)
             folders: list[TelegramMtprotoFolderDescriptor] = []
             for item in filters:
                 folder_id = getattr(item, "id", None)
                 name = _folder_name(item)
                 if isinstance(folder_id, int) and not isinstance(folder_id, bool) and folder_id > 0 and name:
-                    folders.append(TelegramMtprotoFolderDescriptor(folder_id, name))
+                    folders.append(TelegramMtprotoFolderDescriptor(folder_id, name, item))
                     if len(folders) >= scan_limit:
                         break
             return TelegramMtprotoFolderDiscoveryResult(tuple(folders), len(folders) >= scan_limit)
@@ -356,8 +364,8 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
-    async def fetch_folder_dialogs(
-        self, session: str, folder_id: int, limit: int
+    async def fetch_dialog_universe(
+        self, session: str, limit: int
     ) -> TelegramMtprotoFolderDialogsResult:
         client: TelegramClient | None = None
         scan_limit = max(1, min(limit, DISCOVERY_DIALOG_LIMIT))
@@ -371,7 +379,7 @@ class TelethonMtprotoTransport:
             dialogs: list[TelegramMtprotoDialogDescriptor] = []
             skipped: dict[str, int] = {}
             seen = 0
-            async for dialog in client.iter_dialogs(folder=folder_id, limit=scan_limit):
+            async for dialog in client.iter_dialogs(limit=scan_limit):
                 if seen >= scan_limit:
                     break
                 seen += 1
@@ -557,12 +565,25 @@ def _folder_name(item: object) -> str | None:
     return value or None
 
 
+def _custom_filter_definitions(response: object) -> tuple[object, ...]:
+    filters = getattr(response, "filters", response)
+    if not isinstance(filters, (list, tuple)):
+        filters = tuple(filters or ())
+    return tuple(
+        item
+        for item in filters
+        if isinstance(item, (types.DialogFilter, types.DialogFilterChatlist))
+    )
+
+
 def _dialog_from_dialog(
     dialog: object,
 ) -> tuple[TelegramMtprotoDialogDescriptor | None, str | None]:
     entity = getattr(dialog, "entity", None)
+    is_bot = isinstance(entity, types.User) and bool(getattr(entity, "bot", False))
+    is_broadcast = isinstance(entity, types.Channel) and bool(getattr(entity, "broadcast", False))
     if isinstance(entity, types.User):
-        if bool(getattr(entity, "bot", False)):
+        if is_bot:
             return None, "bot"
         kind = "private"
         entity_type = "user"
@@ -572,7 +593,7 @@ def _dialog_from_dialog(
     elif isinstance(entity, types.Channel) and entity.megagroup and not entity.broadcast:
         kind = "supergroup"
         entity_type = "channel"
-    elif isinstance(entity, types.Channel) and entity.broadcast:
+    elif is_broadcast:
         return None, "broadcast"
     else:
         return None, "unsupported"
@@ -600,8 +621,14 @@ def _dialog_from_dialog(
         kind=kind,
         title=title,
         username=username.strip() if username else None,
-        is_muted=bool(getattr(dialog, "muted", False)),
+        is_muted=_is_currently_muted(dialog),
         provider_peer_reference=json.dumps(reference, separators=(",", ":")),
+        is_contact=bool(getattr(entity, "contact", False)) if isinstance(entity, types.User) else False,
+        is_bot=is_bot,
+        is_broadcast=is_broadcast,
+        is_archived=_is_archived(dialog),
+        unread_count=_nonnegative_int(getattr(dialog, "unread_count", 0)),
+        unread_mark=bool(getattr(getattr(dialog, "dialog", None), "unread_mark", False)),
     ), None
 
 
@@ -611,6 +638,67 @@ def _dialog_title(dialog: object, entity: object) -> str | None:
         names = [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]
         title = " ".join(value.strip() for value in names if isinstance(value, str) and value.strip())
     return title.strip() if isinstance(title, str) and title.strip() else None
+
+
+def _is_currently_muted(dialog: object, *, now: datetime | None = None) -> bool:
+    notify_settings = getattr(getattr(dialog, "dialog", None), "notify_settings", None)
+    mute_until = getattr(notify_settings, "mute_until", None)
+    return isinstance(mute_until, int) and not isinstance(mute_until, bool) and mute_until > int(
+        (now or datetime.now(UTC)).timestamp()
+    )
+
+
+def _is_archived(dialog: object) -> bool:
+    return getattr(getattr(dialog, "dialog", None), "folder_id", None) == 1
+
+
+def _nonnegative_int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _peer_id_from_filter_peer(peer: object) -> int | None:
+    try:
+        value = utils.get_peer_id(peer)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _filter_peer_ids(filter_definition: object, attribute: str) -> set[int]:
+    return {
+        peer_id
+        for peer in (getattr(filter_definition, attribute, None) or ())
+        if (peer_id := _peer_id_from_filter_peer(peer)) is not None
+    }
+
+
+def dialog_matches_filter(
+    filter_definition: object, dialog: TelegramMtprotoDialogDescriptor
+) -> bool:
+    """Evaluate Telegram custom-filter fields against one live dialog descriptor."""
+    if dialog.peer_id in _filter_peer_ids(filter_definition, "exclude_peers"):
+        return False
+    explicit = _filter_peer_ids(filter_definition, "include_peers") | _filter_peer_ids(
+        filter_definition, "pinned_peers"
+    )
+    if dialog.peer_id in explicit:
+        return True
+    if isinstance(filter_definition, types.DialogFilterChatlist):
+        return False
+    categories = (
+        bool(getattr(filter_definition, "contacts", False)) and dialog.kind == "private" and dialog.is_contact,
+        bool(getattr(filter_definition, "non_contacts", False)) and dialog.kind == "private" and not dialog.is_contact and not dialog.is_bot,
+        bool(getattr(filter_definition, "groups", False)) and dialog.kind in {"group", "supergroup"},
+        bool(getattr(filter_definition, "broadcasts", False)) and dialog.is_broadcast,
+        bool(getattr(filter_definition, "bots", False)) and dialog.is_bot,
+    )
+    if not any(categories):
+        return False
+    if bool(getattr(filter_definition, "exclude_muted", False)) and dialog.is_muted:
+        return False
+    if bool(getattr(filter_definition, "exclude_read", False)) and dialog.unread_count == 0 and not dialog.unread_mark:
+        return False
+    return not (bool(getattr(filter_definition, "exclude_archived", False)) and dialog.is_archived)
 
 
 def _input_peer_from_reference(provider_peer_reference: str) -> object:

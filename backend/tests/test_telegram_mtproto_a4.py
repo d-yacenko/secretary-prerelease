@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
+from telethon.tl import types
 
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
@@ -21,6 +23,10 @@ from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoFolderDialogsResult,
     TelegramMtprotoFolderDiscoveryResult,
+    _custom_filter_definitions,
+    _is_archived,
+    _is_currently_muted,
+    dialog_matches_filter,
 )
 from app.core.config import settings
 from app.db.models import TelegramMtprotoAccount, TelegramMtprotoSyncFolder, User
@@ -44,6 +50,15 @@ class FakeFolderTransport:
     async def fetch_folder_dialogs(self, session, folder_id, limit):
         self.dialog_calls.append((session, folder_id, limit))
         return self.dialogs.get(folder_id, TelegramMtprotoFolderDialogsResult((), False, {}))
+
+    async def fetch_dialog_universe(self, session, limit):
+        self.dialog_calls.append((session, None, limit))
+        all_dialogs = tuple(item for result in self.dialogs.values() for item in result.dialogs)
+        skipped = {}
+        for result in self.dialogs.values():
+            for key, value in result.skipped_counts.items():
+                skipped[key] = skipped.get(key, 0) + value
+        return TelegramMtprotoFolderDialogsResult(all_dialogs, any(item.truncated for item in self.dialogs.values()), skipped)
 
 
 def _account(db_session):
@@ -91,6 +106,62 @@ def test_migration_0045_is_single_head():
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == ["0045"]
+
+
+def _filter(filter_id=7, name="Team", **kwargs):
+    return types.DialogFilter(
+        id=filter_id,
+        title=types.TextWithEntities(name, []),
+        pinned_peers=kwargs.pop("pinned_peers", []),
+        include_peers=kwargs.pop("include_peers", []),
+        exclude_peers=kwargs.pop("exclude_peers", []),
+        **kwargs,
+    )
+
+
+def test_dialog_filters_wrapper_and_default_are_parsed():
+    custom = _filter()
+    chatlist = types.DialogFilterChatlist(8, types.TextWithEntities("List", []), [], [])
+    response = SimpleNamespace(filters=[types.DialogFilterDefault(), custom, chatlist])
+    parsed = _custom_filter_definitions(response)
+    assert [item.id for item in parsed] == [7, 8]
+    assert _custom_filter_definitions([custom]) == (custom,)
+
+
+def test_filter_membership_uses_explicit_exclude_include_and_categories():
+    private = _dialog(1)
+    group = _dialog(-2, "group")
+    assert dialog_matches_filter(_filter(groups=True), group)
+    assert dialog_matches_filter(_filter(include_peers=[types.InputPeerUser(1, 2)]), private)
+    assert not dialog_matches_filter(_filter(include_peers=[types.InputPeerUser(1, 2)], exclude_peers=[types.InputPeerUser(1, 2)]), private)
+    assert dialog_matches_filter(_filter(contacts=True), _dialog(1)) is False
+    contact = _dialog(1)
+    contact = TelegramMtprotoDialogDescriptor(**{**contact.__dict__, "is_contact": True})
+    assert dialog_matches_filter(_filter(contacts=True), contact)
+
+
+def test_raw_mute_read_and_archive_facts():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    dialog = SimpleNamespace(
+        dialog=SimpleNamespace(
+            notify_settings=SimpleNamespace(mute_until=int((now + timedelta(minutes=5)).timestamp())),
+            folder_id=1,
+            unread_mark=True,
+        ),
+        unread_count=0,
+    )
+    assert _is_currently_muted(dialog, now=now)
+    assert _is_archived(dialog)
+    dialog.dialog.notify_settings.mute_until = int((now - timedelta(minutes=1)).timestamp())
+    assert not _is_currently_muted(dialog, now=now)
+    dialog.dialog.notify_settings.mute_until = 0
+    assert not _is_currently_muted(dialog, now=now)
+    dialog.dialog.notify_settings = SimpleNamespace()
+    assert not _is_currently_muted(dialog, now=now)
+    muted_group = TelegramMtprotoDialogDescriptor(1, "group", "g", None, True, "ref", unread_count=0, unread_mark=True, is_archived=True)
+    assert not dialog_matches_filter(_filter(groups=True, exclude_muted=True), muted_group)
 
 
 @pytest.mark.asyncio
@@ -149,7 +220,10 @@ async def test_scope_unions_peers_filters_muted_and_skips_unsupported(db_session
     store = TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY))
     store.replace_sync_folders(account.id, [(7, "A"), (8, "B")])
     transport = FakeFolderTransport(
-        [TelegramMtprotoFolderDescriptor(7, "A"), TelegramMtprotoFolderDescriptor(8, "Renamed")],
+        [
+            TelegramMtprotoFolderDescriptor(7, "A", _filter(groups=True, include_peers=[types.InputPeerUser(1, 2)])),
+            TelegramMtprotoFolderDescriptor(8, "Renamed", _filter(groups=True)),
+        ],
         {
             7: TelegramMtprotoFolderDialogsResult((_dialog(1), _dialog(2, "group", muted=True)), False, {"bot": 1}),
             8: TelegramMtprotoFolderDialogsResult((_dialog(1), _dialog(3, "supergroup")), True, {"broadcast": 2}),
@@ -160,6 +234,7 @@ async def test_scope_unions_peers_filters_muted_and_skips_unsupported(db_session
     assert {item.kind for item in result.dialogs} == {"private", "supergroup"}
     assert result.truncated is True
     assert result.skipped_counts == {"bot": 1, "broadcast": 2}
+    assert len(transport.dialog_calls) == 1
     saved_by_id = {item.folder_id: item for item in store.list_sync_folders(account.id)}
     assert saved_by_id[8].folder_name == "Renamed"
 
