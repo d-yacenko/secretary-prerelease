@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app.connectors.google.api_errors import parse_google_retry_after
 from app.connectors.google.constants import GOOGLE_AUTH_URL, GOOGLE_OAUTH_SCOPES, GOOGLE_TOKEN_URL
 from app.connectors.google.errors import GoogleOAuthError
 from app.connectors.google.oauth_config import load_oauth_client_config
@@ -71,8 +72,36 @@ class GoogleOAuthService:
             },
         )
         if response.status_code >= 400:
-            raise GoogleOAuthError("failed to refresh access token")
+            error_code = _oauth_error_code(response)
+            retryable = response.status_code == 429 or response.status_code >= 500
+            retryable = retryable or error_code in {
+                "server_error",
+                "temporarily_unavailable",
+                "backendError",
+                "internalError",
+            }
+            raise GoogleOAuthError(
+                "failed to refresh access token",
+                status_code=response.status_code,
+                retryable=retryable,
+                retry_after_seconds=(
+                    parse_google_retry_after(response.headers.get("Retry-After"))
+                    if retryable
+                    else None
+                ),
+            )
         payload = response.json()
         if "access_token" not in payload:
             raise GoogleOAuthError("refresh response missing access token")
         return payload
+
+
+def _oauth_error_code(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    return error if isinstance(error, str) else None
