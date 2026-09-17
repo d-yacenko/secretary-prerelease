@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Fail-closed production deployment entrypoint.
 
-This script is run from a trusted Executor checkout. It never discovers a host:
-the exact SSH target and expected host-key fingerprint come from target.json.
+This script is run from the canonical, clean Executor `main` checkout. It never
+discovers a host: the exact SSH target and expected host-key fingerprint come
+from target.json.
 """
 
 from __future__ import annotations
@@ -17,13 +18,45 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+REPOSITORY_ROOT = HERE.parent.parent
 TARGET_FILE = HERE / "target.json"
 REMOTE_HELPER = HERE / "remote_deploy.py"
+CANONICAL_ORIGIN = "https://github.com/d-yacenko/secretary-prerelease.git"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 
 
 class DeployError(RuntimeError):
     pass
+
+
+def _run_local(cmd: list[str]) -> str:
+    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        message = (proc.stderr or proc.stdout or "command failed").strip().splitlines()
+        tail = message[-1][:300] if message else "command failed"
+        raise DeployError(tail)
+    return proc.stdout.strip()
+
+
+def _require_canonical_local_checkout() -> None:
+    root = _run_local(["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "--show-toplevel"])
+    if Path(root).resolve() != REPOSITORY_ROOT.resolve():
+        raise DeployError("deployment harness is not running from the canonical repository root")
+    origin = _run_local(["git", "-C", str(REPOSITORY_ROOT), "remote", "get-url", "origin"])
+    if origin != CANONICAL_ORIGIN:
+        raise DeployError("local deployment checkout has the wrong Git origin")
+    if _run_local(["git", "-C", str(REPOSITORY_ROOT), "status", "--porcelain"]):
+        raise DeployError("local deployment checkout is not clean")
+    branch = _run_local(["git", "-C", str(REPOSITORY_ROOT), "branch", "--show-current"])
+    if branch != "main":
+        raise DeployError("normal production deployment must run from local main")
+
+    _run_local(["git", "-C", str(REPOSITORY_ROOT), "fetch", "--prune", "origin", "main"])
+    head = _run_local(["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "HEAD"])
+    remote_main = _run_local(["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "origin/main"])
+    if head != remote_main:
+        raise DeployError("local main is stale; fast-forward it to origin/main before deployment")
 
 
 def _load_target() -> dict:
@@ -42,14 +75,17 @@ def _load_target() -> dict:
         raise DeployError(f"target.json missing fields: {', '.join(missing)}")
     if not str(data["ssh_target"]).strip():
         raise DeployError("production ssh_target is not configured; host discovery is forbidden")
-    if not str(data["host_key_sha256"]).strip():
-        raise DeployError("production host_key_sha256 is not configured; fail closed")
+    fingerprint = str(data["host_key_sha256"]).strip()
+    if not FINGERPRINT_RE.fullmatch(fingerprint):
+        raise DeployError("production host_key_sha256 is missing or malformed; fail closed")
     if data["repository_path"] != "/opt/secretary":
         raise DeployError("unexpected production repository_path")
-    if data["origin_url"] != "https://github.com/d-yacenko/secretary-prerelease.git":
+    if data["origin_url"] != CANONICAL_ORIGIN:
         raise DeployError("unexpected production origin_url")
     if data["compose_files"] != ["infra/compose.yaml", "infra/compose.deploy.yaml"]:
         raise DeployError("unexpected production compose_files")
+    if data["health_url"] != "http://127.0.0.1:18080/health":
+        raise DeployError("unexpected production health_url")
     port = data["ssh_port"]
     if not isinstance(port, int) or not (1 <= port <= 65535):
         raise DeployError("invalid production ssh_port")
@@ -118,6 +154,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        _require_canonical_local_checkout()
         target = _load_target()
         release_sha = _validate_sha("release-sha", args.release_sha)
         rollback_sha = _validate_sha("rollback-sha", args.rollback_sha)
