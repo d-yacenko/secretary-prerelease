@@ -1,6 +1,6 @@
 """Telegram Depth A4.3 — active retrieval scope enforcement."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -18,11 +18,13 @@ from app.domain.telegram_mtproto_visibility import (
     telegram_mtproto_active_object_predicate,
 )
 from app.services.context_service import ContextService
+from app.services.conversation_member_read import list_conversation_members_page
 from app.services.errors import NotFoundError
 from app.services.graph_service import GraphService
 from app.services.object_query_service import ObjectQueryService
-from app.services.recent_source_service import RecentSourceService
+from app.services.recent_source_service import RecentSourceService, inbox_feed_at
 from app.services.retrieval_service import RetrievalService
+from app.services.search_service import SearchService
 
 
 def _scope_fixture(db_session, *, active=True):
@@ -64,6 +66,7 @@ def _scope_fixture(db_session, *, active=True):
             "transport": "mtproto",
             "account_id": str(account.id),
             "peer_id": "42",
+            "chat_id": "42",
             "direction": "inbound",
         },
     )
@@ -209,3 +212,149 @@ def test_neighbors_and_context_expansion_exclude_inactive_but_exact_target_remai
     assert graph.get_object(inactive.id).id == inactive.id
     with pytest.raises(NotFoundError):
         graph.get_neighbors(inactive.id)
+
+
+@pytest.mark.parametrize(
+    ("peer_kind", "peer_id"),
+    [("private", 42), ("group", -42), ("supergroup", -1000000000042)],
+)
+def test_all_supported_peer_kinds_toggle_active_visibility(db_session, peer_kind, peer_id):
+    user, _, selection, obj = _scope_fixture(db_session)
+    selection.peer_kind = peer_kind
+    selection.peer_id = peer_id
+    obj.metadata_ = {**obj.metadata_, "peer_id": str(peer_id)}
+    db_session.flush()
+    query = ObjectQueryService(db_session, user.id)
+    assert obj in query.query(kinds=["chat_message"], providers=["telegram"])
+    selection.scope_active = False
+    selection.manual_selected = True
+    db_session.flush()
+    assert obj not in query.query(kinds=["chat_message"], providers=["telegram"])
+    selection.scope_active = True
+    db_session.flush()
+    assert obj in query.query(kinds=["chat_message"], providers=["telegram"])
+
+
+def test_scope_metadata_and_ownership_matrix_fails_closed(db_session):
+    user, account, _, valid = _scope_fixture(db_session)
+    other_user = User(id=uuid4(), display_name="different owner")
+    db_session.add(other_user)
+    db_session.flush()
+    other_account = TelegramMtprotoAccount(
+        id=uuid4(), user_id=other_user.id, telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(other_account)
+    db_session.flush()
+    foreign_owner = User(id=uuid4(), display_name="foreign account owner")
+    db_session.add(foreign_owner)
+    db_session.flush()
+    foreign_account = TelegramMtprotoAccount(
+        id=uuid4(), user_id=foreign_owner.id, telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(foreign_account)
+    db_session.flush()
+    db_session.add_all([
+        TelegramMtprotoChatSelection(
+            id=uuid4(), account_id=other_account.id, peer_id=42, peer_kind="private",
+            provider_peer_reference_encrypted="encrypted", title="Other account", scope_active=True,
+        ),
+        TelegramMtprotoChatSelection(
+            id=uuid4(), account_id=foreign_account.id, peer_id=42, peer_kind="private",
+            provider_peer_reference_encrypted="encrypted", title="Foreign account", scope_active=True,
+        ),
+    ])
+    cases = [
+        {"transport": "mtproto", "peer_id": "42"},
+        {"transport": "mtproto", "account_id": str(account.id)},
+        {"transport": "mtproto", "account_id": {"id": str(account.id)}, "peer_id": "42"},
+        {"transport": "mtproto", "account_id": str(account.id), "peer_id": [42]},
+        {"transport": "mtproto", "account_id": str(uuid4()), "peer_id": "42"},
+        {"transport": "mtproto", "account_id": str(account.id), "peer_id": "999"},
+        {"transport": "mtproto", "account_id": str(other_account.id), "peer_id": "42"},
+        {"transport": "mtproto", "account_id": str(foreign_account.id), "peer_id": "42"},
+    ]
+    objects = []
+    for metadata in cases:
+        obj = Object(
+            id=uuid4(), user_id=user.id, kind="chat_message", provider="telegram",
+            origin="source", state="confirmed", external_id=f"matrix-{uuid4()}",
+            title="matrix", metadata_=metadata,
+        )
+        objects.append(obj)
+    db_session.add_all(objects)
+    db_session.flush()
+    visible = ObjectQueryService(db_session, user.id).query(
+        kinds=["chat_message"], providers=["telegram"]
+    )
+    assert valid in visible
+    assert not set(objects) & set(visible)
+
+
+def test_retrieval_candidate_families_and_search_facade_are_scope_gated(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    obj.title = "distinctive title trigram qzx"
+    obj.body = "distinctive body lexical phrase"
+    db_session.add(Representation(
+        id=uuid4(), object_id=obj.id, kind="full", text="distinctive representation phrase"
+    ))
+    db_session.flush()
+    retrieval = RetrievalService(db_session, user.id)
+    search = SearchService(db_session, user.id)
+    queries = ["distinctive body lexical", "distinctive title qzx", "distinctive representation"]
+    for query in queries:
+        assert obj.id in {hit.object_id for hit in retrieval.retrieve(query, time_scope="all").hits}
+    assert obj.id in {item.id for item in search.search("distinctive body lexical", sort="relevance")}
+    assert obj.id in {item.id for item in search.search("distinctive body lexical", sort="newest")}
+    assert obj.id in {item.id for item in search.search("distinctive body lexical", sort="oldest")}
+    selection.scope_active = False
+    db_session.flush()
+    for query in queries:
+        assert obj.id not in {hit.object_id for hit in retrieval.retrieve(query, time_scope="all").hits}
+    assert obj.id not in {item.id for item in search.search("distinctive body lexical")}
+
+
+def test_object_query_filters_and_recent_review_paths_are_scope_gated(db_session):
+    user, _, selection, obj = _scope_fixture(db_session)
+    recent = RecentSourceService(db_session, user.id)
+    query = ObjectQueryService(db_session, user.id)
+    occurred = obj.occurred_at
+    assert obj in query.query(
+        providers=["telegram"], kinds=["chat_message"], states=["confirmed"],
+        occurred_from=occurred - timedelta(seconds=1), occurred_to=occurred + timedelta(seconds=1),
+    )
+    assert obj in recent.list_page(limit=50).items
+    assert recent.get_inbox_eligible(obj.id) is obj
+    feed_at = inbox_feed_at(obj)
+    assert obj in recent.list_review_window(
+        anchor_feed_at=feed_at - timedelta(seconds=1), anchor_object_id=uuid4(),
+        snapshot_top_feed_at=feed_at + timedelta(seconds=1), snapshot_top_object_id=uuid4(),
+        after_feed_at=None, after_object_id=None, limit=50,
+    ).items
+    selection.scope_active = False
+    db_session.flush()
+    assert obj not in query.query(providers=["telegram"], kinds=["chat_message"], states=["confirmed"])
+    assert obj not in recent.list_page(limit=50).items
+    assert recent.get_inbox_eligible(obj.id) is None
+    assert obj not in recent.list_review_window(
+        anchor_feed_at=feed_at - timedelta(seconds=1), anchor_object_id=uuid4(),
+        snapshot_top_feed_at=feed_at + timedelta(seconds=1), snapshot_top_object_id=uuid4(),
+        after_feed_at=None, after_object_id=None, limit=50,
+    ).items
+
+
+def test_context_query_and_conversation_member_paths_do_not_bypass_scope(db_session):
+    user, _, selection, inactive = _scope_fixture(db_session, active=False)
+    context = ContextService(db_session, user.id).build_context(
+        query="A4.3 unique scope phrase"
+    )
+    assert inactive.id not in {item.object_id for item in context.items}
+    with pytest.raises(NotFoundError):
+        list_conversation_members_page(db_session, user.id, object_id=inactive.id, limit=20, cursor=None)
+    selection.scope_active = True
+    db_session.flush()
+    page = list_conversation_members_page(
+        db_session, user.id, object_id=inactive.id, limit=20, cursor=None
+    )
+    assert inactive.id in [item.id for item in page["members"]]

@@ -202,7 +202,7 @@ def reconstruct_stack_members(
         or anchor.user_id != user_id
         or anchor.deleted_at is not None
     ):
-        raise NotFoundError("object not found")
+        raise NotFoundError("object", object_id)
     if project_inbox_object(anchor) is None:
         raise ValidationError("object is not a conversation member")
     marker = InboxReviewMarkerService(session, user_id).get_marker()
