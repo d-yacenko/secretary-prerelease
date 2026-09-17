@@ -24,6 +24,17 @@ The explicit current task message from the user/Architect is the authorization t
 - Prefer the smallest change that satisfies the authorized task. Do not redesign unrelated code.
 - When the authorized task is complete, run the required checks, commit/push if requested, report results, and **STOP**. Do not continue automatically into another phase.
 
+## Production runtime procedure
+
+Before any explicitly authorized production deploy, rollback, recovery, or
+runtime-maintenance task, the Executor MUST read `docs/deploy.md`.
+
+- `CURRENT_TASK.md` and Architect authorization determine WHAT may be done.
+- `docs/deploy.md` determines HOW authorized production work is executed.
+- `docs/deploy.md` is not a backlog or authorization source.
+- An explicit Architect override may replace a runbook step only when the
+  override is unambiguous.
+
 ## Shared repository documents
 
 - `CURRENT_TASK.md` — active authorized work and phase-local stop conditions.
