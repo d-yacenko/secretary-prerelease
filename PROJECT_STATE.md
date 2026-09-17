@@ -14,11 +14,11 @@
 - Telegram A4 integration baseline: ACCEPTED on `review/telegram-depth-a4-folder-scope` at `4f1a9012145faa66baf499ad4fc9c08b759e9a5f`.
 - Telegram A4.1: ACCEPTED through `43944ca47b407889f87eb891b898a1c55097f7f0`.
 - Telegram A4.2 implementation: `e4202d1171f9a6552d2b276093cd39d6692d6e05`.
-- Telegram A4.2R correction: `28ca11160ce2b0ffcca651bfc2058b9344c379b1`; known scoped unavailable-peer 500 risk fixed to sanitized 409; local PostgreSQL-backed suite reported `90 passed`; Alembic `0046`; ruff/diff checks PASS.
-- A4.2 is NOT YET ACCEPTED because required regression coverage for the new `sync_scope_peer()` path and several durable reconciliation edge cases remains incomplete.
-- Current authorized work: Telegram Depth A4.2T final acceptance coverage only, on `review/telegram-depth-a4-folder-scope`.
-- A4.2T is primarily test hardening. Production code is frozen unless a required new regression test exposes a real same-phase defect.
-- A4.2T must explicitly prove durable private/group/supergroup rows, full cursor preservation across deactivate/re-entry, manual deselect/reselect retention, retained-row A3 manual gate, complete-empty reconciliation, both truncation sources and missing-folder fail-closed behavior, muted-peer deactivation, inactive scoped-history gate, private scoped history through `sync_scope_peer()` with materialization/cursors/idempotency, scoped group/supergroup engine reuse, scoped API peer-ID bounds, and scoped domain/provider error mappings.
+- Telegram A4.2R correction: `28ca11160ce2b0ffcca651bfc2058b9344c379b1`; scoped unavailable-peer error is sanitized to 409; local PostgreSQL-backed suite reported `90 passed`; Alembic `0046`.
+- Telegram A4.2T test hardening: `88207034c5dbd0921b4eab30a419042eda36d9f1`; test-only; required suite reported `98 passed`; added DB-backed private scoped sync/materialization/idempotency, full five-field cursor preservation across re-entry, discovery/universe truncation fail-closed checks against persisted state, muted deactivation, inactive scoped gate, complete-empty scope, and zero-ID boundary.
+- A4.2 is NOT YET ACCEPTED because a small explicit regression set is still missing: all-supported-kind encrypted durable rows, manual deselect/reselect preservation, retained-row legacy `sync_group()` gate, missing-folder persisted-state fail-closed, scoped group/supergroup shared-engine path, scoped HTTP signed-ID routing, and remaining scoped provider/auth error mappings.
+- Current authorized work: Telegram Depth A4.2U remaining acceptance gaps only, on `review/telegram-depth-a4-folder-scope`.
+- A4.2U is primarily test-only. Production code is frozen unless a required test exposes a real same-phase defect.
 - Review Alembic head remains `0046`.
 - No scheduler/recurring jobs, bulk sync-all, assistant/retrieval filtering, UI, merge to main, or production work is authorized.
 - Main code still does not contain A3/A4 Telegram migrations `0044+`; production remains at Alembic `0041`.
