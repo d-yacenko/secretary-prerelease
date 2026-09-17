@@ -141,7 +141,7 @@ def test_migration_0038_revises_0037(db_session) -> None:
         for path in (Path(__file__).resolve().parents[1] / "alembic" / "versions").glob("*.py")
         if path.name[0].isdigit()
     )
-    assert versions[-1].startswith("0044")
+    assert versions[-1].startswith("0046")
     module_path = (
         Path(__file__).resolve().parents[1]
         / "alembic/versions/0038_objects_planned_execution_interval.py"
