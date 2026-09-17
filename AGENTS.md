@@ -24,6 +24,19 @@ The explicit current task message from the user/Architect is the authorization t
 - Prefer the smallest change that satisfies the authorized task. Do not redesign unrelated code.
 - When the authorized task is complete, run the required checks, commit/push if requested, report results, and **STOP**. Do not continue automatically into another phase.
 
+## Production runtime procedure
+
+Before any explicitly authorized production deploy, rollback, recovery, or runtime-maintenance task, read `docs/deploy.md` and the files under `ops/production/` that the runbook names.
+
+- `CURRENT_TASK.md` plus the explicit Architect task determine WHAT is authorized.
+- `docs/deploy.md` determines HOW normal production deployment is executed.
+- Normal production deployment MUST use `ops/production/deploy.py`.
+- Never discover or guess a production host, IP address, SSH alias, repository path, `.env` file, or Compose file.
+- Never probe alternative hosts after a target/preflight failure.
+- If `ops/production/target.json` is unset or its SSH host-key fingerprint does not match, STOP.
+- Direct production SSH/Compose commands are forbidden unless the Architect task explicitly says BREAK-GLASS.
+- A runbook or deployment harness failure is not authorization to repair production configuration. Report and STOP unless the Architect issued a recovery task.
+
 ## Shared repository documents
 
 - `CURRENT_TASK.md` — active authorized work and phase-local stop conditions.
