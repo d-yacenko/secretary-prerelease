@@ -1,163 +1,305 @@
-# Current task — Telegram MTProto C1AR: recipient integrity + canonical direction corrective
+# Current task — Telegram MTProto C1B: edit / delete / mark-read mutations
 
-## Review status
+## Status
 
-C1A implementation:
-`a48d6eba209dda946d203500775ee9ecaa00d812`
+Telegram MTProto C1A + C1AR send/reply is **ACCEPTED and integrated to main**.
 
-Independent review result: **REJECTED pending C1AR corrective**.
+Accepted implementation:
+- C1A `a48d6eba209dda946d203500775ee9ecaa00d812`
+- C1AR `49a219d6a91349d0037c7ae7362974b496490bc2`
+- integration merge `311682ad7b245398835b585d67deec4f6074e020`
 
-The overall C1A architecture is retained:
-- existing generic `send_message` path;
-- frozen `TelegramMtprotoSendRoute`;
-- Pending Action Plan -> approval -> execution gateway;
-- ExternalActionAttempt exactly-once/uncertain behavior;
-- canonical MTProto materialization;
-- AI quarantine remains intact.
+Previously accepted Q1 AI quarantine remains mandatory:
+`TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`
-- Alembic `0041`
-- M3 not authorized.
+- production Alembic `0041`
+- M3 NOT authorized
+- Bot API retirement NOT authorized
 
-## C1AR blocker 1 — durable provider reference must match frozen peer BEFORE approval
+## C1B goal
 
-Current C1A prepare path only:
-- decrypts `provider_peer_reference_encrypted`;
-- checks that the resulting string is non-empty.
+Complete the backend MTProto communication mutation set needed for a usable messenger:
 
-That is insufficient.
+1. edit an eligible own sent MTProto message;
+2. delete/revoke an eligible MTProto message where Telegram permits it;
+3. mark a peer/dialog read up to an exact message id.
 
-The durable provider peer reference is a structured JSON reference used by `_input_peer_from_reference()`.
-A malformed reference, or a valid reference pointing to a different peer than `selection.peer_id`, must fail closed **before a pending action plan is created**.
+Do not add UI in C1B.
 
-Required:
+Do not create direct Telegram mutation endpoints that bypass the existing tool/policy/execution architecture.
 
-1. Introduce a reusable connector-level validator/helper for provider peer references.
-2. It must:
-   - parse exactly the currently supported user/chat/channel reference formats;
-   - derive the canonical Telethon peer id from the parsed InputPeer;
-   - compare it with the expected frozen/selection `peer_id`;
-   - reject mismatch or malformed input with `TelegramMtprotoProviderReferenceInvalidError`.
-3. `_validated_telegram_mtproto_route()` must call this after decrypting the durable reference.
-4. No credential/reference content may appear in the ToolError or pending action payload.
+## Canonical mutation path
 
-The current C1A test fixture is itself invalid:
-- selection.peer_id = 777
-- provider reference identifies user id 12345
+Assistant-triggered external mutations must continue through:
 
-Correct the fixture so the provider reference canonically resolves to exactly the selection peer id.
+User
+-> Assistant / tool request
+-> Policy Gateway
+-> frozen Pending Action Plan
+-> explicit approval
+-> Execution Gateway
+-> DomainToolService
+-> MTProto mutation service/transport
 
-Add explicit tests:
-- malformed decrypted reference -> prepare fails before approval;
-- structurally valid reference for a different peer -> prepare fails before approval;
-- valid matching user/chat/channel references pass as appropriate.
+Reuse existing mutation/tool conventions and `ExternalActionAttempt` or equivalent existing external-write idempotency mechanism.
 
-## C1AR blocker 2 — revalidate peer/reference immediately before provider write
+Do not build a second Telegram-specific approval framework.
 
-Even after approval, the durable selection/reference can change.
+## Shared routing / recipient integrity
 
-Execution must reload and revalidate:
-- account ownership;
-- selection exists and `scope_active=true`;
-- decrypted provider reference is structurally valid;
-- provider reference canonical peer id == frozen route.peer_id.
+Reuse the accepted C1AR route integrity contract.
 
-This validation must happen before `client.send_message()`.
+Every MTProto mutation must validate/freeze:
+- current Secretary user owns the object/account;
+- canonical MTProto object:
+  - provider=telegram
+  - kind=chat_message
+  - metadata.transport=mtproto
+- valid account_id;
+- signed nonzero 64-bit peer_id;
+- positive message_id where required;
+- account belongs to current user;
+- durable selection exists;
+- selection.scope_active=true;
+- decrypted provider peer reference is structurally valid;
+- canonical peer id derived from reference exactly equals frozen peer_id.
 
-Additionally, `TelethonMtprotoTransport.send_message()` itself must defensively validate the same reference/peer relationship before connecting/sending.
+Do this before approval and revalidate immediately before provider write.
 
-A malformed or mismatched reference detected before provider write is a **definite pre-write failure**, never `uncertain`.
+No username/title guessing.
+No manual_selected grant.
+No credential/reference material in frozen plan or outputs.
 
-Current behavior where `TelegramMtprotoProviderReferenceInvalidError` can fall into the broad catch and become uncertain is not acceptable.
+If route/reference/account/scope is invalid before provider call => definite failure / zero provider write.
 
-Add tests proving:
-- mismatched reference causes zero provider send calls;
-- it records failed_definite at execution;
-- it never records uncertain merely because reference parsing/matching failed;
-- correct reference still sends exactly once.
+## C1B-A — Edit own sent message
 
-## C1AR blocker 3 — outgoing direction must survive the next A3 history sync
+### Eligibility
 
-C1A materializes successful outgoing MTProto messages with:
+Edit only when all are true:
+- canonical MTProto object;
+- metadata.direction == "outbound";
+- current active scope;
+- provider message id is valid;
+- message has not been tombstoned/deleted locally;
+- body is non-empty and within Telegram max length.
 
-`metadata.direction = "outbound"`
+Do not allow editing an inbound message.
 
-But existing A3 history normalization does not populate direction.
-The materializer replaces the full metadata dict on a later sync, so the same outgoing object loses its outbound marker.
+Do not assume Telegram will permit every historical outgoing edit; provider rejection is a definite failure.
 
-This is a canonical-object drift bug. It also changes Inbox behavior because `RecentSourceService` intentionally excludes outbound Telegram/Teams chat messages.
+### Frozen plan
 
-Fix the A3 history representation so direction is canonical and stable.
+Freeze at minimum:
+- account_id
+- peer_id
+- message_id
+- new body
+- safe display metadata only
+- operation_id
 
-Preferred design:
-- extend `TelegramMtprotoHistoryEntry` with an explicit outgoing flag derived from Telethon message `out`;
-- `_history_entry_from_message()` captures it;
-- `_normalize_entry()` always writes
-  - `direction="outbound"` when provider message is outgoing;
-  - `direction="inbound"` otherwise;
-- C1A immediate materialization and later A3 sync converge to the same direction semantics.
+Do not freeze session/reference/credentials.
 
-Do not infer direction solely from `sender_peer_id == account.telegram_user_id`; Telegram can have send-as/anonymous/channel cases. Prefer the provider's explicit outgoing flag.
+### Write safety
 
-Keep existing canonical external_id unchanged.
+Transport must support edit against exact peer+message_id.
 
-Add a regression test:
-1. successful C1A send materializes object as outbound;
-2. simulate/import the same provider message through A3 history normalization;
-3. same object/external_id remains one object;
-4. direction remains outbound after sync;
-5. AI=false still creates/enqueues zero AI work.
+Revalidate route/reference before write.
 
-Also test inbound history gets `direction="inbound"`.
+Classify:
+- malformed/unauthorized/not-owned/precondition/provider definite rejection => failed_definite;
+- timeout/network ambiguity after possible provider write => uncertain;
+- uncertain => no automatic retry.
 
-## Preserve accepted C1A behavior
+Repeated succeeded operation => no second provider edit.
 
-Do not redesign:
-- generic send_message architecture;
-- separate TelegramMtprotoSendRoute;
-- frozen non-secret route payload;
-- ExternalActionAttempt semantics;
-- success replay no resend;
-- uncertain write no automatic retry;
-- legacy Bot/Business Telegram path;
-- Q1 AI quarantine.
+### Local convergence
 
-No edit/delete/mark-read yet.
-No realtime update work.
-No UI.
-No migration.
-No production.
+After confirmed edit:
+- update the same canonical Object;
+- keep external_id/object_id stable;
+- update body/title;
+- preserve transport/account/peer/message/direction metadata;
+- set edited_at consistently;
+- with AI=false enqueue zero AI work;
+- with AI=true existing semantic-update embedding behavior may apply.
 
-## Test requirements
+Later A3 history sync of the same edited message must converge to the same body/edited_at, not create a second object.
 
-Run at minimum:
-- focused C1A/C1AR tests;
-- Telegram A1-A4/Q1 regressions;
-- communication external-action / action-plan integrity suites;
-- MTProto history tests;
-- DomainToolService/execution gateway relevant suites;
-- Ruff on changed Python files;
-- git diff --check;
+## C1B-B — Delete/revoke message
+
+### Eligibility
+
+Deletion must address exact account+peer+message_id.
+
+Do not guess whether Telegram permits revoke-for-all; use an explicit provider operation with a clearly defined mode.
+
+For C1B, prefer one conservative canonical behavior:
+- delete/revoke the exact Telegram message using the provider's normal message deletion semantics for the authenticated user;
+- if Telegram rejects due to rights/age/type/etc., treat as definite failure.
+
+Do not silently downgrade to local-only hide.
+
+### Write safety
+
+Freeze account_id, peer_id, message_id and operation_id.
+
+Revalidate route/reference immediately before provider write.
+
+Provider ambiguity after possible delete => uncertain; never auto-retry uncertain deletion.
+
+Repeated succeeded delete => no second provider delete.
+
+### Local state
+
+After confirmed provider deletion:
+- retain canonical Object record for provenance/audit;
+- tombstone/hide it using existing object deletion/tombstone semantics;
+- do not purge DB row;
+- do not create a second deletion representation;
+- later passive history sync must not resurrect it if existing accepted skip-hidden/tombstone semantics already prevent that.
+
+AI quarantine remains respected.
+
+## C1B-C — Mark read
+
+### Semantics
+
+Mark the exact active peer read up to a frozen positive `max_message_id`.
+
+Preferred source for the target:
+- a canonical MTProto message object in that peer;
+- freeze its account_id, peer_id and message_id as `max_message_id`.
+
+Do not use "latest" or a mutable implicit target in the approved plan.
+
+Transport must invoke the provider read acknowledgement against the exact durable peer reference and frozen max_message_id.
+
+### Safety / idempotency
+
+Mark-read is idempotent but still an external mutation.
+
+Revalidate account/scope/reference before provider write.
+
+A repeated succeeded operation must not require another provider call under the approved execution replay semantics.
+
+Provider definite rejection => failed_definite.
+Network ambiguity may be uncertain; do not invent success.
+
+Do not modify message body/content.
+If there is an existing local deterministic unread/read representation that is canonical, update it consistently; otherwise do not invent a new DB schema in C1B merely to cache read state.
+
+No migration is authorized.
+
+## Tool / schema design
+
+Use narrow canonical input/output schemas.
+
+Preferred tool names should be explicit and provider-neutral enough to fit the existing registry if possible, for example:
+- `edit_message`
+- `delete_message`
+- `mark_message_read` or `mark_conversation_read`
+
+But do not broaden other providers in C1B unless required by existing registry invariants.
+
+If existing policy/tool infrastructure requires provider-specific internal routes, keep public semantics generic and route internally by frozen provider data.
+
+All irreversible external writes must remain single-action pending plans according to existing action-plan policy.
+
+## Telethon transport
+
+Extend `TelegramMtprotoTransport` and `TelethonMtprotoTransport` with narrowly typed methods for:
+- edit exact message;
+- delete exact message;
+- mark read up to exact message id.
+
+Each method must:
+- validate durable provider reference vs expected peer id before client/provider write;
+- authenticate using stored user session;
+- sanitize errors;
+- never log/reference credentials;
+- distinguish definite pre-write/provider rejection from uncertain outcome after possible write.
+
+Do not add retries that could duplicate or repeat destructive actions.
+
+## Tests
+
+Add focused tests at minimum for:
+
+### Edit
+- outbound own MTProto object can prepare edit plan;
+- inbound object cannot;
+- inactive scope cannot;
+- malformed/mismatched reference fails before plan;
+- frozen plan contains no credentials/reference;
+- exact peer+message id sent once;
+- confirmed edit updates same object id/external_id;
+- success replay does not call provider again;
+- uncertain edit not retried;
+- definite edit failure recorded;
+- AI=false edit does not enqueue embedding/AI work;
+- later A3 edited history converges to same object/body.
+
+### Delete
+- exact active MTProto object can prepare delete plan;
+- mismatched/invalid route fails before plan;
+- exact provider deletion called once;
+- confirmed delete tombstones/hides same object without purge;
+- passive history re-import does not resurrect tombstoned object;
+- replay does not call provider again;
+- uncertain delete not retried;
+- definite rejection recorded.
+
+### Mark read
+- exact message freezes max_message_id;
+- inactive/wrong-account/malformed route fails;
+- exact peer + max_message_id provider call;
+- success replay no second call;
+- definite/uncertain classifications;
+- no content mutation;
+- no migration.
+
+### Regression
+- C1A send/reply still passes;
+- C1AR recipient integrity still passes;
+- Bot/Business Telegram unchanged;
+- Telegram A1-A4/Q1 regressions pass;
+- action-plan integrity / execution gateway relevant tests pass;
 - Alembic head remains `0046`.
+
+Run Ruff on changed Python files and `git diff --check`.
+
+## Explicitly out of scope C1B
+
+Do NOT implement:
+- realtime MTProto update subscription;
+- client composer/edit/delete/read UI;
+- Android notifications;
+- production deploy/ref move;
+- production DB/env changes;
+- migration `0047`;
+- Bot API retirement;
+- D-Bus/Android fallback.
+
+Those come later.
 
 ## Branch / deliverable
 
-Continue existing branch:
-`review/telegram-mtproto-c1a-send-reply`
+Start from latest `origin/main`.
 
-Start from exact:
-`C1A_BASE_SHA=a48d6eba209dda946d203500775ee9ecaa00d812`
-
-Create a new corrective commit; do not rewrite/squash C1A.
+Create/use:
+`review/telegram-mtproto-c1b-mutations`
 
 Return:
-- `C1A_BASE_SHA`
-- `C1AR_SHA`
+- `STARTING_SHA`
+- `C1B_SHA`
 - changed files
-- provider-reference validation rule
-- execution-time pre-write validation rule
-- direction/history convergence design
+- tool/schema design
+- write-attempt/idempotency design
+- exact edit/delete/mark-read provider semantics
+- local convergence behavior
 - focused/regression tests
 - Ruff
 - git diff --check
@@ -165,7 +307,7 @@ Return:
 - production untouched
 
 Final marker:
-`TELEGRAM_MTPROTO_C1AR_SEND_REPLY_READY`
+`TELEGRAM_MTPROTO_C1B_MUTATIONS_READY`
 
 Then STOP for Architect review.
 
