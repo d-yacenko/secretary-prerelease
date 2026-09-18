@@ -165,14 +165,16 @@ class TelegramMtprotoTransportNotificationService:
             result_object_id=None,
             proposal_=proposal,
         )
-        nested = self._session.begin_nested()
+        nested = None
         try:
+            nested = self._session.begin_nested()
             self._session.add(notification)
             self._session.flush()
             nested.commit()
         except IntegrityError:
-            nested.rollback()
             try:
+                if nested is not None:
+                    nested.rollback()
                 existing = self._session.get(Notification, notification_id)
             except Exception as exc:
                 raise TelegramMtprotoNotificationPersistenceError(
@@ -184,7 +186,13 @@ class TelegramMtprotoTransportNotificationService:
                 )
             return existing
         except Exception as exc:
-            nested.rollback()
+            if nested is not None:
+                try:
+                    nested.rollback()
+                except Exception as rollback_exc:
+                    raise TelegramMtprotoNotificationPersistenceError(
+                        "Telegram transport notification persistence failed"
+                    ) from rollback_exc
             raise TelegramMtprotoNotificationPersistenceError(
                 "Telegram transport notification persistence failed"
             ) from exc
