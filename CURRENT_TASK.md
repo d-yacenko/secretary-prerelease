@@ -1,30 +1,23 @@
-# Current task — Telegram MTProto C2BR: deterministic notification corrective
+# Current task — Telegram MTProto C2BR2: close persistence boundary and acceptance coverage
 
 ## Status
 
-Telegram MTProto C2A/C2AR/C2AR2/C2AR3/C2AR4 reconciliation is **ACCEPTED and integrated to main**.
+Telegram MTProto C2A reconciliation is ACCEPTED / INTEGRATED TO MAIN.
 
-Accepted C2A implementation tip:
-`802d9aacb217bd2d3b3e012bdd2a644059d55ad4`
-
-Integration merge:
-`5823d1f557e7040b0396e895032ed3c3b16d4d0d`
-
-C2B implementation under review:
+C2B implementation:
 `4e01f16d2bea39e2bccef05bcfb8205269d47805`
 
-C2B is **REJECTED pending this narrow C2BR corrective**.
+C2BR corrective:
+`148c668a75222fdd9c75e97000ae646ca36e7766`
 
-The basic C2B design is accepted in direction:
-- deterministic UUIDv5 Notification IDs from `user_id + event_key`;
-- canonical created/edited/deleted event keys;
-- existing `notifications` table/API;
-- initial/backfill anti-spam intent;
-- deterministic non-AI transport events;
-- no migration;
-- Q1 AI quarantine preserved.
+C2BR improved the design and several pieces are accepted:
+- local Notification persistence errors are represented by `TelegramMtprotoNotificationPersistenceError`;
+- edit/delete notification failure is no longer silently accepted in the ordinary insert/select paths;
+- deterministic PK-conflict recovery now has a real IntegrityError-path regression;
+- existing Notification API generic transport-event lifecycle is covered;
+- production and Alembic remain untouched.
 
-Do not redesign those accepted pieces unless needed for the corrective below.
+C2B/C2BR is still REJECTED pending this narrow C2BR2 corrective.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
@@ -33,109 +26,90 @@ Production remains untouched:
 - M3 NOT authorized;
 - Bot API retirement NOT authorized.
 
-Canonical AI flag remains:
+Canonical AI flag:
 `TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
-## C2BR blocking issue 1 — notification persistence must not be swallowed
+## Blocking issue 1 — begin_nested persistence failure is still outside the typed boundary
 
-In C2B SHA `4e01f16d2bea39e2bccef05bcfb8205269d47805`, reconciliation wraps provider fetch, object convergence, and deterministic notification creation in a broad candidate-isolation `except Exception: continue`.
+In `telegram_mtproto_notification_service.py` at C2BR SHA `148c668a75222fdd9c75e97000ae646ca36e7766`, the notification insert path still does:
 
-This creates a C2B-specific correctness risk:
-- remote edit can be materialized/flushed;
-- remote delete can be tombstoned/flushed;
-- deterministic notification persistence can then fail unexpectedly;
-- the broad catch can swallow that local persistence failure;
-- the object mutation can later commit without the required event;
-- future reconciliation can see the object as unchanged/tombstoned, so the event can be lost permanently.
+`nested = self._session.begin_nested()`
+
+before entering the `try` that translates unexpected local persistence failures into `TelegramMtprotoNotificationPersistenceError`.
+
+Therefore a SAVEPOINT/open/pre-flush failure from `begin_nested()` can still escape as a generic exception. In reconciliation that generic exception can be consumed by the pre-existing broad candidate isolation `except Exception: continue`, recreating the exact class of silent local-persistence failure C2BR was intended to eliminate.
 
 Correct this narrowly.
 
 Required invariant:
-- provider/read/normalization failures retain the accepted C2A bounded isolation/classification semantics;
-- deterministic notification idempotency conflicts remain locally recoverable;
-- an unexpected local Notification persistence failure MUST NOT be swallowed as a peer/provider candidate failure;
-- edit/delete object convergence and their deterministic event creation must be atomic in the source-sync transaction or in a candidate savepoint such that a failed event write cannot silently leave a committed mutation with the event permanently missing;
-- if the local event write cannot be completed/recovered, fail the local transaction/job path so a later retry can converge and emit the event;
-- do not reinterpret notification persistence failure as provider exact absence, mismatch, or provider unavailability.
+- the complete deterministic Notification persistence operation, including SAVEPOINT creation/opening, insert flush, savepoint commit, and conflict recovery lookup, must either:
+  1. succeed;
+  2. recover a deterministic PK conflict and return the existing row; or
+  3. raise `TelegramMtprotoNotificationPersistenceError`.
+- no unexpected local persistence failure from that operation may escape as a generic exception into reconciliation candidate isolation;
+- provider/read/normalization candidate isolation semantics from accepted C2A must remain unchanged;
+- do not broadly reclassify provider exceptions as notification persistence failures.
 
-Add focused failure-injection tests for BOTH:
-1. semantic remote edit + forced local notification persistence failure;
-2. confirmed remote delete + forced local notification persistence failure.
+Add a focused regression that forces the notification service SAVEPOINT/`begin_nested()` path itself to fail and proves:
+- the caller receives `TelegramMtprotoNotificationPersistenceError`;
+- edit/delete reconciliation does not silently succeed;
+- no committed semantic edit/tombstone can remain without its deterministic event after rollback.
 
-The tests must prove there is no silent success with a permanently mutated object and missing event. The failure must be observable/retryable, and after the appropriate transaction rollback the object/event state must remain consistent.
+## Blocking issue 2 — acceptance coverage is still incomplete
 
-## C2BR blocking issue 2 — complete the required C2B test matrix
+The focused C2B file at C2BR contains 10 tests. The original C2B/C2BR acceptance matrix still lacks explicit evidence for several required semantics.
 
-The original C2B task required focused coverage substantially broader than the six tests currently added.
+Do not add redundant tests where an existing repository test already proves the exact invariant. You may satisfy a row either by:
+- adding a focused C2B/C2BR regression, OR
+- citing an existing exact test name/file that already proves that exact behavior against the C2B/C2BR code path.
 
-Keep the existing useful tests and add the missing focused coverage at minimum.
+For integration-specific notification behavior, add focused tests where no exact existing test exists.
 
-### Idempotency / conflict path
-- same created event invoked twice -> exactly one Notification row;
-- concurrent-equivalent deterministic PK conflict path returns the same deterministic Notification;
-- same edit revision twice -> one row;
-- later provider `edited_at` revision -> second row;
-- same delete event twice -> one row.
-
-The PK-conflict test must exercise the actual recovery branch, not only the pre-insert query hit.
+Provide explicit test evidence for every item below.
 
 ### Initial/backfill anti-spam
-- initial peer sync with 100 historical inbound messages -> zero notifications;
-- bounded historical backfill -> zero notifications;
-- replay/re-run of the same initial/history data -> zero notifications.
+- bounded historical backfill creates zero notifications;
+- replay/re-run of initial/history data creates zero notifications.
 
 ### New inbound
-- established latest cursor + one newer inbound -> one `message_created`;
-- two newer inbound messages -> two deterministic rows;
-- outgoing -> zero;
-- service message -> zero;
-- inactive-scope peer -> zero;
-- duplicate forward sync -> no duplicate;
-- `source_object_id` points to the canonical Object;
-- payload contains no credential/session/provider-reference/access-hash/api-hash material.
+- two newer inbound messages create two deterministic rows;
+- service message creates zero event;
+- inactive-scope peer creates zero event;
+- payload/proposal contains no credential/session/provider-reference/access_hash/api_hash material.
 
 ### Edit
-- inbound semantic edit + trustworthy `edited_at` -> one `message_edited`;
-- same reconciliation/revision -> no duplicate;
-- later `edited_at` -> another event;
-- metadata-only update -> zero event;
-- body/content change with missing `edited_at` -> Object converges but zero edit event;
-- outgoing edit -> zero;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false` still creates deterministic event while zero AI jobs are enqueued.
+- metadata-only update creates zero event;
+- body/content update with missing `edited_at` converges Object but creates zero event;
+- with `TELEGRAM_MTPROTO_AI_ENABLED=false`, deterministic event is created while zero AI jobs are enqueued.
 
 ### Delete
-- confirmed inbound exact absence -> tombstone + one `message_deleted`;
-- repeated confirmed absence -> no duplicate;
-- outgoing deletion -> zero event;
-- transient/provider lookup error -> zero tombstone and zero event;
-- mismatched provider result -> zero tombstone and zero event.
+- outgoing confirmed deletion creates zero event;
+- transient/provider lookup error creates zero tombstone and zero event;
+- mismatched provider result creates zero tombstone and zero event.
 
-### Existing Notification API
-Add focused API/service tests proving a deterministic `transport_event`:
-- appears in existing GET /notifications behavior;
-- mark-read works;
-- accept uses generic non-task behavior and creates NO task, object, edge, or embedding job;
-- ignore/resolve remain normal.
+Existing already-demonstrated items may be cited rather than duplicated:
+- initial 100-message import anti-spam;
+- one established-cursor inbound event;
+- outgoing forward zero event;
+- same/later edit revision idempotency;
+- inbound confirmed delete idempotency;
+- outgoing edit zero event;
+- deterministic PK conflict recovery;
+- edit/delete notification failure propagation;
+- Notification API read/accept/ignore/resolve lifecycle.
 
-Do not change existing AI-generated notification semantics.
+## Test / verification requirements
 
-## Required regression and test hygiene
-
-Required:
-- focused C2B/C2BR tests;
-- existing notification tests;
+Run:
+- focused C2B/C2BR/C2BR2 tests;
+- existing notification suite on isolated/disposable PostgreSQL;
 - Telegram A1-A4.4/Q1/C1A/C1B/C2A regressions;
-- source-sync recurring tests;
+- source-sync/worker recurring suites;
 - Ruff on changed Python files;
 - `git diff --check`;
 - Alembic head exactly `0046`.
 
-The previous report included one failing notification-suite test attributed to shared DB contamination / OpenAI daily limit. That is NOT sufficient acceptance evidence.
-
-For C2BR:
-- run the required notification suite against a clean/isolated test database/environment;
-- do not modify unrelated product behavior merely to hide polluted shared state;
-- if a failure is genuinely pre-existing and cannot be eliminated locally, report the exact test name/error and reproduce the same failure at the exact C2B base SHA under the same clean conditions.
+Return an acceptance matrix mapping each required C2B/C2BR/C2BR2 invariant to the exact test name and file that proves it.
 
 ## Explicitly out of scope
 
@@ -152,31 +126,33 @@ Do NOT implement:
 
 ## Branch / deliverable
 
-Continue the existing branch:
+Continue existing branch:
 `review/telegram-mtproto-c2b-notifications`
 
 Continue from exact:
-`C2BR_BASE_SHA=4e01f16d2bea39e2bccef05bcfb8205269d47805`
+`C2BR2_BASE_SHA=148c668a75222fdd9c75e97000ae646ca36e7766`
 
 Create exactly one corrective commit on top.
-Do not rewrite/squash the reviewed C2B commit.
+Do not rewrite/squash C2B or C2BR.
 
 Return:
-- `C2BR_BASE_SHA`;
-- `C2BR_SHA`;
+- `C2BR2_BASE_SHA`;
+- `C2BR2_SHA`;
 - changed files;
-- exact transaction/error-propagation correction;
-- proof the deterministic PK-conflict recovery branch is tested;
-- complete focused C2B/C2BR test results;
-- clean notification-suite result or exact demonstrated pre-existing baseline;
-- regression results;
+- exact persistence-boundary correction;
+- SAVEPOINT failure regression;
+- acceptance matrix mapping invariants -> exact tests;
+- focused/regression results;
+- isolated notification-suite result;
 - Ruff;
 - `git diff --check`;
 - Alembic head `0046`;
+- clean worktree;
+- remote branch SHA;
 - production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C2BR_NOTIFICATIONS_READY`
+`TELEGRAM_MTPROTO_C2BR2_NOTIFICATIONS_READY`
 
 Then STOP for Architect review.
 
