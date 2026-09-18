@@ -1,23 +1,16 @@
-# Current task — Telegram MTProto C2BR2: close persistence boundary and acceptance coverage
+# Current task — Telegram MTProto C3A: Flutter account connection and sync-scope UX
 
 ## Status
 
-Telegram MTProto C2A reconciliation is ACCEPTED / INTEGRATED TO MAIN.
+Telegram MTProto C2B/C2BR/C2BR2 deterministic notification/event surface is **ACCEPTED and integrated to main**.
 
-C2B implementation:
-`4e01f16d2bea39e2bccef05bcfb8205269d47805`
+Accepted implementation tip:
+`2653de562f72ddb0b81063fb816a02b330022a4b`
 
-C2BR corrective:
-`148c668a75222fdd9c75e97000ae646ca36e7766`
+Integration merge:
+`0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`
 
-C2BR improved the design and several pieces are accepted:
-- local Notification persistence errors are represented by `TelegramMtprotoNotificationPersistenceError`;
-- edit/delete notification failure is no longer silently accepted in the ordinary insert/select paths;
-- deterministic PK-conflict recovery now has a real IntegrityError-path regression;
-- existing Notification API generic transport-event lifecycle is covered;
-- production and Alembic remain untouched.
-
-C2B/C2BR is still REJECTED pending this narrow C2BR2 corrective.
+C3 is split. This task authorizes only **C3A — client account/auth/sync-scope UX**.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
@@ -26,125 +19,184 @@ Production remains untouched:
 - M3 NOT authorized;
 - Bot API retirement NOT authorized.
 
-Canonical AI flag:
+Canonical AI flag remains:
 `TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
-## Blocking issue 1 — begin_nested persistence failure is still outside the typed boundary
+## Goal
 
-In `telegram_mtproto_notification_service.py` at C2BR SHA `148c668a75222fdd9c75e97000ae646ca36e7766`, the notification insert path still does:
+Expose the already-existing Telegram MTProto account and scope-management backend capabilities in the Flutter client without changing backend semantics.
 
-`nested = self._session.begin_nested()`
+Use the existing backend contract in `backend/app/api/telegram_mtproto.py`. Do not create replacement endpoints.
 
-before entering the `try` that translates unexpected local persistence failures into `TelegramMtprotoNotificationPersistenceError`.
+## Required client API/model support
 
-Therefore a SAVEPOINT/open/pre-flush failure from `begin_nested()` can still escape as a generic exception. In reconciliation that generic exception can be consumed by the pre-existing broad candidate isolation `except Exception: continue`, recreating the exact class of silent local-persistence failure C2BR was intended to eliminate.
+Add typed client models and `SecretaryApiClient` methods for the existing endpoints needed by this UX:
 
-Correct this narrowly.
+Auth/status:
+- `GET /telegram/mtproto/status`
+- `POST /telegram/mtproto/auth/start`
+- `POST /telegram/mtproto/auth/code`
+- `POST /telegram/mtproto/auth/password`
 
-Required invariant:
-- the complete deterministic Notification persistence operation, including SAVEPOINT creation/opening, insert flush, savepoint commit, and conflict recovery lookup, must either:
-  1. succeed;
-  2. recover a deterministic PK conflict and return the existing row; or
-  3. raise `TelegramMtprotoNotificationPersistenceError`.
-- no unexpected local persistence failure from that operation may escape as a generic exception into reconciliation candidate isolation;
-- provider/read/normalization candidate isolation semantics from accepted C2A must remain unchanged;
-- do not broadly reclassify provider exceptions as notification persistence failures.
+Scope/folders:
+- `GET /telegram/mtproto/folders`
+- `GET /telegram/mtproto/sync-folders`
+- `PUT /telegram/mtproto/sync-folders`
+- `GET /telegram/mtproto/sync-scope/preview`
+- `POST /telegram/mtproto/sync-scope/reconcile`
+- `POST /telegram/mtproto/sync-scope/peers/{peer_id}/sync`
 
-Add a focused regression that forces the notification service SAVEPOINT/`begin_nested()` path itself to fail and proves:
-- the caller receives `TelegramMtprotoNotificationPersistenceError`;
-- edit/delete reconciliation does not silently succeed;
-- no committed semantic edit/tombstone can remain without its deterministic event after rollback.
+Manual groups:
+- `GET /telegram/mtproto/groups`
+- `PATCH /telegram/mtproto/groups/{peer_id}`
+- `POST /telegram/mtproto/groups/{peer_id}/sync`
 
-## Blocking issue 2 — acceptance coverage is still incomplete
+Preserve backend field names and meaning exactly.
 
-The focused C2B file at C2BR contains 10 tests. The original C2B/C2BR acceptance matrix still lacks explicit evidence for several required semantics.
+Do not expose or persist Telegram session strings, provider references, access hashes, API hash, credentials, or passwords beyond the transient form submission needed for the existing auth endpoint.
 
-Do not add redundant tests where an existing repository test already proves the exact invariant. You may satisfy a row either by:
-- adding a focused C2B/C2BR regression, OR
-- citing an existing exact test name/file that already proves that exact behavior against the C2B/C2BR code path.
+## Account screen UX
 
-For integration-specific notification behavior, add focused tests where no exact existing test exists.
+Integrate MTProto into the existing account/settings experience, following current client patterns rather than building a separate navigation system.
 
-Provide explicit test evidence for every item below.
+Required states:
+1. MTProto backend not configured;
+2. configured but not connected;
+3. auth code challenge active;
+4. 2FA password required;
+5. connected account;
+6. provider temporarily unavailable/error;
+7. authorization invalid/reconnect-required style state where applicable.
 
-### Initial/backfill anti-spam
-- bounded historical backfill creates zero notifications;
-- replay/re-run of initial/history data creates zero notifications.
+### Login flow
 
-### New inbound
-- two newer inbound messages create two deterministic rows;
-- service message creates zero event;
-- inactive-scope peer creates zero event;
-- payload/proposal contains no credential/session/provider-reference/access_hash/api_hash material.
+When not connected:
+- phone input;
+- start auth;
+- code input;
+- if backend returns `password_required`, show password input;
+- on authorization success refresh MTProto status and connected account display;
+- never log password/code/session values;
+- prevent duplicate submits while request is in flight;
+- show backend-safe error detail using existing client error patterns.
 
-### Edit
-- metadata-only update creates zero event;
-- body/content update with missing `edited_at` converges Object but creates zero event;
-- with `TELEGRAM_MTPROTO_AI_ENABLED=false`, deterministic event is created while zero AI jobs are enqueued.
+Display connected identity using backend `display_name`, username, and Telegram user id where available.
 
-### Delete
-- outgoing confirmed deletion creates zero event;
-- transient/provider lookup error creates zero tombstone and zero event;
-- mismatched provider result creates zero tombstone and zero event.
+Do not add disconnect/delete semantics unless an existing authorized backend endpoint already exists. C3A must not invent destructive account removal.
 
-Existing already-demonstrated items may be cited rather than duplicated:
-- initial 100-message import anti-spam;
-- one established-cursor inbound event;
-- outgoing forward zero event;
-- same/later edit revision idempotency;
-- inbound confirmed delete idempotency;
-- outgoing edit zero event;
-- deterministic PK conflict recovery;
-- edit/delete notification failure propagation;
-- Notification API read/accept/ignore/resolve lifecycle.
+## Sync-folder UX
 
-## Test / verification requirements
+For a connected account:
+- load available Telegram folders;
+- load currently configured sync folders;
+- allow selecting zero or more folder names;
+- allow configuring `ignore_muted`;
+- save through existing `PUT /telegram/mtproto/sync-folders`;
+- preview resulting active scope via existing preview endpoint;
+- reconcile scope explicitly after save or through a clearly labelled user action;
+- surface preview counts/truncation/skipped counts without exposing provider references.
 
-Run:
-- focused C2B/C2BR/C2BR2 tests;
-- existing notification suite on isolated/disposable PostgreSQL;
-- Telegram A1-A4.4/Q1/C1A/C1B/C2A regressions;
-- source-sync/worker recurring suites;
-- Ruff on changed Python files;
+Zero selected folders is a valid backend-supported state; do not silently substitute defaults.
+
+## Manual group UX
+
+For connected account:
+- list groups from existing groups endpoint;
+- show title/username/kind/forum/available/selected;
+- allow manual selected toggle through existing PATCH endpoint;
+- unavailable groups must not look actionable;
+- allow explicit manual sync of a selected group;
+- show bounded sync result summary (scanned/materialized/created/updated/unchanged/skipped/history_complete).
+
+Do not add infinite scrolling/provider-specific references unless required by the existing contract.
+
+## Scope peer sync
+
+For dialogs returned by sync-scope preview/reconcile:
+- allow explicit per-peer sync using the existing scope peer sync endpoint;
+- support private/group/supergroup peer kinds returned by the backend;
+- show sync result summary consistently with manual group sync.
+
+## Source preference interaction
+
+Do not duplicate generic source preference settings already present in the account UI.
+If Telegram MTProto already appears through the generic source preference list, preserve that behavior and keep C3A controls focused on MTProto authorization and scope selection.
+
+## UX / safety invariants
+
+- no secrets in UI state serialization, logs, snackbars, debug prints, test golden text, or analytics;
+- password field obscured;
+- auth code/password cleared after successful authorization and when abandoning/restarting challenge;
+- stale challenge state must not survive app restart unless the current client already has an explicit secure pattern for that exact kind of sensitive ephemeral state;
+- no WebSocket/SSE/realtime listener;
+- no client-side Telegram SDK;
+- no direct Telegram network calls from Flutter;
+- no background daemon;
+- no backend semantic changes merely to simplify UI.
+
+## Testing
+
+Add focused Flutter tests covering at minimum:
+- MTProto status parsing: not configured / disconnected / connected;
+- auth start -> code authorized;
+- auth start -> code password_required -> password authorized;
+- duplicate-submit protection;
+- sensitive code/password is not rendered after success;
+- folder load/current-selection/save;
+- zero-folder selection remains zero;
+- ignore-muted round trip;
+- scope preview rendering including truncated/skipped counts;
+- scope reconcile action;
+- group selected toggle;
+- unavailable group not actionable;
+- group sync summary;
+- scope peer sync summary;
+- API error presentation for 400/409/410/503 paths using existing client error conventions.
+
+Also run relevant existing account/API/inbox Flutter tests.
+
+Required checks:
+- `dart format --output=none --set-exit-if-changed` on changed Dart files;
+- `flutter analyze`;
+- focused Flutter tests;
+- relevant existing client regression tests;
+- backend tests only if backend files are changed (backend changes are not expected);
 - `git diff --check`;
-- Alembic head exactly `0046`.
-
-Return an acceptance matrix mapping each required C2B/C2BR/C2BR2 invariant to the exact test name and file that proves it.
+- repository Alembic head remains `0046`.
 
 ## Explicitly out of scope
 
 Do NOT implement:
-- C3 client UX;
-- websocket/SSE;
-- desktop/mobile OS notifications;
-- realtime Telethon listener;
+- C3B Telegram-specific inbox/notification presentation;
+- OS-level desktop/mobile notifications;
+- websocket/SSE/realtime Telethon listener;
+- backend auth/scope redesign;
+- new backend endpoint unless a hard blocker is proven and reported before implementation;
 - migration `0047`;
 - production deploy/ref move;
 - production DB/env mutation;
-- Bot API retirement;
-- unrelated notification redesign.
+- Bot API retirement.
 
 ## Branch / deliverable
 
-Continue existing branch:
-`review/telegram-mtproto-c2b-notifications`
+Create branch:
+`review/telegram-mtproto-c3a-client-account`
 
-Continue from exact:
-`C2BR2_BASE_SHA=148c668a75222fdd9c75e97000ae646ca36e7766`
+Start from exact:
+`C3A_BASE_SHA=0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`
 
-Create exactly one corrective commit on top.
-Do not rewrite/squash C2B or C2BR.
+If `main` has moved only because Architect updated `CURRENT_TASK.md`, `PROJECT_STATE.md`, or encrypted recovery context after this authorization, do NOT rebase merely for those documentation commits. The reviewed code base remains the exact SHA above unless Architect explicitly changes it.
 
 Return:
-- `C2BR2_BASE_SHA`;
-- `C2BR2_SHA`;
+- `C3A_BASE_SHA`;
+- `C3A_SHA`;
 - changed files;
-- exact persistence-boundary correction;
-- SAVEPOINT failure regression;
-- acceptance matrix mapping invariants -> exact tests;
-- focused/regression results;
-- isolated notification-suite result;
-- Ruff;
+- API/model additions;
+- implemented UX states;
+- focused test list/results;
+- existing client regression results;
+- `flutter analyze`;
+- Dart format check;
 - `git diff --check`;
 - Alembic head `0046`;
 - clean worktree;
@@ -152,7 +204,7 @@ Return:
 - production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C2BR2_NOTIFICATIONS_READY`
+`TELEGRAM_MTPROTO_C3A_CLIENT_ACCOUNT_READY`
 
 Then STOP for Architect review.
 
