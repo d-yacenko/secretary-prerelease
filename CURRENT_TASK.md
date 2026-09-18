@@ -1,211 +1,447 @@
-# Current task — Telegram MTProto C2AR4: recent-head window cursor correctness
+# Current task — Telegram MTProto C2B: deterministic notification/event surface
 
-## Review status
+## Status
 
-C2A:
-`ec44c406907b52eec95a879f0f05ccd404689859`
+Telegram MTProto C2A/C2AR/C2AR2/C2AR3/C2AR4 reconciliation is **ACCEPTED and integrated to main**.
 
-C2AR:
-`c1044a22b81f132afdc97c711b1051dc3389c64c`
+Accepted implementation tip:
+`802d9aacb217bd2d3b3e012bdd2a644059d55ad4`
 
-C2AR2:
-`2cbec106effe6cb1b9f693d21fb981377518a6e2`
+Integration merge:
+`5823d1f557e7040b0396e895032ed3c3b16d4d0d`
 
-C2AR3:
-`c87fb53d31827fb92e074fbf27628442f2a95ca4`
-
-Independent review result: **C2AR3 REJECTED pending one narrow C2AR4 correction**.
-
-The following C2AR3 work is accepted in code:
-- recent-head state and historical sweep state are structurally separated;
-- HEAD service does not update the sweep cursor;
-- SWEEP service advances only the sweep cursor;
-- per-peer HEAD/SWEEP modes alternate;
-- account rotation advances to the peer after the last actually serviced peer rather than +1;
-- >20-peer round-robin behavior is materially improved;
-- inactive peer head/sweep/mode state is pruned;
-- <=5/peer and <=20/account provider-call bounds remain intact;
-- all C2AR2 read-error/backoff/malformed-candidate fixes remain accepted.
+Accepted C2A semantics include:
+- Telegram recurring default cadence 60 seconds;
+- A3 history remains canonical new-message ingestion;
+- bounded exact-message reconciliation for remote edits/deletes;
+- independent recent-head and historical sweep traversal;
+- fair account peer rotation;
+- <=5 provider lookups/peer/run;
+- <=20 provider lookups/account/run;
+- canonical title normalization;
+- read-error/auth/FloodWait classification;
+- confirmed exact absence -> tombstone;
+- Q1 AI quarantine preserved.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- Alembic `0041`;
-- M3 not authorized.
+- production Alembic `0041`;
+- M3 NOT authorized;
+- Bot API retirement NOT authorized.
 
-## Remaining blocker — HEAD window stores the wrong "newest" marker
+Canonical AI flag remains:
+`TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
-C2AR3 chooses a `head_candidate` from the top-5 recent window.
+## C2B goal
 
-But after inspecting a HEAD candidate it stores:
+Add a deterministic Telegram MTProto user notification/event surface using the **existing** Notification persistence/API.
 
-`heads[peer]["newest"] = candidates[peer][0][0]`
+Do not create:
+- a Telegram-specific notification table;
+- a new migration;
+- an LLM/AI notification path;
+- client push/websocket/OS notification transport yet.
 
-In HEAD mode `candidates[peer]` contains only the current `head_candidate`.
+C2B creates deterministic rows in the existing `notifications` table so the existing
+`/notifications` API can expose Telegram transport events.
 
-Therefore after sampling the second-newest object, the persisted "newest" marker becomes the second-newest object instead of the actual newest object.
+C3 will decide how the client renders them.
 
-On the next HEAD service:
-- actual newest != stored "newest";
-- scheduler treats this as if a new message arrived;
-- it jumps back to the newest object.
+## Core invariant — no AI
 
-The resulting cycle can be:
+Telegram transport notifications must be generated entirely from deterministic provider/object facts.
 
-`newest -> second -> newest -> second -> ...`
+Do NOT use:
+- `SecretaryService`;
+- `SecretaryNotificationService`;
+- LLM summaries;
+- semantic classification;
+- inferred urgency/priority;
+- embeddings;
+- proactive AI.
 
-The third/fourth/fifth recent objects may never be revisited by HEAD sampling.
+This is true regardless of `TELEGRAM_MTPROTO_AI_ENABLED`.
 
-This defeats the intended bounded recent-window reconciliation.
+The AI flag controls AI eligibility, not deterministic transport notifications.
 
-The current focused test does not catch this because its target third-recent message was already fetched by the initial SWEEP run before HEAD sampling was evaluated.
+## Event types
 
-## Required correction
+Canonical proposal payload type:
 
-Persist the **actual current head-window newest marker**, independently from the selected candidate.
+`type = "transport_event"`
 
-For each peer during candidate construction:
-- compute the actual `head_window[0]` cursor once;
-- keep that actual-newest cursor alongside the chosen HEAD candidate;
-- when the HEAD candidate is inspected, persist:
-  - `cursor` = inspected HEAD candidate;
-  - `newest` = actual current `head_window[0]`, NOT the inspected candidate unless it actually is newest.
+Provider/transport:
 
-Do not derive the newest marker from the one-element HEAD candidate list.
+`provider = "telegram"`
+`transport = "mtproto"`
 
-Expected behavior with stable top-5 window:
+Supported C2B event types:
 
-`newest -> second -> third -> fourth -> fifth -> newest -> ...`
+1. `message_created`
+   - new inbound MTProto message observed after forward sync is already established;
 
-When a genuinely new newest object arrives:
-- actual newest differs from stored newest;
-- next HEAD sample immediately selects the new newest;
-- persisted newest becomes the real new newest;
-- subsequent HEAD samples continue through the rest of the current top-5 window.
+2. `message_edited`
+   - an already-known inbound MTProto message receives a confirmed provider-side semantic edit;
 
-If the previous head cursor fell out of the top-5 window:
-- fail safely back to current newest;
-- then continue rotating.
+3. `message_deleted`
+   - an already-known inbound MTProto message receives a provider-confirmed exact absence and is tombstoned.
 
-## Preserve SWEEP/account fairness
+Do NOT create deterministic notifications for:
+- outgoing messages;
+- Telegram service messages;
+- legacy Bot/Business messages;
+- inactive-scope messages;
+- initial history import/backfill;
+- unchanged reconciliation;
+- metadata-only changes that do not represent user-visible message content change;
+- mark-read;
+- local outgoing send/edit/delete success.
 
-Do not change the accepted C2AR3 invariants unless required by the direct fix:
-- HEAD must never update sweep cursor;
-- SWEEP must never use head cursor;
-- modes alternate per peer;
-- account rotation is after actual serviced peer/window;
-- stale peer state pruned;
-- <=5 provider calls/peer/run;
-- <=20 provider calls/account/run.
+## Initial sync / backfill anti-spam rule
 
-## Required focused tests
+This is mandatory.
 
-Replace/strengthen the current recent-window test so it cannot pass via SWEEP accidentally.
+The first history import/backfill for a peer can contain many historical messages.
+It MUST NOT generate C2B notifications.
 
-### A. Pure HEAD-window rotation
+A `message_created` transport event is allowed only when all are true:
+- canonical MTProto inbound message;
+- active scope;
+- message was newly materialized by a **forward incremental sync**;
+- the peer already had an established forward history cursor before this sync;
+- provider message_id is strictly newer than the prior forward cursor.
 
-Set up one peer with at least 5 recent objects.
+Initial connection, initial page, bounded historical backfill, replay of existing history, and passive reconciliation must not create "new message" notification storms.
 
-Arrange state so:
-- historical sweep cursor is already outside/below the recent head window;
-- mode starts at HEAD;
-- the target second/third/fourth/fifth objects cannot be fetched by SWEEP during the assertion interval.
+Add tests explicitly proving 100 historical initial messages -> 0 notifications.
 
-Across HEAD service cycles prove exact order includes:
+## Deterministic notification service
 
-`newest, second, third, fourth, fifth`
+Add a narrow service, e.g.:
 
-before wrapping back to newest.
+`TelegramMtprotoTransportNotificationService`
 
-Directly assert after each HEAD call:
-- `heads[peer].cursor` = inspected head object;
-- `heads[peer].newest` remains equal to the actual newest object while the window is unchanged;
-- sweep cursor remains byte-for-byte unchanged.
+It may use `NotificationService` internally or create `Notification` rows directly through a small reusable deterministic helper.
 
-### B. Third-recent remote edit
+Do not overload `SecretaryNotificationService`.
 
-After the third-recent object has already been checked once:
-- mutate provider-side text for that same third-recent message;
-- keep sweep cursor away from the head region;
-- run bounded HEAD/SWEEP cycles;
-- prove the third-recent object is rediscovered by HEAD rotation before sweep wrap;
-- same local Object/external_id updated.
+### Notification fields
 
-The test must prove the provider call that discovers the edit is a HEAD call, not incidental SWEEP.
+For all Telegram transport events:
 
-### C. New newest insertion
+- `priority = "normal"`
+- `status = "new"` on first creation
+- `source_object_id = canonical Telegram Object.id` where the row still exists
+- `related_object_id = None`
+- `result_object_id = None`
 
-After HEAD cursor has progressed to second/third:
-- insert a new most-recent canonical object;
-- next HEAD service must select the new newest;
-- stored `newest` becomes this actual new object;
-- following HEAD services continue into the rest of the current top-5 instead of bouncing only between two entries.
+Title/body must be deterministic, human-readable, and bounded.
 
-### D. Regression
+Recommended:
 
-Keep all prior focused guarantees green:
-- exactly-20 peers: sweep progresses despite alternating head mode;
-- >20 peers: next run starts at first unserved peer, not +1;
-- scope-deactivation state pruning;
-- malformed message_id zero provider call;
-- read reject isolation;
-- auth classification;
-- real FloodWait retry_after;
-- exact absence tombstone;
-- mismatch no mutation;
-- AI=false zero AI work;
-- AI=true semantic enqueue;
-- cadence 60/env override;
-- A3/C1A/C1B/Q1;
-- Alembic head 0046.
+### message_created
+title:
+`Telegram · <conversation title>`
 
-## Scope
+body:
+message body/text, bounded to a reasonable deterministic preview limit.
 
-Continue branch:
-`review/telegram-mtproto-c2a-reconciliation`
+### message_edited
+title:
+`Telegram · message edited · <conversation title>`
 
-Start from exact:
-`C2AR3_BASE_SHA=c87fb53d31827fb92e074fbf27628442f2a95ca4`
+body:
+current edited body preview.
 
-Create exactly one corrective commit.
-Do not rewrite/squash prior C2 commits.
+### message_deleted
+title:
+`Telegram · message deleted · <conversation title>`
 
-Do NOT implement:
-- C2B notifications;
-- websocket/client push;
-- UI;
-- long-lived Telegram listener;
-- production deploy/ref move;
-- migration 0047;
-- Bot API retirement.
+body:
+None or a fixed deterministic string such as `"Message deleted"`.
 
-## Checks
+Do not expose:
+- session strings;
+- provider peer references;
+- api_hash;
+- encrypted credentials;
+- access_hash;
+- raw provider exception content.
+
+## Proposal/event payload
+
+Use existing `Notification.proposal_` JSON.
+
+Required fields:
+
+- `type: "transport_event"`
+- `provider: "telegram"`
+- `transport: "mtproto"`
+- `event_type`
+- `event_key`
+- `account_id`
+- `peer_id`
+- `message_id`
+- `object_id`
+- `occurred_at`
+- `edited_at` where applicable
+- safe `conversation_title` if useful
+
+No secrets/reference/session material.
+
+## Idempotency
+
+Repeated sync/reconciliation must not produce duplicate notifications for the same provider event.
+
+No migration is authorized, so do not add a DB unique constraint.
+
+Use deterministic Notification IDs, preferred approach:
+
+- define a fixed UUID namespace constant;
+- derive Notification.id with UUIDv5 from:
+  `user_id + event_key`;
+- insert under a nested transaction;
+- on PK conflict, fetch and return the existing notification.
+
+Equivalent concurrency-safe approach is acceptable, but a query-then-insert alone is NOT enough if concurrent source jobs can race.
+
+Canonical `event_key` rules:
+
+### message_created
+Stable forever:
+`telegram:mtproto:<account_id>:<peer_id>:<message_id>:created`
+
+### message_deleted
+Stable forever:
+`telegram:mtproto:<account_id>:<peer_id>:<message_id>:deleted`
+
+### message_edited
+Must identify a real provider edit revision.
+
+Preferred:
+`telegram:mtproto:<account_id>:<peer_id>:<message_id>:edited:<edited_at_iso>`
+
+Requirements:
+- identical reconciliation of the same edit -> no duplicate;
+- a later distinct provider edit with a later provider `edited_at` -> a new deterministic edit event;
+- if provider edit lacks a trustworthy `edited_at`, do not invent an edit event revision from arrival time; fail closed for notification creation while still allowing Object convergence.
+
+Do not key edit events by body hash unless necessary and explicitly justified.
+
+## New inbound event integration
+
+Integrate with the accepted A3 history path.
+
+The code needs access to:
+- previous `history_latest_message_id` before the forward page;
+- `TelegramMaterializeResult.change`;
+- normalized direction/service metadata.
+
+Create `message_created` only when:
+- previous latest cursor existed;
+- current entry message_id > previous latest cursor;
+- materializer result is `created`;
+- normalized direction == inbound;
+- non-service;
+- active scope.
+
+Do not notify an outgoing message merely because another client/device sent it and it later appears in sync.
+
+Do not notify duplicate/replayed pages.
+
+## Remote edit event integration
+
+C2A exact-message reconciliation already materializes provider edits through A3 normalization/materializer.
+
+Create `message_edited` only when:
+- existing canonical object was inbound before/after normalization;
+- materializer reports semantic `change == "updated"`;
+- provider supplied a trustworthy non-null `edited_at`;
+- same object/external_id is retained;
+- event key for that `edited_at` does not already exist.
+
+Do not emit for:
+- `metadata_updated`;
+- unchanged;
+- outgoing;
+- service messages;
+- AI pipeline activity.
+
+If the body changed but provider `edited_at` is absent:
+- update the Object through normal materialization;
+- create zero edit notifications.
+
+## Remote delete event integration
+
+C2A exact-message reconciliation tombstones on trustworthy exact absence.
+
+Before tombstoning, freeze only safe facts needed for the deterministic event:
+- Object id;
+- account_id;
+- peer_id;
+- message_id;
+- conversation title;
+- direction.
+
+Create `message_deleted` only when:
+- object was active/not already tombstoned;
+- canonical MTProto;
+- inbound;
+- exact provider absence confirmed;
+- tombstone actually changes the object from active -> deleted.
+
+Repeated confirmed absence after already tombstoned:
+- zero new notification;
+- zero duplicate event.
+
+Transient/provider failure/mismatch:
+- zero tombstone;
+- zero notification.
+
+## Transaction semantics
+
+Object convergence and deterministic event creation should commit atomically in the same source-sync DB transaction where practical.
+
+Do not let a notification insertion failure cause provider content to be incorrectly interpreted as absent/deleted.
+
+Concurrency/idempotency conflict handling must be bounded and local.
+
+## Existing Notification API semantics
+
+Do not add a new API route in C2B.
+
+Existing:
+- GET /notifications
+- GET /notifications/{id}
+- POST /notifications/{id}/read
+- accept/ignore/resolve
+
+must continue to work.
+
+For `transport_event` proposal types:
+- `accept` may use existing generic non-task behavior and simply mark accepted;
+- must never create a task/object/edge automatically;
+- read/ignore/resolve continue normally.
+
+Do not change AI-generated notification behavior.
+
+## User/content privacy
+
+Notification payload/title/body may contain the same human-visible message content already stored in the user's own Object.
+
+But never include:
+- provider reference JSON;
+- session;
+- access_hash;
+- api_hash;
+- credential material;
+- Telegram phone/code/password/auth state.
+
+Sanitized IDs account_id/peer_id/message_id are allowed internal routing metadata.
+
+## Tests
+
+Add focused tests at minimum.
+
+### Idempotency
+- same created event invoked twice -> exactly one Notification row;
+- concurrent-equivalent insert conflict path returns same deterministic notification;
+- same edit revision twice -> one row;
+- later edited_at revision -> second edit notification;
+- same delete event twice -> one row.
+
+### Initial/backfill anti-spam
+- initial peer sync with many historical inbound messages -> zero notifications;
+- bounded backfill -> zero notifications;
+- re-running same initial/history page -> zero notifications.
+
+### New inbound
+- established latest cursor + one newer inbound message -> one message_created notification;
+- two new inbound messages -> two deterministic rows;
+- outgoing new message -> zero;
+- service message -> zero;
+- inactive-scope peer -> zero;
+- duplicate forward sync -> no duplicate;
+- notification source_object_id points to canonical Object;
+- payload has no credential/reference fields.
+
+### Edit
+- remote inbound semantic edit + provider edited_at -> one message_edited;
+- same reconciliation again -> no duplicate;
+- later edit with later edited_at -> another event;
+- metadata-only update -> zero;
+- missing edited_at -> zero event but Object still converges;
+- outgoing edit -> zero;
+- AI=false still creates deterministic notification but zero AI jobs.
+
+### Delete
+- confirmed inbound exact absence -> tombstone + one delete event;
+- repeated absence/tombstone -> no duplicate;
+- outgoing deletion -> zero event;
+- transient lookup error -> no event;
+- mismatched result -> no event.
+
+### Notification API
+- deterministic Telegram transport event appears in existing GET /notifications;
+- mark-read works;
+- accept on transport_event does not create a task/edge;
+- Secretary/AI notification tests remain unchanged.
+
+### Regression
+- C2A reconciliation remains green;
+- C1A/C1B remain green;
+- Q1 AI quarantine remains green;
+- legacy Bot/Business Telegram unchanged;
+- Alembic head remains `0046`.
 
 Run:
-- focused C2A/C2AR/C2AR2/C2AR3/C2AR4;
-- Telegram A1-A4.4/Q1/C1A/C1B;
-- Telegram recurring queue/worker/backoff;
+- focused C2B tests;
+- notifications tests;
+- Telegram A1-A4.4/Q1/C1A/C1B/C2A regressions;
+- source-sync recurring tests;
 - Ruff changed Python files;
-- git diff --check;
-- Alembic head 0046.
+- `git diff --check`.
 
-## Deliverable
+## Explicitly out of scope C2B
+
+Do NOT implement:
+- websocket/SSE push;
+- desktop/mobile OS notifications;
+- Android notification channels;
+- Linux D-Bus notifications;
+- client UI changes;
+- client unread badge behavior;
+- realtime Telethon listener;
+- production deploy/ref move;
+- production DB/env mutation;
+- migration `0047`;
+- Bot API retirement.
+
+Those belong to C3 or later.
+
+## Branch / deliverable
+
+Start from latest `origin/main`.
+
+Create/use:
+`review/telegram-mtproto-c2b-notifications`
 
 Return:
-- `C2AR3_BASE_SHA=c87fb53d31827fb92e074fbf27628442f2a95ca4`
-- `C2AR4_SHA=<exact sha>`
-- changed files
-- exact actual-newest persistence rule
-- observed HEAD rotation sequence in test
-- proof third-recent edit is found by HEAD rather than SWEEP
-- new-newest insertion behavior
-- focused/regression tests
-- Ruff
-- git diff --check
-- Alembic 0046
-- production untouched
+- `STARTING_SHA`;
+- `C2B_SHA`;
+- changed files;
+- deterministic Notification ID/event-key design;
+- initial/backfill anti-spam rule;
+- new/edit/delete integration points;
+- transaction/idempotency behavior;
+- focused/regression test results;
+- Ruff;
+- git diff --check;
+- Alembic head `0046`;
+- production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C2AR4_RECONCILIATION_READY`
+`TELEGRAM_MTPROTO_C2B_NOTIFICATIONS_READY`
 
 Then STOP for Architect review.
 
