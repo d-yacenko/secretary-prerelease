@@ -70,6 +70,14 @@ class TelegramMtprotoProviderUnavailableError(TelegramMtprotoError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class TelegramMtprotoWriteDefiniteError(TelegramMtprotoError):
+    pass
+
+
+class TelegramMtprotoWriteUncertainError(TelegramMtprotoError):
+    pass
+
+
 def classify_telegram_sync_failure(exc: BaseException) -> tuple[str, bool, int | None]:
     if isinstance(exc, TelegramMtprotoProviderUnavailableError):
         return "transient", True, exc.retry_after_seconds

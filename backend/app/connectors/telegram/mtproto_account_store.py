@@ -33,8 +33,21 @@ class TelegramMtprotoAccountStore:
             select(TelegramMtprotoAccount).where(TelegramMtprotoAccount.user_id == user_id)
         )
 
+    def get_by_id_for_user(
+        self, account_id: UUID, user_id: UUID
+    ) -> TelegramMtprotoAccount | None:
+        return self._session.scalar(
+            select(TelegramMtprotoAccount).where(
+                TelegramMtprotoAccount.id == account_id,
+                TelegramMtprotoAccount.user_id == user_id,
+            )
+        )
+
     def decrypt_session(self, account: TelegramMtprotoAccount) -> str:
         return self._encryption.decrypt(account.session_encrypted)
+
+    def decrypt_reference(self, selection: TelegramMtprotoChatSelection) -> str:
+        return self._encryption.decrypt(selection.provider_peer_reference_encrypted)
 
     def list_selections(self, account_id: UUID) -> list[TelegramMtprotoChatSelection]:
         return list(

@@ -299,6 +299,7 @@ def _normalize_entry(
             "group_username": selection.username,
             "is_forum": selection.is_forum,
             "sender_peer_id": entry.sender_peer_id,
+            "direction": "outbound" if entry.outgoing else "inbound",
             "reply_to_message_id": entry.reply_to_message_id,
             "topic_id": entry.topic_id,
             "edited_at": entry.edited_at.isoformat() if entry.edited_at else None,
