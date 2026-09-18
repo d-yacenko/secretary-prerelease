@@ -22,12 +22,13 @@
 - Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
 - M3 migration-bearing production cutover is NOT AUTHORIZED.
 - Telegram Bot API retirement is NOT AUTHORIZED.
-- Current work state: HOLD for Telegram API Terms clarification before any further Telegram code/design task.
+- Current work state: **PROJECT-WIDE HOLD** pending Telegram API Terms clarification; no Executor task is authorized.
 - Intended scenario under review is private personal-assistant processing of messages already accessible to the authenticated user, with no training/fine-tuning/dataset/public indexing/global search/resale/investigation.
-- Current Telegram official terms contain broad AI/ML restrictions including "deployment" and an exception language requiring explicit, informed, affirmative and continued consent from all relevant users for specific content/context.
+- Current Telegram official terms contain broad AI/ML restrictions including "deployment" and exception language involving explicit, informed, affirmative and continued consent from relevant users for specific content/context.
 - It is not yet resolved whether that language permits the intended private inference/summarization scenario.
-- No agent task is authorized during this HOLD.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized.
+- If MTProto + AI is not permitted, future research may evaluate alternative client-side/local Telegram surfaces such as Android share intents, notification-listener flows, Telegram-documented share/export hooks, Linux desktop notification/D-Bus surfaces, and other explicit user-triggered local mechanisms.
+- Those alternatives are research candidates only; do not assume they are automatically legally or contractually unrestricted.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, destructive cleanup, or unrelated development branch is authorized during HOLD.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
