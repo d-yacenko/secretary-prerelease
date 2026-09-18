@@ -1,332 +1,206 @@
-# Current task — Production Migration Rollout M1 harness + local proof
+# Current task — Production Migration Rollout M2 readiness gate
 
 ## Status
 
 - Telegram A4.1–A4.4: ACCEPTED.
 - Telegram Integration Gate I1: ACCEPTED.
-- Production Line Reconciliation R1: ACCEPTED at exact merge SHA `f55bc1f9360384f403e9791f863b9b104d9c6d42`.
-- R1 merge parents are exact prior main `1ff97b66d96ec7a82eb62cb9e1c813e1ebdd4866` and production `5cce4b57b14e0052a038acae1354a2821a2bb77b`; Architect independently verified merge stats `0 additions / 0 deletions / no files`, so production hotfix lineage is now in `main` ancestry without changing the already-tested tree.
-- Current `main` contains the accepted release code and Alembic head `0046`.
-- Production runtime/branch is still `5cce4b57b14e0052a038acae1354a2821a2bb77b`, production DB Alembic `0041 / 0041`.
-- **No production deployment or production migration is authorized in M1.**
-
-## Why a separate harness is required
-
-Normal `ops/production/deploy.py` is intentionally schema-neutral and must continue to reject this release because migration infrastructure differs between rollback and release.
-
-Current Compose starts API with `alembic upgrade head`, while worker starts independently. A migration-bearing rollout must not recreate api+worker concurrently and rely on API startup to win a race against worker startup.
-
-The accepted migration chain is:
-
-`0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`
-
-All new schema belongs to Telegram MTProto:
-
-- `0042`: creates MTProto accounts + auth challenges;
-- `0043`: creates chat selections;
-- `0044`: adds history cursors to selections;
-- `0045`: creates sync folders;
-- `0046`: adds `manual_selected` / `scope_active` and allows `private` peer kind.
-
-Important rollback invariant: `0046` downgrade restores the old check constraint allowing only `group/supergroup`. Automatic schema downgrade after live cutover is therefore forbidden if any new MTProto data exists; it could fail or destroy newly-created Telegram state.
+- Production Line Reconciliation R1: ACCEPTED.
+- Production Migration Rollout M1: **ACCEPTED** at exact final SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
+- M1 is integrated into `main`.
+- Production branch/runtime remains exact rollback SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
+- Production DB Alembic remains `0041`.
+- Accepted release schema target is exact `0046`.
+- **M2 authorizes production readiness inspection only. It does NOT authorize moving `production`, stopping/recreating services, running production Alembic, or deploying.**
 
 ## Objective
 
-Implement and test a separate fail-closed migration-bearing production deployment harness for this release family.
+Prove that production is ready for the separately authorized migration cutover without creating branch/runtime divergence if readiness fails.
 
-The harness must:
+The migration-bearing release includes accepted Telegram MTProto code and exact migration chain:
 
-1. preserve the existing production identity/SSH/.env/DB container/DB volume/credential-key contract;
-2. require exact rollback and release SHAs and exact Alembic from/to revisions;
-3. prove rollback SHA is an ancestor of release SHA;
-4. prove the migration delta is exactly the authorized contiguous `0042..0046` chain with no Alembic infrastructure mutation beyond those revision files;
-5. build release api/worker before downtime;
-6. stop both api and worker before the schema write/cutover window;
-7. run the schema migration explicitly to `0046` using the release image and explicit production Compose env-file/files;
-8. verify DB revision directly before starting worker;
-9. only then recreate/start api + worker;
-10. verify health, exact schema, DB identity/volume, `.env` checksum, and recreated app containers;
-11. implement safe automatic rollback only while it is provably non-destructive;
-12. never rotate or replace `SECRETARY_CREDENTIAL_KEY`.
+`0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`.
 
-## Branch
+The accepted M1 harness is:
 
-Create and work only on:
+- `ops/production/migrate_deploy.py`
+- `ops/production/remote_migrate_deploy.py`
 
-`review/production-migration-rollout-m1`
+M2 must not modify their runtime semantics unless a concrete readiness blocker is discovered and Architect separately authorizes a correction.
 
-starting from exact current `origin/main` after this authorization bookkeeping.
+## Exact release candidate
 
-Do not work directly on `main` or `production`.
+For this readiness phase, the candidate release code SHA is:
 
-## Authorized implementation scope
+`917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`
 
-Expected files:
+Rollback/runtime SHA:
 
-- `ops/production/migrate_deploy.py` — local migration deployment entrypoint;
-- `ops/production/remote_migrate_deploy.py` — streamed remote helper;
-- production-deployment contract tests (place with the existing pytest suite, e.g. `backend/tests/test_production_migration_deploy.py`);
-- `docs/deploy.md` — document the separate migration path and rollback semantics.
+`5cce4b57b14e0052a038acae1354a2821a2bb77b`
 
-Small test-support-only files are allowed if necessary.
+Schema transition:
 
-Do NOT change:
+`0041 -> 0046`
 
-- `backend/alembic/versions/0042...0046`;
-- any other migration file;
-- application/domain/service logic;
-- Telegram feature behavior;
-- `infra/compose.yaml` / `infra/compose.deploy.yaml` unless Architect separately authorizes a concrete blocker;
-- normal `ops/production/deploy.py` schema-neutral rejection semantics.
+Do not substitute another SHA.
 
-If implementation truly requires modifying an existing production helper for shared, behavior-preserving utility extraction, keep it minimal and report it explicitly. No broad refactor.
+## Authorized production actions
 
-## Local entrypoint contract
+M2 may use strict verified SSH to the canonical production target from `ops/production/target.json` for **read-only/readiness inspection**.
 
-`ops/production/migrate_deploy.py` must reuse the canonical committed target and strict SSH host-key contract from the normal deployment harness rather than inventing new host discovery.
+Allowed:
 
-Required literal arguments:
+1. verify SSH host key using the committed exact fingerprint;
+2. inspect canonical production checkout/origin/cleanliness;
+3. run non-mutating Git fetch;
+4. inspect current production branch/ref/runtime facts;
+5. inspect Docker service/container state;
+6. perform health probes;
+7. perform DB TCP `SELECT 1`;
+8. query `alembic_version`;
+9. hash `/opt/secretary/.env` internally without printing the hash;
+10. resolve candidate release Compose configuration against the existing production `.env` without printing raw Compose config or secret values;
+11. verify required release runtime environment values by presence/validity only;
+12. use a temporary detached Git worktree or equivalent non-runtime-affecting checkout to inspect candidate release Compose, then remove it cleanly.
 
-- `--release-sha` exact 40-char SHA;
-- `--rollback-sha` exact 40-char SHA;
-- `--from-alembic 0041`;
-- `--to-alembic 0046`.
+## Forbidden production actions
 
-For this M1 implementation, values other than exact `0041 -> 0046` must fail closed. Do not make an open-ended arbitrary migration runner.
+M2 MUST NOT:
 
-Local preflight must require:
+- move `origin/production`;
+- change local production checkout persistently;
+- stop/restart/recreate api, worker, or db;
+- run `docker compose up`, `stop`, `restart`, `rm`, or destructive service commands;
+- run production Alembic upgrade/downgrade;
+- change DB schema or rows;
+- change `/opt/secretary/.env`;
+- rotate/change `SECRETARY_CREDENTIAL_KEY`;
+- create/replace Telegram credentials;
+- expose any secret value;
+- run the migration deployment harness;
+- deploy application code.
 
-- canonical clean local repository;
-- local branch `main` and `HEAD == origin/main` when the harness is actually executed;
-- both SHAs resolve;
-- rollback SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b` is an ancestor of the authorized release SHA;
-- migration delta from rollback to release contains exactly these new revision paths:
-  - `backend/alembic/versions/0042_telegram_mtproto_foundation.py`
-  - `backend/alembic/versions/0043_telegram_mtproto_chat_selections.py`
-  - `backend/alembic/versions/0044_telegram_mtproto_history_state.py`
-  - `backend/alembic/versions/0045_telegram_mtproto_sync_folders.py`
-  - `backend/alembic/versions/0046_telegram_mtproto_active_scope.py`
-- no changes to `backend/alembic/env.py`, `backend/alembic.ini`, `backend/alembic/script.py.mako`, or any other migration revision between rollback and release;
-- strict SSH fingerprint match before remote execution.
+Any accidental mutation is a failure and must be reported immediately.
 
-The normal `deploy.py` must still reject the same release as migration-bearing.
+## Required readiness checks
 
-## Remote preflight contract
+Before reporting READY, prove all of the following:
 
-Before any service stop or schema write, require:
+### Git/runtime identity
 
-- cwd exactly `/opt/secretary`;
-- canonical Git origin;
-- clean tracked worktree;
-- `/opt/secretary/.env` exists;
-- `origin/production` equals the exact Architect-authorized release SHA at execution time;
-- current checkout is exact rollback SHA or already exact release SHA;
-- existing `db`, `api`, `worker` services exist;
-- DB running + healthy;
-- current API health PASS while still on old runtime;
-- explicit Compose config uses `/opt/secretary/.env` plus both canonical compose files;
-- `POSTGRES_PASSWORD` and `SECRETARY_CREDENTIAL_KEY` non-empty for api+worker;
-- api/worker DB credentials and credential key match;
-- DB TCP auth `SELECT 1` succeeds;
-- direct DB Alembic version is exactly `0041` before migration;
-- current DB/api/worker container IDs, DB volume identity, and `.env` checksum captured internally;
-- Telegram API credential presence is checked without printing values: `TELEGRAM_API_ID > 0` and `TELEGRAM_API_HASH` nonblank for both api and worker. Missing Telegram runtime credentials must fail closed before downtime. Never print the API hash or credential key.
+- production repository path is exactly `/opt/secretary`;
+- origin URL is canonical;
+- tracked worktree is clean;
+- current checkout is exact rollback/runtime SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- `origin/production` is still exact rollback SHA;
+- candidate release SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` resolves after fetch;
+- rollback SHA is an ancestor of release SHA.
 
-## Cutover sequence
+### Existing runtime
 
-Use the exact production Compose prefix on every compose command:
+- db/api/worker all exist;
+- db is running and healthy;
+- api and worker are running;
+- health endpoint `http://127.0.0.1:18080/health` PASS;
+- DB TCP auth `SELECT 1` PASS;
+- direct DB Alembic revision is exactly `0041`.
 
-`docker compose --env-file /opt/secretary/.env -f infra/compose.yaml -f infra/compose.deploy.yaml`
+### Current environment invariant
 
-Required order:
+Resolve the **current rollback Compose** with explicit:
 
-1. fetch refs and switch checkout to exact release SHA;
-2. build only `api` and `worker` while old production api/worker are still running;
-3. verify DB container/volume and `.env` are still unchanged;
-4. stop **both** `api` and `worker`;
-5. verify both are stopped and DB remains running/healthy/unchanged;
-6. run one-off release-image migration with no DB recreate and no dependency startup, targeting **exactly `0046`**, not an unconstrained future `head`;
-7. query DB directly and require Alembic exactly `0046`;
-8. recreate/start `api` and `worker` with `--no-deps --force-recreate`;
-9. verify DB container identity unchanged;
-10. verify DB volume identity unchanged;
-11. verify `.env` checksum unchanged;
-12. verify both api and worker container identities changed from the pre-cutover identities;
-13. verify both are running;
-14. verify API health;
-15. verify direct DB Alembic exactly `0046`;
-16. report only sanitized non-secret facts.
+`--env-file /opt/secretary/.env -f infra/compose.yaml -f infra/compose.deploy.yaml`
 
-The DB service must never be part of an `up`/recreate command.
+Require for api+worker:
 
-## Safe rollback semantics
+- non-empty `POSTGRES_PASSWORD`;
+- non-empty `SECRETARY_CREDENTIAL_KEY`;
+- matching DB connection fields;
+- matching credential key.
 
-### Failure before live release containers start
+Do NOT require Telegram vars from rollback Compose because the deployed rollback Compose does not expose them.
 
-If failure occurs after writers were stopped but before live release api/worker have started, automatic rollback MAY:
+### Candidate release Compose readiness
 
-1. keep api+worker stopped;
-2. use the release image/migration code to downgrade database back to exact `0041`;
-3. verify DB revision directly equals `0041`;
-4. switch checkout to rollback SHA;
-5. rebuild/recreate old api+worker only;
-6. verify DB container/volume and `.env` unchanged;
-7. verify old API health and direct DB revision `0041`.
+Without moving `origin/production` and without changing running services, resolve the candidate release Compose against the same exact `/opt/secretary/.env`.
 
-This path is safe because no release application writers have run against the new MTProto schema.
+Require for both release api and release worker:
 
-### Failure after live release containers have started
+- `TELEGRAM_API_ID` exists, is numeric, and > 0;
+- `TELEGRAM_API_HASH` is nonblank;
+- api/worker Telegram API ID values match;
+- api/worker Telegram API hash values match;
+- release DB connection settings exactly equal the rollback-resolved values;
+- release `SECRETARY_CREDENTIAL_KEY` exactly equals rollback-resolved value;
+- no secret values are printed.
 
-Immediately stop api+worker before evaluating schema rollback.
+If Telegram runtime credentials are absent/unusable, report NOT READY. Do not modify `.env`.
 
-Automatic schema downgrade is allowed ONLY if a direct DB guard proves there is **zero persisted MTProto rollout data**. At minimum, require zero rows in all new data-bearing MTProto tables that can exist by `0046`:
+### No-mutation proof
 
-- `telegram_mtproto_accounts`;
-- `telegram_mtproto_auth_challenges`;
-- `telegram_mtproto_chat_selections`;
-- `telegram_mtproto_sync_folders`.
+Capture before/after:
 
-Handle a missing table conservatively according to the current Alembic revision; do not treat an unexpected query error as “empty”.
+- current checkout SHA;
+- `origin/production` SHA;
+- db/api/worker container IDs;
+- DB volume identity;
+- `.env` checksum internally;
+- DB Alembic revision.
 
-If all relevant tables are present/empty and DB revision is within authorized `0042..0046`, the harness may downgrade to `0041` with writers stopped and restore rollback api/worker.
+All must remain unchanged after readiness inspection.
 
-If ANY new MTProto row exists, or emptiness cannot be proven, the harness MUST NOT run destructive schema downgrade and MUST NOT silently discard data. It must:
+Temporary worktree/path used only for candidate Compose resolution must be removed before completion.
 
-- leave api/worker stopped;
-- leave DB container/volume and `.env` untouched;
-- emit a sanitized explicit marker such as `MIGRATION_ROLLBACK_BLOCKED=post_cutover_mtproto_data`;
-- emit `BREAK_GLASS_REQUIRED=true`;
-- return failure.
+## Output security
 
-Do not auto-restore a database backup and do not delete/truncate Telegram data.
-
-## Security/output rules
-
-Never print or persist in logs:
+Never output:
 
 - PostgreSQL password;
 - `SECRETARY_CREDENTIAL_KEY`;
 - Telegram API hash;
-- API/OAuth secrets;
-- Telegram sessions/auth challenge contents;
-- account IDs, user IDs, Telegram IDs, emails;
+- raw `TELEGRAM_API_ID` if it would identify the production credential;
+- OAuth/API secrets;
 - raw Compose config;
-- raw provider errors containing sensitive text;
-- hashes/prefixes of credentials.
+- credential hashes/prefixes;
+- Telegram/user/account identifiers.
 
-Allowed output: exact Git SHAs, Alembic revisions, health PASS/FAIL, boolean invariant markers, non-sensitive container-change booleans, stage names, sanitized exception class/reason.
-
-## Required tests
-
-Implement behavioral tests for at least:
-
-1. malformed SHA/from/to rejected locally;
-2. non-ancestor rollback rejected;
-3. migration allowlist exactness — extra/missing migration or Alembic infra change rejected;
-4. normal `deploy.py` still rejects migration-bearing release;
-5. strict target/fingerprint path reused, no host discovery/fallback;
-6. remote preflight fails before stop when current DB revision != `0041`;
-7. remote preflight fails before stop when Telegram API credentials are absent/unusable;
-8. build happens before service stop;
-9. both api+worker stop before migration command;
-10. migration command targets exact `0046` and cannot recreate DB;
-11. worker is not started until direct DB revision check proves `0046`;
-12. successful path preserves DB container, DB volume, `.env`, credential-key contract and recreates api+worker;
-13. pre-live failure safely downgrades to `0041` and restores rollback app;
-14. post-live failure with all MTProto tables empty may safely downgrade + restore;
-15. post-live failure with any MTProto data refuses downgrade and emits break-glass marker;
-16. query/error uncertainty in rollback guard refuses downgrade;
-17. no sensitive values appear in success or failure output.
-
-Tests must not contact production or real SSH hosts.
-
-## Local migration proof
-
-Using only disposable/local development PostgreSQL, prove the exact schema chain:
-
-1. start from a clean/disposable DB at `0041`;
-2. `alembic upgrade 0046` -> PASS;
-3. verify single head/current `0046`;
-4. with new MTProto tables empty, `alembic downgrade 0041` -> PASS;
-5. verify current `0041`;
-6. upgrade again `0041 -> 0046` -> PASS;
-7. verify current/head `0046`.
-
-Also demonstrate the rollback guard rationale without damaging repository state: after inserting minimal valid local-only MTProto data at `0046`, the harness guard must report unsafe/nonempty and refuse downgrade. Do not rely on an actual destructive failing downgrade as the guard implementation.
-
-## Regression verification
-
-From backend/local environment:
-
-- production migration harness tests: all PASS;
-- existing production deploy/rollback contract tests if present: PASS;
-- Telegram A1-A4.4 suite: PASS (current baseline 137);
-- production hotfix suites for Yandex/Google: PASS;
-- focused scheduler/queue/worker/source-preference suites: PASS;
-- full `pytest -q` with failure/error identity attribution against accepted pre-M1 baseline; M1-only identities must be zero;
-- `ruff check app tests --output-format concise` with M1-only violations zero;
-- `git diff --check` PASS;
-- clean worktree.
-
-Do not fix unrelated baseline pytest/Ruff debt.
-
-## Documentation
-
-Update `docs/deploy.md` to clearly distinguish:
-
-- normal schema-neutral `deploy.py`;
-- migration-bearing `migrate_deploy.py`;
-- exact M1 from/to guard;
-- stop/migrate/verify/start ordering;
-- rollback guard and break-glass condition;
-- the fact that this documentation defines HOW only and does not authorize execution.
-
-## Scope prohibitions
-
-M1 does NOT authorize:
-
-- SSH to production;
-- moving `origin/production`;
-- production Compose;
-- production Alembic;
-- changing `/opt/secretary/.env`;
-- generating/rotating Telegram API credentials;
-- DB backup/restore on production;
-- actual deployment;
-- A4.5;
-- UI/Flutter;
-- Telegram Bot API removal;
-- application feature changes;
-- new migration `0047`.
+Allowed output is booleans, PASS/FAIL markers, exact Git SHAs, Alembic revision, health status, and non-sensitive invariant facts.
 
 ## Completion report
 
-Commit and push only to `review/production-migration-rollout-m1` and report:
+Return:
 
-- starting main SHA;
-- implementation commit SHA(s);
-- final remote M1 HEAD;
-- changed files;
-- exact harness sequence implemented;
-- exact rollback/break-glass semantics implemented;
-- migration files unchanged confirmation;
-- harness test result;
-- local `0041 -> 0046 -> 0041 -> 0046` proof results;
-- nonempty MTProto rollback-guard test result;
-- Telegram suite result;
-- production hotfix suite result;
-- shared queue/worker suite result;
-- full pytest counts + M1-only identity count;
-- Ruff baseline/M1-only attribution;
-- `git diff --check`;
-- final clean worktree;
-- confirmation no production action occurred;
-- final marker exactly:
+- exact starting local main SHA;
+- exact candidate release SHA;
+- exact production runtime/checkout SHA observed;
+- exact `origin/production` SHA observed;
+- SSH fingerprint verification PASS;
+- health PASS/FAIL;
+- DB TCP auth PASS/FAIL;
+- DB Alembic revision;
+- rollback Compose environment invariant PASS/FAIL;
+- release Compose Telegram readiness PASS/FAIL without values;
+- release-vs-rollback DB/key equality PASS/FAIL;
+- before/after no-mutation invariant PASS/FAIL;
+- confirmation temporary worktree removed;
+- confirmation no service stop/restart/recreate, no Alembic write, no DB write, no ref move, no env modification;
+- final clean local worktree.
 
-`PRODUCTION_MIGRATION_ROLLOUT_M1_READY`
+Final marker if all checks pass:
 
-Then STOP.
+`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_READY`
 
-## After M1
+If any required check fails, use:
 
-Architect will independently review exact code/tests. Only after M1 acceptance will Architect authorize the actual production migration/deployment execution as a separate phase with exact release SHA, rollback SHA, from/to revisions, production ref move, and post-deployment runtime verification.
+`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_BLOCKED`
+
+and STOP.
+
+## After M2 readiness
+
+Only after Architect independently reviews the exact readiness evidence will a separate M3 authorize:
+
+- exact `production` ref move;
+- exact release/rollback/from/to arguments;
+- execution of the accepted migration harness;
+- post-deployment runtime verification;
+- break-glass handling if required.
