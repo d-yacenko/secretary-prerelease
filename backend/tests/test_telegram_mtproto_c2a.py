@@ -23,6 +23,8 @@ from app.db.models import Job, Object, TelegramMtprotoChatSelection
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
 from app.services.telegram_mtproto_history_service import (
     TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY,
+    TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY,
+    TELEGRAM_MTPROTO_RECONCILE_MODES_KEY,
     TelegramMtprotoHistoryService,
     build_mtproto_presentation_title,
 )
@@ -425,6 +427,181 @@ async def test_reconciliation_malformed_message_id_advances_without_provider_cal
     )
     assert all(message_id is not True for _, message_id in transport.calls)
     assert len(transport.calls) <= 5
+
+
+@pytest.mark.asyncio
+async def test_head_and_sweep_use_independent_state_and_both_progress(
+    db_session, credential_key
+):
+    user, account, selection, _ = _fixture(db_session, credential_key)
+    base = datetime.now(UTC)
+    for offset, message_id in enumerate(range(100, 106)):
+        db_session.add(
+            Object(
+                user_id=user.id,
+                kind="chat_message",
+                provider="telegram",
+                external_id=f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+                origin="source",
+                state="observed",
+                title="Alice: old",
+                body="old",
+                metadata_={
+                    "transport": "mtproto",
+                    "account_id": str(account.id),
+                    "peer_id": selection.peer_id,
+                    "message_id": message_id,
+                },
+                occurred_at=base.replace(microsecond=offset),
+            )
+        )
+    db_session.flush()
+    transport = _RecentTransport(
+        lambda peer_id, message_id: {
+            "peer_id": peer_id,
+            "message_id": message_id,
+            "text": "same",
+            "occurred_at": base,
+            "edited_at": None,
+            "outgoing": False,
+            "service": False,
+        }
+    )
+    payload = {}
+    service = _history(db_session, credential_key, transport)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    sweep_cursor = payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY][str(selection.peer_id)]
+    assert TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY in payload
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY] == {}
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY][str(selection.peer_id)] == "head"
+
+    calls_before_head = len(transport.calls)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY][str(selection.peer_id)] == sweep_cursor
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY][str(selection.peer_id)]
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY][str(selection.peer_id)] == "sweep"
+    assert len(transport.calls) == calls_before_head + 1
+
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY][str(selection.peer_id)] != sweep_cursor
+
+
+@pytest.mark.asyncio
+async def test_recent_window_finds_new_and_second_recent_edits_before_sweep_wrap(
+    db_session, credential_key
+):
+    user, account, selection, _ = _fixture(db_session, credential_key)
+    base = datetime.now(UTC)
+    objects = []
+    for offset, message_id in enumerate((200, 201, 202, 203, 204)):
+        obj = Object(
+            user_id=user.id,
+            kind="chat_message",
+            provider="telegram",
+            external_id=f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+            origin="source",
+            state="observed",
+            title="Alice: old",
+            body="old",
+            metadata_={
+                "transport": "mtproto",
+                "account_id": str(account.id),
+                "peer_id": selection.peer_id,
+                "message_id": message_id,
+            },
+            occurred_at=base.replace(microsecond=offset),
+        )
+        objects.append(obj)
+        db_session.add(obj)
+    db_session.flush()
+    transport = _RecentTransport(
+        lambda peer_id, message_id: {
+            "peer_id": peer_id,
+            "message_id": message_id,
+            "text": "updated" if message_id == 202 else "same",
+            "occurred_at": base,
+            "edited_at": None,
+            "outgoing": False,
+            "service": False,
+        }
+    )
+    payload = {}
+    service = _history(db_session, credential_key, transport)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    db_session.refresh(objects[2])
+    objects[2].body = "locally old"
+    db_session.flush()
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert 202 in [message_id for _, message_id in transport.calls]
+    assert len(transport.calls) <= 15
+
+
+@pytest.mark.asyncio
+async def test_account_rotation_advances_after_last_serviced_peer_not_one_step(
+    db_session, credential_key
+):
+    user, account, _, _ = _fixture(db_session, credential_key)
+    encryption = CredentialEncryption(credential_key)
+    now = datetime.now(UTC)
+    peers = []
+    for peer_number in range(25):
+        peer_id = -1000 - peer_number
+        peers.append(peer_id)
+        db_session.add(
+            TelegramMtprotoChatSelection(
+                account_id=account.id,
+                peer_id=peer_id,
+                peer_kind="group",
+                provider_peer_reference_encrypted=encryption.encrypt(
+                    json.dumps({"entity_type": "chat", "id": 1000 + peer_number})
+                ),
+                title=f"Group {peer_number}",
+                scope_active=True,
+            )
+        )
+        db_session.add(
+            Object(
+                user_id=user.id,
+                kind="chat_message",
+                provider="telegram",
+                external_id=f"mtproto|{account.id}|{peer_id}|1",
+                origin="source",
+                state="observed",
+                title="Group: old",
+                body="old",
+                metadata_={
+                    "transport": "mtproto",
+                    "account_id": str(account.id),
+                    "peer_id": peer_id,
+                    "message_id": 1,
+                },
+                occurred_at=now,
+            )
+        )
+    db_session.flush()
+    transport = _RecentTransport(
+        lambda peer_id, message_id: {
+            "peer_id": peer_id,
+            "message_id": message_id,
+            "text": "same",
+            "occurred_at": now,
+            "edited_at": None,
+            "outgoing": False,
+            "service": False,
+        }
+    )
+    payload = {}
+    service = _history(db_session, credential_key, transport)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    first_window = [peer_id for peer_id, _ in transport.calls]
+    assert len(first_window) == 20
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    second_window = [peer_id for peer_id, _ in transport.calls[20:]]
+    assert len(second_window) == 20
+    assert second_window[0] == sorted(peers)[20]
+    assert len(set(first_window)) == 20
+    assert len(set(second_window)) == 20
 
 
 @pytest.mark.asyncio
