@@ -1,123 +1,113 @@
-# Current task — Telegram platform credential provisioning + M2 readiness retry
-
-## Architectural decision
-
-Telegram credentials are split into two layers:
-
-1. **Platform/application credentials** — one pair for the Secretary installation:
-   - `TELEGRAM_API_ID`
-   - `TELEGRAM_API_HASH`
-
-   These identify the Secretary Telegram client application and are shared by all Secretary users. They are NOT per-user profile credentials.
-
-2. **Per-user Telegram authorization** — each Secretary user connects their own Telegram account through the MTProto login flow:
-   - phone number;
-   - Telegram login code;
-   - 2FA password when required;
-   - resulting user-specific MTProto session/auth key.
-
-   The existing backend stores the resulting Telegram session encrypted and bound to the Secretary user. Users must not be asked to create their own Telegram developer application or enter `api_id/api_hash` in their personal profile.
-
-This preserves the same conceptual separation as platform OAuth/app credentials versus personal user tokens/sessions.
+# Current task — Telegram Compliance Re-scope C1
 
 ## Status
 
-- M1 migration harness: ACCEPTED.
-- M2 readiness: BLOCKED only by `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
-- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production Alembic remains `0041`.
-- Candidate release remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- No deployment has occurred.
+- Telegram A1–A4.4 implementation: ACCEPTED in code / NOT production deployed.
+- Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
+- M2 production readiness retry: **READY** based on sanitized operator evidence.
+- Production runtime/ref remains exact `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
+- Production Alembic remains exact `0041`.
+- Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values remain secret.
+- **M3 migration/deployment is NOT authorized.**
+- **Telegram Bot API retirement is NOT authorized.**
 
-## Authorized phase
+## Compliance blocker
 
-A human/operator may now obtain one Telegram application credential pair from Telegram and provision only these two entries in:
+Current Telegram API Terms prohibit using/accessing/aggregating Telegram platform data to train, fine-tune, develop, enhance, benchmark, or deploy AI/ML systems.
 
-`/opt/secretary/.env`
+Telegram Content Licensing terms allow an exception only where all relevant users provide explicit, informed, affirmative, continued consent limited to the specific content/chat/channel/non-global context.
 
-Allowed keys:
+The accepted MTProto A3/A4 design automatically imports selected Telegram dialogs/history and exposes active MTProto objects to assistant/search/retrieval. That is not safe to deploy into the Secretary AI pipeline under the current Telegram terms without a compliant consent model.
 
-- `TELEGRAM_API_ID`
-- `TELEGRAM_API_HASH`
+This is an external compliance gate, not a code-quality failure.
 
-No other environment entry may change.
+## Architectural consequence
 
-## How the operator obtains the credentials
+Do not treat Bot API and MTProto as interchangeable transports anymore.
 
-Use Telegram's official application registration:
+- MTProto may remain technically useful for non-AI client functionality, but Telegram-derived content must not reach Secretary's LLM/retrieval/embedding/AI context unless the required consent basis is demonstrably satisfied.
+- Bot Platform terms explicitly allow use of data submitted directly and voluntarily to the bot by users when intended use is clearly disclosed and users provide individual, explicit, active, revocable consent.
+- Therefore the existing Bot API path must remain available for analysis/rework until a compliant canonical Telegram UX is chosen.
+- Do not remove bot code, bot schema, webhook, credentials, or production bot configuration in C1.
+- Do not deploy the accepted MTProto automatic history/scope ingestion to production in C1.
 
-1. Sign in to `https://my.telegram.org` with an active Telegram account controlled by the installation operator.
-2. Open **API development tools**.
-3. Create/register the Secretary application if no application exists for that operator account.
-4. Record the returned `api_id` and `api_hash` securely.
-5. Do not paste those values into Git, chat, issue trackers, logs, shell history, or documentation.
+## Objective
 
-The registered Telegram account is the operator/developer identity for the application; it is not the Telegram identity used by every Secretary end user.
+Produce a concrete minimal compliant Telegram architecture for Secretary that preserves a single clear user mental model.
 
-## Production .env mutation contract
+The design must answer:
 
-Before editing:
+1. What Telegram data may enter the AI pipeline?
+2. What user action constitutes explicit/active/revocable consent?
+3. Can directly sent/forwarded bot messages be the canonical AI ingress?
+4. If MTProto is retained, what strictly non-AI functions remain useful?
+5. How are retrieval, embeddings, assistant context, proactive processing, and recurring sync prevented from consuming non-consented Telegram data?
+6. What existing A3/A4 components can be reused safely versus disabled/removed?
+7. What is the cleanest single user-facing "Telegram" connection model?
+8. What eventual legacy Bot API cleanup, if any, is still appropriate after the compliant path is proven?
 
-- production repository/runtime/ref must still be exact rollback SHA;
-- services remain running;
-- capture file ownership/mode and an internal checksum of `/opt/secretary/.env`;
-- do not print the checksum or any secret values.
+## Required C1 work
 
-Edit only the two Telegram application credential variables.
+C1 is design + code-impact analysis only unless an extremely small test-only proof is useful.
 
-Requirements:
+Inspect at minimum:
 
-- `TELEGRAM_API_ID` numeric and > 0;
-- `TELEGRAM_API_HASH` nonblank;
-- no quotes or whitespace artifacts that would alter Compose parsing;
-- preserve all existing non-Telegram lines exactly;
-- preserve file owner/group/mode.
+- `backend/app/api/telegram.py`
+- `backend/app/api/telegram_mtproto.py`
+- `backend/app/connectors/telegram/*`
+- Telegram services/scheduler/job handlers
+- Telegram materialization metadata
+- Retrieval/Search/ObjectQuery/RecentSource/context/graph filtering added by A4.3
+- client/profile/source UI references to Telegram
+- existing bot/business send path
+- configuration/env variables and production deploy implications.
 
-Prefer an interactive editor or another non-echoing path. Do not use a command line containing the secret value because it may enter shell history/process listings.
+Produce a proposed target architecture with explicit boundaries between:
 
-## Forbidden during provisioning
+- platform credentials;
+- per-user authorization;
+- ingestion;
+- AI-visible storage/retrieval;
+- outbound sends;
+- consent/revocation.
 
-Do NOT:
+## Constraints
 
-- restart/recreate/stop api, worker, or db;
-- run `docker compose up/restart/stop`;
-- run Alembic upgrade/downgrade;
-- change DB rows/schema;
-- move `production` or any rollout ref;
-- run `migrate_deploy.py`;
-- change `SECRETARY_CREDENTIAL_KEY`;
-- change PostgreSQL settings;
-- print Telegram credential values or hashes.
+Until Architect accepts C1:
 
-The currently running rollback containers do not need these variables; therefore no service restart is required just to provision them.
+- no production ref move;
+- no production deploy;
+- no service restart/recreate;
+- no production Alembic write;
+- no DB mutation;
+- no further `.env` mutation;
+- no MTProto login against production;
+- no Telegram history import against production;
+- no bot deletion/disable;
+- no destructive cleanup of historical Telegram objects;
+- no new migration.
 
-## Verification after edit
+Do not weaken the accepted M1 safety harness.
 
-Without restarting services:
+## Deliverable
 
-1. prove `/opt/secretary/.env` owner/group/mode unchanged;
-2. prove only the two authorized Telegram keys changed;
-3. resolve candidate release Compose against the same production `.env`;
-4. require usable Telegram credentials for release api+worker;
-5. require api/worker Telegram values match without printing values;
-6. require release DB and credential-key settings still exactly equal rollback settings;
-7. rerun the full M2 readiness checks;
-8. prove production runtime/ref/container IDs/DB volume/DB Alembic remain unchanged.
+Return:
 
-If all checks pass, report:
+- exact starting SHA;
+- inventory of Bot API functionality;
+- inventory of MTProto functionality;
+- every current path by which Telegram-derived content can reach AI/retrieval/embedding/proactive processing;
+- proposed compliant target architecture;
+- explicit recommendation for bot retention/retirement under that target;
+- smallest implementation phases to reach it;
+- expected migrations/config/UI changes;
+- test strategy;
+- confirmation no production mutation occurred.
 
-`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_READY`
+Final marker:
 
-Otherwise:
-
-`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_BLOCKED`
+`TELEGRAM_COMPLIANCE_RESCOPE_C1_READY`
 
 Then STOP.
-
-## Product/UI follow-up
-
-The intended user-facing model is a profile/settings action such as **Connect Telegram** that performs per-user phone/code/2FA authorization and stores the resulting encrypted per-user session.
-
-Do not add `TELEGRAM_API_ID` or `TELEGRAM_API_HASH` as ordinary user-profile fields. If a future self-hosting/admin UI is added, these may be exposed only as installation/admin-level platform settings backed by secure server-side secret storage, not as user-scoped credentials.
 
 `CURRENT_TASK.md` is the source of active authorization.
