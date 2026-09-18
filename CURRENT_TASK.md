@@ -1,86 +1,123 @@
-# Current task — Production Migration Rollout M2 BLOCKED: Telegram credential prerequisite
+# Current task — Telegram platform credential provisioning + M2 readiness retry
+
+## Architectural decision
+
+Telegram credentials are split into two layers:
+
+1. **Platform/application credentials** — one pair for the Secretary installation:
+   - `TELEGRAM_API_ID`
+   - `TELEGRAM_API_HASH`
+
+   These identify the Secretary Telegram client application and are shared by all Secretary users. They are NOT per-user profile credentials.
+
+2. **Per-user Telegram authorization** — each Secretary user connects their own Telegram account through the MTProto login flow:
+   - phone number;
+   - Telegram login code;
+   - 2FA password when required;
+   - resulting user-specific MTProto session/auth key.
+
+   The existing backend stores the resulting Telegram session encrypted and bound to the Secretary user. Users must not be asked to create their own Telegram developer application or enter `api_id/api_hash` in their personal profile.
+
+This preserves the same conceptual separation as platform OAuth/app credentials versus personal user tokens/sessions.
 
 ## Status
 
-- Telegram A4.1–A4.4: ACCEPTED.
-- Telegram Integration Gate I1: ACCEPTED.
-- Production Line Reconciliation R1: ACCEPTED.
-- Production Migration Rollout M1: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- M1 is integrated into `main`.
-- M2 production readiness inspection executed read-only and is **BLOCKED**.
-- Production branch/runtime remains exact `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production DB Alembic remains exact `0041`.
-- Candidate release code remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- **No production deploy, ref move, service restart/recreate, Alembic write, DB write, env mutation, or credential mutation is currently authorized.**
+- M1 migration harness: ACCEPTED.
+- M2 readiness: BLOCKED only by `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
+- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
+- Production Alembic remains `0041`.
+- Candidate release remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
+- No deployment has occurred.
 
-## M2 readiness result
+## Authorized phase
 
-The following required checks passed:
+A human/operator may now obtain one Telegram application credential pair from Telegram and provision only these two entries in:
 
-- local main/origin-main alignment;
-- clean local worktree;
-- production runtime checkout exact rollback SHA;
-- `origin/production` exact rollback SHA;
-- SSH fingerprint verification;
-- production health;
-- DB TCP authentication;
-- direct DB Alembic exact `0041`;
-- rollback Compose DB/key environment invariant;
-- candidate release Compose resolution;
-- release api/worker credential-field matching check;
-- release DB/key equality with rollback configuration;
-- no-mutation invariant;
-- temporary candidate worktree cleanup.
+`/opt/secretary/.env`
 
-The blocking required check failed:
+Allowed keys:
 
-- `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
 
-No credential values or hashes were emitted.
+No other environment entry may change.
 
-## Blocker
+## How the operator obtains the credentials
 
-The accepted candidate release Compose requires usable Telegram MTProto application credentials for both api and worker:
+Use Telegram's official application registration:
 
-- `TELEGRAM_API_ID`: numeric and > 0;
-- `TELEGRAM_API_HASH`: nonblank.
+1. Sign in to `https://my.telegram.org` with an active Telegram account controlled by the installation operator.
+2. Open **API development tools**.
+3. Create/register the Secretary application if no application exists for that operator account.
+4. Record the returned `api_id` and `api_hash` securely.
+5. Do not paste those values into Git, chat, issue trackers, logs, shell history, or documentation.
 
-The existing production `/opt/secretary/.env` does not currently resolve to usable values for the candidate release.
+The registered Telegram account is the operator/developer identity for the application; it is not the Telegram identity used by every Secretary end user.
 
-This is a hard fail-closed prerequisite. The release must not be deployed until valid Telegram API credentials are provisioned and M2 readiness is repeated successfully.
+## Production .env mutation contract
 
-## Current authorization
+Before editing:
 
-STOP.
+- production repository/runtime/ref must still be exact rollback SHA;
+- services remain running;
+- capture file ownership/mode and an internal checksum of `/opt/secretary/.env`;
+- do not print the checksum or any secret values.
 
-Do not:
+Edit only the two Telegram application credential variables.
 
-- move `main` or `production` for rollout purposes;
-- SSH to production for mutation;
-- modify `/opt/secretary/.env`;
-- create or rotate credentials;
-- stop/restart/recreate any service;
-- run production Compose mutation commands;
+Requirements:
+
+- `TELEGRAM_API_ID` numeric and > 0;
+- `TELEGRAM_API_HASH` nonblank;
+- no quotes or whitespace artifacts that would alter Compose parsing;
+- preserve all existing non-Telegram lines exactly;
+- preserve file owner/group/mode.
+
+Prefer an interactive editor or another non-echoing path. Do not use a command line containing the secret value because it may enter shell history/process listings.
+
+## Forbidden during provisioning
+
+Do NOT:
+
+- restart/recreate/stop api, worker, or db;
+- run `docker compose up/restart/stop`;
 - run Alembic upgrade/downgrade;
 - change DB rows/schema;
-- execute `migrate_deploy.py`;
-- attempt M3.
+- move `production` or any rollout ref;
+- run `migrate_deploy.py`;
+- change `SECRETARY_CREDENTIAL_KEY`;
+- change PostgreSQL settings;
+- print Telegram credential values or hashes.
 
-## Next prerequisite
+The currently running rollback containers do not need these variables; therefore no service restart is required just to provision them.
 
-A human/operator must have valid Telegram MTProto application credentials available through a secure channel.
+## Verification after edit
 
-Do **not** commit them, paste them into repository files, issue trackers, logs, chat transcripts, or command history.
+Without restarting services:
 
-Once the operator confirms that valid credentials are available, Architect will authorize a separate narrowly scoped credential-provisioning phase that will:
+1. prove `/opt/secretary/.env` owner/group/mode unchanged;
+2. prove only the two authorized Telegram keys changed;
+3. resolve candidate release Compose against the same production `.env`;
+4. require usable Telegram credentials for release api+worker;
+5. require api/worker Telegram values match without printing values;
+6. require release DB and credential-key settings still exactly equal rollback settings;
+7. rerun the full M2 readiness checks;
+8. prove production runtime/ref/container IDs/DB volume/DB Alembic remain unchanged.
 
-1. update only `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in production `/opt/secretary/.env` using a non-echoing/non-logging path;
-2. preserve all other environment entries exactly, especially `SECRETARY_CREDENTIAL_KEY` and PostgreSQL settings;
-3. preserve file ownership/mode;
-4. perform no service restart/recreate and no DB/schema/ref mutation;
-5. verify only presence/validity through candidate release Compose without printing values;
-6. rerun the complete M2 readiness no-mutation gate.
+If all checks pass, report:
 
-Only after that readiness returns READY may Architect authorize M3 actual migration cutover.
+`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_READY`
 
-`CURRENT_TASK.md` remains the source of active authorization.
+Otherwise:
+
+`PRODUCTION_MIGRATION_ROLLOUT_M2_READINESS_BLOCKED`
+
+Then STOP.
+
+## Product/UI follow-up
+
+The intended user-facing model is a profile/settings action such as **Connect Telegram** that performs per-user phone/code/2FA authorization and stores the resulting encrypted per-user session.
+
+Do not add `TELEGRAM_API_ID` or `TELEGRAM_API_HASH` as ordinary user-profile fields. If a future self-hosting/admin UI is added, these may be exposed only as installation/admin-level platform settings backed by secure server-side secret storage, not as user-scoped credentials.
+
+`CURRENT_TASK.md` is the source of active authorization.
