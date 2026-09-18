@@ -21,17 +21,17 @@
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - M1 accepted safety properties include: release-Compose Telegram preflight before downtime; captured-ID initial stop proof; direct DB `alembic_version` checks; bounded startup health retries; stopped-aware post-cutover current-writer quiescence proof; exact `0046` revision gate before MTProto emptiness check; no destructive downgrade on data or uncertainty.
 - M1 is integrated into `main`.
-- M2 production readiness inspection: **BLOCKED**.
-- M2 evidence passed: local main alignment/cleanliness; SSH fingerprint; production runtime/ref identity; health; DB TCP auth; direct Alembic `0041`; rollback Compose DB/key invariants; candidate release Compose resolution; release DB/key equality; no-mutation proof; temporary worktree cleanup.
-- M2 blocking result: `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
+- Initial M2 production readiness inspection was BLOCKED only by `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
 - Candidate release code remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
-- The existing production `/opt/secretary/.env` does not currently resolve usable candidate-release `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` values.
-- No credential values or credential hashes were exposed by M2.
-- Current authorization is STOP: no production ref move, service mutation, Alembic write, DB mutation, env mutation, credential mutation, or M3.
-- Next prerequisite is human/operator availability of valid Telegram MTProto application credentials through a secure channel.
-- After operator confirmation, Architect may authorize a separate narrow credential-provisioning phase that updates only Telegram credential entries in production `.env`, preserves all other env values/ownership/mode, performs no service restart/ref/DB/schema mutation, and then reruns full M2 readiness.
-- Only after M2 returns READY may M3 authorize the actual migration-bearing cutover.
+- Architectural credential model: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` are installation-level Secretary platform credentials; each Secretary user receives a separate encrypted per-user MTProto session via phone/code/2FA authorization.
+- Operator has now provisioned the two Telegram platform credential entries into production `/opt/secretary/.env`.
+- Credential values/hashes were not shared in chat or repository and are not committed.
+- Provisioning is NOT yet accepted as production-ready; full M2 readiness must be rerun and independently reviewed.
+- Current authorization: rerun the M2 readiness/no-mutation gate only, as specified in `CURRENT_TASK.md`.
+- During M2 retry it remains forbidden to move `production`, stop/restart/recreate services, run Alembic writes, mutate DB rows/schema, modify `.env`, rotate credentials, or execute deployment.
+- M2 retry must prove candidate release Compose sees usable Telegram credentials for both api+worker, values match without disclosure, DB/key invariants remain equal, and production runtime/ref/container IDs/DB volume/Alembic remain unchanged.
+- Only after M2 returns READY and Architect accepts the evidence may M3 authorize actual migration-bearing cutover.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
