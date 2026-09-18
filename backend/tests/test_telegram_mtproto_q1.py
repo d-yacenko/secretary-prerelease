@@ -12,6 +12,7 @@ from app.domain.telegram_mtproto_ai import (
     is_canonical_telegram_mtproto_object,
     telegram_mtproto_ai_eligible,
 )
+from app.llm.embedding_text import embedding_input_signature
 from app.services.context_service import ContextService
 from app.services.errors import NotFoundError
 from app.services.object_query_service import ObjectQueryService
@@ -232,7 +233,10 @@ def test_catchup_scans_past_pending_rows_and_advances_cursor(db_session, monkeyp
                 user_id=user.id,
                 type="embed_object",
                 status="pending",
-                payload={"object_id": str(obj.id)},
+                payload={
+                    "object_id": str(obj.id),
+                    "embedding_input_signature": embedding_input_signature(obj),
+                },
             )
         )
     db_session.flush()
@@ -244,6 +248,112 @@ def test_catchup_scans_past_pending_rows_and_advances_cursor(db_session, monkeyp
 
     assert queued == 1
     assert payload["telegram_embed_catchup_cursor"]
+
+
+def test_catchup_old_signatures_do_not_suppress_current_jobs_or_break_bound(
+    db_session, monkeypatch
+) -> None:
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=123,
+            peer_kind="group",
+            provider_peer_reference_encrypted="encrypted",
+            title="old signature scope",
+            manual_selected=False,
+            scope_active=True,
+        )
+    )
+    objects = [
+        _mtproto_object(
+            db_session,
+            user.id,
+            account_id=account.id,
+            peer_id=123,
+            object_id=UUID(int=index + 1),
+        )
+        for index in range(11)
+    ]
+    db_session.flush()
+    for obj in objects[:10]:
+        db_session.add(
+            Job(
+                user_id=user.id,
+                type="embed_object",
+                status="pending",
+                payload={"object_id": str(obj.id), "embedding_input_signature": "old"},
+            )
+        )
+    db_session.flush()
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    service = TelegramMtprotoRecurringSyncService.__new__(TelegramMtprotoRecurringSyncService)
+    service._session = db_session
+    payload = {}
+
+    queued = service._enqueue_embedding_catchup(user.id, account.id, payload)
+    current_jobs = db_session.scalars(
+        select(Job).where(
+            Job.type == "embed_object",
+            Job.status == "pending",
+            Job.payload["embedding_input_signature"].as_string() != "old",
+        )
+    ).all()
+
+    assert queued == 10
+    assert len(current_jobs) == 10
+    assert payload["telegram_embed_catchup_cursor"] == str(objects[9].id)
+
+
+def test_catchup_cursor_converges_across_runs_without_skipping_rows(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=123,
+            peer_kind="group",
+            provider_peer_reference_encrypted="encrypted",
+            title="cursor scope",
+            manual_selected=False,
+            scope_active=True,
+        )
+    )
+    objects = [
+        _mtproto_object(
+            db_session,
+            user.id,
+            account_id=account.id,
+            peer_id=123,
+            object_id=UUID(int=index + 1),
+        )
+        for index in range(12)
+    ]
+    db_session.flush()
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    service = TelegramMtprotoRecurringSyncService.__new__(TelegramMtprotoRecurringSyncService)
+    service._session = db_session
+    payload = {}
+
+    assert service._enqueue_embedding_catchup(user.id, account.id, payload) == 10
+    assert payload["telegram_embed_catchup_cursor"] == str(objects[9].id)
+    assert service._enqueue_embedding_catchup(user.id, account.id, payload) == 2
+    assert payload["telegram_embed_catchup_cursor"] == str(objects[11].id)
+    assert service._enqueue_embedding_catchup(user.id, account.id, payload) == 0
+    assert db_session.scalar(select(func.count()).select_from(Job)) == 12
 
 
 def test_queued_embed_becomes_safe_noop_when_ai_is_disabled(db_session, monkeypatch) -> None:

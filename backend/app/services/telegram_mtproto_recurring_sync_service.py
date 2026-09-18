@@ -141,25 +141,40 @@ class TelegramMtprotoRecurringSyncService:
                     .limit(TELEGRAM_MTPROTO_EMBED_CATCHUP_SCAN_LIMIT)
                 )
         )
-        if objects:
-            catchup_payload[TELEGRAM_MTPROTO_EMBED_CATCHUP_CURSOR_KEY] = str(objects[-1].id)
         queued = 0
         for obj in objects:
-            if queued >= TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN:
-                break
+            if catchup_payload is not None:
+                catchup_payload[TELEGRAM_MTPROTO_EMBED_CATCHUP_CURSOR_KEY] = str(obj.id)
             if object_has_current_embedding_provenance(
                 obj, embedding_input_signature(obj)
             ):
                 continue
+            current_signature = embedding_input_signature(obj)
             before = self._session.scalar(
                 select(Job.id).where(
                     Job.user_id == user_id,
                     Job.type == JOB_TYPE_EMBED_OBJECT,
                     Job.status.in_((JOB_STATUS_PENDING, JOB_STATUS_RUNNING)),
                     Job.payload["object_id"].as_string() == str(obj.id),
+                    Job.payload["embedding_input_signature"].as_string()
+                    == current_signature,
                 )
             )
+            if before is not None:
+                continue
             enqueue_embed_object(self._session, obj.id, user_id)
-            if before is None:
+            after = self._session.scalar(
+                select(Job.id).where(
+                    Job.user_id == user_id,
+                    Job.type == JOB_TYPE_EMBED_OBJECT,
+                    Job.status.in_((JOB_STATUS_PENDING, JOB_STATUS_RUNNING)),
+                    Job.payload["object_id"].as_string() == str(obj.id),
+                    Job.payload["embedding_input_signature"].as_string()
+                    == current_signature,
+                )
+            )
+            if after is not None:
                 queued += 1
+                if queued >= TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN:
+                    break
         return queued
