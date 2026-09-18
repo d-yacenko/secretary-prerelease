@@ -1,184 +1,301 @@
-# Current task — Telegram MTProto C1BR2: edit pipeline + delete preflight semantics
+# Current task — Telegram MTProto C2A: bounded near-realtime reconciliation
 
-## Review status
+## Status
 
-C1B:
-`4d61ebeb2d96e5bfb6393ef3e39d214cd814fc51`
+Telegram MTProto C1B/C1BR/C1BR2 edit/delete/mark-read is **ACCEPTED and integrated to main**.
 
-C1BR:
-`a7c36d8d7053ad62371207773a7aa142a9fe3407`
-
-Independent review result: **C1BR REJECTED pending one narrow C1BR2 corrective**.
-
-The following C1BR areas are accepted in code:
-- deterministic Telethon BadRequest/Forbidden/NotFound/auth rejection mapping is now separated from server/timeout ambiguity;
-- delete has provider-side exact-message preflight before destructive delete;
-- durable SUCCEEDED metadata exists for replay-safe local convergence;
-- edit/delete replay can repair local state without provider resend;
-- first successful mark-read now reports a real mutation;
-- execution-effect wording no longer classifies these mutations as created objects.
+Accepted chain:
+- C1B `4d61ebeb2d96e5bfb6393ef3e39d214cd814fc51`
+- C1BR `a7c36d8d7053ad62371207773a7aa142a9fe3407`
+- C1BR2 `0174b82375837b428f9e0b09c811394dc0f1d884`
+- integration merge `37d2106fedc3d6cd3a9b5fd15dc70ded48d00caf`
 
 Production remains untouched:
-- production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- production Alembic `0041`;
-- M3 NOT authorized.
+- production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`
+- production Alembic `0041`
+- M3 NOT authorized
+- Bot API retirement NOT authorized
 
-## C1BR2 blocker 1 — edit local convergence bypasses the accepted semantic pipeline
+Q1 AI quarantine remains mandatory:
+`TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
-C1BR changed edit convergence from `TelegramObjectMaterializer` to direct mutation of
-`Object.body/title/metadata_`.
+## C2A goal
 
-That is replay-safe, but it bypasses semantic-update enqueue behavior.
+Make Telegram MTProto behave like a practical continuously updated messenger without introducing a new daemon, queue, service, or long-lived Telethon listener.
 
-Consequences:
-- with `TELEGRAM_MTPROTO_AI_ENABLED=false`, zero AI work is correct;
-- with `TELEGRAM_MTPROTO_AI_ENABLED=true`, an edited Telegram object keeps the old embedding unless another sync later happens to repair it.
+Use the existing:
+- `SourceSyncScheduler`
+- Postgres-backed recurring queue
+- `JOB_TYPE_SYNC_TELEGRAM_MTPROTO`
+- `TelegramMtprotoRecurringSyncService`
+- A3 history/materializer
+- C1B exact-message provider fetch capability
 
-This violates the Q1 future-activation contract and C1B semantic-update requirement.
+C2A covers:
+1. faster bounded polling for new messages;
+2. bounded reconciliation of recent known messages for remote edits/deletes;
+3. deterministic convergence into the existing canonical Object format;
+4. fairness and failure isolation.
 
-### Required correction
+C2A does NOT add user-facing notification UI yet. That is C2B.
 
-Keep direct replay-safe convergence if desired, but after applying an actual semantic edit:
-- call the existing centralized embedding enqueue path, preferably `enqueue_embed_object(session, obj.id, obj.user_id)`;
-- rely on Q1 central AI eligibility gate:
-  - AI=false => no job;
-  - AI=true => enqueue current-signature embedding work when missing/stale;
-- preserve existing signature dedupe;
-- replay after rolled-back local convergence must also be able to recreate the missing current-signature job idempotently;
-- do not enqueue if the object body/title is already identical and the current embedding provenance/job is already current.
+## 1. Telegram recurring cadence
 
-Do not create a Telegram-specific embedding mechanism.
+Change the installation default:
 
-### Tests
+`source_sync_telegram_mtproto_interval_seconds: 300 -> 60`
 
-Add focused tests proving:
-1. AI=false edit changes local body/title but creates zero embed jobs.
-2. AI=true edit creates exactly the required current-signature embed work.
-3. replay repair with AI=true does not create duplicate equivalent pending/running jobs.
-4. current embedding provenance / equivalent current-signature pending work is respected by existing dedupe.
+Requirements:
+- Telegram only;
+- do not change Gmail/Yandex/Mattermost/Teams defaults;
+- keep existing recurring queue scheduling architecture;
+- no busy loop;
+- no long-lived Telegram connection;
+- no new worker/daemon;
+- existing retry/failure cooldown semantics stay intact.
 
-## C1BR2 blocker 2 — preflight lookup failure occurs before delete and must not be recorded as an ambiguous destructive write
+Expose/retain the existing env override through normal Settings env parsing; do not add a second interval setting.
 
-Current `delete()` performs:
-- `fetch_message` preflight;
-- then destructive `delete_message`;
+Tests:
+- default Telegram recurring interval is 60;
+- explicit env override still works;
+- other providers unchanged;
+- recurring success re-arms at the configured Telegram interval.
 
-but both are inside the same exception block.
+## 2. New-message ingestion remains A3/A4 history based
 
-If `fetch_message` raises `TelegramMtprotoWriteUncertainError` because of timeout/server/network failure, the whole delete attempt is persisted as `ATTEMPT_UNCERTAIN`.
+Do not replace the accepted A3 history sync.
 
-That is incorrect write semantics:
-- no destructive delete request has yet been issued;
-- we know this approved operation did not perform the delete;
-- it must not be represented as an ambiguous post-write outcome.
+Each recurring Telegram account run still:
+1. reconciles folder/scope;
+2. performs Q1 embedding catch-up only if AI=true;
+3. fairly syncs bounded active peers;
+4. advances peer cursor.
 
-### Required correction
+New messages continue to materialize through the same canonical history normalization/materializer.
 
-Split delete preflight from destructive write classification.
+Do not create a second message-ingestion representation.
 
-Preflight phase:
-- provider-reference validation;
-- exact message lookup;
-- exact peer/message verification;
-- no destructive call yet.
+## 3. Recent-message reconciliation for remote edits/deletes
 
-Any failure during preflight must:
-- result in zero delete calls;
-- finish as a pre-write/definite failure under the existing attempt state model;
-- use sanitized wording such as verification unavailable/failed;
-- require a new approved plan for any later retry;
-- never become `ATTEMPT_UNCERTAIN`.
+The existing incremental history pass is insufficient for:
+- an older message edited after its message_id is already behind the history cursor;
+- a provider-deleted message that disappears from normal history results.
 
-Only once destructive `delete_message` has started may timeout/server/network ambiguity become `ATTEMPT_UNCERTAIN`.
+Add a bounded reconciliation pass over recently known canonical MTProto Objects.
 
-### Tests
+### Candidate selection
 
-Add:
-- fetch/preflight timeout -> `failed_definite`, zero delete calls;
-- fetch/preflight ServerError -> `failed_definite`, zero delete calls;
-- exact preflight success + delete timeout -> `uncertain`, one delete attempt;
-- replay of each state makes zero additional provider calls.
+For the current connected account only:
+- current user;
+- provider=telegram;
+- kind=chat_message;
+- metadata.transport=mtproto;
+- metadata.account_id == current account;
+- active A4.3 scope only;
+- non-tombstoned local objects;
+- positive message_id;
+- exact durable selection exists and scope_active=true.
 
-## Mandatory regression coverage still missing from C1BR focused tests
+Prefer recently occurred/updated objects.
 
-The C1BR task explicitly required these but they are not present in the published focused test file.
+Bound the work:
+- at most 20 exact-message provider checks per recurring account run;
+- at most 5 per peer per run;
+- preserve fairness across peers with a durable cursor in the existing recurring job payload;
+- no unbounded table scan;
+- no new DB state/table/migration.
 
-Add them now.
+A different bounded number is acceptable only if clearly justified in code/tests; do not exceed 50 provider message lookups per account run.
 
-### Edit A3 convergence
+### Provider lookup
 
-Test the actual A3 normalization/materialization path:
-1. C1B/C1BR edit succeeds;
-2. same provider message is later imported as an edited A3 `TelegramMtprotoHistoryEntry`;
-3. same object/external_id remains;
-4. body/title/edited_at converge;
-5. no duplicate object is created;
-6. direction remains outbound.
+Reuse/extend the C1B exact-message fetch primitive.
 
-### Delete passive-sync non-resurrection
+The fetch result must be rich enough to reconcile canonical state, including where available:
+- exact peer id;
+- exact message id;
+- text/body;
+- occurred_at;
+- edit_date / edited_at;
+- reply_to_message_id;
+- sender_peer_id;
+- outgoing flag;
+- topic_id;
+- service-message marker.
 
-Test:
-1. confirmed C1B delete tombstones the object;
-2. same provider message appears in a later passive A3 history page;
-3. materializer with normal passive `skip_hidden` semantics does not clear tombstone/resurrect active visibility;
-4. DB row remains retained.
+Never trust a result whose returned peer/message id does not match the frozen/local object route.
 
-### Real provider rejection through attempt state
+Malformed/mismatched result:
+- peer-local failure;
+- do not mutate local object;
+- continue other candidates.
 
-Existing C1BR tests prove representative Telethon errors map to
-`TelegramMtprotoWriteDefiniteError` at transport level and custom definite errors map to
-`failed_definite` at service level.
+### Remote edit
 
-Add at least one end-to-end focused test that injects a representative real Telethon deterministic rejection through the real transport boundary and proves the resulting
-`ExternalActionAttempt.state == failed_definite`.
+If exact provider message exists:
+- normalize through the same A3 canonical normalization function/path;
+- upsert through `TelegramObjectMaterializer`;
+- preserve same Object id/external_id;
+- update body/title/edited_at/direction/reply metadata consistently;
+- AI=false => zero AI jobs;
+- AI=true => normal signature-aware semantic update enqueue.
 
-## Preserve accepted C1BR design
+Do not manually maintain a divergent metadata format.
 
-Do NOT redesign:
-- tool registry;
-- approval/pending-action architecture;
-- frozen schemas;
-- C1AR route integrity;
-- exact-message delete preflight concept;
-- durable SUCCEEDED convergence metadata;
-- replay no-resend behavior;
-- mark-read changed=true / replay changed=false semantics;
-- error taxonomy already corrected for post-write mutation paths.
+### Remote delete
 
-No migration.
-No UI.
-No realtime.
-No production.
+If an exact provider lookup returns a trustworthy "not found/deleted" result for an object that previously existed:
+- tombstone the existing Object;
+- retain DB row;
+- do not purge;
+- do not create a deletion shadow object;
+- normal active Inbox/retrieval visibility must hide it via existing tombstone semantics.
+
+Be conservative:
+- timeout/server/network/auth/reference failure is NOT evidence of deletion;
+- only provider-confirmed absence for the exact peer/message may tombstone;
+- failure to verify leaves the local object unchanged.
+
+### Locally deleted messages
+
+Do not waste reconciliation budget repeatedly checking already tombstoned local objects.
+Passive A3 sync must still not resurrect them.
+
+## 4. Fairness / payload cursor
+
+Store reconciliation progress only in the existing recurring job payload.
+
+Requirements:
+- cursor identifies the last actually inspected reconciliation candidate;
+- advance across unchanged/edited/deleted candidates;
+- do not advance past uninspected candidates;
+- safe wrap at end;
+- repeated runs eventually revisit all eligible recent candidates;
+- scope changes must not strand the cursor;
+- payload remains non-secret.
+
+Do not add another recurring job per peer/message.
+
+## 5. Failure model
+
+Provider-wide/auth/config failure:
+- preserve existing source-sync retry/failure behavior;
+- do not convert a provider outage into mass local deletions.
+
+Peer/message-local mismatch/not-found:
+- mismatch => local failure/no mutation;
+- confirmed absence => tombstone exact object;
+- continue other peers/candidates where safe.
+
+FloodWait / retry-after:
+- honor existing Telegram recurring retry semantics;
+- do not hammer provider;
+- do not create parallel retries.
+
+## 6. Normalization debt cleanup
+
+C1A/C1B immediate MTProto send/edit currently build presentation titles with a 240-char slice, while A3 canonical history normalization uses the canonical 200-char bounded title with ellipsis.
+
+Unify this now so immediate mutation materialization and later history reconciliation produce the same title/signature.
+
+Preferred:
+- extract/reuse one canonical MTProto presentation-title helper;
+- C1A immediate send, C1B edit convergence, and A3 normalization use the same helper/limit;
+- no duplicate semantic re-embed merely because history later canonicalizes a long title.
+
+This is a compatibility cleanup, not a schema change.
+
+## 7. AI quarantine
+
+C2A must preserve Q1 exactly.
+
+With `TELEGRAM_MTPROTO_AI_ENABLED=false`:
+- new messages materialize;
+- remote edits materialize;
+- remote deletes tombstone;
+- Inbox/non-AI reads update;
+- zero embedding/summary/classification/correlation/LLM work.
+
+With flag=true:
+- normal existing AI semantic update behavior applies.
+
+## 8. Tests
+
+Add focused tests proving at minimum:
+
+### Cadence
+- Telegram default recurring interval=60;
+- env override respected;
+- other source defaults unaffected.
+
+### New message
+- recurring sync still imports newly arrived active-scope messages through A3.
+
+### Remote edit
+- object with old message_id behind latest history cursor is changed provider-side;
+- reconciliation detects it;
+- same object/external_id updated;
+- canonical title/body/edited_at/direction converge;
+- AI=false zero jobs;
+- AI=true current-signature embedding work exactly as existing pipeline allows.
+
+### Remote delete
+- confirmed exact-message absence tombstones same Object;
+- row retained;
+- active reads hide it;
+- transient fetch error does NOT tombstone;
+- peer mismatch does NOT tombstone;
+- tombstoned objects are not repeatedly reconciled/resurrected.
+
+### Bounds/fairness
+- <=20 provider lookups/account run;
+- <=5/peer run;
+- cursor equals last actually inspected candidate;
+- repeated runs cover >one-window candidates;
+- scope deactivation excludes candidates immediately;
+- one peer-local failure does not block others.
+
+### Regression
+- A3/A4 recurring sync still works;
+- Q1 AI quarantine green;
+- C1A send/reply green;
+- C1B edit/delete/mark-read green;
+- canonical title is identical between immediate send/edit and later A3 normalization for long first lines;
+- Alembic head remains `0046`.
+
+Run Ruff on changed Python files and `git diff --check`.
+
+## Explicitly out of scope C2A
+
+Do NOT implement:
+- long-lived Telethon event listener;
+- new daemon/microservice;
+- Redis/Celery/Rabbit/Kafka;
+- websocket push to clients;
+- OS/mobile notifications;
+- client UI;
+- production deploy/ref move;
+- production DB/env mutation;
+- migration `0047`;
+- Bot API retirement;
+- D-Bus/Android fallback.
 
 ## Branch / deliverable
 
-Continue:
-`review/telegram-mtproto-c1b-mutations`
+Start from latest `origin/main`.
 
-Start from exact:
-`C1BR_BASE_SHA=a7c36d8d7053ad62371207773a7aa142a9fe3407`
-
-Create exactly one corrective commit. Do not rewrite/squash C1B/C1BR.
-
-Run:
-- focused C1B/C1BR/C1BR2;
-- C1A/C1AR;
-- Telegram A1-A4.4/Q1;
-- MTProto history;
-- tool/action-plan/execution gateway;
-- relevant external-action suites;
-- Ruff changed Python files;
-- `git diff --check`;
-- Alembic head `0046`.
+Create/use:
+`review/telegram-mtproto-c2a-reconciliation`
 
 Return:
-- `C1BR_BASE_SHA=a7c36d8d7053ad62371207773a7aa142a9fe3407`
-- `C1BR2_SHA=<exact sha>`
+- `STARTING_SHA`
+- `C2A_SHA`
 - changed files
-- edit semantic enqueue rule
-- delete preflight failure classification rule
-- A3 edit convergence proof
-- tombstone non-resurrection proof
+- polling/cadence design
+- reconciliation candidate/cursor design
+- confirmed-delete rule
+- canonical title normalization design
 - focused/regression test results
 - Ruff
 - git diff --check
@@ -186,7 +303,7 @@ Return:
 - production untouched
 
 Final marker:
-`TELEGRAM_MTPROTO_C1BR2_MUTATIONS_READY`
+`TELEGRAM_MTPROTO_C2A_RECONCILIATION_READY`
 
 Then STOP for Architect review.
 
