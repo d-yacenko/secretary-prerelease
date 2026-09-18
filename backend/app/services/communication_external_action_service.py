@@ -1,5 +1,7 @@
 """Bounded Mattermost, Telegram, and Teams send_message execution after approval."""
 
+import asyncio
+import inspect
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -9,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.mattermost.credentials import MattermostAccountStore
 from app.connectors.mattermost.errors import (
     MattermostConfigurationError,
@@ -65,6 +68,17 @@ from app.connectors.telegram.errors import (
     TelegramWriteUncertainError,
 )
 from app.connectors.telegram.materialize import TelegramObjectMaterializer
+from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
+from app.connectors.telegram.mtproto_errors import (
+    TelegramMtprotoProviderReferenceInvalidError,
+    TelegramMtprotoWriteDefiniteError,
+    TelegramMtprotoWriteUncertainError,
+)
+from app.connectors.telegram.mtproto_transport import (
+    TelegramMtprotoSentMessage,
+    TelegramMtprotoTransport,
+    TelethonMtprotoTransport,
+)
 from app.connectors.telegram.normalize import build_external_id as build_telegram_external_id
 from app.connectors.telegram.normalize import provider_id_str
 from app.connectors.telegram.transport import TelegramHttpTransport, TelegramTransport
@@ -76,10 +90,13 @@ from app.db.models import (
     Object,
     TeamsAccount,
     TelegramAccount,
+    TelegramMtprotoAccount,
+    TelegramMtprotoChatSelection,
 )
 from app.db.session import SessionLocal
 from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.domain.task_lifecycle import TASK_STATUS_DELETED
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.provenance import REJECTED_STATE
 from app.tools.schemas import (
     MattermostSendRoute,
@@ -87,6 +104,7 @@ from app.tools.schemas import (
     SendMessageInput,
     SendMessageOutput,
     TeamsSendRoute,
+    TelegramMtprotoSendRoute,
     TelegramSendRoute,
     ToolError,
 )
@@ -141,6 +159,7 @@ class CommunicationExternalActionService:
         *,
         transport: MattermostTransport | None = None,
         telegram_transport: TelegramTransport | None = None,
+        telegram_mtproto_transport: TelegramMtprotoTransport | None = None,
         teams_transport: TeamsTransport | None = None,
         teams_oauth_service: TeamsOAuthService | None = None,
         attempt_session_factory=SessionLocal,
@@ -149,6 +168,7 @@ class CommunicationExternalActionService:
         self._user_id = user_id
         self._transport = transport
         self._telegram_transport = telegram_transport
+        self._telegram_mtproto_transport = telegram_mtproto_transport
         self._teams_transport = teams_transport
         self._teams_oauth_service = teams_oauth_service
         self._attempt_session_factory = attempt_session_factory
@@ -168,6 +188,8 @@ class CommunicationExternalActionService:
 
         obj = self._load_anchor(anchor_id)
         if obj.provider == _PROVIDER_TELEGRAM:
+            if self._is_mtproto_object(obj):
+                return self._prepare_telegram_mtproto(payload, obj, mode)
             return self._prepare_telegram(payload, obj, mode)
         if obj.provider == _PROVIDER_TEAMS:
             return self._prepare_teams(payload, obj, mode)
@@ -228,6 +250,15 @@ class CommunicationExternalActionService:
         if obj.kind != _KIND_REQUIRED:
             raise ToolError("anchor must be a chat_message")
         return obj
+
+    @staticmethod
+    def _is_mtproto_object(obj: Object) -> bool:
+        metadata = obj.metadata_ or {}
+        return (
+            obj.provider == TELEGRAM_PROVIDER
+            and obj.kind == TELEGRAM_KIND
+            and metadata.get("transport") == "mtproto"
+        )
 
     def _validated_route(self, obj: Object) -> dict[str, Any]:
         meta = dict(obj.metadata_ or {})
@@ -412,6 +443,113 @@ class CommunicationExternalActionService:
         )
         raise ToolError(error or "Mattermost write rejected")
 
+    def _prepare_telegram_mtproto(
+        self,
+        payload: SendMessageInput,
+        obj: Object,
+        mode: str,
+    ) -> SendMessageCanonicalInput:
+        if len(payload.body) > MAX_TELEGRAM_MESSAGE_BODY_CHARS:
+            raise ToolError("body exceeds Telegram maximum length")
+        route = self._validated_telegram_mtproto_route(obj, mode)
+        return SendMessageCanonicalInput(
+            provider="telegram",
+            mode=mode,
+            anchor_object_id=obj.id,
+            body=payload.body,
+            operation_id=generate_operation_id(),
+            route=TelegramMtprotoSendRoute(
+                account_id=route["account_id"],
+                peer_id=route["peer_id"],
+                source_message_id=route["source_message_id"],
+                reply_to_message_id=(
+                    route["source_message_id"] if mode == "reply" else None
+                ),
+                peer_title=route["peer_title"],
+            ),
+        )
+
+    def _validated_telegram_mtproto_route(self, obj: Object, mode: str) -> dict[str, Any]:
+        metadata = dict(obj.metadata_ or {})
+        try:
+            account_id = UUID(str(metadata.get("account_id")))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ToolError("malformed Telegram MTProto account_id") from exc
+        peer_id = self._parse_signed_peer_id(metadata.get("peer_id"))
+        raw_message_id = metadata.get("message_id")
+        source_message_id = None
+        if raw_message_id is not None:
+            source_message_id = self._parse_positive_message_id(raw_message_id)
+        if mode == "reply" and source_message_id is None:
+            raise ToolError("malformed Telegram MTProto message_id")
+        if self._session.scalar(
+            select(Object.id).where(
+                Object.id == obj.id,
+                Object.user_id == self._user_id,
+                telegram_mtproto_active_object_predicate(),
+            )
+        ) is None:
+            raise ToolError("Telegram MTProto peer is not in active scope")
+
+        store = self._mtproto_store()
+        account = store.get_by_id_for_user(account_id, self._user_id)
+        if account is None:
+            raise ToolError("Telegram MTProto account is not connected")
+        selection = store.get_selection(account.id, peer_id)
+        if selection is None or not selection.scope_active:
+            raise ToolError("Telegram MTProto peer is not in active scope")
+        try:
+            reference = store.decrypt_reference(selection)
+        except (TelegramMtprotoProviderReferenceInvalidError, ValueError) as exc:
+            raise ToolError("Telegram MTProto peer reference is invalid") from exc
+        except Exception as exc:
+            raise ToolError("Telegram MTProto peer reference is invalid") from exc
+        if not reference:
+            raise ToolError("Telegram MTProto peer reference is invalid")
+        if source_message_id is not None:
+            expected_external_id = f"mtproto|{account.id}|{peer_id}|{source_message_id}"
+            if obj.external_id != expected_external_id:
+                raise ToolError("Telegram MTProto message routing does not match")
+        return {
+            "account_id": account.id,
+            "peer_id": peer_id,
+            "source_message_id": source_message_id,
+            "peer_title": selection.title,
+        }
+
+    @staticmethod
+    def _parse_signed_peer_id(value: object) -> int:
+        if isinstance(value, bool):
+            raise ToolError("malformed Telegram MTProto peer_id")
+        try:
+            peer_id = int(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ToolError("malformed Telegram MTProto peer_id") from exc
+        if peer_id == 0 or peer_id < -(2**63) or peer_id > 2**63 - 1:
+            raise ToolError("malformed Telegram MTProto peer_id")
+        return peer_id
+
+    @staticmethod
+    def _parse_positive_message_id(value: object) -> int:
+        if isinstance(value, bool):
+            raise ToolError("malformed Telegram MTProto message_id")
+        try:
+            message_id = int(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ToolError("malformed Telegram MTProto message_id") from exc
+        if message_id <= 0:
+            raise ToolError("malformed Telegram MTProto message_id")
+        return message_id
+
+    def _mtproto_store(self) -> TelegramMtprotoAccountStore:
+        if not settings.secretary_credential_key.strip():
+            raise ToolError("Telegram MTProto credentials are not configured")
+        try:
+            encryption = CredentialEncryption(settings.secretary_credential_key)
+        except Exception as exc:
+            raise ToolError("Telegram MTProto credentials are not configured") from exc
+        return TelegramMtprotoAccountStore(self._session, encryption)
+
     def _prepare_telegram(
         self,
         payload: SendMessageInput,
@@ -541,6 +679,8 @@ class CommunicationExternalActionService:
     def _send_telegram(self, payload: SendMessageCanonicalInput) -> SendMessageOutput:
         if payload.provider != _PROVIDER_TELEGRAM:
             raise ToolError("unsupported send_message provider")
+        if isinstance(payload.route, TelegramMtprotoSendRoute):
+            return self._send_telegram_mtproto(payload)
         attempt, claimed = self._claim_started(payload.operation_id)
         if not claimed:
             return self._resume_existing_attempt(payload, attempt)
@@ -556,6 +696,149 @@ class CommunicationExternalActionService:
         except ToolError as exc:
             return self._definite_failure(payload, exc.message)
         return self._write_telegram_once(payload, account)
+
+    def _send_telegram_mtproto(
+        self, payload: SendMessageCanonicalInput
+    ) -> SendMessageOutput:
+        attempt, claimed = self._claim_started(payload.operation_id)
+        if not claimed:
+            return self._resume_existing_attempt(payload, attempt)
+        route = payload.telegram_mtproto_route
+        try:
+            store = self._mtproto_store()
+            account = store.get_by_id_for_user(route.account_id, self._user_id)
+            if account is None:
+                return self._definite_failure(payload, "Telegram MTProto account is not connected")
+            selection = store.get_selection(account.id, route.peer_id)
+            if selection is None or not selection.scope_active:
+                return self._definite_failure(payload, "Telegram MTProto peer is not in active scope")
+            reference = store.decrypt_reference(selection)
+            session = store.decrypt_session(account)
+            if not reference or not session:
+                return self._definite_failure(payload, "Telegram MTProto route is unavailable")
+        except (ToolError, TelegramMtprotoProviderReferenceInvalidError, ValueError) as exc:
+            return self._definite_failure(payload, str(exc) or "Telegram MTProto route is unavailable")
+        except Exception:  # noqa: BLE001 - durable route errors fail closed
+            return self._definite_failure(payload, "Telegram MTProto route is unavailable")
+
+        transport = self._telegram_mtproto_transport
+        if transport is None:
+            if settings.telegram_api_id <= 0 or not settings.telegram_api_hash.strip():
+                return self._definite_failure(payload, "Telegram MTProto is not configured")
+            transport = TelethonMtprotoTransport(
+                settings.telegram_api_id, settings.telegram_api_hash.strip()
+            )
+        try:
+            sent = transport.send_message(
+                session,
+                reference,
+                peer_id=route.peer_id,
+                text=payload.body,
+                reply_to_message_id=route.reply_to_message_id,
+            )
+            if inspect.isawaitable(sent):
+                sent = asyncio.run(sent)
+        except TelegramMtprotoWriteDefiniteError as exc:
+            return self._definite_failure(payload, exc.message)
+        except TelegramMtprotoWriteUncertainError as exc:
+            return self._after_uncertain_write(payload, exc.message)
+        except Exception:  # noqa: BLE001 - provider outcome is ambiguous after send
+            return self._after_uncertain_write(payload, _UNCERTAIN_DELIVERY_MESSAGE)
+
+        normalized = self._normalize_mtproto_sent(sent, payload, route)
+        if normalized is None:
+            return self._after_uncertain_write(payload, _UNCERTAIN_DELIVERY_MESSAGE)
+        provider_id = str(normalized["message_id"])
+        self._persist_attempt_state(
+            payload.operation_id,
+            ATTEMPT_SUCCEEDED,
+            provider_external_id=provider_id,
+            delivery_status="sent",
+        )
+        obj = self._materialize_mtproto_created(payload, account, selection, normalized)
+        return self._output(
+            payload,
+            provider_id,
+            object_id=obj.id if obj is not None else None,
+            delivery_status="sent",
+            changed=True,
+        )
+
+    def _normalize_mtproto_sent(
+        self,
+        sent: object,
+        payload: SendMessageCanonicalInput,
+        route: TelegramMtprotoSendRoute,
+    ) -> dict[str, Any] | None:
+        if isinstance(sent, TelegramMtprotoSentMessage):
+            data = {
+                "message_id": sent.message_id,
+                "peer_id": sent.peer_id,
+                "text": sent.text,
+                "occurred_at": sent.occurred_at,
+                "reply_to_message_id": sent.reply_to_message_id,
+                "sender_peer_id": sent.sender_peer_id,
+            }
+        elif isinstance(sent, dict):
+            data = dict(sent)
+        else:
+            return None
+        try:
+            message_id = self._parse_positive_message_id(data.get("message_id"))
+            peer_id = self._parse_signed_peer_id(data.get("peer_id"))
+        except ToolError:
+            return None
+        if peer_id != route.peer_id or data.get("text") != payload.body:
+            return None
+        returned_reply = data.get("reply_to_message_id")
+        if returned_reply is not None:
+            try:
+                returned_reply = self._parse_positive_message_id(returned_reply)
+            except ToolError:
+                return None
+        if payload.mode == "compose" and returned_reply is not None:
+            return None
+        if payload.mode == "reply" and returned_reply != route.reply_to_message_id:
+            return None
+        data["message_id"] = message_id
+        data["peer_id"] = peer_id
+        return data
+
+    def _materialize_mtproto_created(
+        self,
+        payload: SendMessageCanonicalInput,
+        account: TelegramMtprotoAccount,
+        selection: TelegramMtprotoChatSelection,
+        sent: dict[str, Any],
+    ) -> Object | None:
+        body = str(sent["text"])
+        title = f"{selection.title}: {body.splitlines()[0].strip()}"[:240]
+        normalized = {
+            "provider": TELEGRAM_PROVIDER,
+            "kind": TELEGRAM_KIND,
+            "origin": "source",
+            "state": "observed",
+            "external_id": f"mtproto|{account.id}|{selection.peer_id}|{sent['message_id']}",
+            "title": title,
+            "body": body,
+            "occurred_at": sent.get("occurred_at") or _utcnow(),
+            "metadata": {
+                "transport": "mtproto",
+                "account_id": str(account.id),
+                "peer_id": selection.peer_id,
+                "peer_kind": selection.peer_kind,
+                "message_id": sent["message_id"],
+                "reply_to_message_id": sent.get("reply_to_message_id"),
+                "peer_title": selection.title,
+                "direction": "outbound",
+                "sender_peer_id": sent.get("sender_peer_id"),
+            },
+        }
+        return self._telegram_materializer.upsert_mtproto_message(
+            user_id=self._user_id,
+            normalized=normalized,
+            skip_hidden=False,
+        ).obj
 
     def _write_telegram_once(
         self,
@@ -989,7 +1272,13 @@ class CommunicationExternalActionService:
         if payload.provider == _PROVIDER_TELEGRAM:
             if not provider_id:
                 return None
-            route = payload.telegram_route
+            route = payload.route
+            if isinstance(route, TelegramMtprotoSendRoute):
+                existing = self._telegram_materializer.find_existing(
+                    self._user_id,
+                    f"mtproto|{route.account_id}|{route.peer_id}|{provider_id}",
+                )
+                return existing.id if existing is not None else None
             existing = self._telegram_materializer.find_existing(
                 self._user_id,
                 build_telegram_external_id(route.business_connection_id, route.chat_id, provider_id),

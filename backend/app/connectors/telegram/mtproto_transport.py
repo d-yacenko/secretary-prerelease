@@ -34,6 +34,8 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoWriteDefiniteError,
+    TelegramMtprotoWriteUncertainError,
 )
 
 DISCOVERY_DIALOG_LIMIT = 500
@@ -127,6 +129,16 @@ class TelegramMtprotoHistoryEntry:
 
 
 @dataclass(frozen=True)
+class TelegramMtprotoSentMessage:
+    message_id: int
+    peer_id: int
+    text: str
+    occurred_at: datetime | None
+    reply_to_message_id: int | None
+    sender_peer_id: int | None
+
+
+@dataclass(frozen=True)
 class TelegramMtprotoHistoryPage:
     entries: tuple[TelegramMtprotoHistoryEntry, ...]
     has_more: bool
@@ -171,6 +183,17 @@ class TelegramMtprotoTransport(Protocol):
         max_message_id: int | None = None,
         reverse: bool = False,
     ) -> TelegramMtprotoHistoryPage:
+        ...
+
+    async def send_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> TelegramMtprotoSentMessage:
         ...
 
 
@@ -479,6 +502,77 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
+    async def send_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> TelegramMtprotoSentMessage:
+        client: TelegramClient | None = None
+        try:
+            input_peer = _input_peer_from_reference(provider_peer_reference)
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoWriteDefiniteError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            message = await client.send_message(
+                input_peer,
+                message=text,
+                reply_to=reply_to_message_id,
+            )
+            returned_peer = _peer_id_from_message_peer(getattr(message, "peer_id", None))
+            if returned_peer != peer_id:
+                raise TelegramMtprotoWriteUncertainError(
+                    "Telegram provider returned an unexpected peer"
+                )
+            message_id = getattr(message, "id", None)
+            if not isinstance(message_id, int) or message_id <= 0:
+                raise TelegramMtprotoWriteUncertainError(
+                    "Telegram provider returned an invalid message"
+                )
+            returned_text = getattr(message, "message", None)
+            if not isinstance(returned_text, str) or returned_text != text:
+                raise TelegramMtprotoWriteUncertainError(
+                    "Telegram provider returned an unexpected message"
+                )
+            return TelegramMtprotoSentMessage(
+                message_id=message_id,
+                peer_id=returned_peer,
+                text=returned_text,
+                occurred_at=_history_datetime(getattr(message, "date", None)),
+                reply_to_message_id=_positive_int(
+                    getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None)
+                ),
+                sender_peer_id=_peer_id_from_message(message),
+            )
+        except TelegramMtprotoWriteDefiniteError:
+            raise
+        except TelegramMtprotoWriteUncertainError:
+            raise
+        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError:
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram send outcome is uncertain; not retrying"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram peer is unavailable"
+            ) from None
+        except Exception:  # noqa: BLE001 - provider outcome is ambiguous after send
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram send outcome is uncertain; not retrying"
+            ) from None
+        finally:
+            await _disconnect(client)
+
 
 def _state_from_client(
     client: TelegramClient, state: TelegramMtprotoAuthState
@@ -784,6 +878,15 @@ def _peer_id_from_message(message: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return _positive_or_negative_int(peer_id)
+
+
+def _peer_id_from_message_peer(peer: object) -> int | None:
+    if peer is None:
+        return None
+    try:
+        return _positive_or_negative_int(utils.get_peer_id(peer))
+    except (TypeError, ValueError):
+        return None
 
 
 def _positive_int(value: object) -> int | None:

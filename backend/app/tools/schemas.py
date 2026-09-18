@@ -812,6 +812,34 @@ class TelegramSendRoute(BaseModel):
         return _strip_optional_text(value)
 
 
+class TelegramMtprotoSendRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: UUID
+    peer_id: int
+    source_message_id: int | None = None
+    reply_to_message_id: int | None = None
+    peer_title: str | None = None
+
+    @field_validator("peer_title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        return _strip_optional_text(value)
+
+    @field_validator("peer_id", "source_message_id", "reply_to_message_id")
+    @classmethod
+    def _positive_provider_id(cls, value: int | None, info) -> int | None:
+        if value is None:
+            return value
+        if isinstance(value, bool) or value == 0:
+            raise ValueError(f"{info.field_name} must be nonzero")
+        if info.field_name != "peer_id" and value <= 0:
+            raise ValueError(f"{info.field_name} must be positive")
+        if value < -(2**63) or value > 2**63 - 1:
+            raise ValueError(f"{info.field_name} is out of range")
+        return value
+
+
 class TeamsSendRoute(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -860,7 +888,7 @@ class SendMessageCanonicalInput(BaseModel):
     anchor_object_id: UUID
     body: str
     operation_id: str = Field(min_length=5, max_length=1024)
-    route: MattermostSendRoute | TelegramSendRoute | TeamsSendRoute
+    route: MattermostSendRoute | TelegramSendRoute | TelegramMtprotoSendRoute | TeamsSendRoute
 
     @model_validator(mode="before")
     @classmethod
@@ -907,7 +935,7 @@ class SendMessageCanonicalInput(BaseModel):
                 raise ValueError("compose mode must not include root_id")
             return self
         if self.provider == "telegram":
-            if not isinstance(self.route, TelegramSendRoute):
+            if not isinstance(self.route, (TelegramSendRoute, TelegramMtprotoSendRoute)):
                 raise ValueError("telegram send_message requires a Telegram route")
             if self.mode == "compose" and self.route.reply_to_message_id is not None:
                 raise ValueError("compose mode must not include reply_to_message_id")
@@ -936,6 +964,12 @@ class SendMessageCanonicalInput(BaseModel):
     def telegram_route(self) -> TelegramSendRoute:
         if not isinstance(self.route, TelegramSendRoute):
             raise TypeError("send_message route is not Telegram")
+        return self.route
+
+    @property
+    def telegram_mtproto_route(self) -> TelegramMtprotoSendRoute:
+        if not isinstance(self.route, TelegramMtprotoSendRoute):
+            raise TypeError("send_message route is not Telegram MTProto")
         return self.route
 
     @property
