@@ -1,189 +1,143 @@
-# Current task — Telegram MTProto Q1: AI quarantine + future activation
+# Current task — Telegram MTProto Q1R: AI quarantine corrective
 
-## Status
+## Review status
 
-- Telegram A1–A4.4: ACCEPTED in code / NOT production deployed.
-- Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- M2 production readiness retry: READY.
-- Production runtime/ref remains exact `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production Alembic remains exact `0041`.
-- Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values remain secret.
-- The previous project-wide HOLD is lifted for the narrow Q1 implementation below.
-- M3 production deployment remains NOT authorized.
-- Telegram Bot API retirement remains NOT authorized.
+Q1 implementation commit `b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595` was independently reviewed and is **REJECTED pending correction**.
 
-## Product decision
+The architecture is retained:
+- `TELEGRAM_MTPROTO_AI_ENABLED=false` by default;
+- MTProto transport/storage/Inbox remain usable;
+- canonical MTProto objects are excluded from ML/LLM while disabled;
+- no schema migration;
+- future true enables AI with bounded catch-up.
 
-Secretary will finish Telegram MTProto as a full non-AI communication transport even while Telegram's AI/API clarification is pending.
+Production remains untouched:
+- runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- Alembic `0041`;
+- M3 not authorized.
 
-Until an affirmative clarification is accepted, MTProto Telegram objects may be synchronized, stored and shown to the user as ordinary Inbox/message data, but must not enter any ML/LLM processing path.
+## Q1R blockers to correct
 
-A single installation-level capability flag will later enable the AI path if permitted:
+### 1. Catch-up can starve forever
 
-`TELEGRAM_MTPROTO_AI_ENABLED=false`
+Current Q1 catch-up selects the first 10 active MTProto objects and only afterwards checks whether each already has a current embedding / pending job.
 
-Default is fail-closed `false`.
+Therefore if those first 10 are already current or pending, later missing/stale objects are never reached.
 
-The flag controls only AI/ML eligibility. It must NOT disable MTProto authentication, folder/scope reconciliation, history sync, ordinary storage, ordinary Inbox visibility, or future communication CRUD.
+Fix the catch-up so repeated recurring runs **provably converge**.
 
-## Canonical MTProto object
+Preferred approach:
+- maintain a bounded scan cursor in the existing recurring Telegram job payload, analogous to the existing peer cursor;
+- scan a bounded ordered window each run;
+- advance the cursor regardless of whether a scanned object was already current/pending;
+- enqueue at most 10 missing/stale objects per run;
+- wrap safely at end;
+- preserve ownership, active scope, account match and canonical MTProto checks;
+- remain idempotent and dedupe pending/running equivalent embed jobs;
+- no new scheduler/daemon/table/migration.
 
-The quarantine applies only when all are true:
+An equivalent bounded design is acceptable only if it cannot be permanently blocked by already-current early rows.
 
-- `provider == "telegram"`
-- `kind == "chat_message"`
-- `metadata.transport == "mtproto"`
+### 2. AI capability must not become a global user-visibility gate
 
-Legacy/Bot API Telegram objects are not affected by Q1.
+Q1 replaced accepted A4.3 transport visibility with the AI predicate inside shared deterministic read services.
 
-Existing A4.3 `scope_active` semantics remain unchanged and independent from AI eligibility.
+This is incorrect where those services back ordinary user-facing APIs.
 
-## Q1 required implementation
+In particular `GraphService` is used directly by `backend/app/api/routes/graph.py` for ordinary object/neighbors/context endpoints. With AI disabled, active MTProto objects must not disappear merely because the graph API is non-AI.
 
-### 1. Configuration
+Restore the separation:
 
-Add:
+- ordinary/non-AI reads use the accepted `telegram_mtproto_active_object_predicate`;
+- assistant/LLM/retrieval/context paths use the new AI eligibility gate.
 
-`telegram_mtproto_ai_enabled: bool = False`
+Audit at minimum:
+- `GraphService`
+- `GraphWorkspaceService`
+- `ObjectQueryService`
+- `conversation_member_read`
+- their actual callers.
 
-to backend settings.
+If a shared service has both AI and non-AI callers, introduce an explicit AI-only mode/caller boundary rather than globally changing its semantics.
 
-Expose `TELEGRAM_MTPROTO_AI_ENABLED` to both api and worker in `infra/compose.yaml` with default `false`.
+The invariant is:
+`TELEGRAM_MTPROTO_AI_ENABLED` controls AI/ML eligibility only, not ordinary transport visibility.
 
-No DB migration and no new table/column.
+Inbox behavior from Q1 must remain unchanged: active MTProto visible, inactive hidden by A4.3.
 
-### 2. Separate AI eligibility policy
+### 3. Existing queued AI work must fail closed after true -> false
 
-Do NOT overload or change the meaning of `telegram_mtproto_active_object_predicate`.
+Do not rely only on enqueue-time filtering.
 
-Create a separate, centrally reusable fail-closed Telegram MTProto AI eligibility policy/predicate.
+If the flag is changed from true to false while Telegram AI jobs are already PENDING/RUNNING, any handler that can consume a canonical MTProto object through AI/ML must re-check eligibility before doing the work.
 
-It must have SQLAlchemy and raw-SQL equivalents where required by existing retrieval candidate paths, analogous to the current A4.3 visibility helpers.
+Audit object-specific background handlers, including at minimum:
+- embed;
+- summarize;
+- correlate;
+- auto-label/classification;
+- temporal/AI-derived processing where applicable;
+- conversation/proactive processing paths if they can consume MTProto content.
 
-When the flag is false:
-- canonical MTProto objects are AI-ineligible;
-- all other objects keep current behavior.
+Use the central eligibility policy. Do not duplicate ad-hoc provider checks.
 
-When true:
-- canonical MTProto objects keep the existing A4.3 active-scope behavior.
+A queued job created while enabled must become a safe no-op if the flag is disabled before execution.
 
-Malformed metadata must fail closed for AI use.
+### 4. Close the Q1 test gaps
 
-### 3. No embedding or AI-derived enqueue while disabled
+Add focused tests proving all of the following, not just relying on old suites:
 
-For canonical MTProto objects with the flag false:
+- active scope MTProto remains visible in `RecentSourceService` when AI=false;
+- inactive scope MTProto remains hidden;
+- ordinary graph API/service visibility remains based on A4.3 and does not disappear only because AI=false;
+- assistant/retrieval/context path still excludes the same active object when AI=false;
+- direct object context cannot bypass the gate;
+- AI=true restores prior A4.3 assistant visibility;
+- catch-up no-op when false;
+- catch-up with >10 rows progresses past already-current/pending leading rows and reaches later stale/missing rows;
+- repeated runs converge;
+- inactive/foreign-account/malformed MTProto rows are never enqueued;
+- pending/running equivalent embed jobs are not duplicated;
+- a job queued while true is a no-op if false before handler execution;
+- Bot API Telegram and other providers remain unaffected;
+- Alembic head remains `0046`.
 
-- creation must not enqueue `embed_object`;
-- semantic updates must not enqueue `embed_object`;
-- no other Telegram-specific path may enqueue AI/ML-derived work for those objects.
+## Scope
 
-Ordinary materialization must still succeed and report zero AI jobs enqueued.
+Start from the published Q1 review commit:
+`b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595`
 
-Bot API Telegram and other providers retain existing enqueue behavior.
+Create a new correction commit on:
+`review/telegram-mtproto-q1-ai-quarantine`
 
-### 4. AI read-path quarantine
+Do not rewrite or squash the existing Q1 commit.
 
-Inventory the current A4.3 surfaces and all assistant/AI callers before changing them.
-
-When the flag is false, canonical MTProto objects must not be consumable by:
-
-- embedding/vector candidate paths;
-- semantic retrieval;
-- LLM/assistant context construction;
-- direct "Ask Secretary" object context;
-- assistant object-query/tool paths;
-- AI context/graph expansion;
-- conversation-member discovery when used to construct assistant context;
-- proactive AI processing, summarization, classification, correlation or other ML-derived processing if any such path can currently consume `chat_message` objects.
-
-The implementation must be centralized enough that adding another assistant retrieval path cannot trivially bypass the quarantine.
-
-### 5. Preserve non-AI user visibility
-
-This is essential.
-
-With the flag false and `scope_active=true`, MTProto messages MUST remain visible in ordinary non-AI product surfaces needed for a messenger, including the Inbox / `RecentSourceService`.
-
-Do not hide an active MTProto object merely because AI is disabled.
-
-Do not delete, tombstone, redact, mutate, or purge its body.
-
-Existing A4.3 out-of-scope behavior still applies: `scope_active=false` hides it according to the accepted A4.3 contract.
-
-If an existing Search surface mixes lexical and semantic behavior and cannot safely expose MTProto without invoking ML, fail closed for that Search path in Q1 and document the limitation. Do not add a new search architecture in Q1.
-
-### 6. Future one-flag activation / bounded catch-up
-
-Q1 must prepare the future `false -> true` transition so no redesign is needed.
-
-When the flag becomes true, existing active MTProto objects accumulated while disabled must be able to receive their missing/current embeddings through an idempotent, bounded catch-up using the existing Postgres job queue and existing `embed_object` job type.
-
-Requirements:
-- no new daemon;
-- no Redis/Celery/Rabbit/Kafka;
-- no unbounded full-table enqueue in one transaction/run;
-- reuse existing Telegram recurring/source-sync lane or another existing bounded recurring mechanism;
-- only active, correctly owned canonical MTProto objects are eligible;
-- existing current embeddings are not duplicated;
-- pending/running equivalent embedding work is not duplicated;
-- repeated runs converge safely.
-
-The catch-up must do nothing while the flag is false.
-
-### 7. Tests
-
-Add focused tests proving at minimum:
-
-- settings default false;
-- compose exposes the flag identically to api and worker, default false;
-- MTProto create/update stores data but enqueues zero embedding jobs when false;
-- Bot API Telegram still enqueues as before;
-- another provider is unaffected;
-- active MTProto object remains in Inbox when false;
-- inactive MTProto object remains hidden per A4.3;
-- retrieval/assistant/context AI paths exclude active MTProto objects when false;
-- direct Ask Secretary / exact-target context cannot bypass the gate;
-- true restores the prior A4.3 AI-visible behavior;
-- bounded catch-up is no-op when false;
-- bounded catch-up enqueues only missing/stale active MTProto embeddings when true;
-- catch-up is idempotent and bounded;
-- malformed metadata fails closed;
-- no schema migration is introduced.
-
-Run focused Telegram/A4.3/Q1 tests plus relevant retrieval/context/assistant/embedding tests and Ruff on changed Python files.
-
-## Explicitly out of scope for Q1
-
-Do NOT implement yet:
-
-- MTProto send/reply/edit/delete/read mutations;
-- realtime Telegram update subscription;
-- client Telegram composer/reply UI;
-- mobile notifications;
-- production deployment;
-- production ref movement;
-- production DB/schema mutation;
-- production `.env` change;
-- Bot API removal;
-- D-Bus/Android fallback;
-- migration `0047`.
+No production access/mutation.
+No main update.
+No migration.
+No CRUD/send/reply work yet.
+No UI work.
 
 ## Deliverable
 
 Return:
-
-- exact starting SHA;
-- exact implementation commit SHA;
-- changed files;
-- concise description of the central AI gate and catch-up mechanism;
+- Q1_BASE_SHA=`b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595`
+- Q1R_SHA
+- changed files
+- concise explanation of:
+  - convergence mechanism;
+  - AI-vs-non-AI read boundary;
+  - queued-job fail-closed guard;
 - focused test commands/results;
-- Ruff result;
-- Alembic head proof remains `0046`;
-- confirmation no production mutation occurred.
+- Telegram regression result;
+- relevant graph/retrieval/context/background test results;
+- Ruff;
+- git diff --check;
+- Alembic head `0046`;
+- confirmation production untouched.
 
 Final marker:
-
-`TELEGRAM_MTPROTO_Q1_AI_QUARANTINE_READY`
+`TELEGRAM_MTPROTO_Q1R_AI_QUARANTINE_READY`
 
 Then STOP for Architect review.
 
