@@ -1,214 +1,225 @@
-# Current task — Telegram MTProto C2AR: reconciliation fairness + provider backoff corrective
+# Current task — Telegram MTProto C2AR2: recurring recent-head + sweep correctness
 
 ## Review status
 
-C2A implementation:
+C2A:
 `ec44c406907b52eec95a879f0f05ccd404689859`
 
-Independent review result: **REJECTED pending C2AR corrective**.
+C2AR:
+`c1044a22b81f132afdc97c711b1051dc3389c64c`
 
-Accepted C2A parts:
-- Telegram default recurring cadence 300 -> 60 seconds;
-- existing env override retained;
-- A3 materializer reused for remote edits;
-- confirmed exact absence is the intended delete/tombstone signal;
-- canonical MTProto presentation-title helper is shared by history/send/edit;
-- Q1 AI quarantine remains intact.
+Independent review result: **C2AR REJECTED pending narrow C2AR2 corrective**.
+
+Accepted C2AR work:
+- per-peer progress replaced the unsafe global Object cursor;
+- active selections drive peer scheduling;
+- candidate query is current-user/current-account/canonical MTProto and non-tombstoned;
+- stable `occurred_at DESC, id DESC` ordering;
+- <=5 lookups/peer/run and <=20/account/run structure;
+- peer rotation;
+- FloodWait/server generic read failures now use provider-unavailable semantics rather than write-uncertain;
+- provider-wide unavailable errors propagate out of reconciliation.
 
 Production remains untouched:
-- production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- production Alembic `0041`;
+- runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- Alembic `0041`;
 - M3 not authorized.
 
-## Blocker 1 — current global Object cursor can starve eligible messages
+## Blocker 1 — per-peer sweep never wraps/revisits the recent head
 
-Current C2A reconciliation selects up to 100 rows using only:
-- user_id;
-- provider=telegram;
-- kind=chat_message;
-- deleted_at is null;
-- Object.id ordering.
+Current per-peer cursor query only selects rows older than the stored
+`(occurred_at, id)` cursor.
 
-It then filters transport/account/peer/scope in Python.
+When it reaches the oldest eligible row:
+- the next query is empty;
+- the cursor remains at the old tail;
+- there is no reset/wrap;
+- that peer can stop being reconciled forever.
 
-Problems:
+Additionally, a new recent object or a remote edit of a recently checked object can sit above the cursor and is not revisited promptly while the sweep moves through older history.
 
-1. A window containing legacy Bot Telegram, another MTProto account, inactive-scope rows, or malformed rows can be repeatedly rescanned because the reconciliation cursor only advances for a row that reaches an exact provider lookup.
-2. After a peer reaches the 5-lookups-per-peer budget, later rows for that peer are skipped. The loop may then inspect another peer and advance the global cursor beyond those skipped rows. On wrap, the same first five rows of the busy peer can be selected again, so some messages can be permanently starved.
-3. Ordering by UUID Object.id is not a recent-message policy and does not satisfy C2A's near-realtime intent.
+That does not satisfy near-realtime reconciliation.
 
 ### Required design
 
-Redesign candidate scheduling so all of these are simultaneously true:
+Keep a bounded per-peer sweep cursor, but combine it with **recurring recent-head sampling**.
 
-- only canonical MTProto objects for the current account and active A4.3 scope are reconciliation candidates;
-- non-tombstoned only;
-- malformed metadata fails closed but cannot permanently pin progress;
-- recent objects are preferred;
-- max 20 provider lookups/account/run;
-- max 5 provider lookups/peer/run;
-- no eligible candidate is permanently skipped because another peer is busy;
-- repeated runs converge/fairly revisit candidates;
-- scope deactivation excludes a peer immediately;
-- no new DB table/migration/job/daemon.
+The exact split is implementation-defined, but must prove both properties:
 
-Preferred approach:
+1. Recent head is revisited on a bounded cadence independent of sweep depth.
+2. Older eligible objects still make progress and eventually get revisited.
 
-- drive reconciliation by the already-active durable selections/peers;
-- maintain non-secret reconciliation progress in the existing recurring job payload, with per-peer cursors (or an equivalent provably fair structure);
-- for each peer, query only that account+peer's canonical active non-tombstoned MTProto objects;
-- order recent-first using a stable tuple such as `occurred_at DESC, id DESC` (or another stable recent-first order);
-- inspect up to 5 per peer and rotate through active peers until the account total reaches 20;
-- a peer cursor wraps safely after reaching the end;
-- removed/inactive peers have stale cursor state ignored/pruned;
-- do not advance a peer past provider-uninspected candidates.
+Preferred simple design per serviced peer/run:
+- reserve part of the <=5 provider-lookup budget for the newest eligible objects (head sample);
+- reserve the remaining budget for the persistent older sweep cursor;
+- dedupe objects selected by both portions in the same run;
+- when the sweep reaches end, reset/wrap the sweep cursor safely to the head for the next sweep epoch;
+- a newly inserted/recent object after cursor advancement must be eligible for a prompt head check, not wait for a full historical sweep.
 
-An alternative implementation is acceptable only if focused tests prove no starvation with multiple busy peers and mixed non-candidates.
+An alternating head-run/sweep-run strategy is also acceptable if recent head latency remains bounded and tests prove older convergence.
 
-Do not use unsafe JSON integer casts. Reuse accepted string/text-safe metadata filtering patterns where appropriate.
+Do not increase:
+- 5 provider lookups/peer/run;
+- 20 provider lookups/account/run.
 
-## Blocker 2 — FloodWait/provider-wide transient failures are swallowed
+No new DB state/table/job/daemon.
 
-Current `TelethonMtprotoTransport.fetch_message()` has no explicit FloodWait path.
-FloodWait and many lookup transport failures become `TelegramMtprotoWriteUncertainError`.
+## Blocker 2 — local malformed candidates must fail closed without provider calls or cursor pinning
 
-`reconcile_recent_messages()` catches that and continues with more provider lookups.
+C2AR no longer validates `metadata.message_id` before calling `fetch_message`.
 
-This violates the accepted Telegram recurring backoff contract.
+Required:
+- message_id must be an actual int, bool excluded, >0;
+- malformed local metadata => zero provider lookup for that row;
+- it must not consume provider-lookup budget;
+- local scan/sweep progress must advance past it so it cannot pin the peer forever;
+- no unsafe JSON integer cast is required;
+- no local mutation/tombstone based on malformed metadata.
 
-### Required error semantics
+If other canonical metadata required for reconciliation is malformed, apply the same fail-closed/progress rule.
 
-Exact-message reconciliation is a read, not an external write.
+Distinguish:
+- bounded local rows inspected;
+- actual provider lookups issued.
 
-For lookup:
-- FloodWait -> `TelegramMtprotoProviderUnavailableError` with sanitized `retry_after_seconds`;
-- Telegram/server/network/provider-wide transient failure -> provider-unavailable/transient error appropriate for existing recurring sync classification;
-- auth/session invalid -> existing non-retryable authentication failure semantics;
-- malformed local durable reference / exact peer mismatch -> peer-local failure, no mutation;
-- trustworthy exact absence -> normal `None`/absence signal, not an exception.
+Hard provider limits are based on actual provider calls.
 
-At reconciliation layer:
-- provider-wide transient/auth/config failures MUST propagate out of the account recurring run so the existing worker/finalizer applies the Telegram retry/failure policy;
-- do not continue issuing the remaining lookup budget after FloodWait/provider outage;
-- peer/message-local malformed/mismatch errors may be isolated and continue.
+## Blocker 3 — lookup auth failures must use canonical authentication semantics
 
-Do not misuse `TelegramMtprotoWriteUncertainError` for read-only lookup backoff.
+`fetch_message()` currently maps revoked/invalid auth/session conditions to
+`TelegramMtprotoWriteDefiniteError`.
 
-### Tests
+The recurring worker therefore classifies them as `unknown`, not the existing Telegram
+`authentication` failure.
 
-Prove:
-- FloodWait on first reconciliation lookup aborts further lookups;
-- recurring failure classification is transient/retryable and preserves retry_after;
-- ServerError/provider-wide transient similarly does not cause mass tombstone or continued hammering;
-- exact absence still tombstones;
-- peer-local mismatch does not abort unrelated peers.
+Required:
+- revoked/invalid auth/session in read-only `fetch_message()` ->
+  `TelegramMtprotoAuthorizationInvalidError`;
+- recurring reconciliation propagates it;
+- `classify_telegram_sync_failure()` returns authentication/non-retryable;
+- peer-local lookup rejection is not mislabeled as account authentication.
 
-## Blocker 3 — missing focused acceptance coverage
+For deterministic peer/message-local read rejection, use an existing suitable peer-local error or add a narrow read-only lookup-rejected error and isolate it at reconciliation level. Do not abort all other peers for a single malformed/inaccessible message unless the error is genuinely account/provider-wide.
 
-Add tests that were required by C2A but are not present in the current 8-test focused file:
+## Blocker 4 — real backoff integration must be tested, not only a fake final exception
 
-### Candidate isolation
-- legacy Telegram Bot object before eligible MTProto rows cannot pin/starve reconciliation;
-- MTProto object for another account cannot pin/starve current account;
-- inactive-scope peer is not fetched;
-- malformed candidate does not permanently pin progress.
+Current focused FloodWait test injects a prebuilt
+`TelegramMtprotoProviderUnavailableError("busy", 23)`.
 
-### Multi-peer fairness
-Construct at least:
-- one busy peer with >10 eligible objects;
-- a second peer with eligible objects;
-- optionally a third peer.
+It does not prove the new Telethon branch works.
 
-Across repeated runs prove:
-- <=5 lookups/peer/run;
-- <=20 lookups/account/run;
-- second peer is serviced even when first peer is busy;
-- every eligible object in the bounded test set is eventually inspected;
-- cursor/progress state never advances past an object that is silently lost forever.
+Add tests proving:
 
-### Recent-first behavior
-Prove newly/recently occurred objects are considered before materially older objects for a peer, while repeated runs still eventually revisit older eligible rows.
+1. real/fake-Telethon `FloodWaitError` raised by `get_messages` is translated by
+   `TelethonMtprotoTransport.fetch_message()` to
+   `TelegramMtprotoProviderUnavailableError` with the same retry_after seconds;
+2. reconciliation stops after that lookup;
+3. `classify_telegram_sync_failure()` returns
+   `("transient", True, retry_after)`;
+4. recurring finalization/queue uses the retry_after delay for the Telegram job;
+5. auth-invalid lookup classifies as `authentication, False`.
 
-### Scope changes
-- deactivate a peer between runs;
-- next run performs zero exact-message lookups for that peer;
-- stale payload progress for it does not block remaining active peers.
+## Mandatory focused coverage
+
+Add/strengthen tests for all of these.
+
+### Head + sweep + wrap
+- peer has > one sweep window;
+- repeated runs advance older sweep;
+- end-of-sweep wraps safely;
+- after wrap, recent rows are revisited;
+- insert a new most-recent eligible object after cursor already advanced: it is checked on bounded recent-head cadence;
+- remote edit to a recent already-checked object is discovered without waiting for full sweep;
+- every older bounded-test object is eventually inspected too.
+
+### Multi-peer bounds
+- busy peer + second/third peers;
+- actual provider calls <=5/peer/run;
+- actual provider calls <=20/account/run;
+- rotation prevents peer starvation.
+
+### Candidate sanitation
+- malformed message_id => zero provider call for that row;
+- malformed row does not pin progress;
+- legacy Bot object ignored;
+- other-account MTProto object ignored;
+- inactive scope peer ignored;
+- deactivated peer stale cursor is ignored/pruned from payload.
+
+### Error isolation
+- provider-wide FloodWait/server/auth aborts account run as appropriate;
+- peer-local reference/message rejection does not block unrelated peers;
+- mismatch result does not mutate/tombstone and unrelated peer continues;
+- exact trustworthy absence still tombstones.
 
 ### Existing behavior
-- recurring A3 new-message import still works;
-- remote edit same object/external_id;
-- AI=false zero AI jobs;
-- AI=true normal signature-aware enqueue;
-- confirmed absence tombstones exact object;
-- transient provider failure never tombstones;
-- canonical long-title send/edit/history normalization remains identical;
-- C1A/C1B/Q1 regressions remain green;
+- default cadence remains 60;
+- env override works;
+- A3 new-message sync remains;
+- remote edit uses same object/external_id;
+- Q1 AI=false zero AI work;
+- AI=true signature-aware semantic update;
+- canonical title helper remains shared;
+- C1A/C1B regressions remain green;
 - Alembic head remains 0046.
 
-## Preserve accepted C2A work
+## Preserve accepted design
 
-Keep:
-- 60-second Telegram default cadence;
-- environment override;
-- no daemon/listener/new worker;
-- A3 history for new messages;
-- canonical title helper;
+Do NOT redesign:
+- existing recurring Postgres queue;
+- 60-second default cadence;
+- A3 history/materializer new-message path;
+- per-peer reconciliation state in recurring payload;
+- exact-message reconciliation;
+- confirmed exact absence -> tombstone;
 - Q1 AI quarantine;
-- exact-message reconciliation concept;
-- confirmed absence -> tombstone;
-- no migration.
-
-## Scope
-
-Continue branch:
-`review/telegram-mtproto-c2a-reconciliation`
-
-Start from exact:
-`C2A_BASE_SHA=ec44c406907b52eec95a879f0f05ccd404689859`
-
-Create one corrective commit on top.
-Do not rewrite/squash C2A.
+- canonical title helper.
 
 Do NOT implement:
-- C2B notification/event surface;
+- C2B notifications;
 - websocket/client push;
-- OS/mobile notifications;
 - client UI;
-- long-lived Telethon listener;
+- long-lived Telegram listener;
 - production deploy/ref move;
 - migration 0047;
 - Bot API retirement.
 
-## Required checks
+## Branch / deliverable
+
+Continue:
+`review/telegram-mtproto-c2a-reconciliation`
+
+Start from exact:
+`C2AR_BASE_SHA=c1044a22b81f132afdc97c711b1051dc3389c64c`
+
+Create one corrective commit on top. Do not rewrite/squash C2A/C2AR.
 
 Run:
-- focused C2A/C2AR tests;
-- Telegram A1-A4.4/Q1/C1A/C1B regressions;
-- recurring scheduler/queue/worker Telegram failure tests;
-- action-plan/external-action regressions as relevant;
+- focused C2A/C2AR/C2AR2 tests;
+- Telegram A1-A4.4/Q1/C1A/C1B;
+- Telegram recurring scheduler/queue/worker failure/backoff tests;
 - Ruff changed Python files;
 - git diff --check;
 - Alembic head 0046.
 
-## Deliverable
-
 Return:
-- `C2A_BASE_SHA=ec44c406907b52eec95a879f0f05ccd404689859`
-- `C2AR_SHA=<exact sha>`
+- `C2AR_BASE_SHA=c1044a22b81f132afdc97c711b1051dc3389c64c`
+- `C2AR2_SHA=<exact sha>`
 - changed files
-- exact fairness/cursor design
-- recent-first ordering rule
-- exact provider-transient/FloodWait rule
-- proof <=20/account and <=5/peer
-- convergence/starvation test results
-- focused/regression tests
+- exact head-vs-sweep budget/cursor rule
+- wrap rule
+- malformed-candidate progress rule
+- read-error taxonomy
+- real FloodWait/backoff integration proof
+- <=20/account and <=5/peer proof using actual provider call counts
+- focused/regression results
 - Ruff
 - git diff --check
-- Alembic head 0046
+- Alembic 0046
 - production untouched
 
 Final marker:
-`TELEGRAM_MTPROTO_C2AR_RECONCILIATION_READY`
+`TELEGRAM_MTPROTO_C2AR2_RECONCILIATION_READY`
 
 Then STOP for Architect review.
 
