@@ -13,7 +13,6 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.constants import MAX_TELEGRAM_MESSAGE_BODY_CHARS
-from app.connectors.telegram.materialize import TelegramObjectMaterializer
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoProviderReferenceInvalidError,
@@ -76,7 +75,6 @@ class TelegramMtprotoMutationService:
         self._user_id = user_id
         self._transport = transport
         self._attempt_session_factory = attempt_session_factory
-        self._materializer = TelegramObjectMaterializer(session)
 
     def prepare_edit(self, payload: TelegramMtprotoEditInput) -> TelegramMtprotoEditCanonicalInput:
         obj, route = self._prepare_route(payload.object_id, operation="edit")
@@ -116,28 +114,26 @@ class TelegramMtprotoMutationService:
             return self._definite(payload.operation_id, exc.message)
         except TelegramMtprotoWriteUncertainError as exc:
             return self._uncertain(payload.operation_id, exc.message)
+        except ToolError:
+            raise
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
             return self._uncertain(payload.operation_id, _UNCERTAIN_MESSAGE)
         if not self._valid_result(result, route.peer_id, route.message_id, route.body):
             return self._uncertain(payload.operation_id, _UNCERTAIN_MESSAGE)
         edited_at = result.get("edited_at") or _utcnow()
-        metadata = dict(obj.metadata_ or {})
-        metadata["edited_at"] = edited_at.isoformat() if isinstance(edited_at, datetime) else str(edited_at)
-        normalized = {
-            "provider": "telegram",
-            "kind": "chat_message",
-            "origin": obj.origin,
-            "state": obj.state,
-            "external_id": obj.external_id,
-            "title": f"{selection.title}: {route.body.splitlines()[0].strip()}"[:240],
+        edited_at_value = edited_at.isoformat() if isinstance(edited_at, datetime) else str(edited_at)
+        title = f"{selection.title}: {route.body.splitlines()[0].strip()}"[:240]
+        convergence = {
             "body": route.body,
-            "occurred_at": obj.occurred_at,
-            "metadata": metadata,
+            "title": title,
+            "edited_at": edited_at_value,
         }
-        self._materializer.upsert_mtproto_message(
-            user_id=self._user_id, normalized=normalized, skip_hidden=False
+        self._persist(
+            payload.operation_id,
+            ATTEMPT_SUCCEEDED,
+            result_metadata=convergence,
         )
-        self._persist(payload.operation_id, ATTEMPT_SUCCEEDED)
+        self._converge_edit(payload, convergence)
         return TelegramMtprotoMutationOutput(
             operation="edit", object_id=obj.id, status="succeeded", changed=True
         )
@@ -160,6 +156,22 @@ class TelegramMtprotoMutationService:
         except ToolError as exc:
             return self._definite(payload.operation_id, str(exc))
         try:
+            verified = self._call_transport(
+                "fetch_message",
+                session,
+                reference,
+                peer_id=route.peer_id,
+                message_id=route.message_id,
+            )
+            if not (
+                isinstance(verified, dict)
+                and verified.get("peer_id") == route.peer_id
+                and verified.get("message_id") == route.message_id
+            ):
+                return self._definite(
+                    payload.operation_id,
+                    "Telegram message is not present in the selected peer",
+                )
             result = self._call_transport(
                 "delete_message",
                 session,
@@ -171,13 +183,18 @@ class TelegramMtprotoMutationService:
             return self._definite(payload.operation_id, exc.message)
         except TelegramMtprotoWriteUncertainError as exc:
             return self._uncertain(payload.operation_id, exc.message)
+        except ToolError:
+            raise
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
             return self._uncertain(payload.operation_id, _UNCERTAIN_MESSAGE)
         if result is not True:
             return self._definite(payload.operation_id, "Telegram message deletion was rejected")
-        tombstone_object(obj)
-        self._session.flush()
-        self._persist(payload.operation_id, ATTEMPT_SUCCEEDED)
+        self._persist(
+            payload.operation_id,
+            ATTEMPT_SUCCEEDED,
+            result_metadata={"peer_id": route.peer_id, "message_id": route.message_id},
+        )
+        self._converge_delete(payload)
         return TelegramMtprotoMutationOutput(
             operation="delete", object_id=obj.id, status="succeeded", changed=True
         )
@@ -221,7 +238,7 @@ class TelegramMtprotoMutationService:
             return self._definite(payload.operation_id, "Telegram mark-read was rejected")
         self._persist(payload.operation_id, ATTEMPT_SUCCEEDED)
         return TelegramMtprotoMutationOutput(
-            operation="mark_read", object_id=obj.id, status="succeeded", changed=False
+            operation="mark_read", object_id=obj.id, status="succeeded", changed=True
         )
 
     def _prepare_route(self, object_id: UUID, *, operation: str) -> tuple[Object, dict[str, Any]]:
@@ -373,7 +390,13 @@ class TelegramMtprotoMutationService:
         finally:
             session.close()
 
-    def _persist(self, operation_id: str, state: str, error: str | None = None) -> None:
+    def _persist(
+        self,
+        operation_id: str,
+        state: str,
+        error: str | None = None,
+        result_metadata: dict[str, Any] | None = None,
+    ) -> None:
         session = self._attempt_session_factory()
         try:
             attempt = session.scalar(
@@ -385,7 +408,10 @@ class TelegramMtprotoMutationService:
             if attempt is None:
                 return
             attempt.state = state
-            if error:
+            if result_metadata is not None:
+                attempt.result_metadata = result_metadata
+                flag_modified(attempt, "result_metadata")
+            elif error:
                 attempt.result_metadata = {"error": error[:500]}
                 flag_modified(attempt, "result_metadata")
             if state in {ATTEMPT_SUCCEEDED, ATTEMPT_FAILED_DEFINITE, ATTEMPT_UNCERTAIN}:
@@ -396,12 +422,50 @@ class TelegramMtprotoMutationService:
 
     def _resume(self, payload, attempt: ExternalActionAttempt, *, operation: str):
         if attempt.state == ATTEMPT_SUCCEEDED:
+            if operation == "edit":
+                self._converge_edit(payload, attempt.result_metadata or {})
+            elif operation == "delete":
+                self._converge_delete(payload)
             return TelegramMtprotoMutationOutput(
                 operation=operation, object_id=payload.object_id, status="already_succeeded", changed=False
             )
         if attempt.state == ATTEMPT_FAILED_DEFINITE:
             raise ToolError(_FAILED_MESSAGE)
         raise ToolError(_UNCERTAIN_MESSAGE)
+
+    def _converge_edit(self, payload: TelegramMtprotoEditCanonicalInput, metadata: dict) -> None:
+        obj = self._session.scalar(
+            select(Object).where(Object.id == payload.object_id, Object.user_id == self._user_id)
+        )
+        if obj is None:
+            raise ToolError("Telegram edited message is unavailable locally")
+        body = metadata.get("body", payload.route.body)
+        title = metadata.get("title")
+        edited_at = metadata.get("edited_at")
+        if not isinstance(body, str) or not body.strip():
+            raise ToolError("Telegram edited message convergence metadata is invalid")
+        if title is not None and not isinstance(title, str):
+            raise ToolError("Telegram edited message convergence metadata is invalid")
+        if edited_at is not None and not isinstance(edited_at, str):
+            raise ToolError("Telegram edited message convergence metadata is invalid")
+        obj.body = body
+        if title is not None:
+            obj.title = title
+        object_metadata = dict(obj.metadata_ or {})
+        if edited_at is not None:
+            object_metadata["edited_at"] = edited_at
+        obj.metadata_ = object_metadata
+        flag_modified(obj, "metadata_")
+        self._session.flush()
+
+    def _converge_delete(self, payload: TelegramMtprotoDeleteCanonicalInput) -> None:
+        obj = self._session.scalar(
+            select(Object).where(Object.id == payload.object_id, Object.user_id == self._user_id)
+        )
+        if obj is None:
+            raise ToolError("Telegram deleted message is unavailable locally")
+        tombstone_object(obj)
+        self._session.flush()
 
     def _definite(self, operation_id: str, message: str):
         self._persist(operation_id, ATTEMPT_FAILED_DEFINITE, message)

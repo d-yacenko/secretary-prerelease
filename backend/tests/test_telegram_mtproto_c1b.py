@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
@@ -9,6 +10,10 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
+from app.assistant.execution_effects import (
+    classify_tool_execution_effect,
+    describe_execution_effect,
+)
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoWriteDefiniteError,
@@ -39,8 +44,10 @@ class _MutationTransport:
     def __init__(self, *, mode: str = "success") -> None:
         self.mode = mode
         self.edit_calls: list[dict[str, object]] = []
+        self.fetch_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.read_calls: list[dict[str, object]] = []
+        self.lookup_peer_id: int | None = None
 
     async def edit_message(self, session, reference, *, peer_id, message_id, text):
         self.edit_calls.append(
@@ -55,6 +62,15 @@ class _MutationTransport:
         )
         self._raise_if_needed()
         return True
+
+    async def fetch_message(self, session, reference, *, peer_id, message_id):
+        self.fetch_calls.append(
+            {"session": session, "reference": reference, "peer_id": peer_id, "message_id": message_id}
+        )
+        return {
+            "peer_id": self.lookup_peer_id if self.lookup_peer_id is not None else peer_id,
+            "message_id": message_id,
+        }
 
     async def mark_read(self, session, reference, *, peer_id, max_message_id):
         self.read_calls.append(
@@ -198,6 +214,64 @@ def test_delete_tombstones_same_object_and_replay_does_not_write(db_session, cre
     assert obj.deleted_at is not None
 
 
+@pytest.mark.parametrize("peer_kind", ["private", "group", "supergroup"])
+def test_delete_exact_peer_preflight_blocks_wrong_peer_without_delete(
+    db_session, credential_key, peer_kind
+):
+    user, _, selection, obj = _fixture(db_session, credential_key)
+    selection.peer_kind = peer_kind
+    db_session.flush()
+    transport = _MutationTransport()
+    transport.lookup_peer_id = 778
+    service = _service(db_session, user.id, transport)
+    plan = service.prepare_delete(obj.id)
+
+    with pytest.raises(ToolError, match="not present"):
+        service.delete(plan)
+    assert len(transport.fetch_calls) == 1
+    assert transport.delete_calls == []
+    assert obj.deleted_at is None
+    attempt = db_session.scalar(
+        select(ExternalActionAttempt).where(ExternalActionAttempt.operation_id == plan.operation_id)
+    )
+    assert attempt is not None
+    assert attempt.state == ATTEMPT_FAILED_DEFINITE
+
+
+def test_edit_replay_repairs_lost_local_convergence_without_provider_call(db_session, credential_key):
+    user, _, _, obj = _outbound_fixture(db_session, credential_key)
+    transport = _MutationTransport()
+    service = _service(db_session, user.id, transport)
+    plan = service.prepare_edit(TelegramMtprotoEditInput(object_id=obj.id, body="edited"))
+    service.edit(plan)
+    obj.body = "stale"
+    obj.metadata_ = {key: value for key, value in obj.metadata_.items() if key != "edited_at"}
+    db_session.flush()
+
+    replay = service.edit(plan)
+    db_session.refresh(obj)
+    assert replay.status == "already_succeeded"
+    assert len(transport.edit_calls) == 1
+    assert obj.body == "edited"
+    assert "edited_at" in obj.metadata_
+
+
+def test_delete_replay_repairs_lost_tombstone_without_provider_call(db_session, credential_key):
+    user, _, _, obj = _fixture(db_session, credential_key)
+    transport = _MutationTransport()
+    service = _service(db_session, user.id, transport)
+    plan = service.prepare_delete(obj.id)
+    service.delete(plan)
+    obj.deleted_at = None
+    db_session.flush()
+
+    replay = service.delete(plan)
+    db_session.refresh(obj)
+    assert replay.status == "already_succeeded"
+    assert len(transport.delete_calls) == 1
+    assert obj.deleted_at is not None
+
+
 @pytest.mark.parametrize("mode, expected", [("uncertain", ATTEMPT_UNCERTAIN), ("definite", ATTEMPT_FAILED_DEFINITE)])
 def test_delete_provider_outcomes_are_not_retried(db_session, credential_key, mode, expected):
     user, _, _, obj = _fixture(db_session, credential_key)
@@ -229,7 +303,9 @@ def test_mark_read_freezes_exact_message_and_replay_does_not_change_content(db_s
 
     assert plan.route.max_message_id == 41
     assert first.status == "succeeded"
+    assert first.changed is True
     assert replay.status == "already_succeeded"
+    assert replay.changed is False
     assert len(transport.read_calls) == 1
     assert transport.read_calls[0]["peer_id"] == 777
     assert transport.read_calls[0]["max_message_id"] == 41
@@ -245,6 +321,14 @@ def test_mark_read_requires_active_scope_and_exact_route(db_session, credential_
         service.prepare_mark_read(obj.id)
 
 
+@pytest.mark.parametrize("tool_name", ["edit_message", "delete_message", "mark_message_read"])
+def test_mutation_execution_effects_are_changed_not_created(tool_name):
+    assert classify_tool_execution_effect(tool_name, {"changed": True}) == "changed"
+    assert classify_tool_execution_effect(tool_name, {"changed": False}) == "no_op"
+    assert "changed=true" in describe_execution_effect(tool_name, {"changed": True})
+    assert "already completed" in describe_execution_effect(tool_name, {"changed": False})
+
+
 def test_mutation_transport_methods_do_not_construct_client_for_bad_reference(monkeypatch):
     from app.connectors.telegram import mtproto_transport
 
@@ -252,6 +336,69 @@ def test_mutation_transport_methods_do_not_construct_client_for_bad_reference(mo
     transport = mtproto_transport.TelethonMtprotoTransport(123, "hash")
     bad = json.dumps({"entity_type": "user", "id": 778, "access_hash": 99})
     with pytest.raises(TelegramMtprotoWriteDefiniteError, match="reference"):
-        import asyncio
-
         asyncio.run(transport.delete_message("session", bad, peer_id=777, message_id=41))
+
+
+@pytest.mark.parametrize(
+    ("method", "operation"),
+    [("edit_message", "edit"), ("delete_message", "delete_message"), ("mark_read", "mark_read")],
+)
+def test_transport_deterministic_telethon_rejections_are_definite(monkeypatch, method, operation):
+    from telethon.errors import MessageIdInvalidError
+
+    from app.connectors.telegram import mtproto_transport
+
+    class Client:
+        async def connect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return True
+
+        async def edit_message(self, *args, **kwargs):
+            raise MessageIdInvalidError(None)
+
+        async def delete_messages(self, *args, **kwargs):
+            raise MessageIdInvalidError(None)
+
+        async def send_read_acknowledge(self, *args, **kwargs):
+            raise MessageIdInvalidError(None)
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr(mtproto_transport, "TelegramClient", lambda *args: Client())
+    transport = mtproto_transport.TelethonMtprotoTransport(123, "hash")
+    reference = json.dumps({"entity_type": "user", "id": 777, "access_hash": 99})
+    kwargs = {"peer_id": 777, "message_id": 41}
+    if operation == "edit":
+        kwargs["text"] = "edited"
+    if operation == "mark_read":
+        kwargs = {"peer_id": 777, "max_message_id": 41}
+    with pytest.raises(TelegramMtprotoWriteDefiniteError):
+        asyncio.run(getattr(transport, method)("", reference, **kwargs))
+
+
+def test_transport_timeout_is_uncertain(monkeypatch):
+    from telethon.errors import TimeoutError
+
+    from app.connectors.telegram import mtproto_transport
+
+    class Client:
+        async def connect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return True
+
+        async def delete_messages(self, *args, **kwargs):
+            raise TimeoutError(None)
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr(mtproto_transport, "TelegramClient", lambda *args: Client())
+    transport = mtproto_transport.TelethonMtprotoTransport(123, "hash")
+    reference = json.dumps({"entity_type": "user", "id": 777, "access_hash": 99})
+    with pytest.raises(TelegramMtprotoWriteUncertainError):
+        asyncio.run(transport.delete_message("", reference, peer_id=777, message_id=41))

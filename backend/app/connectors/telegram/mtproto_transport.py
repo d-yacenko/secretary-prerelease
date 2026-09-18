@@ -5,17 +5,23 @@ from typing import Any, Protocol
 
 from telethon import TelegramClient, utils
 from telethon.errors import (
+    AuthKeyError,
     AuthKeyUnregisteredError,
+    BadRequestError,
     ChannelInvalidError,
     ChannelPrivateError,
     ChatIdInvalidError,
     FloodWaitError,
+    ForbiddenError,
+    NotFoundError,
     PasswordHashInvalidError,
     PeerIdInvalidError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
+    ServerError,
     SessionPasswordNeededError,
     SessionRevokedError,
+    TimedOutError,
     UnauthorizedError,
     UserDeactivatedBanError,
     UserDeactivatedError,
@@ -206,6 +212,16 @@ class TelegramMtprotoTransport(Protocol):
         message_id: int,
         text: str,
     ) -> dict[str, Any]:
+        ...
+
+    async def fetch_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+    ) -> dict[str, Any] | None:
         ...
 
     async def delete_message(
@@ -588,7 +604,15 @@ class TelethonMtprotoTransport:
             raise
         except TelegramMtprotoWriteUncertainError:
             raise
-        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+        except (
+            AuthKeyError,
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
@@ -654,7 +678,15 @@ class TelethonMtprotoTransport:
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram selected group reference is invalid"
             ) from None
-        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+        except (
+            AuthKeyError,
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
@@ -664,9 +696,75 @@ class TelethonMtprotoTransport:
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
             raise TelegramMtprotoWriteDefiniteError("Telegram message edit was rejected") from None
+        except (BadRequestError, ForbiddenError, NotFoundError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram message edit was rejected") from None
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram edit outcome is uncertain; not retrying"
+            ) from None
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
             raise TelegramMtprotoWriteUncertainError(
                 "Telegram edit outcome is uncertain; not retrying"
+            ) from None
+        finally:
+            await _disconnect(client)
+
+    async def fetch_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+    ) -> dict[str, Any] | None:
+        client: TelegramClient | None = None
+        try:
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoWriteDefiniteError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            message = await client.get_messages(input_peer, ids=message_id)
+            if isinstance(message, list):
+                message = message[0] if message else None
+            if message is None:
+                return None
+            return {
+                "peer_id": _peer_id_from_message_peer(getattr(message, "peer_id", None)),
+                "message_id": getattr(message, "id", None),
+            }
+        except TelegramMtprotoWriteDefiniteError:
+            raise
+        except TelegramMtprotoProviderReferenceInvalidError:
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram selected group reference is invalid"
+            ) from None
+        except (
+            AuthKeyError,
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError,
+                BadRequestError, ForbiddenError, NotFoundError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram message lookup was rejected") from None
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram message lookup is uncertain; not retrying"
+            ) from None
+        except Exception:  # noqa: BLE001 - lookup failure fails closed
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram message lookup is uncertain; not retrying"
             ) from None
         finally:
             await _disconnect(client)
@@ -698,7 +796,15 @@ class TelethonMtprotoTransport:
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram selected group reference is invalid"
             ) from None
-        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+        except (
+            AuthKeyError,
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
@@ -708,6 +814,12 @@ class TelethonMtprotoTransport:
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
             raise TelegramMtprotoWriteDefiniteError("Telegram message deletion was rejected") from None
+        except (BadRequestError, ForbiddenError, NotFoundError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram message deletion was rejected") from None
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram delete outcome is uncertain; not retrying"
+            ) from None
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
             raise TelegramMtprotoWriteUncertainError(
                 "Telegram delete outcome is uncertain; not retrying"
@@ -742,7 +854,7 @@ class TelethonMtprotoTransport:
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram selected group reference is invalid"
             ) from None
-        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+        except (AuthKeyError, AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
             raise TelegramMtprotoWriteDefiniteError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
@@ -752,6 +864,12 @@ class TelethonMtprotoTransport:
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
             raise TelegramMtprotoWriteDefiniteError("Telegram mark-read was rejected") from None
+        except (BadRequestError, ForbiddenError, NotFoundError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram mark-read was rejected") from None
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram mark-read outcome is uncertain; not retrying"
+            ) from None
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
             raise TelegramMtprotoWriteUncertainError(
                 "Telegram mark-read outcome is uncertain; not retrying"

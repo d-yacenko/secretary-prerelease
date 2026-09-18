@@ -14,8 +14,10 @@ def classify_tool_execution_effect(tool_name: str, output: dict[str, Any] | None
         return "created" if output.get("changed") else "no_op"
     if tool_name == "send_email":
         return "created" if output.get("changed") else "no_op"
-    if tool_name in {"send_message", "edit_message", "delete_message", "mark_message_read"}:
+    if tool_name == "send_message":
         return "created" if output.get("changed") else "no_op"
+    if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+        return "changed" if output.get("changed") else "no_op"
     if tool_name == "remove_relation":
         return "removed" if output.get("changed") else "no_op"
     if tool_name == "link_objects":
@@ -78,6 +80,12 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
         obj = (output or {}).get("object") or {}
         return f"{tool_name}: removed/deactivated task {obj.get('id')}"
     if effect == "changed":
+        if tool_name == "edit_message":
+            return "edit_message: message edited; changed=true"
+        if tool_name == "delete_message":
+            return "delete_message: message tombstoned; changed=true"
+        if tool_name == "mark_message_read":
+            return "mark_message_read: message marked read; changed=true"
         if tool_name == "update_task":
             added = len((output or {}).get("evidence_added_object_ids") or [])
             if added:
