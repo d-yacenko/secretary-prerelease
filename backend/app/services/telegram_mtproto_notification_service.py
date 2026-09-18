@@ -13,6 +13,10 @@ TELEGRAM_MTPROTO_NOTIFICATION_NAMESPACE = UUID("8e0f28f1-2e15-4dd4-8e0f-7f7f5cf0
 _PREVIEW_LIMIT = 500
 
 
+class TelegramMtprotoNotificationPersistenceError(RuntimeError):
+    """A local deterministic-event write failed and must abort the source path."""
+
+
 class TelegramMtprotoTransportNotificationService:
     def __init__(self, session) -> None:
         self._session = session
@@ -121,12 +125,17 @@ class TelegramMtprotoTransportNotificationService:
         notification_id = uuid5(
             TELEGRAM_MTPROTO_NOTIFICATION_NAMESPACE, f"{user_id}:{event_key}"
         )
-        existing = self._session.scalar(
-            select(Notification).where(
-                Notification.id == notification_id,
-                Notification.user_id == user_id,
+        try:
+            existing = self._session.scalar(
+                select(Notification).where(
+                    Notification.id == notification_id,
+                    Notification.user_id == user_id,
+                )
             )
-        )
+        except Exception as exc:
+            raise TelegramMtprotoNotificationPersistenceError(
+                "Telegram transport notification persistence failed"
+            ) from exc
         if existing is not None:
             return existing
         proposal = {
@@ -163,10 +172,22 @@ class TelegramMtprotoTransportNotificationService:
             nested.commit()
         except IntegrityError:
             nested.rollback()
-            existing = self._session.get(Notification, notification_id)
+            try:
+                existing = self._session.get(Notification, notification_id)
+            except Exception as exc:
+                raise TelegramMtprotoNotificationPersistenceError(
+                    "Telegram transport notification persistence failed"
+                ) from exc
             if existing is None:
-                raise
+                raise TelegramMtprotoNotificationPersistenceError(
+                    "Telegram transport notification conflict could not be recovered"
+                )
             return existing
+        except Exception as exc:
+            nested.rollback()
+            raise TelegramMtprotoNotificationPersistenceError(
+                "Telegram transport notification persistence failed"
+            ) from exc
         return notification
 
 

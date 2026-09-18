@@ -41,6 +41,7 @@ from app.core.config import settings
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
 from app.domain.object_visibility import tombstone_object
 from app.services.telegram_mtproto_notification_service import (
+    TelegramMtprotoNotificationPersistenceError,
     TelegramMtprotoTransportNotificationService,
 )
 
@@ -318,6 +319,11 @@ class TelegramMtprotoHistoryService:
                 peer_counts[peer_id] = peer_counts.get(peer_id, 0) + 1
                 provider_calls += 1
                 metadata = obj.metadata_ or {}
+                original_body = obj.body
+                original_title = obj.title
+                original_metadata = obj.metadata_
+                original_occurred_at = obj.occurred_at
+                original_deleted_at = obj.deleted_at
                 selection = selections[peer_id]
                 try:
                     reference = store.decrypt_reference(selection)
@@ -388,6 +394,14 @@ class TelegramMtprotoHistoryService:
                 except TelegramMtprotoReadRejectedError:
                     continue
                 except TelegramMtprotoAuthorizationInvalidError:
+                    raise
+                except TelegramMtprotoNotificationPersistenceError:
+                    obj.body = original_body
+                    obj.title = original_title
+                    obj.metadata_ = original_metadata
+                    obj.occurred_at = original_occurred_at
+                    obj.deleted_at = original_deleted_at
+                    self._session.flush()
                     raise
                 except TelegramMtprotoWriteDefiniteError:
                     raise

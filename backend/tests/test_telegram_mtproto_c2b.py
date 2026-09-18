@@ -13,8 +13,12 @@ from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoHistoryPage,
 )
 from app.core.config import settings
-from app.db.models import Notification
+from app.db.models import Edge, Job, Notification, Object
 from app.services.telegram_mtproto_history_service import TelegramMtprotoHistoryService
+from app.services.telegram_mtproto_notification_service import (
+    TelegramMtprotoNotificationPersistenceError,
+    TelegramMtprotoTransportNotificationService,
+)
 from tests.test_telegram_mtproto_c1a import _fixture
 
 
@@ -195,3 +199,152 @@ async def test_outgoing_remote_edit_has_no_transport_event(db_session, credentia
         user.id, account.id, {}
     )
     assert _notifications(db_session, user.id) == []
+
+
+def test_notification_pk_conflict_recovers_existing_row(db_session, credential_key, monkeypatch):
+    user, account, selection, obj = _fixture(db_session, credential_key)
+    service = TelegramMtprotoTransportNotificationService(db_session)
+    first = service.message_created(
+        user_id=user.id,
+        account_id=account.id,
+        peer_id=selection.peer_id,
+        message_id=42,
+        obj=obj,
+        occurred_at=obj.occurred_at,
+        conversation_title=selection.title,
+    )
+    original_scalar = db_session.scalar
+    calls = 0
+
+    def hide_first_lookup(statement, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None
+        return original_scalar(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "scalar", hide_first_lookup)
+    recovered = service.message_created(
+        user_id=user.id,
+        account_id=account.id,
+        peer_id=selection.peer_id,
+        message_id=42,
+        obj=obj,
+        occurred_at=obj.occurred_at,
+        conversation_title=selection.title,
+    )
+    assert recovered.id == first.id
+    assert len(_notifications(db_session, user.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_remote_edit_notification_failure_is_observable_and_rollbackable(
+    db_session, credential_key, monkeypatch
+):
+    user, account, selection, obj = _fixture(db_session, credential_key)
+    original_body = obj.body
+    result = {
+        "peer_id": selection.peer_id,
+        "message_id": obj.metadata_["message_id"],
+        "text": "must rollback",
+        "occurred_at": obj.occurred_at,
+        "edited_at": datetime.now(UTC) + timedelta(seconds=1),
+        "sender_peer_id": 888,
+        "outgoing": False,
+        "service": False,
+    }
+
+    def fail_event(*args, **kwargs):
+        raise TelegramMtprotoNotificationPersistenceError("injected")
+
+    monkeypatch.setattr(
+        TelegramMtprotoTransportNotificationService, "message_edited", fail_event
+    )
+    with pytest.raises(TelegramMtprotoNotificationPersistenceError):
+        await _service(db_session, credential_key, _RecentTransport(result)).reconcile_recent_messages(
+            user.id, account.id, {}
+        )
+    assert obj.body == original_body
+    assert _notifications(db_session, user.id) == []
+
+
+@pytest.mark.asyncio
+async def test_remote_delete_notification_failure_is_observable_and_rollbackable(
+    db_session, credential_key, monkeypatch
+):
+    user, account, _, obj = _fixture(db_session, credential_key)
+
+    def fail_event(*args, **kwargs):
+        raise TelegramMtprotoNotificationPersistenceError("injected")
+
+    monkeypatch.setattr(
+        TelegramMtprotoTransportNotificationService, "message_deleted", fail_event
+    )
+    with pytest.raises(TelegramMtprotoNotificationPersistenceError):
+        await _service(db_session, credential_key, _RecentTransport(None)).reconcile_recent_messages(
+            user.id, account.id, {}
+        )
+    assert obj.deleted_at is None
+    assert _notifications(db_session, user.id) == []
+
+
+def test_transport_event_notification_api_lifecycle(db_session, auth_headers):
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_db
+    from app.main import app
+    from app.users.bootstrap import BOOTSTRAP_USER_ID
+    from tests.conftest import AuthTestClient
+
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = AuthTestClient(TestClient(app), auth_headers)
+    from app.db.models import Notification
+
+    rows = []
+    for suffix in ("read", "accept", "ignore", "resolve"):
+        row = Notification(
+            user_id=BOOTSTRAP_USER_ID,
+            title=f"Telegram event {suffix}",
+            body="body",
+            priority="normal",
+            status="new",
+            proposal_={
+                "type": "transport_event",
+                "provider": "telegram",
+                "transport": "mtproto",
+                "event_type": "message_created",
+                "event_key": f"test:{suffix}",
+            },
+        )
+        db_session.add(row)
+        rows.append(row)
+    db_session.flush()
+    before_objects = db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.user_id == BOOTSTRAP_USER_ID)
+    )
+    before_edges = db_session.scalar(
+        select(func.count()).select_from(Edge).where(Edge.user_id == BOOTSTRAP_USER_ID)
+    )
+    before_jobs = db_session.scalar(
+        select(func.count()).select_from(Job).where(Job.user_id == BOOTSTRAP_USER_ID)
+    )
+    listed = client.get("/notifications")
+    assert listed.status_code == 200
+    assert all(str(row.id) in {item["id"] for item in listed.json()["notifications"]} for row in rows)
+    assert client.post(f"/notifications/{rows[0].id}/read").status_code == 200
+    assert client.post(f"/notifications/{rows[1].id}/accept").json()["status"] == "accepted"
+    assert client.post(f"/notifications/{rows[2].id}/ignore").json()["status"] == "ignored"
+    assert client.post(f"/notifications/{rows[3].id}/resolve").json()["status"] == "resolved"
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.user_id == BOOTSTRAP_USER_ID)
+    ) == before_objects
+    assert db_session.scalar(
+        select(func.count()).select_from(Edge).where(Edge.user_id == BOOTSTRAP_USER_ID)
+    ) == before_edges
+    assert db_session.scalar(
+        select(func.count()).select_from(Job).where(Job.user_id == BOOTSTRAP_USER_ID)
+    ) == before_jobs
+    app.dependency_overrides.clear()
