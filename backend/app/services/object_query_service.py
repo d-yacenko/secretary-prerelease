@@ -20,7 +20,7 @@ from app.domain.task_lifecycle import (
     TASK_STATUS_DONE,
     TASK_STATUS_OPEN,
 )
-from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.services.errors import ValidationError
 from app.services.provenance import REJECTED_STATE
 from app.tools.datetime_utils import normalize_tool_datetime
@@ -92,7 +92,7 @@ class ObjectQueryService:
             Object.user_id == self._user_id,
             Object.state != REJECTED_STATE,
             object_is_active(),
-            telegram_mtproto_active_object_predicate(),
+            telegram_mtproto_ai_predicate(),
         )
 
         if kinds:

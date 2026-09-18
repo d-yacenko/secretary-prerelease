@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.db.models import Object
 from app.db.session import SessionLocal
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.jobs.constants import (
     JOB_TYPE_AUTO_LABEL_OBJECT,
     JOB_TYPE_CORRELATE_OBJECT,
@@ -162,7 +163,11 @@ def _object_is_active(session: Session, object_id: UUID, user_id: UUID) -> bool:
     obj = session.scalar(
         select(Object).where(Object.id == object_id, Object.user_id == user_id)
     )
-    return obj is not None and not is_object_hidden_from_active_reads(obj)
+    return (
+        obj is not None
+        and not is_object_hidden_from_active_reads(obj)
+        and telegram_mtproto_ai_eligible(session, obj)
+    )
 
 
 def handle_embed_object(

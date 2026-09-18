@@ -12,11 +12,17 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoProviderReferenceInvalidError,
 )
 from app.core.config import settings
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.db.models import Job, Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
+from app.jobs.constants import JOB_STATUS_PENDING, JOB_STATUS_RUNNING, JOB_TYPE_EMBED_OBJECT
+from app.llm.embedding_text import embedding_input_signature
+from app.services.embedding_index import object_has_current_embedding_provenance
+from app.services.pipeline_enqueue import enqueue_embed_object
 from app.services.telegram_mtproto_history_service import TelegramMtprotoHistoryService
 from app.services.telegram_mtproto_scope_service import TelegramMtprotoScopeService
 
 TELEGRAM_MTPROTO_RECURRING_MAX_PEERS_PER_RUN = 10
+TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN = 10
 
 _PEER_LOCAL_ERRORS = (
     TelegramMtprotoGroupUnavailableError,
@@ -59,6 +65,7 @@ class TelegramMtprotoRecurringSyncService:
             )
 
         await self._scope.reconcile_scope(user_id)
+        self._enqueue_embedding_catchup(user_id, account_id)
         selections = list(
             self._session.scalars(
                 select(TelegramMtprotoChatSelection)
@@ -86,3 +93,40 @@ class TelegramMtprotoRecurringSyncService:
             except _PEER_LOCAL_ERRORS:
                 pass
             payload["telegram_peer_cursor"] = (cursor + offset + 1) % len(selections)
+
+    def _enqueue_embedding_catchup(self, user_id: UUID, account_id: UUID) -> int:
+        if not settings.telegram_mtproto_ai_enabled:
+            return 0
+        objects = list(
+            self._session.scalars(
+                select(Object)
+                .where(
+                    Object.user_id == user_id,
+                    Object.provider == "telegram",
+                    Object.kind == "chat_message",
+                    Object.metadata_["transport"].as_string() == "mtproto",
+                    Object.metadata_["account_id"].as_string() == str(account_id),
+                    telegram_mtproto_ai_predicate(),
+                )
+                .order_by(Object.created_at, Object.id)
+                .limit(TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN)
+            )
+        )
+        queued = 0
+        for obj in objects:
+            if object_has_current_embedding_provenance(
+                obj, embedding_input_signature(obj)
+            ):
+                continue
+            before = self._session.scalar(
+                select(Job.id).where(
+                    Job.user_id == user_id,
+                    Job.type == JOB_TYPE_EMBED_OBJECT,
+                    Job.status.in_((JOB_STATUS_PENDING, JOB_STATUS_RUNNING)),
+                    Job.payload["object_id"].as_string() == str(obj.id),
+                )
+            )
+            enqueue_embed_object(self._session, obj.id, user_id)
+            if before is None:
+                queued += 1
+        return queued

@@ -10,7 +10,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object
-from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.services.conversation_projection import project_inbox_object
 from app.services.conversation_stack import (
     ConversationStack,
@@ -194,7 +194,7 @@ def reconstruct_stack_members(
         select(Object).where(
             Object.id == object_id,
             Object.user_id == user_id,
-            telegram_mtproto_active_object_predicate(),
+            telegram_mtproto_ai_predicate(),
         )
     )
     if (

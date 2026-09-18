@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import EdgeCreate, ObjectCreate
+from app.core.config import settings
 from app.db.models import (
     Object,
     Representation,
@@ -26,6 +27,11 @@ from app.services.object_query_service import ObjectQueryService
 from app.services.recent_source_service import RecentSourceService, inbox_feed_at
 from app.services.retrieval_service import RetrievalService
 from app.services.search_service import SearchService
+
+
+@pytest.fixture(autouse=True)
+def _enable_mtproto_ai_for_legacy_a43_regressions(monkeypatch):
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
 
 
 def _scope_fixture(db_session, *, active=True):

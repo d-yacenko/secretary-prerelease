@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.models import Object
-from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_sql_fragment
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_sql_fragment
 from app.services.errors import ValidationError
 from app.services.evidence_snippet import (
     build_query_centered_snippet,
@@ -59,18 +59,16 @@ from app.services.retrieval_query_atoms import (
     select_selective_atoms,
 )
 
-_BASE_WHERE = """
+
+def _base_where() -> str:
+    return f"""
     o.user_id = :user_id
     AND o.deleted_at IS NULL
     AND (o.status IS NULL OR o.status != 'deleted')
     AND o.state != 'rejected'
     AND (o.kind != 'label' OR :include_labels)
-    {telegram_scope_clause}
+    {telegram_mtproto_ai_sql_fragment()}
 """
-
-_BASE_WHERE = _BASE_WHERE.format(
-    telegram_scope_clause=telegram_mtproto_active_sql_fragment()
-)
 
 
 def _build_filter_suffix(
@@ -167,7 +165,7 @@ def _build_fts_candidate_sql(filter_suffix: str) -> str:
     return f"""
     SELECT o.id
     FROM objects o
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       AND ({FTS_DOCUMENT_SQL}) @@ plainto_tsquery('simple', :query)
     ORDER BY
@@ -184,7 +182,7 @@ def _build_trigram_candidate_sql(filter_suffix: str) -> str:
     return f"""
     SELECT o.id
     FROM objects o
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       AND o.title % :query
     ORDER BY
@@ -199,7 +197,7 @@ def _build_representation_fts_candidate_sql(filter_suffix: str, ts_config: str) 
     SELECT o.id
     FROM representations r
     INNER JOIN objects o ON o.id = r.object_id
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       {CLOUD_CURRENT_REPRESENTATION_SQL}
       AND r.kind IN ({RETRIEVAL_REPRESENTATION_KINDS_SQL})
@@ -222,7 +220,7 @@ def _build_atom_simple_fts_sql(filter_suffix: str) -> str:
     return f"""
     SELECT o.id
     FROM objects o
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       AND ({FTS_DOCUMENT_SQL}) @@ plainto_tsquery('simple', :atom)
     ORDER BY
@@ -239,7 +237,7 @@ def _build_atom_russian_fts_sql(filter_suffix: str) -> str:
     return f"""
     SELECT o.id
     FROM objects o
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       AND ({RUSSIAN_FTS_DOCUMENT_SQL}) @@ plainto_tsquery('russian', :atom)
     ORDER BY
@@ -256,7 +254,7 @@ def _build_atom_trigram_sql(filter_suffix: str) -> str:
     return f"""
     SELECT o.id
     FROM objects o
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       AND o.title % :atom
     ORDER BY
@@ -271,7 +269,7 @@ def _build_atom_representation_simple_fts_sql(filter_suffix: str) -> str:
     SELECT o.id
     FROM representations r
     INNER JOIN objects o ON o.id = r.object_id
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       {CLOUD_CURRENT_REPRESENTATION_SQL}
       AND r.kind IN ({RETRIEVAL_REPRESENTATION_KINDS_SQL})
@@ -295,7 +293,7 @@ def _build_atom_representation_russian_fts_sql(filter_suffix: str) -> str:
     SELECT o.id
     FROM representations r
     INNER JOIN objects o ON o.id = r.object_id
-    WHERE {_BASE_WHERE}
+    WHERE {_base_where()}
       {filter_suffix}
       {CLOUD_CURRENT_REPRESENTATION_SQL}
       AND r.kind IN ({RETRIEVAL_REPRESENTATION_KINDS_SQL})

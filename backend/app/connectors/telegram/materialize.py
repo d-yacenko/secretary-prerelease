@@ -13,6 +13,7 @@ from app.connectors.telegram.normalize import (
 )
 from app.db.models import Object
 from app.domain.object_visibility import passive_sync_should_skip_existing, tombstone_object
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.services.pipeline_enqueue import enqueue_embed_object
 
 
@@ -92,8 +93,8 @@ class TelegramObjectMaterializer:
                 raise
             return self._apply_existing(existing, normalized, skip_hidden=skip_hidden)
 
-        self._enqueue_embed(obj)
-        return TelegramMaterializeResult(obj=obj, change="created", jobs_enqueued=1)
+        jobs_enqueued = int(self._enqueue_embed(obj))
+        return TelegramMaterializeResult(obj=obj, change="created", jobs_enqueued=jobs_enqueued)
 
     def hide_deleted_messages(
         self,
@@ -143,8 +144,10 @@ class TelegramObjectMaterializer:
         self._apply_normalized(existing, normalized)
         self._session.flush()
         if semantic_changed:
-            self._enqueue_embed(existing)
-            return TelegramMaterializeResult(obj=existing, change="updated", jobs_enqueued=1)
+            jobs_enqueued = int(self._enqueue_embed(existing))
+            return TelegramMaterializeResult(
+                obj=existing, change="updated", jobs_enqueued=jobs_enqueued
+            )
         return TelegramMaterializeResult(obj=existing, change="metadata_updated", jobs_enqueued=0)
 
     @staticmethod
@@ -170,5 +173,8 @@ class TelegramObjectMaterializer:
         obj.metadata_ = normalized["metadata"]
         obj.occurred_at = normalized.get("occurred_at")
 
-    def _enqueue_embed(self, obj: Object) -> None:
+    def _enqueue_embed(self, obj: Object) -> bool:
+        if not telegram_mtproto_ai_eligible(self._session, obj):
+            return False
         enqueue_embed_object(self._session, obj.id, obj.user_id)
+        return True
