@@ -30,14 +30,14 @@
 - Telegram MTProto C1B/C1BR/C1BR2 edit/delete/mark-read: ACCEPTED / INTEGRATED TO MAIN at merge `37d2106fedc3d6cd3a9b5fd15dc70ded48d00caf`. Reviewed implementation tip is `0174b82375837b428f9e0b09c811394dc0f1d884`.
 - C1B accepted semantics include approval-gated edit/delete/read, exact-peer destructive preflight, definite-vs-uncertain write classification, replay-safe local convergence, truthful mark-read effects, and Q1-aware semantic edit enqueue.
 - Non-blocking normalization debt identified during review: immediate MTProto send/edit titles use a different bound than A3 history normalization. C2A must unify canonical presentation-title generation.
-- C2A `ec44c406907b52eec95a879f0f05ccd404689859` and C2AR `c1044a22b81f132afdc97c711b1051dc3389c64c` were rejected. C2AR2 `2cbec106effe6cb1b9f693d21fb981377518a6e2` fixes malformed-candidate handling, read auth taxonomy, peer-local read rejection, real FloodWait translation, retry-after propagation, and introduces sweep wrap; those pieces are accepted in code. C2AR2 remains REJECTED pending C2AR3 because head sampling overwrites the historical sweep cursor, causing sweep starvation when account budget is consumed by head calls (notably at >=20 active peers); head sampling only revisits the single newest object; account peer rotation advances by +1 rather than by the actual serviced window.
-- Current authorized phase: Telegram MTProto C2AR3 separate head/sweep progress + account peer fairness, exactly as specified in `CURRENT_TASK.md`.
+- C2A/C2AR/C2AR2 were rejected through successive review corrections. C2AR3 `c87fb53d31827fb92e074fbf27628442f2a95ca4` correctly separates HEAD and SWEEP state, alternates per-peer modes, advances account rotation after the actually serviced peer window, prunes inactive peer state, and preserves hard lookup bounds; those pieces are accepted in code. C2AR3 remains REJECTED pending narrow C2AR4 because the persisted HEAD `newest` marker is incorrectly taken from the currently selected head candidate rather than the actual top-of-window object, which can produce a `newest -> second -> newest -> second` loop and starve third/fourth/fifth recent messages.
+- Current authorized phase: Telegram MTProto C2AR4 recent-head window cursor correctness, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
 - C2A must add bounded recent-message reconciliation for provider-side edits/deletes while preserving A3 new-message sync and Q1 AI quarantine.
-- Planned next phase after C2AR3 acceptance: C2B deterministic notification/event surface, then C3 client UX, then a newly frozen migration-bearing rollout.
+- Planned next phase after C2AR4 acceptance: C2B deterministic notification/event surface, then C3 client UX, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2AR3.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2AR4.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
