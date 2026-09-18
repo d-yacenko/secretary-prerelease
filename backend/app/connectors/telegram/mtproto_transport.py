@@ -757,9 +757,7 @@ class TelethonMtprotoTransport:
         except TelegramMtprotoWriteDefiniteError:
             raise
         except TelegramMtprotoProviderReferenceInvalidError:
-            raise TelegramMtprotoWriteDefiniteError(
-                "Telegram selected group reference is invalid"
-            ) from None
+            raise
         except (
             AuthKeyError,
             AuthKeyNotFound,
@@ -775,13 +773,17 @@ class TelethonMtprotoTransport:
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError,
                 BadRequestError, ForbiddenError, NotFoundError):
             raise TelegramMtprotoWriteDefiniteError("Telegram message lookup was rejected") from None
-        except (ServerError, TimedOutError):
-            raise TelegramMtprotoWriteUncertainError(
-                "Telegram message lookup is uncertain; not retrying"
+        except FloodWaitError as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable", exc.seconds
             ) from None
-        except Exception:  # noqa: BLE001 - lookup failure fails closed
-            raise TelegramMtprotoWriteUncertainError(
-                "Telegram message lookup is uncertain; not retrying"
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
+            ) from None
+        except Exception:  # noqa: BLE001 - read failure is provider transient
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
             ) from None
         finally:
             await _disconnect(client)

@@ -1,5 +1,6 @@
 """Telegram MTProto C2A bounded recent-message reconciliation regressions."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -7,13 +8,13 @@ from cryptography.fernet import Fernet
 from sqlalchemy import select
 
 from app.connectors.google.encryption import CredentialEncryption
-from app.connectors.telegram.mtproto_errors import TelegramMtprotoWriteUncertainError
+from app.connectors.telegram.mtproto_errors import TelegramMtprotoProviderUnavailableError
 from app.connectors.telegram.mtproto_transport import TelegramMtprotoHistoryEntry
 from app.core.config import Settings, settings
-from app.db.models import Job, Object
+from app.db.models import Job, Object, TelegramMtprotoChatSelection
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
 from app.services.telegram_mtproto_history_service import (
-    TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY,
+    TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY,
     TelegramMtprotoHistoryService,
     build_mtproto_presentation_title,
 )
@@ -115,10 +116,11 @@ async def test_confirmed_absence_tombstones_same_row(db_session, credential_key)
 @pytest.mark.asyncio
 async def test_transient_failure_does_not_tombstone(db_session, credential_key):
     user2, account2, _, obj2 = _fixture(db_session, credential_key)
-    transport2 = _RecentTransport(error=TelegramMtprotoWriteUncertainError("temporary"))
-    await _history(db_session, credential_key, transport2).reconcile_recent_messages(
-        user2.id, account2.id, {}
-    )
+    transport2 = _RecentTransport(error=TelegramMtprotoProviderUnavailableError("temporary"))
+    with pytest.raises(TelegramMtprotoProviderUnavailableError):
+        await _history(db_session, credential_key, transport2).reconcile_recent_messages(
+            user2.id, account2.id, {}
+        )
     db_session.refresh(obj2)
     assert obj2.deleted_at is None
 
@@ -141,7 +143,7 @@ async def test_mismatched_provider_result_does_not_mutate(db_session, credential
 async def test_reconciliation_is_bounded_per_peer_and_cursor_tracks_last_inspected(
     db_session, credential_key
 ):
-    user, account, selection, first = _fixture(db_session, credential_key)
+    user, account, selection, _ = _fixture(db_session, credential_key)
     now = datetime.now(UTC)
     for message_id in range(42, 49):
         db_session.add(
@@ -178,15 +180,110 @@ async def test_reconciliation_is_bounded_per_peer_and_cursor_tracks_last_inspect
 
     await service.reconcile_recent_messages(user.id, account.id, payload)
     assert len(transport.calls) <= 5
-    assert payload[TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY] in {
-        str(first.id),
-        *(str(row.id) for row in db_session.scalars(select(Object).where(Object.user_id == user.id)))
-    }
+    assert TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY in payload
+    assert str(selection.peer_id) in payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY]
     first_run = len(transport.calls)
 
     await service.reconcile_recent_messages(user.id, account.id, payload)
     assert len(transport.calls) > first_run
     assert len(transport.calls) <= 10
+
+
+@pytest.mark.asyncio
+async def test_rotating_recent_first_peers_prevents_busy_peer_starvation(
+    db_session, credential_key
+):
+    user, account, selection, _ = _fixture(db_session, credential_key)
+    encryption = CredentialEncryption(credential_key)
+    second = TelegramMtprotoChatSelection(
+        account_id=account.id,
+        peer_id=-100,
+        peer_kind="group",
+        provider_peer_reference_encrypted=encryption.encrypt(
+            json.dumps({"entity_type": "chat", "id": 100})
+        ),
+        title="Group",
+        scope_active=True,
+    )
+    db_session.add(second)
+    now = datetime.now(UTC)
+    for message_id in range(42, 55):
+        db_session.add(
+            Object(
+                user_id=user.id,
+                kind="chat_message",
+                provider="telegram",
+                external_id=f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+                origin="source",
+                state="observed",
+                title="Alice: old",
+                body="old",
+                metadata_={
+                    "transport": "mtproto",
+                    "account_id": str(account.id),
+                    "peer_id": selection.peer_id,
+                    "message_id": message_id,
+                },
+                occurred_at=now,
+            )
+        )
+    for message_id in (1, 2):
+        db_session.add(
+            Object(
+                user_id=user.id,
+                kind="chat_message",
+                provider="telegram",
+                external_id=f"mtproto|{account.id}|-100|{message_id}",
+                origin="source",
+                state="observed",
+                title="Group: old",
+                body="old",
+                metadata_={
+                    "transport": "mtproto",
+                    "account_id": str(account.id),
+                    "peer_id": -100,
+                    "message_id": message_id,
+                },
+                occurred_at=now,
+            )
+        )
+    db_session.flush()
+    transport = _RecentTransport(
+        lambda peer_id, message_id: {
+            "peer_id": peer_id,
+            "message_id": message_id,
+            "text": "same",
+            "occurred_at": now,
+            "edited_at": None,
+            "outgoing": False,
+            "service": False,
+        }
+    )
+    payload = {}
+    service = _history(db_session, credential_key, transport)
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+
+    assert len(transport.calls) <= 20
+    assert sum(peer_id == selection.peer_id for peer_id, _ in transport.calls) <= 5
+    assert sum(peer_id == -100 for peer_id, _ in transport.calls) == 2
+    assert set(payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY]) == {
+        str(selection.peer_id),
+        "-100",
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_flood_wait_aborts_remaining_reconciliation_and_preserves_delay(
+    db_session, credential_key
+):
+    user, account, _, _ = _fixture(db_session, credential_key)
+    transport = _RecentTransport(error=TelegramMtprotoProviderUnavailableError("busy", 23))
+    with pytest.raises(TelegramMtprotoProviderUnavailableError) as exc_info:
+        await _history(db_session, credential_key, transport).reconcile_recent_messages(
+            user.id, account.id, {}
+        )
+    assert exc_info.value.retry_after_seconds == 23
+    assert len(transport.calls) == 1
 
 
 def test_cadence_default_and_override_without_other_provider_changes(monkeypatch):
