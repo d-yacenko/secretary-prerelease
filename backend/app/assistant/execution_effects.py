@@ -16,6 +16,8 @@ def classify_tool_execution_effect(tool_name: str, output: dict[str, Any] | None
         return "created" if output.get("changed") else "no_op"
     if tool_name == "send_message":
         return "created" if output.get("changed") else "no_op"
+    if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+        return "changed" if output.get("changed") else "no_op"
     if tool_name == "remove_relation":
         return "removed" if output.get("changed") else "no_op"
     if tool_name == "link_objects":
@@ -64,6 +66,8 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
                 f"provider_message_id={(output or {}).get('provider_message_id')}; "
                 f"changed=true"
             )
+        if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+            return f"{tool_name}: changed=true"
         obj = (output or {}).get("object") or {}
         return f"{tool_name}: created object {obj.get('id')} ({obj.get('kind')})"
     if effect == "removed":
@@ -76,6 +80,12 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
         obj = (output or {}).get("object") or {}
         return f"{tool_name}: removed/deactivated task {obj.get('id')}"
     if effect == "changed":
+        if tool_name == "edit_message":
+            return "edit_message: message edited; changed=true"
+        if tool_name == "delete_message":
+            return "delete_message: message tombstoned; changed=true"
+        if tool_name == "mark_message_read":
+            return "mark_message_read: message marked read; changed=true"
         if tool_name == "update_task":
             added = len((output or {}).get("evidence_added_object_ids") or [])
             if added:
@@ -120,5 +130,7 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
                 f"send_message: already sent "
                 f"{(output or {}).get('provider_message_id')}; changed=false"
             )
+        if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+            return f"{tool_name}: already completed; changed=false"
         return f"{tool_name}: no state change; changed=false"
     return f"{tool_name}: execution failed or produced no output"

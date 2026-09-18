@@ -36,7 +36,16 @@ _READ_TOOLS = frozenset(
 _EVIDENCE_WRITE_TOOLS = frozenset(
     {"create_task", "update_task", "set_task_status", "delete_task"}
 )
-_OBJECT_TARGET_TOOLS = frozenset({"update_task", "set_task_status", "delete_task"})
+_OBJECT_TARGET_TOOLS = frozenset(
+    {
+        "update_task",
+        "set_task_status",
+        "delete_task",
+        "edit_message",
+        "delete_message",
+        "mark_message_read",
+    }
+)
 _SEND_MESSAGE_ANCHOR_TOOLS = frozenset({"send_message"})
 _SEND_MESSAGE_ANCHOR_FIELDS = ("conversation_object_id", "reply_to_object_id")
 _ACTIVITY_TARGET_TOOLS = frozenset({"cancel_scheduled_activity"})
@@ -58,6 +67,9 @@ _MUTATION_TOOLS = frozenset(
         "create_calendar_event",
         "send_email",
         "send_message",
+        "edit_message",
+        "delete_message",
+        "mark_message_read",
         "create_label",
         "rename_label",
         "assign_label",

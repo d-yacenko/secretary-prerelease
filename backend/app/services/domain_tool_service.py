@@ -13,6 +13,7 @@ from app.api.schemas import (
     ObjectOut,
 )
 from app.db.models import Edge, Object
+from app.db.session import SessionLocal
 from app.domain.labels import EDGE_TYPE_LABELED_WITH
 from app.domain.object_visibility import is_object_tombstoned
 from app.domain.task_lifecycle import (
@@ -113,6 +114,13 @@ from app.tools.schemas import (
     SetInboxReviewMarkerOutput,
     SetTaskStatusInput,
     SetTaskStatusOutput,
+    TelegramMtprotoDeleteCanonicalInput,
+    TelegramMtprotoEditCanonicalInput,
+    TelegramMtprotoEditInput,
+    TelegramMtprotoMarkReadCanonicalInput,
+    TelegramMtprotoMarkReadInput,
+    TelegramMtprotoMutationOutput,
+    TelegramMtprotoObjectMutationInput,
     ToolError,
     UpdateTaskInput,
     UpdateTaskOutput,
@@ -1150,3 +1158,41 @@ class DomainToolService:
 
     def send_message(self, payload: SendMessageCanonicalInput) -> SendMessageOutput:
         return self._communication_actions().send_message(payload)
+
+    def _telegram_mtproto_mutations(self):
+        from app.services.telegram_mtproto_mutation_service import (
+            TelegramMtprotoMutationService,
+        )
+
+        return TelegramMtprotoMutationService(
+            self._session,
+            self._user_id,
+            transport=self._telegram_mtproto_transport,
+            attempt_session_factory=self._attempt_session_factory or SessionLocal,
+        )
+
+    def prepare_edit_message(
+        self, payload: TelegramMtprotoEditInput
+    ) -> TelegramMtprotoEditCanonicalInput:
+        return self._telegram_mtproto_mutations().prepare_edit(payload)
+
+    def edit_message(
+        self, payload: TelegramMtprotoEditCanonicalInput
+    ) -> TelegramMtprotoMutationOutput:
+        return self._telegram_mtproto_mutations().edit(payload)
+
+    def prepare_delete_message(self, payload: TelegramMtprotoObjectMutationInput):
+        return self._telegram_mtproto_mutations().prepare_delete(payload.object_id)
+
+    def delete_message(
+        self, payload: TelegramMtprotoDeleteCanonicalInput
+    ) -> TelegramMtprotoMutationOutput:
+        return self._telegram_mtproto_mutations().delete(payload)
+
+    def prepare_mark_message_read(self, payload: TelegramMtprotoMarkReadInput):
+        return self._telegram_mtproto_mutations().prepare_mark_read(payload.object_id)
+
+    def mark_message_read(
+        self, payload: TelegramMtprotoMarkReadCanonicalInput
+    ) -> TelegramMtprotoMutationOutput:
+        return self._telegram_mtproto_mutations().mark_read(payload)

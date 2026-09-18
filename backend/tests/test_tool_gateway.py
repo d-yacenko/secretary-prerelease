@@ -52,6 +52,9 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "create_calendar_event",
         "send_email",
         "send_message",
+        "edit_message",
+        "delete_message",
+        "mark_message_read",
     }
 )
 
@@ -102,6 +105,9 @@ def test_registry_covers_executor_dispatch_tools():
         "create_calendar_event",
         "send_email",
         "send_message",
+        "edit_message",
+        "delete_message",
+        "mark_message_read",
     }
     assert registered_tool_names() == expected
 
