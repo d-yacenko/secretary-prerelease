@@ -126,6 +126,7 @@ class TelegramMtprotoHistoryEntry:
     topic_id: int | None
     edited_at: datetime | None
     is_service: bool
+    outgoing: bool = False
 
 
 @dataclass(frozen=True)
@@ -513,7 +514,9 @@ class TelethonMtprotoTransport:
     ) -> TelegramMtprotoSentMessage:
         client: TelegramClient | None = None
         try:
-            input_peer = _input_peer_from_reference(provider_peer_reference)
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
             client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
             await client.connect()
             if not await client.is_user_authorized():
@@ -561,6 +564,10 @@ class TelethonMtprotoTransport:
         except FloodWaitError:
             raise TelegramMtprotoWriteUncertainError(
                 "Telegram send outcome is uncertain; not retrying"
+            ) from None
+        except TelegramMtprotoProviderReferenceInvalidError:
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram selected group reference is invalid"
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
             raise TelegramMtprotoWriteDefiniteError(
@@ -836,6 +843,24 @@ def _input_peer_from_reference(provider_peer_reference: str) -> object:
     )
 
 
+def validate_provider_peer_reference(
+    provider_peer_reference: str, *, expected_peer_id: int
+) -> object:
+    """Parse a durable reference and require its canonical Telethon peer id."""
+    input_peer = _input_peer_from_reference(provider_peer_reference)
+    try:
+        canonical_peer_id = utils.get_peer_id(input_peer)
+    except (TypeError, ValueError):
+        raise TelegramMtprotoProviderReferenceInvalidError(
+            "Telegram selected group reference is invalid"
+        ) from None
+    if canonical_peer_id != expected_peer_id:
+        raise TelegramMtprotoProviderReferenceInvalidError(
+            "Telegram selected group reference does not match peer"
+        )
+    return input_peer
+
+
 def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry | None:
     message_id = getattr(message, "id", None)
     if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
@@ -863,6 +888,7 @@ def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry 
         topic_id=topic_id,
         edited_at=edited_at,
         is_service=getattr(message, "action", None) is not None,
+        outgoing=bool(getattr(message, "out", False)),
     )
 
 

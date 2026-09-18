@@ -78,6 +78,7 @@ from app.connectors.telegram.mtproto_transport import (
     TelegramMtprotoSentMessage,
     TelegramMtprotoTransport,
     TelethonMtprotoTransport,
+    validate_provider_peer_reference,
 )
 from app.connectors.telegram.normalize import build_external_id as build_telegram_external_id
 from app.connectors.telegram.normalize import provider_id_str
@@ -500,6 +501,7 @@ class CommunicationExternalActionService:
             raise ToolError("Telegram MTProto peer is not in active scope")
         try:
             reference = store.decrypt_reference(selection)
+            validate_provider_peer_reference(reference, expected_peer_id=peer_id)
         except (TelegramMtprotoProviderReferenceInvalidError, ValueError) as exc:
             raise ToolError("Telegram MTProto peer reference is invalid") from exc
         except Exception as exc:
@@ -716,6 +718,7 @@ class CommunicationExternalActionService:
             session = store.decrypt_session(account)
             if not reference or not session:
                 return self._definite_failure(payload, "Telegram MTProto route is unavailable")
+            validate_provider_peer_reference(reference, expected_peer_id=route.peer_id)
         except (ToolError, TelegramMtprotoProviderReferenceInvalidError, ValueError) as exc:
             return self._definite_failure(payload, str(exc) or "Telegram MTProto route is unavailable")
         except Exception:  # noqa: BLE001 - durable route errors fail closed

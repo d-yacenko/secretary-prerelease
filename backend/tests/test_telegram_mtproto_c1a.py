@@ -16,7 +16,10 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoWriteDefiniteError,
     TelegramMtprotoWriteUncertainError,
 )
-from app.connectors.telegram.mtproto_transport import TelegramMtprotoSentMessage
+from app.connectors.telegram.mtproto_transport import (
+    TelegramMtprotoHistoryEntry,
+    TelegramMtprotoSentMessage,
+)
 from app.db.models import (
     ExternalActionAttempt,
     Job,
@@ -31,6 +34,7 @@ from app.services.communication_external_action_service import (
     ATTEMPT_UNCERTAIN,
     CommunicationExternalActionService,
 )
+from app.services.telegram_mtproto_history_service import _normalize_entry
 from app.tools.schemas import SendMessageInput, TelegramMtprotoSendRoute, ToolError
 
 
@@ -126,7 +130,7 @@ def _fixture(db_session, credential_key: str, *, scope_active: bool = True):
         peer_id=peer_id,
         peer_kind="private",
         provider_peer_reference_encrypted=encryption.encrypt(
-            json.dumps({"entity_type": "user", "id": 12345, "access_hash": 99})
+            json.dumps({"entity_type": "user", "id": peer_id, "access_hash": 99})
         ),
         title="Alice",
         username="alice",
@@ -185,9 +189,26 @@ def test_prepare_freezes_mtproto_compose_and_exact_reply_route(db_session, crede
 
 
 def test_prepare_mtproto_fails_closed_for_inactive_and_wrong_account(db_session, credential_key):
-    user, _, selection, obj = _fixture(db_session, credential_key, scope_active=False)
+    user, _, _, obj = _fixture(db_session, credential_key, scope_active=False)
     service = _service(db_session, user.id, _FakeMtprotoTransport())
     with pytest.raises(ToolError, match="active scope"):
+        service.prepare_send_message(SendMessageInput(body="hi", conversation_object_id=obj.id))
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["not-json", json.dumps({"entity_type": "channel", "id": 777})],
+)
+def test_prepare_mtproto_rejects_malformed_or_mismatched_reference(
+    db_session, credential_key, reference
+):
+    user, _, selection, obj = _fixture(db_session, credential_key)
+    selection.provider_peer_reference_encrypted = CredentialEncryption(credential_key).encrypt(
+        reference
+    )
+    db_session.flush()
+    service = _service(db_session, user.id, _FakeMtprotoTransport())
+    with pytest.raises(ToolError, match="reference"):
         service.prepare_send_message(SendMessageInput(body="hi", conversation_object_id=obj.id))
 
     selection.scope_active = True
@@ -243,6 +264,106 @@ def test_compose_sends_once_materializes_canonical_object_without_ai_job(
             Job.payload["object_id"].as_string() == str(created.id),
         )
     ) is None
+
+
+def test_execution_revalidates_reference_before_provider_write(db_session, credential_key):
+    user, _, selection, obj = _fixture(db_session, credential_key)
+    fake = _FakeMtprotoTransport()
+    service = _service(db_session, user.id, fake)
+    plan = service.prepare_send_message(
+        SendMessageInput(body="outbound", conversation_object_id=obj.id)
+    )
+    selection.provider_peer_reference_encrypted = CredentialEncryption(credential_key).encrypt(
+        json.dumps({"entity_type": "user", "id": 778, "access_hash": 99})
+    )
+    db_session.flush()
+    with pytest.raises(ToolError, match="reference|route"):
+        service.send_message(plan)
+    attempt = db_session.scalar(
+        select(ExternalActionAttempt).where(ExternalActionAttempt.operation_id == plan.operation_id)
+    )
+    assert attempt is not None
+    assert attempt.state == "failed_definite"
+    assert len(fake.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_telethon_transport_validates_reference_before_client(monkeypatch):
+    from app.connectors.telegram import mtproto_transport
+
+    def fail_if_constructed(*args, **kwargs):
+        raise AssertionError("client must not be constructed for invalid reference")
+
+    monkeypatch.setattr(mtproto_transport, "TelegramClient", fail_if_constructed)
+    transport = mtproto_transport.TelethonMtprotoTransport(123, "hash")
+    with pytest.raises(TelegramMtprotoWriteDefiniteError, match="reference"):
+        await transport.send_message(
+            "session",
+            json.dumps({"entity_type": "user", "id": 778, "access_hash": 99}),
+            peer_id=777,
+            text="hello",
+        )
+
+
+def test_history_normalization_converges_to_outbound_direction_without_ai_job(
+    db_session, credential_key
+):
+    user, account, selection, obj = _fixture(db_session, credential_key)
+    fake = _FakeMtprotoTransport()
+    service = _service(db_session, user.id, fake)
+    plan = service.prepare_send_message(
+        SendMessageInput(body="outbound", conversation_object_id=obj.id)
+    )
+    result = service.send_message(plan)
+    created = db_session.get(Object, result.object_id)
+    assert created is not None
+    normalized = _normalize_entry(
+        account,
+        selection,
+        TelegramMtprotoHistoryEntry(
+            message_id=9001,
+            occurred_at=datetime.now(UTC),
+            text="outbound",
+            sender_peer_id=selection.peer_id,
+            reply_to_message_id=None,
+            topic_id=None,
+            edited_at=None,
+            is_service=False,
+            outgoing=True,
+        ),
+        datetime.now(UTC).replace(year=datetime.now(UTC).year - 1),
+    )
+    assert normalized is not None
+    assert normalized["metadata"]["direction"] == "outbound"
+    materialized = service._telegram_materializer.upsert_mtproto_message(
+        user_id=user.id, normalized=normalized
+    )
+    assert materialized.obj.id == created.id
+    assert materialized.obj.metadata_["direction"] == "outbound"
+    assert db_session.scalar(
+        select(Job.id).where(Job.type == JOB_TYPE_EMBED_OBJECT)
+    ) is None
+
+
+def test_history_normalization_marks_inbound_entries_inbound(db_session, credential_key):
+    _, account, selection, _ = _fixture(db_session, credential_key)
+    normalized = _normalize_entry(
+        account,
+        selection,
+        TelegramMtprotoHistoryEntry(
+            message_id=9002,
+            occurred_at=datetime.now(UTC),
+            text="inbound",
+            sender_peer_id=-42,
+            reply_to_message_id=None,
+            topic_id=None,
+            edited_at=None,
+            is_service=False,
+        ),
+        datetime.now(UTC).replace(year=datetime.now(UTC).year - 1),
+    )
+    assert normalized is not None
+    assert normalized["metadata"]["direction"] == "inbound"
 
 
 def test_reply_sends_exact_provider_reply_id_and_success_replay_does_not_resend(
