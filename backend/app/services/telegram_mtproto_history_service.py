@@ -173,6 +173,7 @@ class TelegramMtprotoHistoryService:
         rotation %= len(peer_ids)
         ordered_peers = peer_ids[rotation:] + peer_ids[:rotation]
         candidates: dict[int, list[tuple[Object, str]]] = {}
+        actual_newest_values: dict[int, dict[str, str | None]] = {}
         for peer_id in ordered_peers:
             base_filters = [
                 Object.user_id == user_id,
@@ -201,6 +202,7 @@ class TelegramMtprotoHistoryService:
             head_candidate: Object | None = None
             if head_window:
                 newest = head_window[0]
+                actual_newest_values[peer_id] = _object_cursor_value(newest)
                 if newest_cursor != _object_cursor(newest):
                     head_candidate = newest
                 elif head_cursor is not None:
@@ -292,9 +294,7 @@ class TelegramMtprotoHistoryService:
                     else:
                         heads[peer_key] = {
                             "cursor": cursor_value,
-                            "newest": _object_cursor_value(
-                                candidates[peer_id][0][0]
-                            ),
+                            "newest": actual_newest_values[peer_id],
                         }
                     modes[peer_key] = "sweep" if mode == "head" else "head"
                     last_serviced_index = peer_ids.index(peer_id)

@@ -1,7 +1,7 @@
 """Telegram MTProto C2A bounded recent-message reconciliation regressions."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.fernet import Fernet
@@ -602,6 +602,114 @@ async def test_account_rotation_advances_after_last_serviced_peer_not_one_step(
     assert second_window[0] == sorted(peers)[20]
     assert len(set(first_window)) == 20
     assert len(set(second_window)) == 20
+
+
+@pytest.mark.asyncio
+async def test_head_window_persists_actual_newest_and_rotates_exactly(
+    db_session, credential_key
+):
+    user, account, selection, old_object = _fixture(db_session, credential_key)
+    base = datetime.now(UTC)
+    recent = []
+    for offset, message_id in enumerate((10, 11, 12, 13, 14)):
+        obj = Object(
+            user_id=user.id,
+            kind="chat_message",
+            provider="telegram",
+            external_id=f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+            origin="source",
+            state="observed",
+            title="Alice: old",
+            body="old",
+            metadata_={
+                "transport": "mtproto",
+                "account_id": str(account.id),
+                "peer_id": selection.peer_id,
+                "message_id": message_id,
+            },
+            occurred_at=base + timedelta(seconds=offset + 1),
+        )
+        recent.append(obj)
+        db_session.add(obj)
+    db_session.flush()
+    sweep_cursor = {
+        "occurred_at": old_object.occurred_at.isoformat(),
+        "id": str(old_object.id),
+    }
+    newest_cursor = {
+        "occurred_at": recent[-1].occurred_at.isoformat(),
+        "id": str(recent[-1].id),
+    }
+    payload = {
+        TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY: {str(selection.peer_id): sweep_cursor},
+        TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY: {
+            str(selection.peer_id): {"cursor": None, "newest": newest_cursor}
+        },
+        TELEGRAM_MTPROTO_RECONCILE_MODES_KEY: {str(selection.peer_id): "head"},
+    }
+
+    inserted = None
+
+    def provider_result(peer_id, message_id):
+        text = "third-recent edit" if message_id == 12 else "same"
+        occurred_at = next(
+            (item.occurred_at for item in recent if item.metadata_["message_id"] == message_id),
+            inserted.occurred_at if inserted is not None else base,
+        )
+        return {
+            "peer_id": peer_id,
+            "message_id": message_id,
+            "text": text,
+            "occurred_at": occurred_at,
+            "edited_at": datetime.now(UTC),
+            "outgoing": False,
+            "service": False,
+        }
+
+    transport = _RecentTransport(provider_result)
+    service = _history(db_session, credential_key, transport)
+    for expected in (14, 13, 12, 11, 10):
+        payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY][str(selection.peer_id)] = "head"
+        await service.reconcile_recent_messages(user.id, account.id, payload)
+        assert transport.calls[-1][1] == expected
+        assert payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY][str(selection.peer_id)] == sweep_cursor
+        assert payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY][str(selection.peer_id)]["cursor"] == {
+            "occurred_at": recent[expected - 10].occurred_at.isoformat(),
+            "id": str(recent[expected - 10].id),
+        }
+        assert payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY][str(selection.peer_id)]["newest"] == newest_cursor
+    db_session.refresh(recent[2])
+    assert recent[2].body == "third-recent edit"
+
+    inserted = Object(
+        user_id=user.id,
+        kind="chat_message",
+        provider="telegram",
+        external_id=f"mtproto|{account.id}|{selection.peer_id}|15",
+        origin="source",
+        state="observed",
+        title="Alice: new",
+        body="new",
+        metadata_={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": selection.peer_id,
+            "message_id": 15,
+        },
+        occurred_at=base + timedelta(seconds=20),
+    )
+    db_session.add(inserted)
+    db_session.flush()
+    payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY][str(selection.peer_id)] = "head"
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert transport.calls[-1][1] == 15
+    assert payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY][str(selection.peer_id)]["newest"] == {
+        "occurred_at": inserted.occurred_at.isoformat(),
+        "id": str(inserted.id),
+    }
+    payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY][str(selection.peer_id)] = "head"
+    await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert transport.calls[-1][1] == 14
 
 
 @pytest.mark.asyncio
