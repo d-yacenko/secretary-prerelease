@@ -35,6 +35,7 @@ from app.db.session import SessionLocal
 from app.domain.object_visibility import is_object_hidden_from_active_reads, tombstone_object
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.pipeline_enqueue import enqueue_embed_object
+from app.services.telegram_mtproto_history_service import build_mtproto_presentation_title
 from app.tools.schemas import (
     TelegramMtprotoDeleteCanonicalInput,
     TelegramMtprotoDeleteRoute,
@@ -123,7 +124,7 @@ class TelegramMtprotoMutationService:
             return self._uncertain(payload.operation_id, _UNCERTAIN_MESSAGE)
         edited_at = result.get("edited_at") or _utcnow()
         edited_at_value = edited_at.isoformat() if isinstance(edited_at, datetime) else str(edited_at)
-        title = f"{selection.title}: {route.body.splitlines()[0].strip()}"[:240]
+        title = build_mtproto_presentation_title(selection.title, route.body.splitlines()[0].strip())
         convergence = {
             "body": route.body,
             "title": title,

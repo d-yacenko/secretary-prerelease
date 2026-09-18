@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.google.errors import GoogleConfigurationError
 from app.connectors.telegram.constants import (
@@ -22,6 +24,9 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoConfigurationError,
     TelegramMtprotoGroupNotSelectedError,
     TelegramMtprotoPeerNotInActiveScopeError,
+    TelegramMtprotoProviderReferenceInvalidError,
+    TelegramMtprotoWriteDefiniteError,
+    TelegramMtprotoWriteUncertainError,
 )
 from app.connectors.telegram.mtproto_transport import (
     TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
@@ -31,10 +36,15 @@ from app.connectors.telegram.mtproto_transport import (
     TelethonMtprotoTransport,
 )
 from app.core.config import settings
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.domain.object_visibility import tombstone_object
 
 TELEGRAM_MTPROTO_HISTORY_DAYS = 14
 TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN = 200
+TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS = 20
+TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER = 5
+TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT = 100
+TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY = "telegram_reconcile_cursor"
 
 
 @dataclass(frozen=True)
@@ -108,6 +118,116 @@ class TelegramMtprotoHistoryService:
                 "Telegram peer is not in active Telegram sync scope"
             )
         return await self._sync_selection(account, selection)
+
+    async def reconcile_recent_messages(self, user_id: UUID, account_id: UUID, payload: dict) -> int:
+        """Reconcile bounded known messages through the canonical A3 materializer."""
+        account = self._session.scalar(
+            select(TelegramMtprotoAccount).where(
+                TelegramMtprotoAccount.id == account_id,
+                TelegramMtprotoAccount.user_id == user_id,
+            )
+        )
+        if account is None:
+            raise TelegramMtprotoAccountNotConnectedError(
+                "Telegram MTProto account is not connected"
+            )
+        selections = {
+            selection.peer_id: selection
+            for selection in self._session.scalars(
+                select(TelegramMtprotoChatSelection).where(
+                    TelegramMtprotoChatSelection.account_id == account_id,
+                    TelegramMtprotoChatSelection.scope_active.is_(True),
+                )
+            )
+        }
+        if not selections:
+            payload[TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY] = None
+            return 0
+        cursor = _uuid_cursor(payload.get(TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY))
+        filters = [
+            Object.user_id == user_id,
+            Object.provider == TELEGRAM_PROVIDER,
+            Object.kind == TELEGRAM_KIND,
+            Object.deleted_at.is_(None),
+        ]
+        if cursor is not None:
+            filters.append(Object.id > cursor)
+        objects = list(
+            self._session.scalars(
+                select(Object).where(*filters).order_by(Object.id).limit(
+                    TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT
+                )
+            )
+        )
+        if not objects and cursor is not None:
+            objects = list(
+                self._session.scalars(
+                    select(Object)
+                    .where(*filters[:4])
+                    .order_by(Object.id)
+                    .limit(TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT)
+                )
+            )
+        checked = 0
+        peer_counts: dict[int, int] = {}
+        materializer = TelegramObjectMaterializer(self._session)
+        transport = self._transport_factory()
+        store = self._store()
+        session = store.decrypt_session(account)
+        for obj in objects:
+            metadata = obj.metadata_ or {}
+            if metadata.get("transport") != "mtproto" or metadata.get("account_id") != str(account_id):
+                continue
+            peer_id = metadata.get("peer_id")
+            message_id = metadata.get("message_id")
+            if not isinstance(peer_id, int) or isinstance(peer_id, bool) or peer_id == 0:
+                continue
+            if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+                continue
+            selection = selections.get(peer_id)
+            if selection is None or peer_counts.get(peer_id, 0) >= TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER:
+                continue
+            peer_counts[peer_id] = peer_counts.get(peer_id, 0) + 1
+            checked += 1
+            payload[TELEGRAM_MTPROTO_RECONCILE_CURSOR_KEY] = str(obj.id)
+            try:
+                reference = store.decrypt_reference(selection)
+                result = await transport.fetch_message(
+                    session, reference, peer_id=peer_id, message_id=message_id
+                )
+                if result is None:
+                    tombstone_object(obj)
+                    self._session.flush()
+                    continue
+                if result.get("peer_id") != peer_id or result.get("message_id") != message_id:
+                    continue
+                if result.get("service") or not result.get("text"):
+                    continue
+                entry = TelegramMtprotoHistoryEntry(
+                    message_id=message_id,
+                    occurred_at=result.get("occurred_at") or obj.occurred_at,
+                    text=result.get("text"),
+                    sender_peer_id=result.get("sender_peer_id"),
+                    reply_to_message_id=result.get("reply_to_message_id"),
+                    topic_id=result.get("topic_id"),
+                    edited_at=result.get("edited_at"),
+                    is_service=bool(result.get("service")),
+                    outgoing=bool(result.get("outgoing")),
+                )
+                normalized = _normalize_entry(
+                    account, selection, entry, datetime.min.replace(tzinfo=UTC)
+                )
+                if normalized is not None:
+                    materializer.upsert_mtproto_message(user_id=user_id, normalized=normalized)
+            except (TelegramMtprotoProviderReferenceInvalidError, ValueError):
+                continue
+            except (TelegramMtprotoWriteDefiniteError, TelegramMtprotoWriteUncertainError):
+                continue
+            except Exception:  # noqa: BLE001, S112 - isolate one candidate failure
+                continue
+            if checked >= TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
+                break
+        return checked
 
     async def _sync_selection(
         self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection
@@ -277,7 +397,7 @@ def _normalize_entry(
     if not body.strip():
         return None
     first_line = body.strip().splitlines()[0].strip()
-    title = _bound_title(f"{selection.title}: {first_line}")
+    title = build_mtproto_presentation_title(selection.title, first_line)
     return {
         "provider": TELEGRAM_PROVIDER,
         "kind": TELEGRAM_KIND,
@@ -332,6 +452,11 @@ def _bound_title(text: str) -> str:
     return stripped[:199].rstrip() + "…"
 
 
+def build_mtproto_presentation_title(peer_title: str, first_line: str) -> str:
+    """Build the canonical bounded title shared by history and mutations."""
+    return _bound_title(f"{peer_title}: {first_line}")
+
+
 def _build_transport() -> TelegramMtprotoTransport:
     if not _mtproto_is_configured():
         raise TelegramMtprotoConfigurationError("Telegram MTProto is not configured")
@@ -348,3 +473,12 @@ def _mtproto_is_configured() -> bool:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _uuid_cursor(value: object) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None

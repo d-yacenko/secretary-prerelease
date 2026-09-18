@@ -734,9 +734,25 @@ class TelethonMtprotoTransport:
                 message = message[0] if message else None
             if message is None:
                 return None
+            entry = _history_entry_from_message(message)
+            if entry is None:
+                return {
+                    "peer_id": _peer_id_from_message_peer(getattr(message, "peer_id", None)),
+                    "message_id": getattr(message, "id", None),
+                    "text": None,
+                    "service": getattr(message, "action", None) is not None,
+                }
             return {
                 "peer_id": _peer_id_from_message_peer(getattr(message, "peer_id", None)),
-                "message_id": getattr(message, "id", None),
+                "message_id": entry.message_id,
+                "text": entry.text,
+                "occurred_at": entry.occurred_at,
+                "edited_at": entry.edited_at,
+                "reply_to_message_id": entry.reply_to_message_id,
+                "sender_peer_id": entry.sender_peer_id,
+                "outgoing": entry.outgoing,
+                "topic_id": entry.topic_id,
+                "service": entry.is_service,
             }
         except TelegramMtprotoWriteDefiniteError:
             raise

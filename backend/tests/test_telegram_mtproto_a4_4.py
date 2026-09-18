@@ -189,7 +189,7 @@ def test_telegram_interval_is_separate_from_generic_preferences():
     assert JOB_TYPE_SYNC_TELEGRAM_MTPROTO not in SUPPORTED_SOURCE_KEYS_ORDERED
     assert deployment_default_interval_seconds_for_job_type(
         JOB_TYPE_SYNC_TELEGRAM_MTPROTO
-    ) == 300
+    ) == 60
 
 
 def test_telegram_failure_classification_and_sanitization():
@@ -356,7 +356,7 @@ async def test_empty_reconciled_scope_does_not_fetch_history(db_session):
     assert payload["telegram_peer_cursor"] == 0
 
 
-def test_success_clears_failure_metadata_and_uses_300_seconds(db_session):
+def test_success_clears_failure_metadata_and_uses_60_seconds(db_session):
     user = User(id=uuid4(), display_name="A4.4 success user")
     db_session.add(user)
     db_session.flush()
@@ -381,4 +381,4 @@ def test_success_clears_failure_metadata_and_uses_300_seconds(db_session):
     assert job.status == JOB_STATUS_PENDING
     assert job.payload["telegram_peer_cursor"] == 7
     assert "last_error_kind" not in job.payload
-    assert job.run_after >= utcnow() + timedelta(seconds=299)
+    assert job.run_after >= utcnow() + timedelta(seconds=59)

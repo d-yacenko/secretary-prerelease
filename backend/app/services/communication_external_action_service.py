@@ -99,6 +99,7 @@ from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.domain.task_lifecycle import TASK_STATUS_DELETED
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.provenance import REJECTED_STATE
+from app.services.telegram_mtproto_history_service import build_mtproto_presentation_title
 from app.tools.schemas import (
     MattermostSendRoute,
     SendMessageCanonicalInput,
@@ -815,7 +816,7 @@ class CommunicationExternalActionService:
         sent: dict[str, Any],
     ) -> Object | None:
         body = str(sent["text"])
-        title = f"{selection.title}: {body.splitlines()[0].strip()}"[:240]
+        title = build_mtproto_presentation_title(selection.title, body.splitlines()[0].strip())
         normalized = {
             "provider": TELEGRAM_PROVIDER,
             "kind": TELEGRAM_KIND,
