@@ -30,8 +30,8 @@
 - Existing A4.3 `scope_active` visibility remains independent from the AI capability gate.
 - Future affirmative Telegram clarification should require only switching the flag to true; bounded idempotent catch-up must enqueue missing embeddings for already accumulated active MTProto objects.
 - Negative clarification will keep the MTProto AI flag false and may later trigger a separate Android/Linux local-surface redesign (Share/notifications/D-Bus), without blocking ordinary MTProto messenger use in the meantime.
-- Q1 implementation `b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595` was independently reviewed and REJECTED pending corrective Q1R: catch-up starvation, AI predicate leaking into ordinary shared read surfaces, queued-job fail-closed gaps, and insufficient focused coverage.
-- Current authorized phase: Telegram MTProto Q1R corrective, exactly as specified in `CURRENT_TASK.md`.
+- Q1 implementation `b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595` was rejected and corrected by Q1R `39e3f2f24ca1bcd695e27d070bfde229c131c7cb`. Q1R AI/non-AI read boundaries and execution-time fail-closed guards are accepted in code. Q1R remains rejected pending one narrow Q1R2 correction: catch-up equivalent-signature dedupe/budget accounting and last-inspected cursor semantics.
+- Current authorized phase: Telegram MTProto Q1R2 catch-up boundedness correction, exactly as specified in `CURRENT_TASK.md`.
 - Planned phases after Q1R acceptance: C1 MTProto communication mutations (send/reply/edit/delete/read), C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine.
 - No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during Q1.
