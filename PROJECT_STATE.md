@@ -23,24 +23,20 @@
 - M3 migration-bearing production cutover is NOT AUTHORIZED.
 - Telegram Bot API retirement is NOT AUTHORIZED.
 - Telegram API Terms clarification remains pending through external support channels.
-- Previous project-wide HOLD is lifted only for the staged non-AI Telegram completion plan.
-- Product direction while clarification is pending: MTProto will be completed as a full ordinary communication transport/messenger, while MTProto-derived objects remain excluded from ML/LLM use by default.
+- Product direction while clarification is pending: complete MTProto as a full ordinary messenger while keeping MTProto-derived objects outside ML/LLM by default.
 - Canonical installation flag: `TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
-- The flag controls AI eligibility only; active MTProto messages must remain stored and visible in ordinary Inbox/non-AI messaging flows.
-- Existing A4.3 `scope_active` visibility remains independent from the AI capability gate.
-- Future affirmative Telegram clarification should require only switching the flag to true; bounded idempotent catch-up must enqueue missing embeddings for already accumulated active MTProto objects.
-- Negative clarification will keep the MTProto AI flag false and may later trigger a separate Android/Linux local-surface redesign (Share/notifications/D-Bus), without blocking ordinary MTProto messenger use in the meantime.
-- Telegram MTProto Q1/Q1R/Q1R2 AI quarantine: ACCEPTED / INTEGRATED TO MAIN at merge `b50e1e62f825cff960f5a1a3a50711fd25863697`. Reviewed implementation tip is `8fa8f52dd81309f4530867852fe291038998148e`.
-- AI/non-AI read boundaries, execution-time fail-closed guards, and bounded signature-aware embedding catch-up are accepted.
-- Telegram MTProto C1A/C1AR send/reply: ACCEPTED / INTEGRATED TO MAIN at merge `311682ad7b245398835b585d67deec4f6074e020`. Reviewed implementation tip is `49a219d6a91349d0037c7ae7362974b496490bc2`.
-- Recipient/reference integrity is validated before approval, before provider write, and defensively in the Telethon transport; outgoing direction converges through A3 history sync.
-- C1B implementation `4d61ebeb2d96e5bfb6393ef3e39d214cd814fc51` was rejected.
-- C1BR `a7c36d8d7053ad62371207773a7aa142a9fe3407` fixes most write-safety issues and its error taxonomy, exact-message preflight concept, durable success metadata, replay repair, and mark-read effect semantics are accepted in code.
-- C1BR remains REJECTED pending narrow C1BR2: direct edit convergence bypasses semantic embedding enqueue when AI=true; preflight lookup failures before delete are still recorded as uncertain; mandatory A3 edit-convergence/tombstone non-resurrection and end-to-end deterministic rejection tests are missing.
-- Current authorized phase: Telegram MTProto C1BR2 edit-pipeline + delete-preflight corrective, exactly as specified in `CURRENT_TASK.md`.
-- Planned phases after C1BR2 acceptance: C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
-- Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and later Telegram work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C1BR2.
+- Telegram MTProto Q1/Q1R/Q1R2 AI quarantine: ACCEPTED / INTEGRATED at `b50e1e62f825cff960f5a1a3a50711fd25863697`.
+- Telegram MTProto C1A/C1AR send/reply: ACCEPTED / INTEGRATED at `311682ad7b245398835b585d67deec4f6074e020`.
+- Telegram MTProto C1B/C1BR/C1BR2 edit/delete/mark-read: ACCEPTED / INTEGRATED TO MAIN at merge `37d2106fedc3d6cd3a9b5fd15dc70ded48d00caf`. Reviewed implementation tip is `0174b82375837b428f9e0b09c811394dc0f1d884`.
+- C1B accepted semantics include approval-gated edit/delete/read, exact-peer destructive preflight, definite-vs-uncertain write classification, replay-safe local convergence, truthful mark-read effects, and Q1-aware semantic edit enqueue.
+- Non-blocking normalization debt identified during review: immediate MTProto send/edit titles use a different bound than A3 history normalization. C2A must unify canonical presentation-title generation.
+- Current authorized phase: Telegram MTProto C2A bounded near-realtime reconciliation, exactly as specified in `CURRENT_TASK.md`.
+- C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
+- C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
+- C2A must add bounded recent-message reconciliation for provider-side edits/deletes while preserving A3 new-message sync and Q1 AI quarantine.
+- Planned next phase after C2A acceptance: C2B deterministic notification/event surface, then C3 client UX, then a newly frozen migration-bearing rollout.
+- Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2A.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
