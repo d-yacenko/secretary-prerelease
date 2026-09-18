@@ -1,4 +1,4 @@
-# Current task — Telegram MTProto C2AR2: recurring recent-head + sweep correctness
+# Current task — Telegram MTProto C2AR3: separate head/sweep progress + account peer fairness
 
 ## Review status
 
@@ -8,177 +8,245 @@ C2A:
 C2AR:
 `c1044a22b81f132afdc97c711b1051dc3389c64c`
 
-Independent review result: **C2AR REJECTED pending narrow C2AR2 corrective**.
+C2AR2:
+`2cbec106effe6cb1b9f693d21fb981377518a6e2`
 
-Accepted C2AR work:
-- per-peer progress replaced the unsafe global Object cursor;
-- active selections drive peer scheduling;
-- candidate query is current-user/current-account/canonical MTProto and non-tombstoned;
-- stable `occurred_at DESC, id DESC` ordering;
-- <=5 lookups/peer/run and <=20/account/run structure;
-- peer rotation;
-- FloodWait/server generic read failures now use provider-unavailable semantics rather than write-uncertain;
-- provider-wide unavailable errors propagate out of reconciliation.
+Independent review result: **C2AR2 REJECTED pending one narrow C2AR3 corrective**.
+
+The following C2AR2 areas are ACCEPTED in code:
+- malformed message_id is skipped locally without provider call/budget consumption;
+- read-only auth/session invalid now maps to `TelegramMtprotoAuthorizationInvalidError`;
+- peer/message-local deterministic read rejection has a separate `TelegramMtprotoReadRejectedError`;
+- FloodWait/server/network read failures map to provider-unavailable/transient semantics;
+- real Telethon FloodWait translation preserves retry_after;
+- existing recurring finalizer already proves Telegram retry_after is honored;
+- sweep wrap concept is present;
+- provider bounds remain <=5/peer and <=20/account.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
 - Alembic `0041`;
 - M3 not authorized.
 
-## Blocker 1 — per-peer sweep never wraps/revisits the recent head
+## Remaining blocker 1 — head sampling corrupts the sweep cursor
 
-Current per-peer cursor query only selects rows older than the stored
-`(occurred_at, id)` cursor.
+C2AR2 prepends the newest head object to each peer's candidate list, but then writes
+that head object's `(occurred_at, id)` into the same
+`telegram_reconcile_peer_cursors` state used for historical sweep progress.
 
-When it reaches the oldest eligible row:
-- the next query is empty;
-- the cursor remains at the old tail;
-- there is no reset/wrap;
-- that peer can stop being reconciled forever.
+This is incorrect because head sampling and historical sweep are two independent traversals.
 
-Additionally, a new recent object or a remote edit of a recently checked object can sit above the cursor and is not revisited promptly while the sweep moves through older history.
+Concrete failure:
+- with 20 active peers and account limit 20, the first pass spends one provider call on each peer's head;
+- account budget is then exhausted;
+- every peer's sweep cursor has been overwritten to the head;
+- no peer advances its historical sweep;
+- the same pattern can repeat indefinitely.
 
-That does not satisfy near-realtime reconciliation.
+With >20 active peers the problem combines with account rotation and can leave old rows effectively unreconciled for very long periods.
 
-### Required design
+### Required correction
 
-Keep a bounded per-peer sweep cursor, but combine it with **recurring recent-head sampling**.
+Separate **recent-head progress** from **historical sweep progress**.
 
-The exact split is implementation-defined, but must prove both properties:
+Use the existing recurring payload only. No schema/migration.
 
-1. Recent head is revisited on a bounded cadence independent of sweep depth.
-2. Older eligible objects still make progress and eventually get revisited.
+Preferred payload shape:
+- `telegram_reconcile_peer_cursors` = historical sweep cursor only;
+- `telegram_reconcile_peer_heads` = recent-head sampling state per peer;
+- account-level peer rotation/cursor = next peer to service.
 
-Preferred simple design per serviced peer/run:
-- reserve part of the <=5 provider-lookup budget for the newest eligible objects (head sample);
-- reserve the remaining budget for the persistent older sweep cursor;
-- dedupe objects selected by both portions in the same run;
-- when the sweep reaches end, reset/wrap the sweep cursor safely to the head for the next sweep epoch;
-- a newly inserted/recent object after cursor advancement must be eligible for a prompt head check, not wait for a full historical sweep.
+A head lookup MUST NEVER overwrite or move the sweep cursor.
 
-An alternating head-run/sweep-run strategy is also acceptable if recent head latency remains bounded and tests prove older convergence.
+A sweep cursor MUST only advance when a sweep row is actually inspected.
 
-Do not increase:
-- 5 provider lookups/peer/run;
-- 20 provider lookups/account/run.
+When sweep reaches end:
+- wrap/reset sweep state safely;
+- do not depend on head state for wrap.
 
-No new DB state/table/job/daemon.
+## Remaining blocker 2 — recent head must be a rotating window, not only the single newest object
 
-## Blocker 2 — local malformed candidates must fail closed without provider calls or cursor pinning
+C2AR2 always checks exactly the newest object as the head sample.
 
-C2AR no longer validates `metadata.message_id` before calling `fetch_message`.
+That catches:
+- a newly inserted newest object;
+- an edit to the current newest object.
 
-Required:
-- message_id must be an actual int, bool excluded, >0;
-- malformed local metadata => zero provider lookup for that row;
-- it must not consume provider-lookup budget;
-- local scan/sweep progress must advance past it so it cannot pin the peer forever;
-- no unsafe JSON integer cast is required;
-- no local mutation/tombstone based on malformed metadata.
+But it does not catch an edit to the second/third recent already-checked object until the full historical sweep eventually wraps.
 
-If other canonical metadata required for reconciliation is malformed, apply the same fail-closed/progress rule.
+C2AR2 acceptance explicitly required a recent already-checked edit to be detected without waiting for a full sweep.
 
-Distinguish:
-- bounded local rows inspected;
-- actual provider lookups issued.
+### Required correction
 
-Hard provider limits are based on actual provider calls.
+Implement a small bounded recent-head window, independent from the historical sweep.
 
-## Blocker 3 — lookup auth failures must use canonical authentication semantics
+Preferred:
+- newest 3 to 5 eligible objects per peer;
+- maintain a per-peer head position/cursor in `telegram_reconcile_peer_heads`;
+- each head service advances within that recent window and wraps independently;
+- if the recent window changes because a new message arrives, sampling must naturally include it promptly;
+- head sampling must never mutate sweep state.
 
-`fetch_message()` currently maps revoked/invalid auth/session conditions to
-`TelegramMtprotoWriteDefiniteError`.
+Equivalent design is acceptable if it proves bounded revisit latency for more than only the single newest object.
 
-The recurring worker therefore classifies them as `unknown`, not the existing Telegram
-`authentication` failure.
+## Remaining blocker 3 — account-level peer rotation must advance by actual service, not +1
 
-Required:
-- revoked/invalid auth/session in read-only `fetch_message()` ->
-  `TelegramMtprotoAuthorizationInvalidError`;
-- recurring reconciliation propagates it;
-- `classify_telegram_sync_failure()` returns authentication/non-retryable;
-- peer-local lookup rejection is not mislabeled as account authentication.
+C2AR/C2AR2 currently sets:
 
-For deterministic peer/message-local read rejection, use an existing suitable peer-local error or add a narrow read-only lookup-rejected error and isolate it at reconciliation level. Do not abort all other peers for a single malformed/inaccessible message unless the error is genuinely account/provider-wide.
+`rotation = (rotation + 1) % len(peer_ids)`
 
-## Blocker 4 — real backoff integration must be tested, not only a fake final exception
+independent of how many peers were actually serviced.
 
-Current focused FloodWait test injects a prebuilt
-`TelegramMtprotoProviderUnavailableError("busy", 23)`.
+With many active peers and a 20-call account cap, this creates a sliding window that introduces only about one new peer per run.
 
-It does not prove the new Telethon branch works.
+Example:
+- 100 active peers;
+- run 1 can service peers 1..20;
+- run 2 starts at peer 2 and mostly services peers 2..21;
+- the tail can wait many minutes despite available round-robin semantics.
 
-Add tests proving:
+### Required correction
 
-1. real/fake-Telethon `FloodWaitError` raised by `get_messages` is translated by
-   `TelethonMtprotoTransport.fetch_message()` to
-   `TelegramMtprotoProviderUnavailableError` with the same retry_after seconds;
-2. reconciliation stops after that lookup;
-3. `classify_telegram_sync_failure()` returns
-   `("transient", True, retry_after)`;
-4. recurring finalization/queue uses the retry_after delay for the Telegram job;
-5. auth-invalid lookup classifies as `authentication, False`.
+Account-level rotation/cursor must point to the **next peer after the last peer actually serviced/attempted under the account budget**.
 
-## Mandatory focused coverage
+Requirements:
+- with N peers and one provider slot allocated per peer, peers outside the first account window must enter on the next run, not one-by-one;
+- no active peer is starved by earlier peers;
+- stale state for deactivated peers is ignored and pruned;
+- deterministic ordering across runs.
 
-Add/strengthen tests for all of these.
+Do not infer fairness only from sorted peer IDs.
 
-### Head + sweep + wrap
-- peer has > one sweep window;
-- repeated runs advance older sweep;
-- end-of-sweep wraps safely;
-- after wrap, recent rows are revisited;
-- insert a new most-recent eligible object after cursor already advanced: it is checked on bounded recent-head cadence;
-- remote edit to a recent already-checked object is discovered without waiting for full sweep;
-- every older bounded-test object is eventually inspected too.
+## Scheduling rule
 
-### Multi-peer bounds
-- busy peer + second/third peers;
-- actual provider calls <=5/peer/run;
-- actual provider calls <=20/account/run;
-- rotation prevents peer starvation.
+Use any simple deterministic scheduler that proves both head and sweep make progress.
 
-### Candidate sanitation
-- malformed message_id => zero provider call for that row;
-- malformed row does not pin progress;
-- legacy Bot object ignored;
-- other-account MTProto object ignored;
-- inactive scope peer ignored;
-- deactivated peer stale cursor is ignored/pruned from payload.
+A recommended design is per-peer alternating service mode:
 
-### Error isolation
-- provider-wide FloodWait/server/auth aborts account run as appropriate;
-- peer-local reference/message rejection does not block unrelated peers;
-- mismatch result does not mutate/tombstone and unrelated peer continues;
-- exact trustworthy absence still tombstones.
+- peer state records whether its next reconciliation service is `head` or `sweep`;
+- when a peer receives one provider lookup:
+  - HEAD mode uses independent recent-head state;
+  - SWEEP mode uses independent historical sweep state;
+- then toggle the peer's next mode;
+- if budget remains after all active peers have one service slot, a peer may receive additional slots, up to 5 total in the run;
+- account cursor advances after actual peer service.
 
-### Existing behavior
-- default cadence remains 60;
-- env override works;
-- A3 new-message sync remains;
-- remote edit uses same object/external_id;
-- Q1 AI=false zero AI work;
-- AI=true signature-aware semantic update;
-- canonical title helper remains shared;
-- C1A/C1B regressions remain green;
-- Alembic head remains 0046.
+This gives progress even when active peer count >=20.
 
-## Preserve accepted design
+An equivalent design is acceptable if tests prove:
+- head cannot starve sweep;
+- sweep cannot starve head;
+- >=20 active peers still make sweep progress across repeated runs.
+
+## Candidate / budget invariants
+
+Preserve:
+- canonical MTProto only;
+- current account only;
+- active scope only;
+- non-tombstoned;
+- stable recent ordering;
+- malformed metadata fail closed locally;
+- <=5 actual provider calls per peer/run;
+- <=20 actual provider calls account/run.
+
+Local malformed rows:
+- may advance the relevant local traversal cursor;
+- consume zero provider-call budget;
+- cannot pin head or sweep forever.
+
+Provider errors:
+- accepted C2AR2 taxonomy remains unchanged.
+
+## Payload hygiene
+
+At each run:
+- prune head/sweep state for peers no longer active;
+- do not retain unbounded stale peer keys;
+- payload must remain non-secret.
+
+## Required focused tests
+
+Add tests proving the actual bug is closed.
+
+### Separate head vs sweep
+
+1. Create exactly 20 active peers, each with:
+   - a recent head object;
+   - at least one older sweep object.
+
+2. Run reconciliation once:
+   - <=20 provider calls;
+   - each serviced peer may consume the account window with head work.
+
+3. Run repeatedly:
+   - every peer's historical sweep eventually advances;
+   - head sampling does not reset the sweep cursor;
+   - old objects are actually provider-fetched.
+
+Also assert directly:
+- after a head-only service for a peer, its sweep cursor is unchanged.
+
+### Recent-head window
+
+For one peer with at least 5 recent objects plus older history:
+- advance sweep away from the head;
+- edit the second or third newest already-checked object provider-side;
+- prove reconciliation rediscovers that edit through head-window sampling before historical sweep wraps;
+- insert a new newest object and prove it enters head sampling promptly;
+- older sweep still progresses.
+
+### >20 peer account fairness
+
+Create >20 active peers, e.g. 25 or 40.
+
+Across repeated runs:
+- actual calls <=20/account/run;
+- <=5/peer/run;
+- the next run starts from the first unserved peer after the previous account window;
+- all peers receive service within the expected round-robin number of runs;
+- no one-new-peer-per-run sliding-window behavior.
+
+### Scope churn / payload prune
+
+- service a peer so head/sweep state exists;
+- deactivate it;
+- next run performs zero calls for it;
+- its head/sweep payload keys are removed/ignored;
+- remaining peers continue.
+
+### Existing C2AR2 behavior
+
+Keep tests for:
+- malformed message_id zero provider call;
+- peer-local read reject isolation;
+- auth-invalid -> authentication/non-retryable;
+- real Telethon FloodWait -> provider unavailable + same retry_after;
+- recurring retry_after finalization;
+- exact absence -> tombstone;
+- mismatch -> no mutation;
+- AI=false zero AI work;
+- AI=true semantic enqueue;
+- cadence 60/env override;
+- A3/C1A/C1B/Q1 regressions;
+- Alembic head 0046.
+
+## Preserve accepted architecture
 
 Do NOT redesign:
-- existing recurring Postgres queue;
-- 60-second default cadence;
-- A3 history/materializer new-message path;
-- per-peer reconciliation state in recurring payload;
+- Postgres recurring queue;
+- 60-second Telegram default cadence;
+- A3 history/materializer;
 - exact-message reconciliation;
-- confirmed exact absence -> tombstone;
+- confirmed absence tombstone;
+- C2AR2 read-error taxonomy;
 - Q1 AI quarantine;
 - canonical title helper.
 
 Do NOT implement:
 - C2B notifications;
 - websocket/client push;
-- client UI;
+- UI;
 - long-lived Telegram listener;
 - production deploy/ref move;
 - migration 0047;
@@ -190,36 +258,36 @@ Continue:
 `review/telegram-mtproto-c2a-reconciliation`
 
 Start from exact:
-`C2AR_BASE_SHA=c1044a22b81f132afdc97c711b1051dc3389c64c`
+`C2AR2_BASE_SHA=2cbec106effe6cb1b9f693d21fb981377518a6e2`
 
-Create one corrective commit on top. Do not rewrite/squash C2A/C2AR.
+Create one corrective commit on top. Do not rewrite/squash prior C2 commits.
 
 Run:
-- focused C2A/C2AR/C2AR2 tests;
+- focused C2A/C2AR/C2AR2/C2AR3;
 - Telegram A1-A4.4/Q1/C1A/C1B;
-- Telegram recurring scheduler/queue/worker failure/backoff tests;
+- recurring Telegram queue/worker/backoff tests;
 - Ruff changed Python files;
 - git diff --check;
 - Alembic head 0046.
 
 Return:
-- `C2AR_BASE_SHA=c1044a22b81f132afdc97c711b1051dc3389c64c`
-- `C2AR2_SHA=<exact sha>`
+- `C2AR2_BASE_SHA=2cbec106effe6cb1b9f693d21fb981377518a6e2`
+- `C2AR3_SHA=<exact sha>`
 - changed files
-- exact head-vs-sweep budget/cursor rule
-- wrap rule
-- malformed-candidate progress rule
-- read-error taxonomy
-- real FloodWait/backoff integration proof
-- <=20/account and <=5/peer proof using actual provider call counts
-- focused/regression results
+- separate head-state vs sweep-state design
+- recent-head window rule
+- account peer rotation rule
+- payload-pruning rule
+- proof historical sweep advances with >=20 active peers
+- proof >20 peers rotate by service window, not +1
+- focused/regression test results
 - Ruff
 - git diff --check
 - Alembic 0046
 - production untouched
 
 Final marker:
-`TELEGRAM_MTPROTO_C2AR2_RECONCILIATION_READY`
+`TELEGRAM_MTPROTO_C2AR3_RECONCILIATION_READY`
 
 Then STOP for Architect review.
 
