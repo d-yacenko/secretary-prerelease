@@ -15,20 +15,25 @@
 - Telegram A4.1–A4.4: ACCEPTED / MAIN / NOT PRODUCTION DEPLOYED.
 - Telegram Integration Gate I1: ACCEPTED.
 - Production Line Reconciliation R1: ACCEPTED.
-- Accepted migration chain is exactly `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`.
+- Accepted migration chain is exactly `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`; no `0047` is authorized.
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
 - M2 production readiness retry: READY.
 - Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
 - M3 migration-bearing production cutover is NOT AUTHORIZED.
 - Telegram Bot API retirement is NOT AUTHORIZED.
-- Current work state: **PROJECT-WIDE HOLD** pending Telegram API Terms clarification; no Executor task is authorized.
-- Intended scenario under review is private personal-assistant processing of messages already accessible to the authenticated user, with no training/fine-tuning/dataset/public indexing/global search/resale/investigation.
-- Current Telegram official terms contain broad AI/ML restrictions including "deployment" and exception language involving explicit, informed, affirmative and continued consent from relevant users for specific content/context.
-- It is not yet resolved whether that language permits the intended private inference/summarization scenario.
-- If MTProto + AI is not permitted, future research may evaluate alternative client-side/local Telegram surfaces such as Android share intents, notification-listener flows, Telegram-documented share/export hooks, Linux desktop notification/D-Bus surfaces, and other explicit user-triggered local mechanisms.
-- Those alternatives are research candidates only; do not assume they are automatically legally or contractually unrestricted.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, destructive cleanup, or unrelated development branch is authorized during HOLD.
+- Telegram API Terms clarification remains pending through external support channels.
+- Previous project-wide HOLD is lifted only for the staged non-AI Telegram completion plan.
+- Product direction while clarification is pending: MTProto will be completed as a full ordinary communication transport/messenger, while MTProto-derived objects remain excluded from ML/LLM use by default.
+- Canonical installation flag: `TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
+- The flag controls AI eligibility only; active MTProto messages must remain stored and visible in ordinary Inbox/non-AI messaging flows.
+- Existing A4.3 `scope_active` visibility remains independent from the AI capability gate.
+- Future affirmative Telegram clarification should require only switching the flag to true; bounded idempotent catch-up must enqueue missing embeddings for already accumulated active MTProto objects.
+- Negative clarification will keep the MTProto AI flag false and may later trigger a separate Android/Linux local-surface redesign (Share/notifications/D-Bus), without blocking ordinary MTProto messenger use in the meantime.
+- Current authorized phase: Telegram MTProto Q1 AI quarantine + future activation catch-up, exactly as specified in `CURRENT_TASK.md`.
+- Planned phases after Q1 acceptance: C1 MTProto communication mutations (send/reply/edit/delete/read), C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
+- Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during Q1.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
