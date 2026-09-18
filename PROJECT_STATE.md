@@ -32,8 +32,9 @@
 - Negative clarification will keep the MTProto AI flag false and may later trigger a separate Android/Linux local-surface redesign (Share/notifications/D-Bus), without blocking ordinary MTProto messenger use in the meantime.
 - Telegram MTProto Q1/Q1R/Q1R2 AI quarantine: ACCEPTED / INTEGRATED TO MAIN at merge `b50e1e62f825cff960f5a1a3a50711fd25863697`. Reviewed implementation tip is `8fa8f52dd81309f4530867852fe291038998148e`.
 - AI/non-AI read boundaries, execution-time fail-closed guards, and bounded signature-aware embedding catch-up are accepted.
-- Current authorized phase: Telegram MTProto C1A send/reply through the canonical generic communication action path, exactly as specified in `CURRENT_TASK.md`.
-- Planned phases after C1A acceptance: C1B MTProto edit/delete/mark-read, C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
+- C1A implementation `a48d6eba209dda946d203500775ee9ecaa00d812` was independently reviewed and REJECTED pending C1AR corrective. The generic send/reply architecture is retained; blockers are durable provider-reference/peer integrity before approval and before provider write, plus outgoing direction drift on subsequent A3 history sync.
+- Current authorized phase: Telegram MTProto C1AR recipient-integrity + canonical-direction corrective, exactly as specified in `CURRENT_TASK.md`.
+- Planned phases after C1AR acceptance: C1B MTProto edit/delete/mark-read, C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine.
 - No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C1A.
 - IMAP IDLE: NOT STARTED.
