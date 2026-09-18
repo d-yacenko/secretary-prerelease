@@ -32,13 +32,16 @@
 - Non-blocking normalization debt identified during review: immediate MTProto send/edit titles use a different bound than A3 history normalization. C2A must unify canonical presentation-title generation.
 - Telegram MTProto C2A/C2AR/C2AR2/C2AR3/C2AR4 reconciliation: ACCEPTED / INTEGRATED TO MAIN at merge `5823d1f557e7040b0396e895032ed3c3b16d4d0d`. Reviewed implementation tip is `802d9aacb217bd2d3b3e012bdd2a644059d55ad4`.
 - Accepted reconciliation semantics: 60-second Telegram cadence; A3 new-message sync; bounded exact-message remote edit/delete reconciliation; independent recent-head + historical sweep traversal; fair account rotation; <=5 lookups/peer and <=20/account; auth/FloodWait/provider error classification; confirmed absence tombstone; canonical title normalization; Q1 quarantine preserved.
-- Current authorized phase: Telegram MTProto C2B deterministic notification/event surface, exactly as specified in `CURRENT_TASK.md`.
+- Telegram MTProto C2B implementation `4e01f16d2bea39e2bccef05bcfb8205269d47805`: REVIEWED / REJECTED PENDING C2BR.
+- Accepted C2B direction: deterministic UUIDv5 Notification IDs; created/edited/deleted transport event keys; existing notifications table/API; no migration; initial/backfill anti-spam intent; Q1 AI quarantine preserved.
+- C2B blocking defect: reconciliation can swallow an unexpected local Notification persistence failure under broad candidate isolation after edit/delete mutation, risking committed object convergence with a permanently missing deterministic event.
+- C2B blocking verification gap: required focused matrix was not completed; missing explicit conflict-path, backfill/replay, service/inactive, missing-edited-at/metadata-only, outgoing-delete/transient/mismatch, and Notification API behavior coverage.
+- Current authorized phase: Telegram MTProto C2BR deterministic notification corrective, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
-- C2A must add bounded recent-message reconciliation for provider-side edits/deletes while preserving A3 new-message sync and Q1 AI quarantine.
-- Planned next phase after C2B acceptance: C3 client UX, then a newly frozen migration-bearing rollout.
+- Planned next phase after C2B/C2BR acceptance: C3 client UX, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2B.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2BR.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
