@@ -40,6 +40,9 @@ from app.connectors.telegram.mtproto_transport import (
 from app.core.config import settings
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
 from app.domain.object_visibility import tombstone_object
+from app.services.telegram_mtproto_notification_service import (
+    TelegramMtprotoTransportNotificationService,
+)
 
 TELEGRAM_MTPROTO_HISTORY_DAYS = 14
 TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN = 200
@@ -266,6 +269,7 @@ class TelegramMtprotoHistoryService:
         positions = {peer_id: 0 for peer_id in ordered_peers}
         last_serviced_index: int | None = None
         materializer = TelegramObjectMaterializer(self._session)
+        notifications = TelegramMtprotoTransportNotificationService(self._session)
         transport = self._transport_factory()
         store = self._store()
         session = store.decrypt_session(account)
@@ -321,8 +325,23 @@ class TelegramMtprotoHistoryService:
                         session, reference, peer_id=peer_id, message_id=message_id
                     )
                     if result is None:
-                        tombstone_object(obj)
-                        self._session.flush()
+                        was_inbound = metadata.get("direction") == "inbound"
+                        if was_inbound and tombstone_object(obj):
+                            notifications.message_deleted(
+                                user_id=user_id,
+                                account_id=account_id,
+                                peer_id=peer_id,
+                                message_id=message_id,
+                                obj=obj,
+                                occurred_at=obj.occurred_at or _utcnow(),
+                                conversation_title=(
+                                    metadata.get("peer_title")
+                                    or metadata.get("group_title")
+                                    or selection.title
+                                ),
+                            )
+                        elif tombstone_object(obj):
+                            self._session.flush()
                         continue
                     if result.get("peer_id") != peer_id or result.get("message_id") != message_id:
                         continue
@@ -343,7 +362,25 @@ class TelegramMtprotoHistoryService:
                         account, selection, entry, datetime.min.replace(tzinfo=UTC)
                     )
                     if normalized is not None:
-                        materializer.upsert_mtproto_message(user_id=user_id, normalized=normalized)
+                        materialized = materializer.upsert_mtproto_message(
+                            user_id=user_id, normalized=normalized
+                        )
+                        if (
+                            materialized.change == "updated"
+                            and entry.edited_at is not None
+                            and metadata.get("direction") == "inbound"
+                            and normalized["metadata"].get("direction") == "inbound"
+                        ):
+                            notifications.message_edited(
+                                user_id=user_id,
+                                account_id=account_id,
+                                peer_id=peer_id,
+                                message_id=message_id,
+                                obj=materialized.obj,
+                                occurred_at=entry.occurred_at or obj.occurred_at or _utcnow(),
+                                edited_at=entry.edited_at,
+                                conversation_title=selection.title,
+                            )
                 except TelegramMtprotoProviderUnavailableError:
                     raise
                 except TelegramMtprotoProviderReferenceInvalidError:
@@ -384,6 +421,7 @@ class TelegramMtprotoHistoryService:
         latest_message_id = selection.history_latest_message_id
         backfill_before_message_id = selection.history_backfill_before_message_id
         history_complete = selection.history_complete
+        previous_latest_message_id = latest_message_id
         stats = _ImportStats()
         materializer = TelegramObjectMaterializer(self._session)
         remaining = TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN
@@ -396,7 +434,13 @@ class TelegramMtprotoHistoryService:
                 limit=TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
             )
             materialized_in_page = self._apply_page(
-                materializer, account, selection, page, cutoff, stats
+                materializer,
+                account,
+                selection,
+                page,
+                cutoff,
+                stats,
+                previous_latest_message_id=None,
             )
             stats.scanned += len(page.entries)
             stats.skipped += len(page.entries) - materialized_in_page
@@ -413,7 +457,13 @@ class TelegramMtprotoHistoryService:
                 limit=TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
             )
             materialized_in_page = self._apply_page(
-                materializer, account, selection, page, cutoff, stats
+                materializer,
+                account,
+                selection,
+                page,
+                cutoff,
+                stats,
+                previous_latest_message_id=previous_latest_message_id,
             )
             stats.scanned += len(page.entries)
             stats.skipped += len(page.entries) - materialized_in_page
@@ -503,20 +553,37 @@ class TelegramMtprotoHistoryService:
         page: TelegramMtprotoHistoryPage,
         cutoff: datetime,
         stats: _ImportStats,
+        previous_latest_message_id: int | None = None,
     ) -> int:
         materialized = 0
+        notifications = TelegramMtprotoTransportNotificationService(self._session)
         with self._session.begin_nested():
             for entry in sorted(page.entries, key=lambda item: item.message_id):
                 normalized = _normalize_entry(account, selection, entry, cutoff)
                 if normalized is None:
                     continue
                 materialized += 1
-                stats.add(
-                    materializer.upsert_mtproto_message(
-                        user_id=account.user_id,
-                        normalized=normalized,
-                    )
+                result = materializer.upsert_mtproto_message(
+                    user_id=account.user_id,
+                    normalized=normalized,
                 )
+                stats.add(result)
+                if (
+                    previous_latest_message_id is not None
+                    and entry.message_id > previous_latest_message_id
+                    and result.change == "created"
+                    and normalized["metadata"].get("direction") == "inbound"
+                    and selection.scope_active
+                ):
+                    notifications.message_created(
+                        user_id=account.user_id,
+                        account_id=account.id,
+                        peer_id=selection.peer_id,
+                        message_id=entry.message_id,
+                        obj=result.obj,
+                        occurred_at=entry.occurred_at,
+                        conversation_title=selection.title,
+                    )
         return materialized
 
 
