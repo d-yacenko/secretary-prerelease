@@ -15,12 +15,17 @@ from app.assistant.execution_effects import (
     describe_execution_effect,
 )
 from app.connectors.google.encryption import CredentialEncryption
+from app.connectors.telegram.materialize import TelegramObjectMaterializer
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoWriteDefiniteError,
     TelegramMtprotoWriteUncertainError,
 )
-from app.db.models import ExternalActionAttempt, Object
+from app.connectors.telegram.mtproto_transport import TelegramMtprotoHistoryEntry
+from app.db.models import ExternalActionAttempt, Job, Object
+from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
+from app.llm.embedding_text import embedding_input_signature
 from app.services.domain_tool_service import DomainToolService
+from app.services.telegram_mtproto_history_service import _normalize_entry
 from app.services.telegram_mtproto_mutation_service import (
     ATTEMPT_FAILED_DEFINITE,
     ATTEMPT_UNCERTAIN,
@@ -48,6 +53,7 @@ class _MutationTransport:
         self.delete_calls: list[dict[str, object]] = []
         self.read_calls: list[dict[str, object]] = []
         self.lookup_peer_id: int | None = None
+        self.fetch_error: Exception | None = None
 
     async def edit_message(self, session, reference, *, peer_id, message_id, text):
         self.edit_calls.append(
@@ -67,6 +73,8 @@ class _MutationTransport:
         self.fetch_calls.append(
             {"session": session, "reference": reference, "peer_id": peer_id, "message_id": message_id}
         )
+        if self.fetch_error is not None:
+            raise self.fetch_error
         return {
             "peer_id": self.lookup_peer_id if self.lookup_peer_id is not None else peer_id,
             "message_id": message_id,
@@ -119,6 +127,79 @@ def test_edit_updates_same_object_and_replay_does_not_write(db_session, credenti
     assert obj.external_id.endswith("|41")
     assert obj.body == "edited"
     assert obj.metadata_["direction"] == "outbound"
+
+
+def test_edit_ai_false_has_no_embedding_job(db_session, credential_key):
+    user, _, _, obj = _outbound_fixture(db_session, credential_key)
+    service = _service(db_session, user.id, _MutationTransport())
+    service.edit(service.prepare_edit(TelegramMtprotoEditInput(object_id=obj.id, body="edited")))
+    assert db_session.scalar(select(Job.id).where(Job.type == JOB_TYPE_EMBED_OBJECT)) is None
+
+
+def test_edit_ai_true_enqueues_current_signature_and_replay_repairs_once(
+    db_session, credential_key, monkeypatch
+):
+    monkeypatch.setattr("app.core.config.settings.telegram_mtproto_ai_enabled", True)
+    user, _, _, obj = _outbound_fixture(db_session, credential_key)
+    service = _service(db_session, user.id, _MutationTransport())
+    plan = service.prepare_edit(TelegramMtprotoEditInput(object_id=obj.id, body="edited"))
+    service.edit(plan)
+    jobs = list(
+        db_session.scalars(
+            select(Job).where(Job.type == JOB_TYPE_EMBED_OBJECT, Job.user_id == user.id)
+        )
+    )
+    assert len(jobs) == 1
+    assert jobs[0].payload["embedding_input_signature"] == embedding_input_signature(obj)
+
+    service.edit(plan)
+    assert db_session.scalar(
+        select(Job.id).where(Job.type == JOB_TYPE_EMBED_OBJECT, Job.user_id == user.id)
+    ) == jobs[0].id
+    db_session.delete(jobs[0])
+    db_session.flush()
+    service.edit(plan)
+    repaired = list(
+        db_session.scalars(
+            select(Job).where(Job.type == JOB_TYPE_EMBED_OBJECT, Job.user_id == user.id)
+        )
+    )
+    assert len(repaired) == 1
+    assert repaired[0].payload["embedding_input_signature"] == embedding_input_signature(obj)
+
+
+def test_edit_converges_with_later_a3_history_update(db_session, credential_key):
+    user, account, selection, obj = _outbound_fixture(db_session, credential_key)
+    service = _service(db_session, user.id, _MutationTransport())
+    plan = service.prepare_edit(TelegramMtprotoEditInput(object_id=obj.id, body="edited"))
+    service.edit(plan)
+    edited_at = datetime.fromisoformat(obj.metadata_["edited_at"])
+    normalized = _normalize_entry(
+        account,
+        selection,
+        TelegramMtprotoHistoryEntry(
+            message_id=41,
+            occurred_at=obj.occurred_at,
+            text="edited",
+            sender_peer_id=selection.peer_id,
+            reply_to_message_id=None,
+            topic_id=None,
+            edited_at=edited_at,
+            is_service=False,
+            outgoing=True,
+        ),
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    materialized = TelegramObjectMaterializer(db_session).upsert_mtproto_message(
+        user_id=user.id, normalized=normalized
+    )
+    db_session.refresh(obj)
+    assert materialized.obj.id == obj.id
+    assert materialized.obj.external_id == obj.external_id
+    assert materialized.obj.body == "edited"
+    assert materialized.obj.title == obj.title
+    assert materialized.obj.metadata_["edited_at"] == obj.metadata_["edited_at"]
+    assert materialized.obj.metadata_["direction"] == "outbound"
 
 
 def test_edit_uses_approval_gateway_and_freezes_only_safe_route(db_session, credential_key):
@@ -270,6 +351,114 @@ def test_delete_replay_repairs_lost_tombstone_without_provider_call(db_session, 
     assert replay.status == "already_succeeded"
     assert len(transport.delete_calls) == 1
     assert obj.deleted_at is not None
+
+
+@pytest.mark.parametrize("preflight_error", [TimeoutError("timeout"), TelegramMtprotoWriteUncertainError("server")])
+def test_delete_preflight_failure_is_definite_and_not_retried(
+    db_session, credential_key, preflight_error
+):
+    user, _, _, obj = _fixture(db_session, credential_key)
+    transport = _MutationTransport()
+    transport.fetch_error = preflight_error
+    service = _service(db_session, user.id, transport)
+    plan = service.prepare_delete(obj.id)
+    with pytest.raises(ToolError, match="lookup failed before delete"):
+        service.delete(plan)
+    with pytest.raises(ToolError, match="previously failed"):
+        service.delete(plan)
+    attempt = db_session.scalar(
+        select(ExternalActionAttempt).where(ExternalActionAttempt.operation_id == plan.operation_id)
+    )
+    assert attempt is not None
+    assert attempt.state == ATTEMPT_FAILED_DEFINITE
+    assert len(transport.fetch_calls) == 1
+    assert transport.delete_calls == []
+
+
+def test_delete_timeout_after_preflight_is_uncertain_and_not_retried(db_session, credential_key):
+    user, _, _, obj = _fixture(db_session, credential_key)
+    transport = _MutationTransport(mode="uncertain")
+    service = _service(db_session, user.id, transport)
+    plan = service.prepare_delete(obj.id)
+    with pytest.raises(ToolError, match="provider outcome is uncertain"):
+        service.delete(plan)
+    with pytest.raises(ToolError, match="could not confirm"):
+        service.delete(plan)
+    attempt = db_session.scalar(
+        select(ExternalActionAttempt).where(ExternalActionAttempt.operation_id == plan.operation_id)
+    )
+    assert attempt is not None
+    assert attempt.state == ATTEMPT_UNCERTAIN
+    assert len(transport.fetch_calls) == 1
+    assert len(transport.delete_calls) == 1
+
+
+def test_delete_passive_history_does_not_resurrect_tombstone(db_session, credential_key):
+    user, account, selection, obj = _fixture(db_session, credential_key)
+    service = _service(db_session, user.id, _MutationTransport())
+    service.delete(service.prepare_delete(obj.id))
+    deleted_at = obj.deleted_at
+    normalized = _normalize_entry(
+        account,
+        selection,
+        TelegramMtprotoHistoryEntry(
+            message_id=41,
+            occurred_at=obj.occurred_at,
+            text="old body",
+            sender_peer_id=selection.peer_id,
+            reply_to_message_id=None,
+            topic_id=None,
+            edited_at=None,
+            is_service=False,
+        ),
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    materialized = TelegramObjectMaterializer(db_session).upsert_mtproto_message(
+        user_id=user.id, normalized=normalized
+    )
+    db_session.refresh(obj)
+    assert materialized.obj.id == obj.id
+    assert obj.deleted_at == deleted_at
+    assert obj.body == "hello"
+
+
+def test_real_transport_deterministic_rejection_persists_failed_definite(
+    db_session, credential_key, monkeypatch
+):
+    from telethon.errors import MessageIdInvalidError
+
+    from app.connectors.telegram import mtproto_transport
+
+    class Client:
+        async def connect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return True
+
+        async def edit_message(self, *args, **kwargs):
+            raise MessageIdInvalidError(None)
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr(mtproto_transport, "TelegramClient", lambda *args: Client())
+    monkeypatch.setattr(mtproto_transport, "StringSession", lambda value: value)
+    user, _, _, obj = _outbound_fixture(db_session, credential_key)
+    service = TelegramMtprotoMutationService(
+        db_session,
+        user.id,
+        transport=mtproto_transport.TelethonMtprotoTransport(123, "hash"),
+        attempt_session_factory=lambda: _SessionProxy(db_session),
+    )
+    plan = service.prepare_edit(TelegramMtprotoEditInput(object_id=obj.id, body="edited"))
+    with pytest.raises(ToolError, match="rejected"):
+        service.edit(plan)
+    attempt = db_session.scalar(
+        select(ExternalActionAttempt).where(ExternalActionAttempt.operation_id == plan.operation_id)
+    )
+    assert attempt is not None
+    assert attempt.state == ATTEMPT_FAILED_DEFINITE
 
 
 @pytest.mark.parametrize("mode, expected", [("uncertain", ATTEMPT_UNCERTAIN), ("definite", ATTEMPT_FAILED_DEFINITE)])

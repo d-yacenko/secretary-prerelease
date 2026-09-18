@@ -34,6 +34,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.domain.object_visibility import is_object_hidden_from_active_reads, tombstone_object
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
+from app.services.pipeline_enqueue import enqueue_embed_object
 from app.tools.schemas import (
     TelegramMtprotoDeleteCanonicalInput,
     TelegramMtprotoDeleteRoute,
@@ -163,15 +164,30 @@ class TelegramMtprotoMutationService:
                 peer_id=route.peer_id,
                 message_id=route.message_id,
             )
-            if not (
-                isinstance(verified, dict)
-                and verified.get("peer_id") == route.peer_id
-                and verified.get("message_id") == route.message_id
-            ):
-                return self._definite(
-                    payload.operation_id,
-                    "Telegram message is not present in the selected peer",
-                )
+        except TelegramMtprotoWriteDefiniteError as exc:
+            return self._definite(payload.operation_id, exc.message)
+        except TelegramMtprotoWriteUncertainError:
+            return self._definite(
+                payload.operation_id,
+                "Telegram message lookup failed before delete; create a new plan",
+            )
+        except ToolError:
+            raise
+        except Exception:  # noqa: BLE001 - preflight fails closed before destructive write
+            return self._definite(
+                payload.operation_id,
+                "Telegram message lookup failed before delete; create a new plan",
+            )
+        if not (
+            isinstance(verified, dict)
+            and verified.get("peer_id") == route.peer_id
+            and verified.get("message_id") == route.message_id
+        ):
+            return self._definite(
+                payload.operation_id,
+                "Telegram message is not present in the selected peer",
+            )
+        try:
             result = self._call_transport(
                 "delete_message",
                 session,
@@ -457,6 +473,7 @@ class TelegramMtprotoMutationService:
         obj.metadata_ = object_metadata
         flag_modified(obj, "metadata_")
         self._session.flush()
+        enqueue_embed_object(self._session, obj.id, self._user_id)
 
     def _converge_delete(self, payload: TelegramMtprotoDeleteCanonicalInput) -> None:
         obj = self._session.scalar(

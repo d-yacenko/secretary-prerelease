@@ -13,6 +13,7 @@ from telethon.errors import (
     ChatIdInvalidError,
     FloodWaitError,
     ForbiddenError,
+    MessageIdInvalidError,
     NotFoundError,
     PasswordHashInvalidError,
     PeerIdInvalidError,
@@ -696,7 +697,7 @@ class TelethonMtprotoTransport:
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
             raise TelegramMtprotoWriteDefiniteError("Telegram message edit was rejected") from None
-        except (BadRequestError, ForbiddenError, NotFoundError):
+        except (MessageIdInvalidError, BadRequestError, ForbiddenError, NotFoundError):
             raise TelegramMtprotoWriteDefiniteError("Telegram message edit was rejected") from None
         except (ServerError, TimedOutError):
             raise TelegramMtprotoWriteUncertainError(
