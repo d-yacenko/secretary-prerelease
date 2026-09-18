@@ -19,19 +19,18 @@
 - Accepted migration chain is exactly `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`; no `0047` is authorized.
 - Normal `ops/production/deploy.py` remains schema-neutral and must reject this migration-bearing release.
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- M1 accepted safety properties include: release-Compose Telegram preflight before downtime; captured-ID initial stop proof; direct DB `alembic_version` checks; bounded startup health retries; stopped-aware post-cutover current-writer quiescence proof; exact `0046` revision gate before MTProto emptiness check; no destructive downgrade on data or uncertainty.
-- M1 is integrated into `main`.
-- Initial M2 production readiness inspection was BLOCKED only by `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
-- Candidate release code remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
-- Architectural credential model: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` are installation-level Secretary platform credentials; each Secretary user receives a separate encrypted per-user MTProto session via phone/code/2FA authorization.
-- Operator has now provisioned the two Telegram platform credential entries into production `/opt/secretary/.env`.
-- Credential values/hashes were not shared in chat or repository and are not committed.
-- Provisioning is NOT yet accepted as production-ready; full M2 readiness must be rerun and independently reviewed.
-- Current authorization: rerun the M2 readiness/no-mutation gate only, as specified in `CURRENT_TASK.md`.
-- During M2 retry it remains forbidden to move `production`, stop/restart/recreate services, run Alembic writes, mutate DB rows/schema, modify `.env`, rotate credentials, or execute deployment.
-- M2 retry must prove candidate release Compose sees usable Telegram credentials for both api+worker, values match without disclosure, DB/key invariants remain equal, and production runtime/ref/container IDs/DB volume/Alembic remain unchanged.
-- Only after M2 returns READY and Architect accepts the evidence may M3 authorize actual migration-bearing cutover.
+- Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
+- M2 production readiness retry: **READY**. Sanitized evidence: local main/origin-main exact, production runtime/ref exact rollback SHA, SSH fingerprint PASS, health PASS, DB TCP auth PASS, direct Alembic `0041`, rollback Compose env PASS, candidate release resolves/configures PASS, candidate Telegram credentials PASS, api/worker Telegram credential match PASS, release DB/key equality PASS, production state unchanged PASS, temporary worktree removed PASS.
+- Exact pre-edit owner/group/mode evidence for `.env` was not available and was not fabricated.
+- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deploy/ref move occurred.
+- M3 migration-bearing production cutover is **NOT AUTHORIZED** due Telegram external compliance blocker.
+- Current Telegram API Terms prohibit using/accessing/aggregating Telegram-platform data to train, fine-tune, develop, enhance, or deploy AI/ML systems.
+- Current Bot Platform terms permit use of data submitted directly and voluntarily by users to a bot only with clear intended-use disclosure and individual explicit active revocable consent; broader scraping/aggregation for AI products is prohibited.
+- Accepted MTProto A3/A4 automatic history/folder ingestion currently feeds Telegram-derived objects into assistant/search/retrieval/embedding/proactive paths and therefore must not be production-deployed unchanged.
+- Telegram Bot API retirement is **DEFERRED**. Bot code/config/webhook/schema must remain until a compliant Telegram architecture is selected and implemented.
+- Current authorized work: Telegram Compliance Re-scope C1 design/code-impact analysis as specified in `CURRENT_TASK.md`.
+- C1 must define a single clear user-facing Telegram model, consent/revocation semantics, exact AI-visible data boundary, and whether MTProto is retained only for non-AI functions or removed.
+- Until C1 acceptance: no production ref move, no production deploy, no service restart/recreate, no Alembic write, no DB mutation, no further `.env` mutation, no production MTProto login/history import, no bot disable/delete, no destructive Telegram cleanup.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
