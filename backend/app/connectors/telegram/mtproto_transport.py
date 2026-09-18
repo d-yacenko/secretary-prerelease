@@ -41,6 +41,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoReadRejectedError,
     TelegramMtprotoWriteDefiniteError,
     TelegramMtprotoWriteUncertainError,
 )
@@ -726,7 +727,7 @@ class TelethonMtprotoTransport:
             client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
             await client.connect()
             if not await client.is_user_authorized():
-                raise TelegramMtprotoWriteDefiniteError(
+                raise TelegramMtprotoAuthorizationInvalidError(
                     "Telegram MTProto authorization is no longer valid"
                 )
             message = await client.get_messages(input_peer, ids=message_id)
@@ -754,9 +755,7 @@ class TelethonMtprotoTransport:
                 "topic_id": entry.topic_id,
                 "service": entry.is_service,
             }
-        except TelegramMtprotoWriteDefiniteError:
-            raise
-        except TelegramMtprotoProviderReferenceInvalidError:
+        except (TelegramMtprotoAuthorizationInvalidError, TelegramMtprotoProviderReferenceInvalidError):
             raise
         except (
             AuthKeyError,
@@ -767,12 +766,12 @@ class TelethonMtprotoTransport:
             UserDeactivatedBanError,
             UserDeactivatedError,
         ):
-            raise TelegramMtprotoWriteDefiniteError(
+            raise TelegramMtprotoAuthorizationInvalidError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError,
                 BadRequestError, ForbiddenError, NotFoundError):
-            raise TelegramMtprotoWriteDefiniteError("Telegram message lookup was rejected") from None
+            raise TelegramMtprotoReadRejectedError("Telegram message lookup was rejected") from None
         except FloodWaitError as exc:
             raise TelegramMtprotoProviderUnavailableError(
                 "Telegram provider is temporarily unavailable", exc.seconds

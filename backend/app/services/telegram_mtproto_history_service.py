@@ -21,11 +21,13 @@ from app.connectors.telegram.materialize import (
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAccountNotConnectedError,
+    TelegramMtprotoAuthorizationInvalidError,
     TelegramMtprotoConfigurationError,
     TelegramMtprotoGroupNotSelectedError,
     TelegramMtprotoPeerNotInActiveScopeError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoReadRejectedError,
     TelegramMtprotoWriteDefiniteError,
 )
 from app.connectors.telegram.mtproto_transport import (
@@ -45,6 +47,7 @@ TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS = 20
 TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER = 5
 TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT = 100
 TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY = "telegram_reconcile_peer_cursors"
+TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY = "telegram_reconcile_peer_heads"
 TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY = "telegram_reconcile_peer_rotation"
 
 
@@ -156,8 +159,9 @@ class TelegramMtprotoHistoryService:
         ordered_peers = peer_ids[rotation:] + peer_ids[:rotation]
         payload[TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY] = (rotation + 1) % len(peer_ids)
         candidates: dict[int, list[Object]] = {}
+        head_candidates: dict[int, Object | None] = {}
         for peer_id in ordered_peers:
-            filters = [
+            base_filters = [
                 Object.user_id == user_id,
                 Object.provider == TELEGRAM_PROVIDER,
                 Object.kind == TELEGRAM_KIND,
@@ -167,6 +171,13 @@ class TelegramMtprotoHistoryService:
                 Object.metadata_["peer_id"].as_string() == str(peer_id),
             ]
             cursor = _reconcile_cursor(cursors.get(str(peer_id)))
+            head_candidates[peer_id] = self._session.scalar(
+                select(Object)
+                .where(*base_filters)
+                .order_by(Object.occurred_at.desc().nullslast(), Object.id.desc())
+                .limit(1)
+            )
+            filters = list(base_filters)
             if cursor is not None:
                 cursor_time, cursor_id = cursor
                 if cursor_time is None:
@@ -181,7 +192,7 @@ class TelegramMtprotoHistoryService:
                             Object.occurred_at.is_(None),
                         )
                     )
-            candidates[peer_id] = list(
+            sweep = list(
                 self._session.scalars(
                     select(Object)
                     .where(*filters)
@@ -189,37 +200,72 @@ class TelegramMtprotoHistoryService:
                     .limit(TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT)
                 )
             )
-        checked = 0
+            if not sweep and cursor is not None:
+                # Reaching the end starts a fresh bounded sweep.  The cursor is
+                # only advanced again when a row is actually inspected.
+                sweep = list(
+                    self._session.scalars(
+                        select(Object)
+                        .where(*base_filters)
+                        .order_by(Object.occurred_at.desc().nullslast(), Object.id.desc())
+                        .limit(TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT)
+                    )
+                )
+            seen: set[UUID] = set()
+            peer_candidates: list[Object] = []
+            if head_candidates[peer_id] is not None:
+                peer_candidates.append(head_candidates[peer_id])
+                seen.add(head_candidates[peer_id].id)
+            for candidate in sweep:
+                if candidate.id not in seen:
+                    peer_candidates.append(candidate)
+                    seen.add(candidate.id)
+            candidates[peer_id] = peer_candidates
+        provider_calls = 0
         peer_counts: dict[int, int] = {}
         positions = {peer_id: 0 for peer_id in ordered_peers}
         materializer = TelegramObjectMaterializer(self._session)
         transport = self._transport_factory()
         store = self._store()
         session = store.decrypt_session(account)
-        while checked < TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
+        while provider_calls < TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
             made_progress = False
             for peer_id in ordered_peers:
-                if checked >= TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
+                if provider_calls >= TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
                     break
+                position = positions[peer_id]
+                while position < len(candidates[peer_id]):
+                    if peer_counts.get(peer_id, 0) >= TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER:
+                        break
+                    obj = candidates[peer_id][position]
+                    position += 1
+                    positions[peer_id] = position
+                    made_progress = True
+                    metadata = obj.metadata_ or {}
+                    message_id = metadata.get("message_id")
+                    cursor_value = {
+                        "occurred_at": obj.occurred_at.isoformat() if obj.occurred_at else None,
+                        "id": str(obj.id),
+                    }
+                    payload.setdefault(TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY, {})[
+                        str(peer_id)
+                    ] = cursor_value
+                    if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+                        # Local malformed rows advance the sweep but consume no
+                        # provider budget and cannot pin a peer indefinitely.
+                        continue
+                    break
+                else:
+                    continue
                 if peer_counts.get(peer_id, 0) >= TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER:
                     continue
-                position = positions[peer_id]
-                if position >= len(candidates[peer_id]):
+                if position > len(candidates[peer_id]):
                     continue
-                obj = candidates[peer_id][position]
-                positions[peer_id] = position + 1
+                if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+                    continue
                 peer_counts[peer_id] = peer_counts.get(peer_id, 0) + 1
-                checked += 1
-                made_progress = True
+                provider_calls += 1
                 metadata = obj.metadata_ or {}
-                message_id = metadata.get("message_id")
-                cursor_value = {
-                    "occurred_at": obj.occurred_at.isoformat() if obj.occurred_at else None,
-                    "id": str(obj.id),
-                }
-                payload.setdefault(TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY, {})[
-                    str(peer_id)
-                ] = cursor_value
                 selection = selections[peer_id]
                 try:
                     reference = store.decrypt_reference(selection)
@@ -254,6 +300,10 @@ class TelegramMtprotoHistoryService:
                     raise
                 except TelegramMtprotoProviderReferenceInvalidError:
                     continue
+                except TelegramMtprotoReadRejectedError:
+                    continue
+                except TelegramMtprotoAuthorizationInvalidError:
+                    raise
                 except TelegramMtprotoWriteDefiniteError:
                     raise
                 except ValueError:
@@ -262,7 +312,7 @@ class TelegramMtprotoHistoryService:
                     continue
             if not made_progress:
                 break
-        return checked
+        return provider_calls
 
     async def _sync_selection(
         self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection

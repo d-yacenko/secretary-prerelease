@@ -8,8 +8,16 @@ from cryptography.fernet import Fernet
 from sqlalchemy import select
 
 from app.connectors.google.encryption import CredentialEncryption
-from app.connectors.telegram.mtproto_errors import TelegramMtprotoProviderUnavailableError
-from app.connectors.telegram.mtproto_transport import TelegramMtprotoHistoryEntry
+from app.connectors.telegram.mtproto_errors import (
+    TelegramMtprotoAuthorizationInvalidError,
+    TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoReadRejectedError,
+    classify_telegram_sync_failure,
+)
+from app.connectors.telegram.mtproto_transport import (
+    TelegramMtprotoHistoryEntry,
+    TelethonMtprotoTransport,
+)
 from app.core.config import Settings, settings
 from app.db.models import Job, Object, TelegramMtprotoChatSelection
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
@@ -284,6 +292,198 @@ async def test_provider_flood_wait_aborts_remaining_reconciliation_and_preserves
         )
     assert exc_info.value.retry_after_seconds == 23
     assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_read_rejection_is_peer_local(db_session, credential_key):
+    user, account, first_selection, first_obj = _fixture(db_session, credential_key)
+    encryption = CredentialEncryption(credential_key)
+    second_selection = TelegramMtprotoChatSelection(
+        account_id=account.id,
+        peer_id=-100,
+        peer_kind="group",
+        provider_peer_reference_encrypted=encryption.encrypt(
+            json.dumps({"entity_type": "chat", "id": 100})
+        ),
+        title="Group",
+        scope_active=True,
+    )
+    db_session.add(second_selection)
+    second_obj = Object(
+        user_id=user.id,
+        kind="chat_message",
+        provider="telegram",
+        external_id=f"mtproto|{account.id}|-100|1",
+        origin="source",
+        state="observed",
+        title="Group: hello",
+        body="hello",
+        metadata_={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": -100,
+            "message_id": 1,
+        },
+        occurred_at=datetime.now(UTC),
+    )
+    db_session.add(second_obj)
+    db_session.flush()
+
+    def result(peer_id, message_id):
+        if peer_id == first_selection.peer_id:
+            raise TelegramMtprotoReadRejectedError("lookup rejected")
+        return _provider_message(second_obj, text="updated")
+
+    transport = _RecentTransport(result)
+    await _history(db_session, credential_key, transport).reconcile_recent_messages(
+        user.id, account.id, {}
+    )
+    assert any(peer_id == -100 for peer_id, _ in transport.calls)
+    db_session.refresh(first_obj)
+    assert first_obj.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_head_recheck_and_sweep_wrap_cover_old_rows(
+    db_session, credential_key
+):
+    user, account, selection, original = _fixture(db_session, credential_key)
+    now = datetime.now(UTC)
+    for message_id in range(100, 106):
+        db_session.add(
+            Object(
+                user_id=user.id,
+                kind="chat_message",
+                provider="telegram",
+                external_id=f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+                origin="source",
+                state="observed",
+                title="Alice: old",
+                body="old",
+                metadata_={
+                    "transport": "mtproto",
+                    "account_id": str(account.id),
+                    "peer_id": selection.peer_id,
+                    "message_id": message_id,
+                },
+                occurred_at=now,
+            )
+        )
+    db_session.flush()
+    seen: list[int] = []
+    transport = _RecentTransport(
+        lambda peer_id, message_id: (
+            seen.append(message_id)
+            or {
+                "peer_id": peer_id,
+                "message_id": message_id,
+                "text": "same",
+                "occurred_at": now,
+                "edited_at": None,
+                "outgoing": False,
+                "service": False,
+            }
+        )
+    )
+    payload = {}
+    service = _history(db_session, credential_key, transport)
+    for _ in range(4):
+        await service.reconcile_recent_messages(user.id, account.id, payload)
+    assert len(seen) <= 20
+    assert {message_id for message_id in seen} >= {41, 100, 101, 102, 103, 104, 105}
+    assert seen[0] != 41 or 41 in seen
+    assert original.id is not None
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_malformed_message_id_advances_without_provider_call(
+    db_session, credential_key
+):
+    user, account, selection, _ = _fixture(db_session, credential_key)
+    malformed = Object(
+        user_id=user.id,
+        kind="chat_message",
+        provider="telegram",
+        external_id=f"mtproto|{account.id}|{selection.peer_id}|bad",
+        origin="source",
+        state="observed",
+        title="Alice: malformed",
+        body="bad",
+        metadata_={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": selection.peer_id,
+            "message_id": True,
+        },
+        occurred_at=datetime.now(UTC),
+    )
+    db_session.add(malformed)
+    db_session.flush()
+    transport = _RecentTransport(_provider_message(malformed, message_id=41))
+    await _history(db_session, credential_key, transport).reconcile_recent_messages(
+        user.id, account.id, {}
+    )
+    assert all(message_id is not True for _, message_id in transport.calls)
+    assert len(transport.calls) <= 5
+
+
+@pytest.mark.asyncio
+async def test_telethon_flood_wait_read_is_transient_and_preserves_retry_after(monkeypatch):
+    from telethon.errors import FloodWaitError
+    from telethon.sessions import StringSession
+
+    class FloodClient:
+        def __init__(self, *args):
+            pass
+
+        async def connect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return True
+
+        async def get_messages(self, peer, ids):
+            raise FloodWaitError(None, 19)
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr("app.connectors.telegram.mtproto_transport.TelegramClient", FloodClient)
+    with pytest.raises(TelegramMtprotoProviderUnavailableError) as exc_info:
+        await TelethonMtprotoTransport(1, "hash").fetch_message(
+            StringSession().save(), json.dumps({"entity_type": "user", "id": 777, "access_hash": 99}),
+            peer_id=777, message_id=41,
+        )
+    assert exc_info.value.retry_after_seconds == 19
+    assert classify_telegram_sync_failure(exc_info.value) == ("transient", True, 19)
+
+
+@pytest.mark.asyncio
+async def test_telethon_auth_invalid_read_is_authentication(monkeypatch):
+    from telethon.sessions import StringSession
+
+    class UnauthorizedClient:
+        def __init__(self, *args):
+            pass
+
+        async def connect(self):
+            return None
+
+        async def is_user_authorized(self):
+            return False
+
+        async def disconnect(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.connectors.telegram.mtproto_transport.TelegramClient", UnauthorizedClient
+    )
+    with pytest.raises(TelegramMtprotoAuthorizationInvalidError) as exc_info:
+        await TelethonMtprotoTransport(1, "hash").fetch_message(
+            StringSession().save(), json.dumps({"entity_type": "user", "id": 777, "access_hash": 99}),
+            peer_id=777, message_id=41,
+        )
+    assert classify_telegram_sync_failure(exc_info.value) == ("authentication", False, None)
 
 
 def test_cadence_default_and_override_without_other_provider_changes(monkeypatch):
