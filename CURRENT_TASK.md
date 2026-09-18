@@ -1,157 +1,254 @@
-# Current task — Telegram MTProto Q1R2: catch-up boundedness correction
+# Current task — Telegram MTProto C1A: send/reply through canonical communication action
 
-## Review status
+## Status
 
-Q1 implementation:
-`b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595`
+Telegram MTProto Q1/Q1R/Q1R2 AI quarantine is **ACCEPTED and integrated to main**.
 
-Q1R implementation:
-`39e3f2f24ca1bcd695e27d070bfde229c131c7cb`
+Accepted implementation chain:
+- Q1 `b306b6d1ad1a4e7ae0d2dd3260bd5b746d2f2595`
+- Q1R `39e3f2f24ca1bcd695e27d070bfde229c131c7cb`
+- Q1R2 `8fa8f52dd81309f4530867852fe291038998148e`
+- main integration merge `b50e1e62f825cff960f5a1a3a50711fd25863697`
 
-Q1R was independently reviewed.
+Production remains:
+- ref/runtime `5cce4b57b14e0052a038acae1354a2821a2bb77b`
+- Alembic `0041`
+- M3 NOT authorized
+- Bot API retirement NOT authorized
 
-The following Q1R areas are ACCEPTED in code:
-- AI-vs-non-AI read boundary via explicit `ai_only` callers;
-- ordinary A4.3 transport visibility preserved for non-AI Graph/ObjectQuery/Workspace/conversation reads;
-- execution-time fail-closed guards for queued AI work;
-- conversation-stack summary guard uses actual payload `object_ids`.
+Canonical Telegram MTProto AI setting remains:
+`TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
 
-Q1R is **REJECTED pending one narrow Q1R2 correction** in embedding catch-up boundedness/dedupe accounting.
+## C1A goal
 
-Production remains untouched:
-- production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- production Alembic `0041`;
-- M3 not authorized.
+Add Telegram MTProto **compose/send and reply** support to the existing generic communication action path.
 
-## Remaining blocker
+Do not create a parallel Telegram mutation API or bypass the existing architecture.
 
-Current catch-up checks:
+Canonical mutation path remains:
 
-- whether *any* PENDING/RUNNING `embed_object` job exists for the object;
-- then calls `enqueue_embed_object()`, which deduplicates using the **current embedding_input_signature**;
-- then increments its local `queued` count only when that broad pre-check was empty.
+User/UI/Assistant
+-> DomainToolService.prepare_send_message
+-> frozen SendMessageCanonicalInput
+-> pending action plan
+-> explicit approval
+-> execution gateway
+-> DomainToolService.send_message
+-> CommunicationExternalActionService
+-> MTProto transport
 
-This is incorrect.
+The legacy Telegram Bot API send path must continue to work unchanged.
 
-If a pending/running embed job exists for the same object but with an old/different signature:
-- it is not equivalent work;
-- `enqueue_embed_object()` correctly creates a new current-signature job;
-- but catch-up does not increment `queued`;
-- therefore one run can create more than `TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN=10` new jobs.
+## Routing distinction
 
-The current focused test does not catch this because its synthetic pending jobs omit `embedding_input_signature` and it asserts the returned counter rather than the actual newly-enqueued current-signature jobs.
+Telegram provider now has two transports:
 
-There is also a cursor precision issue: the cursor is currently moved to `objects[-1]` before the loop, even when the loop stops after reaching enqueue budget. This jumps over rows that were loaded but never inspected. Wrap-around may eventually revisit them, but the intended keyset contract is simpler and safer if the cursor represents the last row actually inspected.
+1. legacy Bot/Business path
+   - existing behavior
+   - metadata does NOT identify canonical MTProto transport
 
-## Q1R2 required correction
+2. canonical MTProto path
+   - `provider == "telegram"`
+   - `kind == "chat_message"`
+   - `metadata.transport == "mtproto"`
 
-Start from exact:
-`Q1R_BASE_SHA=39e3f2f24ca1bcd695e27d070bfde229c131c7cb`
+Do not infer MTProto merely from provider == telegram.
 
-Work on existing branch:
-`review/telegram-mtproto-q1-ai-quarantine`
+## Canonical MTProto route validation
 
-Create exactly one new correction commit. Do not rewrite/squash Q1/Q1R.
+For a MTProto anchor, validate/freeze at prepare time:
 
-### 1. Equivalent-job dedupe
+- Secretary object ownership;
+- object is active under accepted A4.3 transport visibility;
+- canonical MTProto metadata;
+- `account_id` is a valid UUID and belongs to current Secretary user;
+- connected MTProto account exists;
+- `peer_id` is signed 64-bit nonzero;
+- `message_id` is positive integer for reply anchors;
+- matching durable `TelegramMtprotoChatSelection` exists for account+peer;
+- selection `scope_active == true`;
+- provider peer reference is available/decryptable;
+- route identity/account/peer cannot be guessed or substituted.
 
-For each candidate object:
-- compute the current `embedding_input_signature(obj)`;
-- treat a pending/running embed job as equivalent only when BOTH:
-  - `payload.object_id == obj.id`
-  - `payload.embedding_input_signature == current_signature`
-- an old-signature pending/running job must NOT suppress the current-signature catch-up job;
-- an equivalent current-signature pending/running job must not be duplicated and must not consume enqueue budget.
+Do not use `manual_selected` to grant current scope.
 
-The catch-up's enqueue counter must reflect **actual new current-signature jobs created by this catch-up run**.
+If scope/account/reference is missing or malformed: fail closed before approval.
 
-Do not use a broad object-id-only pre-check for budget accounting.
+### Compose semantics
 
-A small reusable helper is acceptable if it makes the signature semantics explicit. Avoid unrelated refactors.
+Existing generic `SendMessageInput.conversation_object_id` remains compose mode.
 
-### 2. Hard enqueue bound
+For a canonical MTProto anchor:
+- destination is the frozen account+peer of the anchor;
+- do not reply to the anchor message;
+- no recipient guessing.
 
-One invocation of catch-up must create at most:
+### Reply semantics
 
-`TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN = 10`
+Existing generic `SendMessageInput.reply_to_object_id` remains reply mode.
 
-new embed jobs.
+For canonical MTProto:
+- destination is frozen account+peer;
+- reply target is frozen source Telegram `message_id`.
 
-This must be proven by actual DB job count/signature assertions, not only by the method's return value.
+## Frozen canonical payload
 
-### 3. Cursor semantics
+Extend the existing send-message canonical route model cleanly for MTProto.
 
-Use the existing bounded keyset scan, but make the stored cursor represent the **last object actually inspected**.
+Do not overload the Bot/Business `TelegramSendRoute` with mutually incompatible fields if that makes validation ambiguous.
 
-Requirements:
-- inspect at most `TELEGRAM_MTPROTO_EMBED_CATCHUP_SCAN_LIMIT` rows per invocation;
-- stop when 10 new current-signature jobs have actually been created;
-- advance cursor across current/equivalent-pending rows without consuming enqueue budget;
-- do not advance cursor past rows that were never inspected;
-- if end of keyspace is reached, next invocation may wrap safely to the start;
-- repeated invocations must converge.
+A separate `TelegramMtprotoSendRoute` (or equivalent discriminated route) is preferred.
 
-No new table/scheduler/daemon/migration.
+Frozen route must contain only non-secret routing facts required for execution, such as:
+- account_id;
+- peer_id;
+- source_message_id;
+- reply_to_message_id if reply;
+- safe display metadata if needed.
 
-### 4. Focused tests
+Do NOT put:
+- session strings;
+- api_hash;
+- encrypted provider references;
+- credential material
 
-Add/adjust tests proving:
+into pending plans/audit payloads.
 
-A. Old-signature pending jobs:
-- create >10 eligible MTProto objects;
-- give the leading objects pending/running embed jobs with an intentionally different/old `embedding_input_signature`;
-- run catch-up;
-- assert no more than 10 **new current-signature** jobs were created;
-- assert returned enqueue count equals actual new jobs;
-- assert old-signature jobs did not falsely consume/destroy eligibility.
+Execution must reload/decrypt credentials and provider reference from durable stores after approval.
 
-B. Equivalent current-signature jobs:
-- pending/running current-signature work is not duplicated;
-- it does not consume the 10-new-job budget;
-- later missing/stale objects in the scan can still be enqueued.
+## MTProto transport
 
-C. Cursor/convergence:
-- cursor equals the last actually inspected object, not blindly the end of the loaded window;
-- a subsequent invocation continues after that point;
-- repeated invocations eventually enqueue every eligible missing/stale object;
-- no eligible object is permanently skipped.
+Extend `TelegramMtprotoTransport` / `TelethonMtprotoTransport` with a bounded send method supporting:
 
-D. Existing Q1/Q1R invariants remain:
-- AI=false no-op catch-up;
-- active/owned/account-matched only;
-- inactive, wrong-account, malformed excluded;
-- AI/non-AI boundary unchanged;
-- queued-job true->false guards unchanged;
-- Bot API/other providers unaffected;
-- Alembic head remains `0046`.
+- compose message;
+- reply to provider message id;
+- existing max Telegram message-body constraint;
+- user session from the connected MTProto account;
+- durable provider peer reference rather than guessed username/title.
 
-## Scope
+Return enough normalized provider facts to validate and materialize the created message:
+- message id;
+- peer identity/reference consistency;
+- text/body;
+- timestamp;
+- reply target where applicable;
+- sender/account identity when available.
 
-Do NOT alter already-accepted Q1R AI/non-AI service boundaries unless required to fix a direct regression.
-Do NOT implement CRUD/send/reply yet.
-Do NOT touch UI.
-Do NOT update main.
-Do NOT touch production.
-Do NOT add migration `0047`.
+Do not expose credentials in logs/errors/results.
 
-## Deliverable
+## Write safety / exactly-once
+
+Reuse existing `ExternalActionAttempt` operation claim semantics used by generic `send_message`.
+
+Required:
+- one frozen `operation_id`;
+- no transparent resend after an uncertain write;
+- repeated execution of succeeded operation returns already-sent result;
+- definite pre-write/provider rejection may become failed_definite;
+- timeout/network/provider ambiguity after a possible send becomes uncertain;
+- uncertain operation must NOT be retried automatically.
+
+If MTProto/Telethon errors need explicit definite-vs-uncertain write classes, add narrowly scoped errors under the Telegram MTProto connector.
+
+FloodWait/RetryAfter during an approved external write must not cause an automatic duplicate send.
+
+## Materialization
+
+On confirmed successful MTProto send/reply:
+
+- materialize the created outgoing message through the canonical Telegram materializer;
+- metadata must remain canonical MTProto:
+  - transport=mtproto
+  - account_id
+  - peer_id
+  - message_id
+  - reply_to_message_id when applicable
+  - sender/direction fields consistent with existing A3 normalization
+- external_id must use the same canonical MTProto external-id scheme as imported history;
+- repeated successful-operation resume must resolve to the already materialized object where possible;
+- with `TELEGRAM_MTPROTO_AI_ENABLED=false`, materialization must still create/update the object but enqueue zero AI embedding jobs per accepted Q1.
+
+Do not invent a second MTProto object format.
+
+## AI quarantine interaction
+
+C1A MUST NOT weaken Q1.
+
+Sending via MTProto is allowed while AI=false because this is ordinary messenger functionality.
+
+The newly created outgoing MTProto object:
+- appears in ordinary Inbox/messenger data according to transport visibility;
+- remains AI-ineligible while flag=false;
+- must not trigger embedding/summarization/correlation/classification paths while disabled.
+
+## Tests
+
+Add focused tests proving at minimum:
+
+1. prepare compose from active MTProto anchor produces frozen MTProto route;
+2. prepare reply freezes exact source message id;
+3. inactive scope fails closed;
+4. wrong user/account fails closed;
+5. malformed account/peer/message metadata fails closed;
+6. Bot/Business Telegram prepare/send regression unchanged;
+7. compose calls MTProto transport exactly once with expected peer and no reply target;
+8. reply calls exactly once with frozen reply message id;
+9. successful MTProto send materializes canonical outgoing object;
+10. AI=false successful send materializes but enqueues zero AI work;
+11. succeeded operation replay does not resend;
+12. uncertain write records uncertain and replay does not resend;
+13. definite failure records failed_definite;
+14. provider/session/reference credentials never appear in canonical pending payload/output;
+15. body length bound preserved;
+16. no migration; Alembic head remains `0046`.
+
+Run:
+- focused C1A tests;
+- Telegram A1-A4/Q1 regressions;
+- communication external-action / pending-action-plan integrity suites;
+- relevant DomainToolService/execution gateway tests;
+- Ruff changed Python files;
+- git diff --check.
+
+## Explicitly out of scope C1A
+
+Do NOT implement yet:
+- edit sent message;
+- delete/revoke message;
+- mark-read/read receipts;
+- realtime update subscription;
+- client composer UI;
+- Android notifications;
+- production deploy/ref move;
+- production DB/env mutation;
+- Bot API removal;
+- D-Bus fallback;
+- migration `0047`.
+
+Those are later phases.
+
+## Branch / deliverable
+
+Start from latest `origin/main`.
+
+Create/use review branch:
+`review/telegram-mtproto-c1a-send-reply`
 
 Return:
-- `Q1R_BASE_SHA=39e3f2f24ca1bcd695e27d070bfde229c131c7cb`
-- `Q1R2_SHA=<exact sha>`
+- `STARTING_SHA`;
+- `C1A_SHA`;
 - changed files;
-- exact equivalent-job signature rule;
-- exact cursor advancement rule;
-- proof actual newly-created embed jobs <= 10/run;
-- focused test results;
-- Telegram/Q1 regression results;
+- canonical MTProto route design;
+- exact uncertain-write behavior;
+- materialization behavior with AI=false;
+- focused/regression test results;
 - Ruff;
 - git diff --check;
 - Alembic head `0046`;
 - production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_Q1R2_AI_QUARANTINE_READY`
+`TELEGRAM_MTPROTO_C1A_SEND_REPLY_READY`
 
 Then STOP for Architect review.
 
