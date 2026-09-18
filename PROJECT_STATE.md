@@ -18,19 +18,20 @@
 - Production Line Reconciliation R1: ACCEPTED at exact merge SHA `f55bc1f9360384f403e9791f863b9b104d9c6d42`; production hotfix lineage is in main ancestry.
 - Accepted migration chain is exactly `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`; no `0047` is authorized.
 - Normal `ops/production/deploy.py` remains schema-neutral and must reject this migration-bearing release.
-- Production Migration Rollout M1 harness: **ACCEPTED** at exact final SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- M1 accepted fixes include: release-Compose Telegram preflight before downtime; captured-ID initial stop proof; direct DB `alembic_version` checks; bounded health retry; post-cutover current-writer quiescence proof via stopped-aware lookup + inspect; exact `0046` revision gate before MTProto emptiness check; destructive downgrade forbidden on data or uncertainty.
-- M1 was fast-forward integrated into `main`.
-- M1 local evidence reported: harness `32 passed`; critical regression suite `292 passed`; full backend `2968 passed, 97 failed, 8 errors, 3 skipped`; Ruff baseline `107`, changed-file Ruff PASS; disposable `0041 -> 0046 -> 0041 -> 0046` PASS; nonempty MTProto rollback guard PASS; `git diff --check` PASS.
-- The one additional full-suite identity reported during M1R4 was `tests/test_phase_29a_r1_corrective.py::test_revision_change_invalidates_before_worker`; M1R4 changed only the production migration helper and its tests, and independent review found no causal code overlap. Treat it as environment/order-sensitive baseline evidence unless independently reproduced against M1 scope.
-- GitHub commit statuses for the M1 correction SHAs were empty; M1 acceptance is based on exact independent code/diff review plus local verification evidence.
-- Current authorized work: **Production Migration Rollout M2 readiness gate** as specified in `CURRENT_TASK.md`.
-- M2 is production read-only/readiness inspection only. It authorizes strict verified SSH and non-mutating checks needed to prove candidate release Compose/runtime readiness while `origin/production` and running production remain on rollback SHA.
-- M2 explicitly forbids moving `production`, stopping/recreating services, running production Alembic writes, changing DB rows/schema, changing `.env`, rotating credentials, or executing the deployment harness.
-- Candidate release code for M2 readiness: `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
-- Rollback/runtime SHA: `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- M2 must prove production Telegram runtime credential presence/validity through the candidate release Compose using the existing production `.env`, without printing values and without moving the production ref.
-- Only after M2 readiness acceptance may a separate M3 authorize the actual production ref move + exact migration deployment + runtime verification.
+- Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
+- M1 accepted safety properties include: release-Compose Telegram preflight before downtime; captured-ID initial stop proof; direct DB `alembic_version` checks; bounded startup health retries; stopped-aware post-cutover current-writer quiescence proof; exact `0046` revision gate before MTProto emptiness check; no destructive downgrade on data or uncertainty.
+- M1 is integrated into `main`.
+- M2 production readiness inspection: **BLOCKED**.
+- M2 evidence passed: local main alignment/cleanliness; SSH fingerprint; production runtime/ref identity; health; DB TCP auth; direct Alembic `0041`; rollback Compose DB/key invariants; candidate release Compose resolution; release DB/key equality; no-mutation proof; temporary worktree cleanup.
+- M2 blocking result: `RELEASE_TELEGRAM_CREDENTIALS=FAIL`.
+- Candidate release code remains `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
+- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
+- The existing production `/opt/secretary/.env` does not currently resolve usable candidate-release `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` values.
+- No credential values or credential hashes were exposed by M2.
+- Current authorization is STOP: no production ref move, service mutation, Alembic write, DB mutation, env mutation, credential mutation, or M3.
+- Next prerequisite is human/operator availability of valid Telegram MTProto application credentials through a secure channel.
+- After operator confirmation, Architect may authorize a separate narrow credential-provisioning phase that updates only Telegram credential entries in production `.env`, preserves all other env values/ownership/mode, performs no service restart/ref/DB/schema mutation, and then reruns full M2 readiness.
+- Only after M2 returns READY may M3 authorize the actual migration-bearing cutover.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
