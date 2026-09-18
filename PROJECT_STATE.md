@@ -33,11 +33,13 @@
 - Telegram MTProto Q1/Q1R/Q1R2 AI quarantine: ACCEPTED / INTEGRATED TO MAIN at merge `b50e1e62f825cff960f5a1a3a50711fd25863697`. Reviewed implementation tip is `8fa8f52dd81309f4530867852fe291038998148e`.
 - AI/non-AI read boundaries, execution-time fail-closed guards, and bounded signature-aware embedding catch-up are accepted.
 - Telegram MTProto C1A/C1AR send/reply: ACCEPTED / INTEGRATED TO MAIN at merge `311682ad7b245398835b585d67deec4f6074e020`. Reviewed implementation tip is `49a219d6a91349d0037c7ae7362974b496490bc2`.
-- Recipient/reference integrity is validated before approval, before provider write, and defensively in the Telethon transport; outgoing direction now converges through A3 history sync.
-- Current authorized phase: Telegram MTProto C1B edit/delete/mark-read backend mutations, exactly as specified in `CURRENT_TASK.md`.
-- Planned phases after C1B acceptance: C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
-- Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C1B.
+- Recipient/reference integrity is validated before approval, before provider write, and defensively in the Telethon transport; outgoing direction converges through A3 history sync.
+- C1B implementation `4d61ebeb2d96e5bfb6393ef3e39d214cd814fc51` was independently reviewed and REJECTED pending C1BR corrective.
+- C1B tool/approval/frozen-route architecture is retained. Blocking issues: deterministic Telegram RPC rejections are misclassified as uncertain; destructive delete lacks provider-side message-to-peer verification despite Telethon delete semantics; succeeded external writes cannot currently repair lost/rolled-back local convergence on replay; first successful mark-read is falsely reported as no-op; several mandatory focused tests are absent.
+- Current authorized phase: Telegram MTProto C1BR mutation write-safety corrective, exactly as specified in `CURRENT_TASK.md`.
+- Planned phases after C1BR acceptance: C2 sync/reconciliation/notifications, C3 client UX, then a newly frozen migration-bearing rollout.
+- Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and later Telegram work.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C1BR.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
