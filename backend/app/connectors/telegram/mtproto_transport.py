@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from telethon import TelegramClient, utils
 from telethon.errors import (
@@ -195,6 +195,37 @@ class TelegramMtprotoTransport(Protocol):
         text: str,
         reply_to_message_id: int | None = None,
     ) -> TelegramMtprotoSentMessage:
+        ...
+
+    async def edit_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+        text: str,
+    ) -> dict[str, Any]:
+        ...
+
+    async def delete_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+    ) -> bool:
+        ...
+
+    async def mark_read(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        max_message_id: int,
+    ) -> bool:
         ...
 
 
@@ -576,6 +607,154 @@ class TelethonMtprotoTransport:
         except Exception:  # noqa: BLE001 - provider outcome is ambiguous after send
             raise TelegramMtprotoWriteUncertainError(
                 "Telegram send outcome is uncertain; not retrying"
+            ) from None
+        finally:
+            await _disconnect(client)
+
+    async def edit_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+        text: str,
+    ) -> dict[str, Any]:
+        client: TelegramClient | None = None
+        try:
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoWriteDefiniteError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            message = await client.edit_message(input_peer, message_id, text=text)
+            returned_peer = _peer_id_from_message_peer(getattr(message, "peer_id", None))
+            returned_id = getattr(message, "id", None)
+            returned_text = getattr(message, "message", None)
+            if returned_peer != peer_id or returned_id != message_id or returned_text != text:
+                raise TelegramMtprotoWriteUncertainError(
+                    "Telegram provider returned an unexpected edited message"
+                )
+            return {
+                "peer_id": returned_peer,
+                "message_id": returned_id,
+                "text": returned_text,
+                "edited_at": _history_datetime(getattr(message, "edit_date", None))
+                or _history_datetime(getattr(message, "date", None)),
+            }
+        except TelegramMtprotoWriteDefiniteError:
+            raise
+        except TelegramMtprotoWriteUncertainError:
+            raise
+        except TelegramMtprotoProviderReferenceInvalidError:
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram selected group reference is invalid"
+            ) from None
+        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError:
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram edit outcome is uncertain; not retrying"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram message edit was rejected") from None
+        except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram edit outcome is uncertain; not retrying"
+            ) from None
+        finally:
+            await _disconnect(client)
+
+    async def delete_message(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+    ) -> bool:
+        client: TelegramClient | None = None
+        try:
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoWriteDefiniteError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            await client.delete_messages(input_peer, [message_id])
+            return True
+        except TelegramMtprotoWriteDefiniteError:
+            raise
+        except TelegramMtprotoProviderReferenceInvalidError:
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram selected group reference is invalid"
+            ) from None
+        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError:
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram delete outcome is uncertain; not retrying"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram message deletion was rejected") from None
+        except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram delete outcome is uncertain; not retrying"
+            ) from None
+        finally:
+            await _disconnect(client)
+
+    async def mark_read(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        max_message_id: int,
+    ) -> bool:
+        client: TelegramClient | None = None
+        try:
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoWriteDefiniteError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            await client.send_read_acknowledge(input_peer, max_id=max_message_id)
+            return True
+        except TelegramMtprotoWriteDefiniteError:
+            raise
+        except TelegramMtprotoProviderReferenceInvalidError:
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram selected group reference is invalid"
+            ) from None
+        except (AuthKeyNotFound, AuthKeyUnregisteredError, SessionRevokedError, UnauthorizedError):
+            raise TelegramMtprotoWriteDefiniteError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except FloodWaitError:
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram mark-read outcome is uncertain; not retrying"
+            ) from None
+        except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError):
+            raise TelegramMtprotoWriteDefiniteError("Telegram mark-read was rejected") from None
+        except Exception:  # noqa: BLE001 - provider outcome is ambiguous after write
+            raise TelegramMtprotoWriteUncertainError(
+                "Telegram mark-read outcome is uncertain; not retrying"
             ) from None
         finally:
             await _disconnect(client)

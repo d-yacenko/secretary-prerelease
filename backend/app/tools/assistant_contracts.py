@@ -732,4 +732,43 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         },
         "strict": False,
     },
+    "edit_message": {
+        "type": "function",
+        "name": "edit_message",
+        "description": "Edit an exact outbound Telegram MTProto message after approval.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "object_id": {"type": "string"},
+                "body": {"type": "string"},
+            },
+            "required": ["object_id", "body"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "delete_message": {
+        "type": "function",
+        "name": "delete_message",
+        "description": "Delete an exact Telegram MTProto message after approval.",
+        "parameters": {
+            "type": "object",
+            "properties": {"object_id": {"type": "string"}},
+            "required": ["object_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "mark_message_read": {
+        "type": "function",
+        "name": "mark_message_read",
+        "description": "Mark a Telegram MTProto peer read through an exact message.",
+        "parameters": {
+            "type": "object",
+            "properties": {"object_id": {"type": "string"}},
+            "required": ["object_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
 }

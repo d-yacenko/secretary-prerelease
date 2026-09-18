@@ -1024,6 +1024,91 @@ class SendMessageOutput(BaseModel):
     changed: bool
 
 
+class TelegramMtprotoObjectMutationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    object_id: UUID
+
+
+class TelegramMtprotoDeleteInput(TelegramMtprotoObjectMutationInput):
+    pass
+
+
+class TelegramMtprotoMarkReadInput(TelegramMtprotoObjectMutationInput):
+    pass
+
+
+class TelegramMtprotoEditInput(TelegramMtprotoObjectMutationInput):
+    body: str
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _normalize_edit_body(cls, value: object) -> object:
+        return _normalize_message_body(value)
+
+
+class TelegramMtprotoEditRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: UUID
+    peer_id: int
+    message_id: int
+    body: str
+    peer_title: str | None = None
+
+
+class TelegramMtprotoDeleteRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: UUID
+    peer_id: int
+    message_id: int
+    peer_title: str | None = None
+
+
+class TelegramMtprotoMarkReadRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: UUID
+    peer_id: int
+    max_message_id: int
+    peer_title: str | None = None
+
+
+class TelegramMtprotoEditCanonicalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=5, max_length=1024)
+    object_id: UUID
+    route: TelegramMtprotoEditRoute
+
+
+class TelegramMtprotoDeleteCanonicalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=5, max_length=1024)
+    object_id: UUID
+    route: TelegramMtprotoDeleteRoute
+
+
+class TelegramMtprotoMarkReadCanonicalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=5, max_length=1024)
+    object_id: UUID
+    route: TelegramMtprotoMarkReadRoute
+
+
+TelegramMtprotoMutationStatus = Literal["succeeded", "already_succeeded", "uncertain", "failed"]
+
+
+class TelegramMtprotoMutationOutput(BaseModel):
+    operation: Literal["edit", "delete", "mark_read"]
+    object_id: UUID
+    status: TelegramMtprotoMutationStatus
+    changed: bool
+
+
 MAX_SCHEDULED_ACTIVITY_TITLE_CHARS = 300
 MAX_SCHEDULED_ACTIVITY_BODY_CHARS = 5000
 ScheduledActivityPriority = Literal["low", "normal", "high", "urgent"]

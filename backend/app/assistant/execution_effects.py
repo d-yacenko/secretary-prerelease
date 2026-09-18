@@ -14,7 +14,7 @@ def classify_tool_execution_effect(tool_name: str, output: dict[str, Any] | None
         return "created" if output.get("changed") else "no_op"
     if tool_name == "send_email":
         return "created" if output.get("changed") else "no_op"
-    if tool_name == "send_message":
+    if tool_name in {"send_message", "edit_message", "delete_message", "mark_message_read"}:
         return "created" if output.get("changed") else "no_op"
     if tool_name == "remove_relation":
         return "removed" if output.get("changed") else "no_op"
@@ -64,6 +64,8 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
                 f"provider_message_id={(output or {}).get('provider_message_id')}; "
                 f"changed=true"
             )
+        if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+            return f"{tool_name}: changed=true"
         obj = (output or {}).get("object") or {}
         return f"{tool_name}: created object {obj.get('id')} ({obj.get('kind')})"
     if effect == "removed":
@@ -120,5 +122,7 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
                 f"send_message: already sent "
                 f"{(output or {}).get('provider_message_id')}; changed=false"
             )
+        if tool_name in {"edit_message", "delete_message", "mark_message_read"}:
+            return f"{tool_name}: already completed; changed=false"
         return f"{tool_name}: no state change; changed=false"
     return f"{tool_name}: execution failed or produced no output"
