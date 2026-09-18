@@ -95,6 +95,9 @@ class TelegramMtprotoRecurringSyncService:
             except _PEER_LOCAL_ERRORS:
                 pass
             payload["telegram_peer_cursor"] = (cursor + offset + 1) % len(selections)
+        reconcile = getattr(self._history, "reconcile_recent_messages", None)
+        if reconcile is not None:
+            await reconcile(user_id, account_id, payload)
 
     def _enqueue_embedding_catchup(
         self, user_id: UUID, account_id: UUID, payload: dict | None = None

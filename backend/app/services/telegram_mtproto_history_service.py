@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy import and_, or_, select
+
 from app.connectors.google.encryption import CredentialEncryption
 from app.connectors.google.errors import GoogleConfigurationError
 from app.connectors.telegram.constants import (
@@ -19,9 +21,14 @@ from app.connectors.telegram.materialize import (
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAccountNotConnectedError,
+    TelegramMtprotoAuthorizationInvalidError,
     TelegramMtprotoConfigurationError,
     TelegramMtprotoGroupNotSelectedError,
     TelegramMtprotoPeerNotInActiveScopeError,
+    TelegramMtprotoProviderReferenceInvalidError,
+    TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoReadRejectedError,
+    TelegramMtprotoWriteDefiniteError,
 )
 from app.connectors.telegram.mtproto_transport import (
     TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
@@ -31,10 +38,19 @@ from app.connectors.telegram.mtproto_transport import (
     TelethonMtprotoTransport,
 )
 from app.core.config import settings
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.domain.object_visibility import tombstone_object
 
 TELEGRAM_MTPROTO_HISTORY_DAYS = 14
 TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN = 200
+TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS = 20
+TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER = 5
+TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT = 100
+TELEGRAM_MTPROTO_RECONCILE_HEAD_WINDOW = 5
+TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY = "telegram_reconcile_peer_cursors"
+TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY = "telegram_reconcile_peer_heads"
+TELEGRAM_MTPROTO_RECONCILE_MODES_KEY = "telegram_reconcile_peer_modes"
+TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY = "telegram_reconcile_peer_rotation"
 
 
 @dataclass(frozen=True)
@@ -108,6 +124,247 @@ class TelegramMtprotoHistoryService:
                 "Telegram peer is not in active Telegram sync scope"
             )
         return await self._sync_selection(account, selection)
+
+    async def reconcile_recent_messages(self, user_id: UUID, account_id: UUID, payload: dict) -> int:
+        """Reconcile bounded known messages through the canonical A3 materializer."""
+        account = self._session.scalar(
+            select(TelegramMtprotoAccount).where(
+                TelegramMtprotoAccount.id == account_id,
+                TelegramMtprotoAccount.user_id == user_id,
+            )
+        )
+        if account is None:
+            raise TelegramMtprotoAccountNotConnectedError(
+                "Telegram MTProto account is not connected"
+            )
+        selections = {
+            selection.peer_id: selection
+            for selection in self._session.scalars(
+                select(TelegramMtprotoChatSelection).where(
+                    TelegramMtprotoChatSelection.account_id == account_id,
+                    TelegramMtprotoChatSelection.scope_active.is_(True),
+                )
+            )
+        }
+        if not selections:
+            payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY] = {}
+            payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY] = {}
+            payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY] = {}
+            payload[TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY] = 0
+            return 0
+        raw_cursors = payload.get(TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY, {})
+        cursors = raw_cursors if isinstance(raw_cursors, dict) else {}
+        raw_heads = payload.get(TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY, {})
+        heads = raw_heads if isinstance(raw_heads, dict) else {}
+        raw_modes = payload.get(TELEGRAM_MTPROTO_RECONCILE_MODES_KEY, {})
+        modes = raw_modes if isinstance(raw_modes, dict) else {}
+        peer_ids = sorted(selections)
+        active_keys = {str(peer_id) for peer_id in peer_ids}
+        cursors = {key: value for key, value in cursors.items() if key in active_keys}
+        heads = {key: value for key, value in heads.items() if key in active_keys}
+        modes = {key: value for key, value in modes.items() if key in active_keys}
+        payload[TELEGRAM_MTPROTO_RECONCILE_CURSORS_KEY] = cursors
+        payload[TELEGRAM_MTPROTO_RECONCILE_HEAD_KEY] = heads
+        payload[TELEGRAM_MTPROTO_RECONCILE_MODES_KEY] = modes
+        try:
+            rotation = int(payload.get(TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY, 0))
+        except (TypeError, ValueError):
+            rotation = 0
+        rotation %= len(peer_ids)
+        ordered_peers = peer_ids[rotation:] + peer_ids[:rotation]
+        candidates: dict[int, list[tuple[Object, str]]] = {}
+        actual_newest_values: dict[int, dict[str, str | None]] = {}
+        for peer_id in ordered_peers:
+            base_filters = [
+                Object.user_id == user_id,
+                Object.provider == TELEGRAM_PROVIDER,
+                Object.kind == TELEGRAM_KIND,
+                Object.deleted_at.is_(None),
+                Object.metadata_["transport"].as_string() == "mtproto",
+                Object.metadata_["account_id"].as_string() == str(account_id),
+                Object.metadata_["peer_id"].as_string() == str(peer_id),
+            ]
+            head_window = list(
+                self._session.scalars(
+                    select(Object)
+                    .where(*base_filters)
+                    .order_by(Object.occurred_at.desc().nullslast(), Object.id.desc())
+                    .limit(TELEGRAM_MTPROTO_RECONCILE_HEAD_WINDOW)
+                )
+            )
+            head_state = heads.get(str(peer_id))
+            head_cursor = _reconcile_cursor(
+                head_state.get("cursor") if isinstance(head_state, dict) else None
+            )
+            newest_cursor = _reconcile_cursor(
+                head_state.get("newest") if isinstance(head_state, dict) else None
+            )
+            head_candidate: Object | None = None
+            if head_window:
+                newest = head_window[0]
+                actual_newest_values[peer_id] = _object_cursor_value(newest)
+                if newest_cursor != _object_cursor(newest):
+                    head_candidate = newest
+                elif head_cursor is not None:
+                    for index, item in enumerate(head_window):
+                        if _object_cursor(item) == head_cursor:
+                            head_candidate = head_window[(index + 1) % len(head_window)]
+                            break
+                if head_candidate is None:
+                    head_candidate = newest
+            cursor = _reconcile_cursor(cursors.get(str(peer_id)))
+            filters = list(base_filters)
+            if cursor is not None:
+                cursor_time, cursor_id = cursor
+                if cursor_time is None:
+                    filters.append(
+                        and_(Object.occurred_at.is_(None), Object.id < cursor_id)
+                    )
+                else:
+                    filters.append(
+                        or_(
+                            Object.occurred_at < cursor_time,
+                            and_(Object.occurred_at == cursor_time, Object.id < cursor_id),
+                            Object.occurred_at.is_(None),
+                        )
+                    )
+            sweep = list(
+                self._session.scalars(
+                    select(Object)
+                    .where(*filters)
+                    .order_by(Object.occurred_at.desc().nullslast(), Object.id.desc())
+                    .limit(TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT)
+                )
+            )
+            if not sweep and cursor is not None:
+                # Reaching the end starts a fresh bounded sweep.  The cursor is
+                # only advanced again when a row is actually inspected.
+                sweep = list(
+                    self._session.scalars(
+                        select(Object)
+                        .where(*base_filters)
+                        .order_by(Object.occurred_at.desc().nullslast(), Object.id.desc())
+                        .limit(TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT)
+                    )
+                )
+            seen: set[UUID] = set()
+            peer_candidates: list[tuple[Object, str]] = []
+            mode = modes.get(str(peer_id))
+            if mode not in {"head", "sweep"}:
+                mode = "sweep"
+            if mode == "head" and head_candidate is not None:
+                peer_candidates.append((head_candidate, "head"))
+                seen.add(head_candidate.id)
+            if mode == "sweep":
+                for candidate in sweep:
+                    if candidate.id not in seen:
+                        peer_candidates.append((candidate, "sweep"))
+                        seen.add(candidate.id)
+            candidates[peer_id] = peer_candidates
+        provider_calls = 0
+        peer_counts: dict[int, int] = {}
+        positions = {peer_id: 0 for peer_id in ordered_peers}
+        last_serviced_index: int | None = None
+        materializer = TelegramObjectMaterializer(self._session)
+        transport = self._transport_factory()
+        store = self._store()
+        session = store.decrypt_session(account)
+        while provider_calls < TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
+            made_progress = False
+            for peer_id in ordered_peers:
+                if provider_calls >= TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS:
+                    break
+                position = positions[peer_id]
+                while position < len(candidates[peer_id]):
+                    if peer_counts.get(peer_id, 0) >= TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER:
+                        break
+                    obj, mode = candidates[peer_id][position]
+                    position += 1
+                    positions[peer_id] = position
+                    made_progress = True
+                    metadata = obj.metadata_ or {}
+                    message_id = metadata.get("message_id")
+                    cursor_value = {
+                        "occurred_at": obj.occurred_at.isoformat() if obj.occurred_at else None,
+                        "id": str(obj.id),
+                    }
+                    peer_key = str(peer_id)
+                    if mode == "sweep":
+                        cursors[peer_key] = cursor_value
+                    else:
+                        heads[peer_key] = {
+                            "cursor": cursor_value,
+                            "newest": actual_newest_values[peer_id],
+                        }
+                    modes[peer_key] = "sweep" if mode == "head" else "head"
+                    last_serviced_index = peer_ids.index(peer_id)
+                    if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+                        # Local malformed rows advance the sweep but consume no
+                        # provider budget and cannot pin a peer indefinitely.
+                        continue
+                    break
+                else:
+                    continue
+                if peer_counts.get(peer_id, 0) >= TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER:
+                    continue
+                if position > len(candidates[peer_id]):
+                    continue
+                if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+                    continue
+                peer_counts[peer_id] = peer_counts.get(peer_id, 0) + 1
+                provider_calls += 1
+                metadata = obj.metadata_ or {}
+                selection = selections[peer_id]
+                try:
+                    reference = store.decrypt_reference(selection)
+                    result = await transport.fetch_message(
+                        session, reference, peer_id=peer_id, message_id=message_id
+                    )
+                    if result is None:
+                        tombstone_object(obj)
+                        self._session.flush()
+                        continue
+                    if result.get("peer_id") != peer_id or result.get("message_id") != message_id:
+                        continue
+                    if result.get("service") or not result.get("text"):
+                        continue
+                    entry = TelegramMtprotoHistoryEntry(
+                        message_id=message_id,
+                        occurred_at=result.get("occurred_at") or obj.occurred_at,
+                        text=result.get("text"),
+                        sender_peer_id=result.get("sender_peer_id"),
+                        reply_to_message_id=result.get("reply_to_message_id"),
+                        topic_id=result.get("topic_id"),
+                        edited_at=result.get("edited_at"),
+                        is_service=bool(result.get("service")),
+                        outgoing=bool(result.get("outgoing")),
+                    )
+                    normalized = _normalize_entry(
+                        account, selection, entry, datetime.min.replace(tzinfo=UTC)
+                    )
+                    if normalized is not None:
+                        materializer.upsert_mtproto_message(user_id=user_id, normalized=normalized)
+                except TelegramMtprotoProviderUnavailableError:
+                    raise
+                except TelegramMtprotoProviderReferenceInvalidError:
+                    continue
+                except TelegramMtprotoReadRejectedError:
+                    continue
+                except TelegramMtprotoAuthorizationInvalidError:
+                    raise
+                except TelegramMtprotoWriteDefiniteError:
+                    raise
+                except ValueError:
+                    continue
+                except Exception:  # noqa: BLE001, S112 - isolate one candidate failure
+                    continue
+            if not made_progress:
+                break
+        if last_serviced_index is not None:
+            payload[TELEGRAM_MTPROTO_RECONCILE_ROTATION_KEY] = (
+                last_serviced_index + 1
+            ) % len(peer_ids)
+        return provider_calls
 
     async def _sync_selection(
         self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection
@@ -277,7 +534,7 @@ def _normalize_entry(
     if not body.strip():
         return None
     first_line = body.strip().splitlines()[0].strip()
-    title = _bound_title(f"{selection.title}: {first_line}")
+    title = build_mtproto_presentation_title(selection.title, first_line)
     return {
         "provider": TELEGRAM_PROVIDER,
         "kind": TELEGRAM_KIND,
@@ -332,6 +589,11 @@ def _bound_title(text: str) -> str:
     return stripped[:199].rstrip() + "…"
 
 
+def build_mtproto_presentation_title(peer_title: str, first_line: str) -> str:
+    """Build the canonical bounded title shared by history and mutations."""
+    return _bound_title(f"{peer_title}: {first_line}")
+
+
 def _build_transport() -> TelegramMtprotoTransport:
     if not _mtproto_is_configured():
         raise TelegramMtprotoConfigurationError("Telegram MTProto is not configured")
@@ -348,3 +610,42 @@ def _mtproto_is_configured() -> bool:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _uuid_cursor(value: object) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _reconcile_cursor(value: object) -> tuple[datetime | None, UUID] | None:
+    if not isinstance(value, dict):
+        return None
+    cursor_id = _uuid_cursor(value.get("id"))
+    if cursor_id is None:
+        return None
+    raw_time = value.get("occurred_at")
+    if raw_time is None:
+        return None, cursor_id
+    try:
+        occurred_at = datetime.fromisoformat(str(raw_time))
+    except ValueError:
+        return None
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=UTC)
+    return occurred_at.astimezone(UTC), cursor_id
+
+
+def _object_cursor(obj: Object) -> tuple[datetime | None, UUID]:
+    occurred_at = obj.occurred_at.astimezone(UTC) if obj.occurred_at else None
+    return occurred_at, obj.id
+
+
+def _object_cursor_value(obj: Object) -> dict[str, str | None]:
+    return {
+        "occurred_at": obj.occurred_at.isoformat() if obj.occurred_at else None,
+        "id": str(obj.id),
+    }

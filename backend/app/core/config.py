@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     microsoft_redirect_uri: str = "http://localhost:18080/auth/teams/callback"
     microsoft_teams_notification_url: str = ""
     source_sync_teams_interval_seconds: int = 900
-    source_sync_telegram_mtproto_interval_seconds: int = 300
+    source_sync_telegram_mtproto_interval_seconds: int = 60
     source_sync_gmail_interval_seconds: int = 120
     source_sync_yandex_mail_interval_seconds: int = 120
     source_sync_google_calendar_interval_seconds: int = 300

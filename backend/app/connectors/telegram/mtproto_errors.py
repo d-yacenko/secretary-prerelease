@@ -64,6 +64,10 @@ class TelegramMtprotoProviderReferenceInvalidError(TelegramMtprotoError):
     pass
 
 
+class TelegramMtprotoReadRejectedError(TelegramMtprotoError):
+    """A deterministic rejection of a read-only provider lookup."""
+
+
 class TelegramMtprotoProviderUnavailableError(TelegramMtprotoError):
     def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
         super().__init__(message)

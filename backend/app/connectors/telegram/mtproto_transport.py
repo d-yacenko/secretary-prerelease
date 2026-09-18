@@ -41,6 +41,7 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoInvalidPasswordError,
     TelegramMtprotoProviderReferenceInvalidError,
     TelegramMtprotoProviderUnavailableError,
+    TelegramMtprotoReadRejectedError,
     TelegramMtprotoWriteDefiniteError,
     TelegramMtprotoWriteUncertainError,
 )
@@ -726,7 +727,7 @@ class TelethonMtprotoTransport:
             client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
             await client.connect()
             if not await client.is_user_authorized():
-                raise TelegramMtprotoWriteDefiniteError(
+                raise TelegramMtprotoAuthorizationInvalidError(
                     "Telegram MTProto authorization is no longer valid"
                 )
             message = await client.get_messages(input_peer, ids=message_id)
@@ -734,16 +735,28 @@ class TelethonMtprotoTransport:
                 message = message[0] if message else None
             if message is None:
                 return None
+            entry = _history_entry_from_message(message)
+            if entry is None:
+                return {
+                    "peer_id": _peer_id_from_message_peer(getattr(message, "peer_id", None)),
+                    "message_id": getattr(message, "id", None),
+                    "text": None,
+                    "service": getattr(message, "action", None) is not None,
+                }
             return {
                 "peer_id": _peer_id_from_message_peer(getattr(message, "peer_id", None)),
-                "message_id": getattr(message, "id", None),
+                "message_id": entry.message_id,
+                "text": entry.text,
+                "occurred_at": entry.occurred_at,
+                "edited_at": entry.edited_at,
+                "reply_to_message_id": entry.reply_to_message_id,
+                "sender_peer_id": entry.sender_peer_id,
+                "outgoing": entry.outgoing,
+                "topic_id": entry.topic_id,
+                "service": entry.is_service,
             }
-        except TelegramMtprotoWriteDefiniteError:
+        except (TelegramMtprotoAuthorizationInvalidError, TelegramMtprotoProviderReferenceInvalidError):
             raise
-        except TelegramMtprotoProviderReferenceInvalidError:
-            raise TelegramMtprotoWriteDefiniteError(
-                "Telegram selected group reference is invalid"
-            ) from None
         except (
             AuthKeyError,
             AuthKeyNotFound,
@@ -753,19 +766,23 @@ class TelethonMtprotoTransport:
             UserDeactivatedBanError,
             UserDeactivatedError,
         ):
-            raise TelegramMtprotoWriteDefiniteError(
+            raise TelegramMtprotoAuthorizationInvalidError(
                 "Telegram MTProto authorization is no longer valid"
             ) from None
         except (ChannelInvalidError, ChannelPrivateError, ChatIdInvalidError, PeerIdInvalidError,
                 BadRequestError, ForbiddenError, NotFoundError):
-            raise TelegramMtprotoWriteDefiniteError("Telegram message lookup was rejected") from None
-        except (ServerError, TimedOutError):
-            raise TelegramMtprotoWriteUncertainError(
-                "Telegram message lookup is uncertain; not retrying"
+            raise TelegramMtprotoReadRejectedError("Telegram message lookup was rejected") from None
+        except FloodWaitError as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable", exc.seconds
             ) from None
-        except Exception:  # noqa: BLE001 - lookup failure fails closed
-            raise TelegramMtprotoWriteUncertainError(
-                "Telegram message lookup is uncertain; not retrying"
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
+            ) from None
+        except Exception:  # noqa: BLE001 - read failure is provider transient
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
             ) from None
         finally:
             await _disconnect(client)
