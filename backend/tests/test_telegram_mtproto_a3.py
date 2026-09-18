@@ -42,6 +42,11 @@ SESSION = "session-only-inside-fake-transport"
 API_HASH = "api-hash-only-in-settings"
 
 
+@pytest.fixture(autouse=True)
+def _enable_mtproto_ai_for_legacy_a3_regressions(monkeypatch):
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+
+
 class FakeHistoryTransport:
     def __init__(self, pages: list[TelegramMtprotoHistoryPage]) -> None:
         self.pages = pages
@@ -108,9 +113,12 @@ def _descriptor(
 
 def _selection(db_session, account, descriptor=None):
     descriptor = descriptor or _descriptor()
-    return TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY)).save_selection(
+    selection = TelegramMtprotoAccountStore(db_session, CredentialEncryption(KEY)).save_selection(
         account.id, descriptor
     )
+    selection.scope_active = True
+    db_session.flush()
+    return selection
 
 
 def _entry(message_id: int, text: str | None = "text", *, days_ago=1, service=False):

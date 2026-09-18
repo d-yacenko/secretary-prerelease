@@ -15,6 +15,7 @@ from app.db.models import Job, Object, UserSettings
 from app.domain.labels import KIND_LABEL
 from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.domain.scheduled_activity import KIND_SCHEDULED_ACTIVITY
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.domain.temporal_hint import KIND_TEMPORAL_HINT
 from app.jobs.constants import (
     JOB_STATUS_DONE,
@@ -220,7 +221,9 @@ def load_auto_label_state(
     if lock_rows:
         obj_stmt = obj_stmt.with_for_update()
     obj = session.scalar(obj_stmt.execution_options(populate_existing=True))
-    if obj is None or not object_is_auto_label_eligible(obj):
+    if obj is None or not telegram_mtproto_ai_eligible(session, obj):
+        return None
+    if not object_is_auto_label_eligible(obj):
         return None
     candidates = load_active_label_candidates(session, user_id, lock_rows=lock_rows)
     if candidates is None or len(candidates) == 0:

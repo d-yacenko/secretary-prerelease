@@ -8,6 +8,7 @@ from app.api.schemas import EdgeCreate, ObjectCreate, ObjectUpdate
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.planned_execution import validate_planned_execution_interval
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.llm.embedding_service import EmbeddingService
 from app.services.db_errors import is_external_object_unique_violation
@@ -35,10 +36,20 @@ class GraphService:
         session: Session,
         user_id: UUID,
         embedding_service: EmbeddingService | None = None,
+        *,
+        ai_only: bool = False,
     ) -> None:
         self._session = session
         self._user_id = user_id
         self._embedding_service = embedding_service
+        self._ai_only = ai_only
+
+    def _scope_predicate(self, model=Object):
+        return (
+            telegram_mtproto_ai_predicate(model)
+            if self._ai_only
+            else telegram_mtproto_active_object_predicate(model)
+        )
 
     def _flush_object(self) -> None:
         try:
@@ -51,7 +62,7 @@ class GraphService:
     def _get_object_row(self, object_id: UUID, *, active_only: bool = False) -> Object | None:
         filters = [Object.id == object_id, Object.user_id == self._user_id]
         if active_only:
-            filters.append(telegram_mtproto_active_object_predicate())
+            filters.append(self._scope_predicate())
         return self._session.scalar(select(Object).where(*filters))
 
     def create_object(self, data: ObjectCreate) -> Object:
@@ -281,8 +292,8 @@ class GraphService:
         if not include_rejected:
             outgoing_filters.extend([Edge.state != "rejected", Object.state != "rejected"])
             incoming_filters.extend([Edge.state != "rejected", Object.state != "rejected"])
-        outgoing_filters.extend([object_is_active(Object), telegram_mtproto_active_object_predicate()])
-        incoming_filters.extend([object_is_active(Object), telegram_mtproto_active_object_predicate()])
+        outgoing_filters.extend([object_is_active(Object), self._scope_predicate(Object)])
+        incoming_filters.extend([object_is_active(Object), self._scope_predicate(Object)])
 
         outgoing = (
             select(Edge.id, literal("outgoing").label("direction"))
@@ -364,7 +375,7 @@ class GraphService:
                     select(Object).where(
                         Object.user_id == self._user_id,
                         Object.id.in_(neighbor_ids),
-                        telegram_mtproto_active_object_predicate(),
+                        self._scope_predicate(),
                     )
                 ).all()
             )

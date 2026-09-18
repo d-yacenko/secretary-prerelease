@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Job, Object, Representation
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.jobs.constants import (
     JOB_STATUS_FAILED,
     JOB_STATUS_PENDING,
@@ -143,6 +144,18 @@ def enqueue_summarize_conversation_stack(
     user_id: UUID,
     stack: ConversationStack,
 ) -> Job | None:
+    objects = list(
+        session.scalars(
+            select(Object).where(
+                Object.user_id == user_id,
+                Object.id.in_(list(stack.object_ids)),
+            )
+        )
+    )
+    if len(objects) != len(stack.object_ids) or any(
+        not telegram_mtproto_ai_eligible(session, obj) for obj in objects
+    ):
+        return None
     if find_current_stack_summary(session, stack) is not None:
         return None
     existing = _active_summary_job(session, user_id, stack.fingerprint)
@@ -285,6 +298,8 @@ class ConversationStackSummaryService:
                 )
             ).all()
         )
+        if any(not telegram_mtproto_ai_eligible(self._session, obj) for obj in objects):
+            return None
         by_id = {obj.id: obj for obj in objects}
         ordered = [by_id[item] for item in object_ids if item in by_id]
         if len(ordered) != len(object_ids):

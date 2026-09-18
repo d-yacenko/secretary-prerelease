@@ -18,6 +18,7 @@ from app.domain.labels import KIND_LABEL
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.scheduled_activity import KIND_SCHEDULED_ACTIVITY
 from app.domain.task_lifecycle import TASK_STATUS_IN_PROGRESS, TASK_STATUS_OPEN
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.jobs.constants import JOB_TYPE_PROACTIVE_REVIEW
 from app.llm.openai_assistant_provider import OpenAIAssistantProvider
 from app.notifications.constants import (
@@ -345,6 +346,7 @@ class ProactiveReviewService:
             Object.user_id == self._user_id,
             object_is_active(),
             Object.state != REJECTED_STATE,
+            telegram_mtproto_ai_predicate(),
         ]
 
     def _recent_activity(self, window_start: datetime, window_end: datetime) -> list[Object]:
@@ -632,6 +634,10 @@ class ProactiveReviewService:
             select(Object).where(Object.id == object_id, Object.user_id == self._user_id)
         )
         if obj is None:
+            return None
+        if not self._session.scalar(
+            select(Object.id).where(Object.id == obj.id, telegram_mtproto_ai_predicate())
+        ):
             return None
         if is_object_hidden_from_active_reads(obj) or obj.state == REJECTED_STATE:
             return None

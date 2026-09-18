@@ -10,6 +10,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.conversation_projection import project_inbox_object
 from app.services.conversation_stack import (
@@ -130,6 +131,7 @@ def _exists_beyond(
     newer: bool,
     feed_at,
     object_id: UUID,
+    ai_only: bool,
 ) -> bool:
     svc = RecentSourceService(session, user_id)
     feed_sql = inbox_feed_at_sql()
@@ -138,12 +140,25 @@ def _exists_beyond(
     else:
         bound = or_(feed_sql < feed_at, and_(feed_sql == feed_at, Object.id < object_id))
     found = session.scalar(
-        select(Object.id).where(svc._eligible_filters(), bound).limit(1)
+        select(Object.id).where(
+            svc._eligible_filters(),
+            bound,
+            telegram_mtproto_ai_predicate()
+            if ai_only
+            else telegram_mtproto_active_object_predicate(),
+        ).limit(1)
     )
     return found is not None
 
 
-def _load_window(session: Session, user_id: UUID, anchor: Object, half: int) -> list[Object]:
+def _load_window(
+    session: Session,
+    user_id: UUID,
+    anchor: Object,
+    half: int,
+    *,
+    ai_only: bool,
+) -> list[Object]:
     svc = RecentSourceService(session, user_id)
     feed_sql = inbox_feed_at_sql()
     anchor_feed = inbox_feed_at(anchor)
@@ -152,6 +167,9 @@ def _load_window(session: Session, user_id: UUID, anchor: Object, half: int) -> 
             select(Object)
             .where(
                 svc._eligible_filters(),
+                telegram_mtproto_ai_predicate()
+                if ai_only
+                else telegram_mtproto_active_object_predicate(),
                 Object.id != anchor.id,
                 or_(
                     feed_sql > anchor_feed,
@@ -167,6 +185,9 @@ def _load_window(session: Session, user_id: UUID, anchor: Object, half: int) -> 
             select(Object)
             .where(
                 svc._eligible_filters(),
+                telegram_mtproto_ai_predicate()
+                if ai_only
+                else telegram_mtproto_active_object_predicate(),
                 Object.id != anchor.id,
                 or_(
                     feed_sql < anchor_feed,
@@ -189,12 +210,16 @@ def reconstruct_stack_members(
     session: Session,
     user_id: UUID,
     object_id: UUID,
+    *,
+    ai_only: bool = False,
 ) -> tuple[Object, list[Object], str, str, str]:
     anchor = session.scalar(
         select(Object).where(
             Object.id == object_id,
             Object.user_id == user_id,
-            telegram_mtproto_active_object_predicate(),
+            telegram_mtproto_ai_predicate()
+            if ai_only
+            else telegram_mtproto_active_object_predicate(),
         )
     )
     if (
@@ -208,7 +233,7 @@ def reconstruct_stack_members(
     marker = InboxReviewMarkerService(session, user_id).get_marker()
     half = _WINDOW_HALF
     while True:
-        window = _load_window(session, user_id, anchor, half)
+        window = _load_window(session, user_id, anchor, half, ai_only=ai_only)
         groups = group_inbox_conversation_items(window, marker=marker)
         group = next((item for item in groups if object_id in item.object_ids), None)
         if group is None:
@@ -223,11 +248,21 @@ def reconstruct_stack_members(
             continue
         edge_hit = False
         if window[0].id in member_ids and _exists_beyond(
-            session, user_id, newer=True, feed_at=inbox_feed_at(window[0]), object_id=window[0].id
+            session,
+            user_id,
+            newer=True,
+            feed_at=inbox_feed_at(window[0]),
+            object_id=window[0].id,
+            ai_only=ai_only,
         ):
             edge_hit = True
         if window[-1].id in member_ids and _exists_beyond(
-            session, user_id, newer=False, feed_at=inbox_feed_at(window[-1]), object_id=window[-1].id
+            session,
+            user_id,
+            newer=False,
+            feed_at=inbox_feed_at(window[-1]),
+            object_id=window[-1].id,
+            ai_only=ai_only,
         ):
             edge_hit = True
         if edge_hit and half < _WINDOW_HALF_MAX:
@@ -276,13 +311,14 @@ def list_conversation_members_page(
     object_id: UUID,
     limit: int,
     cursor: str | None,
+    ai_only: bool = False,
 ):
     bounded = min(max(limit, 1), CONVERSATION_MEMBERS_MAX_LIMIT)
     decoded = _decode_cursor(cursor) if cursor else None
     if decoded is not None and decoded["object_id"] != object_id:
         raise ValidationError("conversation members cursor does not match object_id")
     _anchor, members, provider, label, fingerprint = reconstruct_stack_members(
-        session, user_id, object_id
+        session, user_id, object_id, ai_only=ai_only
     )
     if decoded is not None and decoded["fingerprint"] != fingerprint:
         raise ValidationError("conversation stack changed; restart without cursor")

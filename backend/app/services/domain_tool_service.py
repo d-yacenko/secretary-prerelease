@@ -48,6 +48,7 @@ from app.tools.schemas import (
     CancelScheduledActivityInput,
     CancelScheduledActivityOutput,
     ClearInboxReviewMarkerOutput,
+    ConversationMemberOut,
     CreateCalendarEventCanonicalInput,
     CreateCalendarEventInput,
     CreateCalendarEventOutput,
@@ -76,11 +77,10 @@ from app.tools.schemas import (
     LabelItemOut,
     LinkObjectsInput,
     LinkObjectsOutput,
-    ListInboxSinceReviewMarkerInput,
-    ListInboxSinceReviewMarkerOutput,
     ListConversationMembersInput,
     ListConversationMembersOutput,
-    ConversationMemberOut,
+    ListInboxSinceReviewMarkerInput,
+    ListInboxSinceReviewMarkerOutput,
     ListLabelsInput,
     ListLabelsOutput,
     ListNeighborsInput,
@@ -157,15 +157,15 @@ class DomainToolService:
         from app.core.client_timezone import get_request_timezone
 
         self._client_timezone = client_timezone or get_request_timezone()
-        self._graph = GraphService(session, user_id, embedding_service)
+        self._graph = GraphService(session, user_id, embedding_service, ai_only=True)
         self._search = SearchService(session, user_id)
         self._retrieval = RetrievalService(session, user_id)
-        self._object_query = ObjectQueryService(session, user_id)
+        self._object_query = ObjectQueryService(session, user_id, ai_only=True)
         self._context = ContextService(session, user_id, embedding_service)
         self._notifications = NotificationService(session, user_id)
         self._defer_write_embeddings = defer_write_embeddings
         if defer_write_embeddings:
-            self._write_graph = GraphService(session, user_id, None)
+            self._write_graph = GraphService(session, user_id, None, ai_only=True)
             self._job_queue = JobQueueService(session)
         else:
             self._write_graph = self._graph
@@ -405,6 +405,7 @@ class DomainToolService:
                 object_id=input.object_id,
                 limit=input.limit,
                 cursor=input.cursor,
+                ai_only=True,
             )
         except NotFoundError as exc:
             raise ToolError(exc.message) from exc

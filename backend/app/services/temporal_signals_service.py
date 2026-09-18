@@ -16,6 +16,7 @@ from app.ai_audit.context import ai_trace_session, get_active_trace
 from app.api.schemas import EdgeCreate, ObjectCreate
 from app.db.models import Edge, Job, Object, UserSettings
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.domain.temporal_hint import (
     EDGE_TYPE_TEMPORAL_CONFIRMATION,
     EDGE_TYPE_TEMPORAL_EVIDENCE,
@@ -1107,9 +1108,12 @@ class TemporalSignalService:
         return event
 
     def _load_source(self, object_id: UUID) -> Object | None:
-        return self._session.scalar(
+        obj = self._session.scalar(
             select(Object).where(Object.id == object_id, Object.user_id == self._user_id)
         )
+        if obj is None or not telegram_mtproto_ai_eligible(self._session, obj):
+            return None
+        return obj
 
     def _candidate_from_object(self, obj: Object) -> TemporalMatchCandidate:
         return TemporalMatchCandidate(

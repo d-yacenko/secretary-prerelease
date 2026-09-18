@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai_audit.context import get_active_trace
-from app.db.models import Job
+from app.db.models import Job, Object
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.jobs.constants import (
     JOB_STATUS_DONE,
     JOB_STATUS_PENDING,
@@ -73,9 +74,13 @@ def enqueue_summarize_resource(
     expected_revision: str | None,
     expected_representation_generation: int | None = None,
 ) -> None:
+    obj = session.scalar(
+        select(Object).where(Object.id == object_id, Object.user_id == user_id)
+    )
+    if obj is None or not telegram_mtproto_ai_eligible(session, obj):
+        return
     generation = expected_representation_generation
     if generation is None:
-        from app.db.models import Object
         from app.services.representation_generation import get_representation_generation
 
         obj = session.scalar(
@@ -124,6 +129,8 @@ def enqueue_correlate_object(
     )
     if obj is None:
         return
+    if not telegram_mtproto_ai_eligible(session, obj):
+        return
     signature = correlation_input_signature(obj)
     if _has_correlation_signature_job(session, user_id, object_id, signature):
         return
@@ -149,6 +156,8 @@ def enqueue_embed_object(session: Session, object_id: UUID, user_id: UUID) -> No
     )
     if obj is None:
         return
+    if not telegram_mtproto_ai_eligible(session, obj):
+        return
     signature = embedding_input_signature(obj)
     if _has_active_embedding_signature_job(session, user_id, object_id, signature):
         return
@@ -171,6 +180,11 @@ def enqueue_auto_label_object(
     *,
     parent_trace_id=None,
 ) -> None:
+    obj = session.scalar(
+        select(Object).where(Object.id == object_id, Object.user_id == user_id)
+    )
+    if obj is None or not telegram_mtproto_ai_eligible(session, obj):
+        return
     from app.services.auto_label_service import enqueue_auto_label_object as enqueue
 
     enqueue(session, object_id, user_id, parent_trace_id=parent_trace_id)

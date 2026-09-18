@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import object_session
 
 from app.db.models import Object
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.llm.embedding_service import EmbeddingService
 from app.llm.embedding_text import canonical_embedding_text, embedding_input_signature
 from app.services.openai_daily_budget import OpenAIDailyBudgetExhaustedError
@@ -29,6 +30,9 @@ def refresh_object_embedding(
     obj: Object,
     embedding_service: EmbeddingService,
 ) -> None:
+    session = object_session(obj)
+    if session is not None and not telegram_mtproto_ai_eligible(session, obj):
+        return
     intended_sig = embedding_input_signature(obj)
     if object_has_current_embedding_provenance(obj, intended_sig):
         return
