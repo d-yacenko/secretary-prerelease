@@ -10,7 +10,7 @@ from app.api.schemas import EdgeOut, ObjectOut
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS
-from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import NotFoundError
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
@@ -63,7 +63,7 @@ class GraphWorkspaceService:
             select(Object).where(
                 Object.id == root_id,
                 Object.user_id == self._user_id,
-                telegram_mtproto_ai_predicate(),
+                telegram_mtproto_active_object_predicate(),
             )
         )
         if root is None or is_object_hidden_from_active_reads(root):
@@ -212,14 +212,14 @@ class GraphWorkspaceService:
             Object.kind == "task",
             Object.state != REJECTED_STATE,
             non_terminal_status,
-            telegram_mtproto_ai_predicate(),
+            telegram_mtproto_active_object_predicate(),
         ]
 
     def _eligible_neighbor_object_filters(self, exclude_deleted_neighbors: bool) -> list:
         object_filters = [
             Object.user_id == self._user_id,
             Object.state != REJECTED_STATE,
-            telegram_mtproto_ai_predicate(),
+            telegram_mtproto_active_object_predicate(),
         ]
         if exclude_deleted_neighbors:
             object_filters.append(object_is_active())

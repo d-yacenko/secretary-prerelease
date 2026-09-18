@@ -1,5 +1,5 @@
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
@@ -14,6 +14,7 @@ from app.domain.telegram_mtproto_ai import (
 )
 from app.services.context_service import ContextService
 from app.services.errors import NotFoundError
+from app.services.object_query_service import ObjectQueryService
 from app.services.telegram_mtproto_recurring_sync_service import (
     TelegramMtprotoRecurringSyncService,
 )
@@ -26,8 +27,11 @@ def _user(db_session) -> User:
     return user
 
 
-def _mtproto_object(db_session, user_id, *, account_id=None, peer_id=123) -> Object:
+def _mtproto_object(
+    db_session, user_id, *, account_id=None, peer_id=123, object_id=None
+) -> Object:
     obj = Object(
+        id=object_id or uuid4(),
         user_id=user_id,
         kind=TELEGRAM_KIND,
         provider=TELEGRAM_PROVIDER,
@@ -158,6 +162,103 @@ def test_enabled_catchup_is_bounded_and_idempotent_for_active_owned_objects(
     assert service._enqueue_embedding_catchup(user.id, account.id) == 1
     assert service._enqueue_embedding_catchup(user.id, account.id) == 0
     assert db_session.scalar(select(func.count()).select_from(Job)) == 1
+
+
+def test_ordinary_visibility_is_independent_from_ai_quarantine(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=123,
+            peer_kind="group",
+            provider_peer_reference_encrypted="encrypted",
+            title="ordinary scope",
+            manual_selected=False,
+            scope_active=True,
+        )
+    )
+    obj = _mtproto_object(db_session, user.id, account_id=account.id, peer_id=123)
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
+
+    assert obj in ObjectQueryService(db_session, user.id).query(
+        kinds=[TELEGRAM_KIND], providers=[TELEGRAM_PROVIDER]
+    )
+    assert obj not in ObjectQueryService(db_session, user.id, ai_only=True).query(
+        kinds=[TELEGRAM_KIND], providers=[TELEGRAM_PROVIDER]
+    )
+
+
+def test_catchup_scans_past_pending_rows_and_advances_cursor(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=123,
+            peer_kind="group",
+            provider_peer_reference_encrypted="encrypted",
+            title="catchup scope",
+            manual_selected=False,
+            scope_active=True,
+        )
+    )
+    objects = []
+    for index in range(11):
+        obj = _mtproto_object(
+            db_session,
+            user.id,
+            account_id=account.id,
+            peer_id=123,
+            object_id=UUID(int=index + 1),
+        )
+        objects.append(obj)
+    db_session.flush()
+    for obj in objects[:10]:
+        db_session.add(
+            Job(
+                user_id=user.id,
+                type="embed_object",
+                status="pending",
+                payload={"object_id": str(obj.id)},
+            )
+        )
+    db_session.flush()
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    service = TelegramMtprotoRecurringSyncService.__new__(TelegramMtprotoRecurringSyncService)
+    service._session = db_session
+    payload = {}
+    queued = service._enqueue_embedding_catchup(user.id, account.id, payload)
+
+    assert queued == 1
+    assert payload["telegram_embed_catchup_cursor"]
+
+
+def test_queued_embed_becomes_safe_noop_when_ai_is_disabled(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    obj = _mtproto_object(db_session, user.id)
+    from app.jobs.handlers import handle_embed_object
+    from app.llm.embedding_text import embedding_input_signature
+
+    payload = {
+        "object_id": str(obj.id),
+        "embedding_input_signature": embedding_input_signature(obj),
+    }
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
+    handle_embed_object(db_session, None, payload, user.id)
+    assert db_session.scalar(select(func.count()).select_from(Job)) == 0
 
 
 def test_malformed_mtproto_metadata_is_not_canonical_or_eligible(db_session, monkeypatch) -> None:

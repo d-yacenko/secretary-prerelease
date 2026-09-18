@@ -156,6 +156,8 @@ def enqueue_embed_object(session: Session, object_id: UUID, user_id: UUID) -> No
     )
     if obj is None:
         return
+    if not telegram_mtproto_ai_eligible(session, obj):
+        return
     signature = embedding_input_signature(obj)
     if _has_active_embedding_signature_job(session, user_id, object_id, signature):
         return

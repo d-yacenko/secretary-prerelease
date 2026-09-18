@@ -21,6 +21,7 @@ from app.domain.task_lifecycle import (
     TASK_STATUS_OPEN,
 )
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
+from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import ValidationError
 from app.services.provenance import REJECTED_STATE
 from app.tools.datetime_utils import normalize_tool_datetime
@@ -58,9 +59,10 @@ def _task_status_filter(statuses: list[str]) -> object | None:
 
 
 class ObjectQueryService:
-    def __init__(self, session: Session, user_id: UUID) -> None:
+    def __init__(self, session: Session, user_id: UUID, *, ai_only: bool = False) -> None:
         self._session = session
         self._user_id = user_id
+        self._ai_only = ai_only
 
     def query(
         self,
@@ -92,7 +94,11 @@ class ObjectQueryService:
             Object.user_id == self._user_id,
             Object.state != REJECTED_STATE,
             object_is_active(),
-            telegram_mtproto_ai_predicate(),
+            (
+                telegram_mtproto_ai_predicate()
+                if self._ai_only
+                else telegram_mtproto_active_object_predicate()
+            ),
         )
 
         if kinds:

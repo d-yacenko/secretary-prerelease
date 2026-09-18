@@ -23,6 +23,8 @@ from app.services.telegram_mtproto_scope_service import TelegramMtprotoScopeServ
 
 TELEGRAM_MTPROTO_RECURRING_MAX_PEERS_PER_RUN = 10
 TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN = 10
+TELEGRAM_MTPROTO_EMBED_CATCHUP_SCAN_LIMIT = 100
+TELEGRAM_MTPROTO_EMBED_CATCHUP_CURSOR_KEY = "telegram_embed_catchup_cursor"
 
 _PEER_LOCAL_ERRORS = (
     TelegramMtprotoGroupUnavailableError,
@@ -65,7 +67,7 @@ class TelegramMtprotoRecurringSyncService:
             )
 
         await self._scope.reconcile_scope(user_id)
-        self._enqueue_embedding_catchup(user_id, account_id)
+        self._enqueue_embedding_catchup(user_id, account_id, payload)
         selections = list(
             self._session.scalars(
                 select(TelegramMtprotoChatSelection)
@@ -94,26 +96,57 @@ class TelegramMtprotoRecurringSyncService:
                 pass
             payload["telegram_peer_cursor"] = (cursor + offset + 1) % len(selections)
 
-    def _enqueue_embedding_catchup(self, user_id: UUID, account_id: UUID) -> int:
+    def _enqueue_embedding_catchup(
+        self, user_id: UUID, account_id: UUID, payload: dict | None = None
+    ) -> int:
         if not settings.telegram_mtproto_ai_enabled:
             return 0
+        catchup_payload = payload if payload is not None else {}
+        cursor_raw = catchup_payload.get(TELEGRAM_MTPROTO_EMBED_CATCHUP_CURSOR_KEY)
+        try:
+            cursor = UUID(str(cursor_raw)) if cursor_raw else None
+        except (TypeError, ValueError):
+            cursor = None
+        filters = [
+            Object.user_id == user_id,
+            Object.provider == "telegram",
+            Object.kind == "chat_message",
+            Object.metadata_["transport"].as_string() == "mtproto",
+            Object.metadata_["account_id"].as_string() == str(account_id),
+            telegram_mtproto_ai_predicate(),
+        ]
+        if cursor is not None:
+            filters.append(Object.id > cursor)
         objects = list(
             self._session.scalars(
                 select(Object)
-                .where(
-                    Object.user_id == user_id,
-                    Object.provider == "telegram",
-                    Object.kind == "chat_message",
-                    Object.metadata_["transport"].as_string() == "mtproto",
-                    Object.metadata_["account_id"].as_string() == str(account_id),
-                    telegram_mtproto_ai_predicate(),
-                )
-                .order_by(Object.created_at, Object.id)
-                .limit(TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN)
+                .where(*filters)
+                .order_by(Object.id)
+                .limit(TELEGRAM_MTPROTO_EMBED_CATCHUP_SCAN_LIMIT)
             )
         )
+        if not objects and cursor is not None:
+            objects = list(
+                self._session.scalars(
+                    select(Object)
+                    .where(
+                        Object.user_id == user_id,
+                        Object.provider == "telegram",
+                        Object.kind == "chat_message",
+                        Object.metadata_["transport"].as_string() == "mtproto",
+                        Object.metadata_["account_id"].as_string() == str(account_id),
+                        telegram_mtproto_ai_predicate(),
+                    )
+                    .order_by(Object.id)
+                    .limit(TELEGRAM_MTPROTO_EMBED_CATCHUP_SCAN_LIMIT)
+                )
+        )
+        if objects:
+            catchup_payload[TELEGRAM_MTPROTO_EMBED_CATCHUP_CURSOR_KEY] = str(objects[-1].id)
         queued = 0
         for obj in objects:
+            if queued >= TELEGRAM_MTPROTO_EMBED_CATCHUP_MAX_PER_RUN:
+                break
             if object_has_current_embedding_provenance(
                 obj, embedding_input_signature(obj)
             ):

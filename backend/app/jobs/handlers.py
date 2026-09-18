@@ -361,6 +361,20 @@ def handle_summarize_conversation_stack(
     payload: dict,
     user_id: UUID,
 ) -> None:
+    object_ids = [UUID(str(item)) for item in payload.get("object_ids") or []]
+    if object_ids:
+        objects = list(
+            session.scalars(
+                select(Object).where(
+                    Object.user_id == user_id,
+                    Object.id.in_(object_ids),
+                )
+            )
+        )
+        if len(objects) != len(object_ids) or any(
+            not telegram_mtproto_ai_eligible(session, obj) for obj in objects
+        ):
+            return
     from app.llm.openai_summarizer import (
         create_openai_conversation_stack_summarizer_from_effective,
     )
