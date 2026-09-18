@@ -32,17 +32,17 @@
 - Non-blocking normalization debt identified during review: immediate MTProto send/edit titles use a different bound than A3 history normalization. C2A must unify canonical presentation-title generation.
 - Telegram MTProto C2A/C2AR/C2AR2/C2AR3/C2AR4 reconciliation: ACCEPTED / INTEGRATED TO MAIN at merge `5823d1f557e7040b0396e895032ed3c3b16d4d0d`. Reviewed implementation tip is `802d9aacb217bd2d3b3e012bdd2a644059d55ad4`.
 - Accepted reconciliation semantics: 60-second Telegram cadence; A3 new-message sync; bounded exact-message remote edit/delete reconciliation; independent recent-head + historical sweep traversal; fair account rotation; <=5 lookups/peer and <=20/account; auth/FloodWait/provider error classification; confirmed absence tombstone; canonical title normalization; Q1 quarantine preserved.
-- Telegram MTProto C2B implementation `4e01f16d2bea39e2bccef05bcfb8205269d47805`: REVIEWED / REJECTED PENDING C2BR2.
+- Telegram MTProto C2B/C2BR/C2BR2 deterministic notification surface: ACCEPTED / INTEGRATED TO MAIN at merge `0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`. Reviewed implementation tip is `2653de562f72ddb0b81063fb816a02b330022a4b`.
 - Accepted C2B direction: deterministic UUIDv5 Notification IDs; created/edited/deleted transport event keys; existing notifications table/API; no migration; initial/backfill anti-spam intent; Q1 AI quarantine preserved.
 - C2B blocking defect: reconciliation can swallow an unexpected local Notification persistence failure under broad candidate isolation after edit/delete mutation, risking committed object convergence with a permanently missing deterministic event.
 - C2B blocking verification gap: required focused matrix was not completed; missing explicit conflict-path, backfill/replay, service/inactive, missing-edited-at/metadata-only, outgoing-delete/transient/mismatch, and Notification API behavior coverage.
-- Telegram MTProto C2BR corrective `148c668a75222fdd9c75e97000ae646ca36e7766`: REVIEWED / REJECTED PENDING C2BR2. Improvement accepted: typed local persistence error, edit/delete failure propagation, real PK-conflict regression, transport-event Notification API lifecycle coverage. Remaining defect: `begin_nested()`/SAVEPOINT creation is still outside the typed persistence boundary and can escape as a generic exception into reconciliation candidate isolation.
-- Current authorized phase: Telegram MTProto C2BR2 persistence-boundary and acceptance-coverage corrective, exactly as specified in `CURRENT_TASK.md`.
+- Accepted C2B semantics: deterministic UUIDv5 transport notifications for created/edited/deleted inbound Telegram MTProto events; initial/backfill anti-spam; Q1 AI quarantine preserved; generic Notification API lifecycle; typed local persistence boundary including SAVEPOINT creation; deterministic PK-conflict recovery; local notification persistence failures cannot silently commit edit/delete convergence without the corresponding event.
+- Current authorized phase: Telegram MTProto C3A Flutter account connection and sync-scope UX, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
-- Planned next phase after C2B/C2BR acceptance: C3 client UX, then a newly frozen migration-bearing rollout.
+- C3 is split: C3A account/auth/sync-scope Flutter UX first; planned next phase after C3A acceptance is C3B Telegram-specific inbox/notification presentation, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C2BR2.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3A.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
