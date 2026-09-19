@@ -1,187 +1,198 @@
-# Current task — Telegram MTProto M4AH2: one approved live first-page conversion probe
+# Current task — Telegram MTProto M4AH2R: runtime-stage diagnostics and child-scope fix
 
 ## Status
 
-M4AH1R corrective first-page history probe is REVIEW ACCEPTED for exactly one live diagnostic execution.
-
-Approved branch:
-`review/telegram-mtproto-m4ah`
-
-Approved exact SHA:
-`0e512795c2e389f1e84e7682457395b3daee7bd0`
-
-Parent:
-`50ae5b65ac0a243b006f352d1b585c8ae2f4f09c`
-
-Reported verification:
-- focused pytest: 23 passed;
-- Ruff: PASS;
-- git diff --check: PASS;
-- worktree clean.
-
-Architect review confirmed:
-- origin review branch resolves exactly to approved SHA;
-- reviewed pinned/fail-closed SSH transport is reused;
-- production guards/cardinality/structural checks precede provider calls;
-- connect/auth/iteration/conversion failure stages are explicitly separated;
-- all failure paths carry sanitized MESSAGE_ORDINAL;
-- raw iterator failure ordinal is 0 before first item or next attempted position after yielded items, bounded to 100;
-- conversion failure ordinal is the current yielded position;
-- exact release `_history_entry_from_message(message)` is used;
-- `entry is None` stops immediately as STAGE_3_CONVERSION / InvalidHistoryEntry;
-- a failed page cannot emit FIRST_PAGE_PASS;
-- successful helper output uses ENTRIES_NONE=0;
-- no application `fetch_history()`, materialization, DB write, login/discovery/write RPC occurs;
-- output remains aggregate/sanitized only;
-- disconnect is in finally;
-- remote-started diagnostic does not SSH-retry.
-
-Non-blocking review debt:
-- the local protocol parser would accept a synthetic externally supplied success payload with `ENTRIES_NONE>0`, although the exact approved helper itself cannot emit that on success. Do not modify before this authorized run.
-
-This acceptance applies only to this diagnostic execution. It is not approval to merge or deploy the diagnostic harness.
-
-## Context
-
-M4AG2 proved:
-- session decrypt/StringSession parse PASS;
-- selected provider reference decrypt/parse/peer-match PASS;
-- TelegramClient construct PASS;
-- connect PASS;
-- live authorization true;
-- one raw `iter_messages(... limit=1, reverse=False)` PASS.
-
-Production release `8091736337689b68b4510126e74d9e409397f696` uses first-page size 100 and calls `_history_entry_from_message()` for every yielded message. Broad `ValueError`/`TypeError` in `fetch_history()` is currently remapped to authorization-invalid.
-
-M4AH2 tests the complete first page without that remapping.
-
-## Authorization
-
-Execute exactly once:
-
-`ops/production/diagnose_mtproto_history_page.py`
-
-from exact SHA:
+M4AH2 was executed exactly once on approved SHA:
 `0e512795c2e389f1e84e7682457395b3daee7bd0`.
 
-Its built-in maximum 3 SSH attempts are allowed only for pre-remote transport establishment failure.
+Transport:
+- strict pinned SSH PASS on attempt 1;
+- SSH auth PASS;
+- remote helper started;
+- no production mutation.
 
-No manual second run.
+Sanitized result:
+- `FAILURE_STAGE=STAGE_1_RUNTIME`;
+- `RAW_EXCEPTION_CLASS=RuntimeError`;
+- `MESSAGE_ORDINAL=0`;
+- `TELEGRAM_NETWORK_CALLS=0`.
 
-## Preparation
+Therefore M4AH2 produced no Telegram/auth/history evidence.
 
-1. `git fetch origin`.
-2. Use exact review SHA `0e512795c2e389f1e84e7682457395b3daee7bd0`.
-3. Require clean local worktree.
-4. Verify `origin/review/telegram-mtproto-m4ah` equals exact SHA.
-5. Verify `target.json` unchanged.
-6. Do not edit/amend/rebase/cherry-pick before run.
+Static review found an additional guaranteed child-script defect:
+- the embedded API-container child probe references `PAGE_SIZE`;
+- `PAGE_SIZE` is defined in the outer remote helper but NOT inside the child script scope;
+- if runtime startup were fixed, Stage 3 would later fail with a child-scope `NameError`.
 
-## Provider budget
+This task authorizes only **corrective implementation + local tests + review-branch push**.
 
-Only after all fail-closed guards pass:
+NO production execution is authorized.
 
-- `client.connect()` <= 1;
-- `client.is_user_authorized()` <= 1;
-- one `client.iter_messages(input_peer, limit=100, reverse=False)`;
-- consume <= 100 yielded items;
-- one local `_history_entry_from_message()` conversion per yielded item until first failure.
+## Branch / base
 
-No provider retry.
+Continue on:
+`review/telegram-mtproto-m4ah`
 
-Always disconnect.
+Base:
+`0e512795c2e389f1e84e7682457395b3daee7bd0`
 
-## Forbidden
+Do not modify main or production.
 
-Do NOT:
-- login/re-login;
-- submit code/password;
-- discover folders/groups;
-- press/retry Secretary Sync;
-- Apply Scope;
-- send/edit/delete/mark-read;
-- call application `fetch_history()`;
-- materialize messages;
-- inspect or emit message IDs/text/body/sender/timestamps/titles/metadata;
-- print session/reference, IDs, phone, access hash, credentials, tokens, IPs;
-- write DB;
-- mutate production;
-- restart/recreate;
-- edit production files/env;
-- run Alembic writes;
-- change main/production refs;
-- change target.json or SSH trust state;
-- change Bot API or MTProto AI flag.
+## Goal
 
-## Required report
+Make the inner API-container probe self-diagnosing and self-contained so that:
 
-Return only sanitized reviewed-harness results.
+1. import/runtime/bootstrap failures are surfaced as sanitized child failure stages/classes instead of collapsing to outer `STAGE_1_RUNTIME / RuntimeError`;
+2. `PAGE_SIZE=100` is defined inside the child script itself;
+3. success protocol is internally consistent:
+   - `FIRST_PAGE_PASS=true` requires `ENTRIES_NONE=0`;
+4. no raw child stderr/stdout is leaked.
 
-### Transport
-- attempt matrix;
-- pin verified;
-- host-key;
-- SSH auth;
-- remote execution.
+## Required fix A — child-scope PAGE_SIZE
 
-### Guards / structure
-- account exactly one;
-- manual-selected group exactly one;
-- session decrypt;
-- StringSession parse;
-- reference decrypt;
-- reference parse;
-- peer match;
-- client construct.
+Inside the embedded child Python script itself, define:
 
-### Live
-- CONNECT_PASS;
-- IS_USER_AUTHORIZED;
-- call counts if emitted.
+`PAGE_SIZE = 100`
 
-### First page
+Do not rely on the outer helper variable.
 
-If success:
-- `FIRST_PAGE_PASS`;
-- `MESSAGES_SEEN`;
-- `ENTRIES_CONVERTED`;
-- `ENTRIES_NONE`;
-- iterator/network call counts.
+Tests must prove the child script compiles and that `PAGE_SIZE` is available where `iter_messages(... limit=PAGE_SIZE ...)` is executed.
+
+## Required fix B — sanitized inner bootstrap/import diagnostics
+
+The current child script has top-level imports before `run_probe()`.
+If one of those imports fails, the child process exits nonzero and the outer helper only sees generic runtime failure.
+
+Refactor so import/bootstrap failures are converted inside the child process into the same strict protocol.
+
+At minimum distinguish sanitized stages:
+
+- `STAGE_1_IMPORTS`
+- `STAGE_1_DB_SESSION`
+- existing structural stages thereafter.
+
+Allowed example behavior:
+
+- import failure:
+  - `FAILURE_STAGE=STAGE_1_IMPORTS`
+  - `RAW_EXCEPTION_CLASS=<class-name-only>`
+  - `MESSAGE_ORDINAL=0`
+  - `TELEGRAM_NETWORK_CALLS=0`
+
+- SessionLocal/open/query bootstrap failure:
+  - `FAILURE_STAGE=STAGE_1_DB_SESSION`
+  - class only
+  - ordinal 0
+  - network calls 0
+
+Do not emit exception messages or tracebacks.
+
+The child should return process exit code 0 after a valid sanitized diagnostic failure so the parent parser can preserve the real stage/class.
+
+## Required fix C — parent child-process handling
+
+If child:
+- returncode == 0;
+- stderr empty;
+- stdout follows strict allowlist;
+
+then preserve sanitized diagnostic failure/success.
+
+If child:
+- returncode != 0; OR
+- stderr non-empty; OR
+- malformed/unknown output;
+
+then parent must fail closed without echoing raw child content.
+
+The parent may emit:
+- `FAILURE_STAGE=OUTPUT_ALLOWLIST` or another hardcoded local harness stage;
+- `MESSAGE_ORDINAL=0`;
+- `TELEGRAM_NETWORK_CALLS=0`.
+
+Do not regress to generic raw RuntimeError hiding a valid child protocol result.
+
+## Required fix D — success protocol invariants
+
+Tighten `parse_page_output()`.
+
+If `FIRST_PAGE_PASS=true`, require all:
+- no `FAILURE_STAGE`;
+- `ENTRIES_NONE=0`;
+- `MESSAGES_SEEN` present;
+- `ENTRIES_CONVERTED` present;
+- `MESSAGES_SEEN == ENTRIES_CONVERTED`;
+- all success counts 0..100.
 
 If failure:
-- `FAILURE_STAGE`;
-- `RAW_EXCEPTION_CLASS`;
-- `MESSAGE_ORDINAL`;
-- call counts if emitted.
+- require:
+  - `FAILURE_STAGE`;
+  - `RAW_EXCEPTION_CLASS`;
+  - `MESSAGE_ORDINAL`;
+- reject `FIRST_PAGE_PASS`.
 
-Also confirm:
-- no login/write/discovery calls;
-- no message data emitted;
-- no session/reference printed;
-- no production mutation;
-- SSH trust/target unchanged.
+Do not allow synthetic success payloads with `ENTRIES_NONE>0`.
 
-## Interpretation
+## Required fix E — preserve exact provider behavior
 
-A. `STAGE_3_CONVERSION` + `ValueError`/`TypeError`
-=> direct evidence that release `fetch_history()` falsely maps a conversion failure to authorization-invalid.
+Do not alter the intended live probe behavior:
+- connect <= 1;
+- auth check <= 1;
+- one `iter_messages(input_peer, limit=100, reverse=False)`;
+- consume <= 100 yielded messages;
+- exact `_history_entry_from_message()`;
+- first conversion exception => stop;
+- first `None` => `InvalidHistoryEntry`;
+- no application `fetch_history()`;
+- no materialization;
+- no DB writes;
+- no login/discovery/write RPC;
+- disconnect in finally.
 
-B. `STAGE_3_CONVERSION` + `InvalidHistoryEntry`
-=> exact first-page message conversion returns None; release would surface provider-unavailable, not auth-invalid. Original 409 then likely came from a different/transient attempt path.
+## Required focused tests
 
-C. `STAGE_3_ITERATION` + `ValueError`/`TypeError`
-=> direct evidence that raw full-page history iteration can be falsely remapped to authorization-invalid.
+Add/adjust explicit executable tests for at least:
 
-D. first page PASS
-=> session/reference/auth/raw 100-message page/conversion path works now; original 409 was transient or outside this first-page provider/conversion path. Next step should be application-path classification fix before any user retry.
+1. embedded child script compiles independently;
+2. child defines `PAGE_SIZE=100` in its own scope;
+3. import failure -> sanitized `STAGE_1_IMPORTS`, class only, ordinal 0, calls 0;
+4. DB session/query bootstrap failure -> sanitized `STAGE_1_DB_SESSION`, class only, ordinal 0, calls 0;
+5. sanitized child failure exits 0 and is preserved by parent;
+6. nonzero child exit never leaks raw stderr/stdout;
+7. child stderr never leaks;
+8. malformed child output fails closed;
+9. success with `ENTRIES_NONE>0` rejected;
+10. success missing counts rejected;
+11. success requires seen == converted;
+12. failure requires stage/class/ordinal;
+13. Stage 2/3 provider-call limits unchanged;
+14. `limit=100, reverse=False` unchanged;
+15. no application `fetch_history()`;
+16. no materialization/DB-write/login/discovery/write RPC;
+17. disconnect success/failure;
+18. all existing M4AH safety tests remain passing.
 
-E. other class/stage
-=> classify exact sanitized evidence before further action.
+Run:
+- focused pytest;
+- Ruff on changed Python;
+- `git diff --check`.
 
-Do not repair/retry during M4AH2.
+## Review handoff
+
+After fixes:
+- commit on same review branch;
+- push only `review/telegram-mtproto-m4ah`;
+- do NOT run production probe;
+- report:
+  - full corrective SHA;
+  - focused test count/pass;
+  - Ruff;
+  - diff-check;
+  - blocker -> fix summary;
+  - remaining gaps.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AH2_LIVE_READY`
+`TELEGRAM_MTPROTO_M4AH2R_REVIEW_READY`
 
 Then STOP.
 
