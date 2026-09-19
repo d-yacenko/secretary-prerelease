@@ -7,6 +7,7 @@ is a read-only diagnostic harness and is not a deployment or sync entrypoint.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,10 +23,90 @@ EXPECTED_PIN = auth_diagnostic.EXPECTED_PIN
 MAX_ATTEMPTS = auth_diagnostic.MAX_ATTEMPTS
 REMOTE_BEGIN = "HISTORY_STAGE_REMOTE_BEGIN"
 REMOTE_END = "HISTORY_STAGE_REMOTE_END"
+ALLOWED_KEYS = frozenset(
+    {
+        "STAGE_0_ACCOUNT_EXACTLY_ONE",
+        "STAGE_0_MANUAL_SELECTED_GROUP_EXACTLY_ONE",
+        "SESSION_DECRYPT_PASS",
+        "STRING_SESSION_PARSE_PASS",
+        "REFERENCE_DECRYPT_PASS",
+        "REFERENCE_PARSE_PASS",
+        "REFERENCE_PEER_MATCH_PASS",
+        "TELEGRAM_CLIENT_CONSTRUCT_PASS",
+        "CONNECT_PASS",
+        "IS_USER_AUTHORIZED",
+        "ITER_MESSAGES_STARTED",
+        "ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS",
+        "FAILURE_STAGE",
+        "RAW_EXCEPTION_CLASS",
+        "CONNECT_CALL_COUNT",
+        "IS_USER_AUTHORIZED_CALL_COUNT",
+        "ITER_MESSAGES_CALL_COUNT",
+        "TELEGRAM_NETWORK_CALLS",
+    }
+)
+BOOLEAN_KEYS = frozenset(ALLOWED_KEYS - {"FAILURE_STAGE", "RAW_EXCEPTION_CLASS", "CONNECT_CALL_COUNT", "IS_USER_AUTHORIZED_CALL_COUNT", "ITER_MESSAGES_CALL_COUNT", "TELEGRAM_NETWORK_CALLS"})
+COUNT_LIMITS = {
+    "CONNECT_CALL_COUNT": 1,
+    "IS_USER_AUTHORIZED_CALL_COUNT": 1,
+    "ITER_MESSAGES_CALL_COUNT": 1,
+    "TELEGRAM_NETWORK_CALLS": 3,
+}
+FAILURE_STAGES = frozenset(
+    {
+        "STAGE_0_RELEASE_REF",
+        "STAGE_0_PRODUCTION_REF",
+        "STAGE_0_WORKTREE",
+        "STAGE_0_CONFIG",
+        "STAGE_0_CONTAINERS",
+        "STAGE_0_ALEMBIC",
+        "STAGE_0_ACCOUNT_CARDINALITY",
+        "STAGE_0_SELECTION_CARDINALITY",
+        "STAGE_1_SESSION_DECRYPT",
+        "STAGE_1_STRING_SESSION_PARSE",
+        "STAGE_1_REFERENCE_DECRYPT",
+        "STAGE_1_REFERENCE_PARSE",
+        "STAGE_1_REFERENCE_PEER_MATCH",
+        "STAGE_1_CLIENT_CONSTRUCT",
+        "STAGE_1_RUNTIME",
+        "STAGE_2_CONNECT",
+        "STAGE_2_AUTHORIZED",
+        "STAGE_3_ITER_MESSAGES",
+        "SANITIZED_HELPER",
+    }
+)
+EXCEPTION_CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 
 
 class HistoryStageError(RuntimeError):
     """A sanitized local harness failure."""
+
+
+def parse_child_output(stdout: str, stderr: str, returncode: int) -> dict[str, str]:
+    """Accept only the documented child protocol; never return raw child text."""
+    if stderr or returncode != 0:
+        raise HistoryStageError("child execution failed")
+    parsed: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if line in {f"{REMOTE_BEGIN}=true", f"{REMOTE_END}=true"}:
+            continue
+        if line.count("=") != 1:
+            raise HistoryStageError("invalid child output")
+        key, value = line.split("=", 1)
+        if key not in ALLOWED_KEYS or key in parsed:
+            raise HistoryStageError("invalid child output")
+        if key in BOOLEAN_KEYS and value not in {"true", "false"}:
+            raise HistoryStageError("invalid child output")
+        if key == "FAILURE_STAGE" and value not in FAILURE_STAGES:
+            raise HistoryStageError("invalid child output")
+        if key == "RAW_EXCEPTION_CLASS" and EXCEPTION_CLASS.fullmatch(value) is None:
+            raise HistoryStageError("invalid child output")
+        if key in COUNT_LIMITS and (
+            re.fullmatch(r"[0-9]+", value) is None or int(value) > COUNT_LIMITS[key]
+        ):
+            raise HistoryStageError("invalid child output")
+        parsed[key] = value
+    return parsed
 
 
 def _run_once() -> int:
@@ -62,14 +143,23 @@ def _run_once() -> int:
             )
 
         remote_started = REMOTE_BEGIN in result.stdout
-        if result.returncode == 0 and REMOTE_END in result.stdout:
-            print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=pass")
-            print(result.stdout, end="")
-            return 0
         if remote_started:
-            print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=failed")
-            print(result.stdout, end="")
-            raise HistoryStageError("remote history stage failed") from None
+            if f"{REMOTE_END}=true" not in result.stdout:
+                print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=failed")
+                print("FAILURE_STAGE=OUTPUT_ALLOWLIST")
+                print("TELEGRAM_NETWORK_CALLS=0")
+                return 2
+            try:
+                parsed = parse_child_output(result.stdout, result.stderr, result.returncode)
+            except HistoryStageError:
+                print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=failed")
+                print("FAILURE_STAGE=OUTPUT_ALLOWLIST")
+                print("TELEGRAM_NETWORK_CALLS=0")
+                return 2
+            print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=pass")
+            for key, value in parsed.items():
+                print(f"{key}={value}")
+            return 0
 
         failure = auth_diagnostic._failure_class(result.stderr)
         if failure == "authentication":
@@ -119,6 +209,8 @@ def compose(*args, **kwargs):
 def stop(stage, exc):
     emit("FAILURE_STAGE", stage)
     emit("RAW_EXCEPTION_CLASS", type(exc).__name__)
+    emit("TELEGRAM_NETWORK_CALLS", "0")
+    emit("HISTORY_STAGE_REMOTE_END", "true")
     raise SystemExit(0)
 
 try:
@@ -128,9 +220,12 @@ try:
     head = run(["git", "rev-parse", "HEAD"])
     production = run(["git", "rev-parse", "origin/production"])
     clean = run(["git", "status", "--porcelain"])
-    emit("RELEASE_REF_MATCH", "true" if head.returncode == 0 and head.stdout.strip() == EXPECTED_RELEASE else "false")
-    emit("PRODUCTION_REF_MATCH", "true" if production.returncode == 0 and production.stdout.strip() == EXPECTED_RELEASE else "false")
-    emit("PRODUCTION_WORKTREE_CLEAN", "true" if clean.returncode == 0 and not clean.stdout.strip() else "false")
+    if head.returncode != 0 or head.stdout.strip() != EXPECTED_RELEASE:
+        stop("STAGE_0_RELEASE_REF", RuntimeError())
+    if production.returncode != 0 or production.stdout.strip() != EXPECTED_RELEASE:
+        stop("STAGE_0_PRODUCTION_REF", RuntimeError())
+    if clean.returncode != 0 or clean.stdout.strip():
+        stop("STAGE_0_WORKTREE", RuntimeError())
 
     config = compose("config", "--format", "json")
     if config.returncode != 0:
@@ -183,10 +278,12 @@ async def run_probe():
         if len(accounts) != 1:
             print("FAILURE_STAGE=STAGE_0_ACCOUNT_CARDINALITY")
             print("RAW_EXCEPTION_CLASS=CardinalityError")
+            print("TELEGRAM_NETWORK_CALLS=0")
             return
         if len(selections) != 1:
             print("FAILURE_STAGE=STAGE_0_SELECTION_CARDINALITY")
             print("RAW_EXCEPTION_CLASS=CardinalityError")
+            print("TELEGRAM_NETWORK_CALLS=0")
             return
 
         account = accounts[0]
@@ -286,9 +383,7 @@ if __name__ == "__main__":
     result = run(COMPOSE + ["exec", "-T", "api", "python3", "-"], input=probe)
     if result.returncode != 0:
         stop("STAGE_1_RUNTIME", RuntimeError())
-    sys.stdout.write(result.stdout)
-    emit("SESSION_OR_REFERENCE_PRINTED", "false")
-    emit("PRODUCTION_MUTATION", "false")
+    print(result.stdout, end="")
     emit("HISTORY_STAGE_REMOTE_END", "true")
 except SystemExit:
     pass

@@ -38,7 +38,12 @@ def test_temp_known_hosts_lives_through_single_direct_ssh_session(
         observed["input"] = kwargs["input"]
         path = next(item.split("=", 1)[1] for item in argv if item.startswith("UserKnownHostsFile="))
         observed["known_hosts_exists"] = Path(path).exists()
-        return subprocess.CompletedProcess(argv, 0, diagnostic.REMOTE_BEGIN + "\n" + diagnostic.REMOTE_END + "\n", "")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            diagnostic.REMOTE_BEGIN + "=true\nTELEGRAM_NETWORK_CALLS=0\n" + diagnostic.REMOTE_END + "=true\n",
+            "",
+        )
 
     monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
     assert diagnostic._run_once() == 0
@@ -92,19 +97,30 @@ def test_pre_remote_transport_retries_three_times_with_fresh_files(
 
 
 def test_auth_and_remote_started_failures_do_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    for stderr, stdout in (("Permission denied", ""), ("", diagnostic.REMOTE_BEGIN + "\n")):
-        _verified(monkeypatch)
-        calls = 0
+    _verified(monkeypatch)
+    calls = 0
 
-        def fake_run(argv, _stdout=stdout, _stderr=stderr, **_kwargs):
-            nonlocal calls
-            calls += 1
-            return subprocess.CompletedProcess(argv, 255, _stdout, _stderr)
+    def fake_auth_run(argv, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(argv, 255, "", "Permission denied")
 
-        monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
-        with pytest.raises(diagnostic.HistoryStageError):
-            diagnostic._run_once()
-        assert calls == 1
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_auth_run)
+    with pytest.raises(diagnostic.HistoryStageError):
+        diagnostic._run_once()
+    assert calls == 1
+
+    _verified(monkeypatch)
+    calls = 0
+
+    def fake_remote_run(argv, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(argv, 0, diagnostic.REMOTE_BEGIN + "=true\n", "")
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_remote_run)
+    assert diagnostic._run_once() == 2
+    assert calls == 1
 
 
 def test_history_stage_order_and_single_call_limits_are_explicit() -> None:
@@ -146,7 +162,7 @@ def test_iterator_never_emits_message_data_or_identifiers() -> None:
 
 def test_probe_has_no_secret_decryption_output_or_mutation_commands() -> None:
     helper = diagnostic.REMOTE_HELPER
-    assert "SESSION_OR_REFERENCE_PRINTED" in helper
+    assert "SESSION_OR_REFERENCE_PRINTED" not in helper
     assert "print(session_value" not in helper
     assert "print(reference_value" not in helper
     assert "print(settings.telegram_api_id" not in helper
@@ -158,3 +174,119 @@ def test_probe_has_no_secret_decryption_output_or_mutation_commands() -> None:
     assert "docker compose up" not in helper
     assert "docker compose restart" not in helper
     assert "git reset" not in helper
+
+
+def test_stage_zero_guards_precede_inner_probe_and_provider_construction() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert helper.index("if head.returncode") < helper.index("probe =")
+    assert helper.index("if production.returncode") < helper.index("probe =")
+    assert helper.index("if clean.returncode") < helper.index("probe =")
+    assert helper.index("revision =") < helper.index("probe =")
+    assert helper.index("if len(accounts) != 1") < helper.index("TelegramClient(")
+    assert 'emit("TELEGRAM_NETWORK_CALLS", "0")' in helper
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("UNKNOWN=true", "unknown key"),
+        ("CONNECT_PASS=maybe", "invalid boolean"),
+        ("CONNECT_CALL_COUNT=2", "over-bound count"),
+        ("CONNECT_PASS=true\nCONNECT_PASS=false", "duplicate key"),
+        ("FAILURE_STAGE=not-a-stage", "invalid failure stage"),
+        ("RAW_EXCEPTION_CLASS=ValueError:secret", "exception message"),
+        ("RAW_EXCEPTION_CLASS=Trace\nback", "malformed line"),
+    ],
+)
+def test_child_output_allowlist_rejects_invalid_lines(line: str, expected: str) -> None:
+    with pytest.raises(diagnostic.HistoryStageError, match="invalid child output"):
+        diagnostic.parse_child_output(
+            f"{diagnostic.REMOTE_BEGIN}=true\n{line}\n{diagnostic.REMOTE_END}=true\n",
+            "",
+            0,
+        )
+    assert expected
+
+
+def test_raw_exception_class_allowlist_accepts_only_safe_class_name() -> None:
+    parsed = diagnostic.parse_child_output(
+        "RAW_EXCEPTION_CLASS=ValueError\nTELEGRAM_NETWORK_CALLS=0\n",
+        "",
+        0,
+    )
+    assert parsed["RAW_EXCEPTION_CLASS"] == "ValueError"
+    for invalid in ("ValueError.message", "ValueError:secret", "Value Error", "[ValueError]"):
+        with pytest.raises(diagnostic.HistoryStageError):
+            diagnostic.parse_child_output(f"RAW_EXCEPTION_CLASS={invalid}\n", "", 0)
+
+
+def test_child_stderr_is_never_echoed_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _verified(monkeypatch)
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            f"{diagnostic.REMOTE_BEGIN}=true\n{diagnostic.REMOTE_END}=true\n",
+            "secret-session traceback",
+        )
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
+    assert diagnostic._run_once() == 2
+    output = capsys.readouterr()
+    assert "secret-session" not in output.out
+    assert "traceback" not in output.out
+    assert "FAILURE_STAGE=OUTPUT_ALLOWLIST" in output.out
+
+
+def test_valid_diagnostic_failure_is_preserved_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _verified(monkeypatch)
+    calls = 0
+
+    def fake_run(argv, **_kwargs):
+        nonlocal calls
+        calls += 1
+        stdout = "\n".join(
+            [
+                f"{diagnostic.REMOTE_BEGIN}=true",
+                "FAILURE_STAGE=STAGE_2_AUTHORIZED",
+                "RAW_EXCEPTION_CLASS=AuthorizationFalse",
+                "TELEGRAM_NETWORK_CALLS=2",
+                f"{diagnostic.REMOTE_END}=true",
+            ]
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout + "\n", "")
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
+    assert diagnostic._run_once() == 0
+    assert calls == 1
+    assert "FAILURE_STAGE=STAGE_2_AUTHORIZED" in capsys.readouterr().out
+
+
+def test_valid_success_output_is_preserved() -> None:
+    payload = """SESSION_DECRYPT_PASS=true
+STRING_SESSION_PARSE_PASS=true
+REFERENCE_DECRYPT_PASS=true
+REFERENCE_PARSE_PASS=true
+REFERENCE_PEER_MATCH_PASS=true
+TELEGRAM_CLIENT_CONSTRUCT_PASS=true
+CONNECT_PASS=true
+IS_USER_AUTHORIZED=true
+ITER_MESSAGES_STARTED=true
+ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS=true
+CONNECT_CALL_COUNT=1
+IS_USER_AUTHORIZED_CALL_COUNT=1
+ITER_MESSAGES_CALL_COUNT=1
+TELEGRAM_NETWORK_CALLS=3"""
+    parsed = diagnostic.parse_child_output(
+        payload,
+        "",
+        0,
+    )
+    assert parsed["TELEGRAM_NETWORK_CALLS"] == "3"
