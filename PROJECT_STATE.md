@@ -5,7 +5,7 @@
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
 - Production application/runtime: `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
 - Production branch: `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production Alembic: `0041 / 0041`.
+- Production Alembic: `0046 / 0046`.
 - Production health: PASS.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
 - Production Deploy Contract v2: MERGED / MANDATORY FOR NORMAL SCHEMA-NEUTRAL PRODUCTION DEPLOYMENT.
@@ -19,8 +19,8 @@
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
 - M2 production readiness retry: READY.
-- Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
-- M3 migration-bearing production cutover is AUTHORIZED only by current `CURRENT_TASK.md` for exact release `8091736337689b68b4510126e74d9e409397f696`, rollback `5cce4b57b14e0052a038acae1354a2821a2bb77b`, and `0041 -> 0046`.
+- Production runtime/ref is `8091736337689b68b4510126e74d9e409397f696` after successful M3 cutover.
+- Production Migration Rollout M3: SUCCESS. Production ref/runtime is exact `8091736337689b68b4510126e74d9e409397f696`; production Alembic is `0046`; api/worker/db healthy; DB container/volume and `.env` preserved; no Telegram login/history import occurred; Bot API untouched.
 - Telegram Bot API retirement is NOT AUTHORIZED.
 - Telegram API Terms clarification remains pending through external support channels.
 - Product direction while clarification is pending: complete MTProto as a full ordinary messenger while keeping MTProto-derived objects outside ML/LLM by default.
@@ -46,12 +46,12 @@
 - Exact accepted RF1R release candidate eligible for M3: `8091736337689b68b4510126e74d9e409397f696`.
 - Validated product base `e503f680543d2eeafbfbb9b641b1b1942d7990ca` is NOT an M3 release SHA; RF1 head `a90716602d35cf5525554a1005a543dd8dda5491` is superseded.
 - Accepted RF1/RF1R evidence: disposable incremental 0041->0046 PASS; fresh install ->0046 PASS; intermediate downgrade matrix 0042..0046 ->0041 PASS with sentinel preservation; round-trip 0041->0046->0041->0046 PASS; focused Telegram/notification/source-sync/client gates PASS; Flutter analyzer head-only diagnostics zero; full backend comparison has head-only failed/error identities zero; production untouched.
-- Current authorized phase: Production Migration Rollout M3 exact Telegram MTProto cutover, exactly as specified in `CURRENT_TASK.md`.
+- Current authorized phase: Telegram MTProto M4A production account activation and first controlled sync, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
 - C3A/C3B and RF1/RF1R are accepted. M3 is now authorized only for exact release SHA `8091736337689b68b4510126e74d9e409397f696`, exact rollback SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b`, and exact schema transition `0041 -> 0046` through the accepted migration harness.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during M3, except the exact production ref move / accepted migration harness actions explicitly authorized by `CURRENT_TASK.md`.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during M4A.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
