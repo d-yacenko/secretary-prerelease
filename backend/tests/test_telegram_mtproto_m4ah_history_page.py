@@ -131,6 +131,81 @@ def test_page_output_redacts_unknown_malformed_and_stderr() -> None:
             diagnostic.parse_page_output(payload, stderr, 0)
 
 
+@pytest.mark.parametrize(
+    ("stage", "exception", "ordinal"),
+    [
+        ("STAGE_3_CONVERSION", "ValueError", 1),
+        ("STAGE_3_CONVERSION", "TypeError", 37),
+        ("STAGE_3_ITERATION", "ServerError", 0),
+        ("STAGE_3_ITERATION", "TimeoutError", 38),
+        ("STAGE_3_ITERATION", "TimeoutError", 100),
+        ("STAGE_2_CONNECT", "ConnectionError", 0),
+        ("STAGE_2_AUTHORIZED", "AuthError", 0),
+        ("STAGE_2_AUTHORIZED", "AuthorizationFalse", 0),
+        ("STAGE_3_CONVERSION", "InvalidHistoryEntry", 1),
+    ],
+)
+def test_failure_protocol_always_carries_bounded_message_ordinal(
+    stage: str, exception: str, ordinal: int
+) -> None:
+    payload = (
+        f"FAILURE_STAGE={stage}\n"
+        f"RAW_EXCEPTION_CLASS={exception}\n"
+        f"MESSAGE_ORDINAL={ordinal}\n"
+    )
+    parsed = diagnostic.parse_page_output(payload, "", 0)
+    assert parsed["FAILURE_STAGE"] == stage
+    assert parsed["RAW_EXCEPTION_CLASS"] == exception
+    assert parsed["MESSAGE_ORDINAL"] == str(ordinal)
+
+
+def test_failure_without_ordinal_is_rejected() -> None:
+    with pytest.raises(diagnostic.HistoryPageError):
+        diagnostic.parse_page_output(
+            "FAILURE_STAGE=STAGE_3_ITERATION\nRAW_EXCEPTION_CLASS=ServerError\n", "", 0
+        )
+
+
+def test_none_conversion_is_terminal_and_cannot_pass_page() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert 'failure_class = "InvalidHistoryEntry"' in helper
+    assert 'failure_stage = "STAGE_3_CONVERSION"' in helper
+    assert "if entry is None:" in helper
+    assert "break" in helper[helper.index("if entry is None:") :]
+    with pytest.raises(diagnostic.HistoryPageError):
+        diagnostic.parse_page_output(
+            "FAILURE_STAGE=STAGE_3_CONVERSION\n"
+            "RAW_EXCEPTION_CLASS=InvalidHistoryEntry\n"
+            "MESSAGE_ORDINAL=1\nFIRST_PAGE_PASS=true\n",
+            "",
+            0,
+        )
+
+
+def test_success_protocol_has_zero_none_entries_and_aggregate_counts() -> None:
+    parsed = diagnostic.parse_page_output(
+        "ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS=true\n"
+        "FIRST_PAGE_PASS=true\nMESSAGES_SEEN=4\n"
+        "ENTRIES_CONVERTED=4\nENTRIES_NONE=0\n",
+        "",
+        0,
+    )
+    assert parsed["ENTRIES_NONE"] == "0"
+    assert "RAW_EXCEPTION_CLASS" not in parsed
+
+
+def test_stage_transitions_are_narrow_and_not_counter_inferred() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert 'failure_stage = "STAGE_2_CONNECT"' in helper
+    assert 'failure_stage = "STAGE_2_AUTHORIZED"' in helper
+    assert 'failure_stage = "STAGE_3_ITERATION"' in helper
+    assert 'failure_stage = "STAGE_3_CONVERSION"' in helper
+    assert "authorized_calls == 0" not in helper
+    assert "authorized_calls == 0 else" not in helper
+    assert "min(messages_seen + 1, PAGE_SIZE)" in helper
+    assert "failure_ordinal = messages_seen" in helper
+
+
 def test_child_failure_does_not_retry_after_remote_start(monkeypatch: pytest.MonkeyPatch) -> None:
     _verified(monkeypatch)
     calls = 0

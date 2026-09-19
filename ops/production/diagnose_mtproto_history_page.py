@@ -76,6 +76,11 @@ def parse_page_output(stdout: str, stderr: str, returncode: int) -> dict[str, st
         ):
             raise HistoryPageError("invalid child output")
         parsed[key] = value
+    if "FAILURE_STAGE" in parsed:
+        if "RAW_EXCEPTION_CLASS" not in parsed or "MESSAGE_ORDINAL" not in parsed:
+            raise HistoryPageError("failure missing ordinal/class")
+        if "FIRST_PAGE_PASS" in parsed:
+            raise HistoryPageError("failed page cannot pass")
     return parsed
 
 
@@ -114,6 +119,7 @@ def _run_once() -> int:
             if f"{REMOTE_END}=true" not in result.stdout:
                 print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=failed")
                 print("FAILURE_STAGE=OUTPUT_ALLOWLIST")
+                print("MESSAGE_ORDINAL=0")
                 print("TELEGRAM_NETWORK_CALLS=0")
                 return 2
             try:
@@ -121,6 +127,7 @@ def _run_once() -> int:
             except HistoryPageError:
                 print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=failed")
                 print("FAILURE_STAGE=OUTPUT_ALLOWLIST")
+                print("MESSAGE_ORDINAL=0")
                 print("TELEGRAM_NETWORK_CALLS=0")
                 return 2
             print(f"ATTEMPT={attempt} PIN_VERIFIED=yes HOST_KEY=pass AUTH=pass REMOTE=pass")
@@ -175,6 +182,7 @@ def compose(*args, **kwargs):
 def stop(stage, exc):
     emit("FAILURE_STAGE", stage)
     emit("RAW_EXCEPTION_CLASS", type(exc).__name__)
+    emit("MESSAGE_ORDINAL", "0")
     emit("TELEGRAM_NETWORK_CALLS", "0")
     emit("HISTORY_PAGE_REMOTE_END", "true")
     raise SystemExit(0)
@@ -239,11 +247,13 @@ async def run_probe():
         if len(accounts) != 1:
             print("FAILURE_STAGE=STAGE_0_ACCOUNT_CARDINALITY")
             print("RAW_EXCEPTION_CLASS=CardinalityError")
+            print("MESSAGE_ORDINAL=0")
             print("TELEGRAM_NETWORK_CALLS=0")
             return
         if len(selections) != 1:
             print("FAILURE_STAGE=STAGE_0_SELECTION_CARDINALITY")
             print("RAW_EXCEPTION_CLASS=CardinalityError")
+            print("MESSAGE_ORDINAL=0")
             print("TELEGRAM_NETWORK_CALLS=0")
             return
         account = accounts[0]
@@ -258,6 +268,7 @@ async def run_probe():
             print("SESSION_DECRYPT_PASS=false")
             print("FAILURE_STAGE=STAGE_1_SESSION_DECRYPT")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
         try:
             StringSession(session_value)
@@ -266,6 +277,7 @@ async def run_probe():
             print("STRING_SESSION_PARSE_PASS=false")
             print("FAILURE_STAGE=STAGE_1_STRING_SESSION_PARSE")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
         try:
             reference_value = encryption.decrypt(selection.provider_peer_reference_encrypted)
@@ -276,6 +288,7 @@ async def run_probe():
             print("REFERENCE_DECRYPT_PASS=false")
             print("FAILURE_STAGE=STAGE_1_REFERENCE_DECRYPT")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
         try:
             _input_peer_from_reference(reference_value)
@@ -284,6 +297,7 @@ async def run_probe():
             print("REFERENCE_PARSE_PASS=false")
             print("FAILURE_STAGE=STAGE_1_REFERENCE_PARSE")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
         try:
             input_peer = validate_provider_peer_reference(reference_value, expected_peer_id=selection.peer_id)
@@ -292,6 +306,7 @@ async def run_probe():
             print("REFERENCE_PEER_MATCH_PASS=false")
             print("FAILURE_STAGE=STAGE_1_REFERENCE_PEER_MATCH")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
         try:
             client = TelegramClient(StringSession(session_value), settings.telegram_api_id, settings.telegram_api_hash)
@@ -300,6 +315,7 @@ async def run_probe():
             print("TELEGRAM_CLIENT_CONSTRUCT_PASS=false")
             print("FAILURE_STAGE=STAGE_1_CLIENT_CONSTRUCT")
             print("RAW_EXCEPTION_CLASS=" + type(exc).__name__)
+            print("MESSAGE_ORDINAL=0")
             return
 
         connect_calls = 0
@@ -307,39 +323,57 @@ async def run_probe():
         iterator_calls = 0
         messages_seen = 0
         converted = 0
-        empty_entries = 0
         failure_stage = None
         failure_class = None
+        failure_ordinal = 0
         try:
             connect_calls = 1
-            await client.connect()
-            print("CONNECT_PASS=true")
-            authorized_calls = 1
-            authorized = await client.is_user_authorized()
-            print("IS_USER_AUTHORIZED=" + ("true" if authorized else "false"))
-            if not authorized:
-                failure_stage = "STAGE_2_AUTHORIZED"
-                failure_class = "AuthorizationFalse"
+            try:
+                await client.connect()
+            except Exception as exc:
+                failure_stage = "STAGE_2_CONNECT"
+                failure_class = type(exc).__name__
             else:
-                iterator_calls = 1
-                print("ITER_MESSAGES_STARTED=true")
-                async for message in client.iter_messages(input_peer, limit=PAGE_SIZE, reverse=False):
-                    if messages_seen >= PAGE_SIZE:
-                        break
-                    messages_seen += 1
-                    try:
-                        entry = _history_entry_from_message(message)
-                    except Exception as exc:
-                        failure_stage = "STAGE_3_CONVERSION"
-                        failure_class = type(exc).__name__
-                        break
-                    if entry is None:
-                        empty_entries += 1
+                print("CONNECT_PASS=true")
+
+                authorized_calls = 1
+                try:
+                    authorized = await client.is_user_authorized()
+                except Exception as exc:
+                    failure_stage = "STAGE_2_AUTHORIZED"
+                    failure_class = type(exc).__name__
+                else:
+                    print("IS_USER_AUTHORIZED=" + ("true" if authorized else "false"))
+                    if not authorized:
+                        failure_stage = "STAGE_2_AUTHORIZED"
+                        failure_class = "AuthorizationFalse"
                     else:
-                        converted += 1
-        except Exception as exc:
-            failure_stage = "STAGE_2_CONNECT" if authorized_calls == 0 else "STAGE_3_ITERATION"
-            failure_class = type(exc).__name__
+                        iterator_calls = 1
+                        print("ITER_MESSAGES_STARTED=true")
+                        try:
+                            async for message in client.iter_messages(
+                                input_peer, limit=PAGE_SIZE, reverse=False
+                            ):
+                                if messages_seen >= PAGE_SIZE:
+                                    break
+                                messages_seen += 1
+                                try:
+                                    entry = _history_entry_from_message(message)
+                                except Exception as exc:
+                                    failure_stage = "STAGE_3_CONVERSION"
+                                    failure_class = type(exc).__name__
+                                    failure_ordinal = messages_seen
+                                    break
+                                if entry is None:
+                                    failure_stage = "STAGE_3_CONVERSION"
+                                    failure_class = "InvalidHistoryEntry"
+                                    failure_ordinal = messages_seen
+                                    break
+                                converted += 1
+                        except Exception as exc:
+                            failure_stage = "STAGE_3_ITERATION"
+                            failure_class = type(exc).__name__
+                            failure_ordinal = min(messages_seen + 1, PAGE_SIZE)
         finally:
             try:
                 await client.disconnect()
@@ -348,12 +382,13 @@ async def run_probe():
         if failure_stage is not None:
             print("FAILURE_STAGE=" + failure_stage)
             print("RAW_EXCEPTION_CLASS=" + failure_class)
+            print("MESSAGE_ORDINAL=" + str(failure_ordinal))
         else:
             print("ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS=true")
             print("FIRST_PAGE_PASS=true")
             print("MESSAGES_SEEN=" + str(messages_seen))
             print("ENTRIES_CONVERTED=" + str(converted))
-            print("ENTRIES_NONE=" + str(empty_entries))
+            print("ENTRIES_NONE=0")
         print("CONNECT_CALL_COUNT=" + str(connect_calls))
         print("IS_USER_AUTHORIZED_CALL_COUNT=" + str(authorized_calls))
         print("ITER_MESSAGES_CALL_COUNT=" + str(iterator_calls))
