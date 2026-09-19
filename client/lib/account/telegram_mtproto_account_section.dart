@@ -6,6 +6,8 @@ import '../api/secretary_api_client.dart';
 import '../auth/auth_controller.dart';
 import 'account_layout.dart';
 
+enum _TelegramMtprotoAuthStep { phone, code, password }
+
 /// Account-only Telegram MTProto setup. It intentionally keeps challenges in
 /// memory and talks only to the Secretary API.
 class TelegramMtprotoAccountSection extends StatefulWidget {
@@ -42,6 +44,7 @@ class _TelegramMtprotoAccountSectionState
   bool _scopeBusy = false;
   bool _groupsBusy = false;
   bool _ignoreMuted = true;
+  _TelegramMtprotoAuthStep _authStep = _TelegramMtprotoAuthStep.phone;
   final Set<String> _selectedFolderNames = {};
 
   @override
@@ -63,6 +66,7 @@ class _TelegramMtprotoAccountSectionState
     _challengeId = null;
     _codeController.clear();
     _passwordController.clear();
+    _authStep = _TelegramMtprotoAuthStep.phone;
   }
 
   Future<void> _loadStatus() async {
@@ -114,6 +118,7 @@ class _TelegramMtprotoAccountSectionState
       if (!mounted) return;
       setState(() {
         _challengeId = result.challengeId;
+        _authStep = _TelegramMtprotoAuthStep.code;
         _codeController.clear();
         _passwordController.clear();
         _error = null;
@@ -144,7 +149,10 @@ class _TelegramMtprotoAccountSectionState
       if (!mounted) return;
       _codeController.clear();
       if (result.status == 'password_required') {
-        setState(() => _error = null);
+        setState(() {
+          _authStep = _TelegramMtprotoAuthStep.password;
+          _error = null;
+        });
       } else {
         _clearChallenge();
         await _loadStatus();
@@ -231,6 +239,8 @@ class _TelegramMtprotoAccountSectionState
           _scopeBusy = false;
         });
       }
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) {
         setState(() {
@@ -255,6 +265,8 @@ class _TelegramMtprotoAccountSectionState
           _scopeBusy = false;
         });
       }
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) {
         setState(() {
@@ -279,6 +291,8 @@ class _TelegramMtprotoAccountSectionState
           _scopeBusy = false;
         });
       }
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) {
         setState(() {
@@ -301,6 +315,8 @@ class _TelegramMtprotoAccountSectionState
         selected: selected,
       );
       await _loadScopeData();
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -319,6 +335,8 @@ class _TelegramMtprotoAccountSectionState
         peerId,
       );
       if (mounted) setState(() => _lastSync = result);
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -335,6 +353,8 @@ class _TelegramMtprotoAccountSectionState
     try {
       final result = await widget.apiClient.syncTelegramMtprotoGroup(peerId);
       if (mounted) setState(() => _lastSync = result);
+    } on AuthenticationException {
+      widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -387,7 +407,8 @@ class _TelegramMtprotoAccountSectionState
           onPressed: challenge == null && !_busy ? _startAuth : null,
           child: Text(_busy ? 'Отправка…' : 'Получить код'),
         ),
-        if (challenge != null) ...[
+        if (challenge != null &&
+            _authStep == _TelegramMtprotoAuthStep.code) ...[
           const SizedBox(height: 12),
           TextField(
             key: const Key('telegram_mtproto_code'),
@@ -400,6 +421,15 @@ class _TelegramMtprotoAccountSectionState
             onPressed: _busy ? null : _submitCode,
             child: const Text('Подтвердить код'),
           ),
+          TextButton(
+            key: const Key('telegram_mtproto_abandon'),
+            onPressed: _busy ? null : () => setState(_clearChallenge),
+            child: const Text('Отменить подключение'),
+          ),
+        ],
+        if (challenge != null &&
+            _authStep == _TelegramMtprotoAuthStep.password) ...[
+          const SizedBox(height: 12),
           TextField(
             key: const Key('telegram_mtproto_password'),
             controller: _passwordController,
@@ -522,13 +552,28 @@ class _TelegramMtprotoAccountSectionState
           if (preview.truncated) const Text('Предпросмотр усечён.'),
           for (final dialog in preview.dialogs) _peerRow(dialog),
         ],
-        if (reconcile != null)
+        if (reconcile != null) ...[
           Text(
             'Область: ${reconcile.active}; добавлено ${reconcile.activated}; '
             'убрано ${reconcile.deactivated}; без изменений ${reconcile.unchanged}',
           ),
+          for (final dialog in _scopeDialogs(reconcile)) _peerRow(dialog),
+        ],
       ],
     );
+  }
+
+  List<TelegramMtprotoDialog> _scopeDialogs(
+    TelegramMtprotoScopeReconcile reconcile,
+  ) {
+    final byPeer = <int, TelegramMtprotoDialog>{};
+    for (final dialog in _preview?.dialogs ?? const <TelegramMtprotoDialog>[]) {
+      byPeer[dialog.peerId] = dialog;
+    }
+    for (final dialog in reconcile.peers) {
+      byPeer[dialog.peerId] = dialog;
+    }
+    return byPeer.values.toList();
   }
 
   Widget _peerRow(TelegramMtprotoDialog dialog) {
@@ -556,17 +601,21 @@ class _TelegramMtprotoAccountSectionState
           ListTile(
             title: Text(group.title),
             subtitle: Text(
-              '${group.kind}${group.username == null ? '' : ' · @${group.username}'}',
+              '${group.kind}${group.username == null ? '' : ' · @${group.username}'}'
+              '${group.isForum ? ' · forum' : ''}'
+              '${group.available ? '' : ' · недоступна'}',
             ),
             trailing: Wrap(
               children: [
                 Checkbox(
+                  key: Key('telegram_mtproto_group_${group.peerId}'),
                   value: group.selected,
                   onChanged: group.available
                       ? (value) => _toggleGroup(group, value == true)
                       : null,
                 ),
                 TextButton(
+                  key: Key('telegram_mtproto_sync_group_${group.peerId}'),
                   onPressed: group.available && group.selected && !_groupsBusy
                       ? () => _syncGroup(group.peerId)
                       : null,
