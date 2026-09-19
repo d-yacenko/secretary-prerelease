@@ -1,182 +1,251 @@
-# Current task — Telegram MTProto M4AG2: one approved live history-stage probe
+# Current task — Telegram MTProto M4AH1: implement first-page history conversion probe
 
 ## Status
 
-M4AG1R corrective history-stage probe is REVIEW ACCEPTED for exactly one live diagnostic execution.
-
-Approved branch:
-`review/telegram-mtproto-m4ag`
-
-Approved exact SHA:
-`b9b6cb6e3444d78ae7bb438eedb30e30fc83b3d1`
-
-Parent:
-`7f592deee20b92a3ed5a4e47ae11aec052a09200`
-
-Reported local verification:
-- focused tests: 32 passed;
-- Ruff: PASS;
-- git diff --check: PASS.
-
-Architect review confirmed:
-- origin review branch resolves exactly to approved SHA;
-- Stage 0 fails closed on release/ref/worktree/container/DB/Alembic mismatch;
-- no provider probe starts before Stage 0/cardinality/structural gates;
-- strict pinned SSH transport is reused;
-- pre-remote transport retry remains bounded to 3;
-- auth failure and remote-started failure do not retry;
-- child output is locally strict-allowlisted before user-visible emission;
-- malformed/unknown/duplicate/secret-shaped output fails closed;
-- raw child stderr is not user-visible;
-- raw exception output is class-name only;
-- exactly one connect, one authorization check, and one `iter_messages(... limit=1, reverse=False)` are present in the probe path;
-- no login, discovery, write RPC, application `fetch_history()`, DB write, or materialization occurs;
-- disconnect executes in `finally`.
-
-This acceptance applies only to this diagnostic execution. It is not approval to merge the harness to main or deploy it.
-
-## Context
-
-M4AE human probe repeatedly proved the current stored Telegram MTProto session can perform provider-backed folders/groups discovery without auth-invalid.
-
-The original manual group sync returned HTTP 409 surfaced as:
-`Telegram MTProto authorization is no longer valid`.
-
-Exact production release `fetch_history()` broadly maps `ValueError` / `TypeError` to that same authorization-invalid error.
-
-The purpose of M4AG2 is to expose the raw stage/class without application remapping.
-
-## Authorization
-
-Execute the approved script exactly once:
-
-`ops/production/diagnose_mtproto_history_stage.py`
-
-from exact SHA:
+M4AG2 live probe passed completely on exact diagnostic SHA:
 `b9b6cb6e3444d78ae7bb438eedb30e30fc83b3d1`.
 
-Its built-in maximum 3 SSH attempts are allowed only for pre-remote transport establishment failures.
+Confirmed:
+- stored session decrypts;
+- `StringSession` parses;
+- selected-group provider reference decrypts/parses;
+- peer reference matches selected row;
+- `TelegramClient` constructs;
+- one `connect()` succeeds;
+- one `is_user_authorized()` returns true;
+- one raw `iter_messages(input_peer, limit=1, reverse=False)` completes successfully;
+- no login/write/discovery/materialization/production mutation occurred.
 
-Do not manually run it a second time.
+Therefore:
+- the stored MTProto session is not generally revoked;
+- the selected-group provider reference is structurally valid;
+- the first raw history read works.
 
-## Preparation
+Exact production release behavior:
+- `TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE = 100`;
+- `fetch_history()` iterates up to 100 messages;
+- each message is converted with `_history_entry_from_message(message)`;
+- any `ValueError` or `TypeError` anywhere in that try block is broadly remapped to
+  `TelegramMtprotoAuthorizationInvalidError("Telegram MTProto authorization is no longer valid")`.
 
-1. `git fetch origin`.
-2. Use exact review SHA `b9b6cb6e3444d78ae7bb438eedb30e30fc83b3d1`.
-3. Require clean local worktree.
-4. Verify origin `review/telegram-mtproto-m4ag` equals exact SHA.
-5. Verify `target.json` remains unchanged.
-6. Do not amend/rebase/edit/cherry-pick before execution.
+This task authorizes only **implementation + local tests + review-branch push** for a first-page history conversion probe.
+
+NO production execution is authorized yet.
+
+## Goal
+
+Build a deterministic diagnostic that reproduces the first production history page as closely as possible while preserving the raw failure stage/class.
+
+It must distinguish:
+
+1. failure during raw Telethon iteration;
+2. failure during `_history_entry_from_message()` conversion;
+3. successful conversion of the complete first page.
+
+No DB writes or materialization.
+
+## Branch / base
+
+Create a new review branch from:
+`b9b6cb6e3444d78ae7bb438eedb30e30fc83b3d1`
+
+Preferred branch:
+`review/telegram-mtproto-m4ah`
+
+Do not modify main or production.
+
+## Deliverable
+
+Preferred script:
+`ops/production/diagnose_mtproto_history_page.py`
+
+Reuse the reviewed strict SSH transport / output allowlist patterns from:
+- `diagnose_mtproto_auth_readonly.py`
+- `diagnose_mtproto_history_stage.py`
+
+Do not weaken trust or output-sanitization behavior.
+
+## Remote stages
+
+### Stage 0 — same fail-closed production guards
+
+Require before provider calls:
+- production HEAD exact `8091736337689b68b4510126e74d9e409397f696`;
+- `origin/production` same exact SHA;
+- production worktree clean;
+- db/api/worker running;
+- DB healthy;
+- Alembic exact `0046`;
+- exactly one MTProto account;
+- exactly one manual-selected group.
+
+No IDs emitted.
+
+### Stage 1 — same structural checks
+
+In memory only:
+- decrypt session;
+- parse `StringSession`;
+- decrypt selected provider reference;
+- parse exact release local reference;
+- validate peer match;
+- construct `TelegramClient`.
+
+No network yet.
+
+### Stage 2 — one authorization session
+
+Only after all previous checks:
+- `client.connect()` exactly once;
+- `client.is_user_authorized()` exactly once;
+- stop if false.
+
+Always disconnect in `finally`.
+
+### Stage 3 — full first-page raw iteration + exact release conversion
+
+Use exact production page size:
+`TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE = 100`.
+
+Run:
+`client.iter_messages(input_peer, limit=100, reverse=False)`
+
+Constraints:
+- one iterator creation only;
+- consume at most 100 items;
+- no second provider read;
+- no retry.
+
+For EACH yielded message:
+- increment an in-memory ordinal counter starting at 1;
+- call exact release `_history_entry_from_message(message)`;
+- do not inspect/emit message content, IDs, sender, timestamps, titles, or metadata;
+- if conversion returns `None`, emit only a sanitized aggregate count at end or stop with a sanitized conversion-invalid marker, whichever best matches release semantics;
+- do not call application `fetch_history()`;
+- do not materialize anything.
+
+If raw iteration raises:
+- `FAILURE_STAGE=STAGE_3_ITERATION`
+- `RAW_EXCEPTION_CLASS=<class only>`
+- `MESSAGE_ORDINAL=<1..100 or 0 if before first item>`
+
+If conversion raises:
+- `FAILURE_STAGE=STAGE_3_CONVERSION`
+- `RAW_EXCEPTION_CLASS=<class only>`
+- `MESSAGE_ORDINAL=<1..100>`
+
+If all up to 100 items convert:
+- `FIRST_PAGE_PASS=true`
+- `MESSAGES_SEEN=<0..100>`
+- `ENTRIES_CONVERTED=<0..100>`
+- `ENTRIES_NONE=<0..100>`
+
+No message-level detail.
+
+## Output allowlist
+
+Strictly allow only:
+- Stage 0/1/2 booleans already used in M4AG;
+- `FIRST_PAGE_PASS`;
+- `MESSAGES_SEEN`;
+- `ENTRIES_CONVERTED`;
+- `ENTRIES_NONE`;
+- `MESSAGE_ORDINAL`;
+- `FAILURE_STAGE`;
+- `RAW_EXCEPTION_CLASS`;
+- call counters;
+- `TELEGRAM_NETWORK_CALLS`.
+
+Validation:
+- booleans exactly true/false;
+- counters ASCII decimal only with exact upper bounds;
+- ordinal 0..100;
+- exception class regex only;
+- hardcoded failure-stage enum;
+- no duplicate keys;
+- unexpected child stdout/stderr fails closed and is never echoed raw.
 
 ## Provider-call budget
 
-Only if all local/production guards and structural checks pass:
+At most:
+- connect: 1;
+- is_user_authorized: 1;
+- iter_messages iterator: 1.
 
-1. `client.connect()` <= 1;
-2. `client.is_user_authorized()` <= 1;
-3. `client.iter_messages(input_peer, limit=1, reverse=False)` <= 1, consuming at most one item.
+Do not count each yielded item as a separate provider-call budget unit; report explicit iterator call count separately.
 
-No automatic provider retry.
+No:
+- login;
+- folder/group discovery;
+- send/edit/delete;
+- mark-read;
+- application `fetch_history()`;
+- retry.
 
-Always disconnect.
+## Forbidden output
 
-## Forbidden
+Never emit:
+- account/user/Telegram/peer IDs;
+- phone;
+- usernames/titles;
+- session/ref encrypted or decrypted;
+- access hash;
+- message ID/text/body;
+- sender;
+- timestamps;
+- API id/hash;
+- credential key;
+- token;
+- IP;
+- raw logs;
+- traceback;
+- exception message.
 
-Do NOT:
-- login/re-login;
-- submit code/password;
-- discover folders/groups;
-- retry manual Secretary Sync;
-- Apply Scope;
-- send/edit/delete messages;
-- mark read;
-- inspect or emit message contents/IDs/senders/timestamps;
-- call application `fetch_history()`;
-- materialize messages;
-- decrypt/print session/reference outside in-process structural use;
-- print IDs, phone, usernames/titles, access hashes, provider refs, credentials, tokens, IPs;
-- write DB;
-- mutate production;
-- restart/recreate;
-- edit production files/env;
-- run Alembic writes;
-- change main/production refs;
-- change target.json or SSH trust state;
-- change Bot API or MTProto AI flag.
+## Required local tests
 
-## Required report
+Add explicit tests for at least:
 
-Return only sanitized results emitted by the reviewed harness.
+1. exact reviewed pinned SSH contract reused;
+2. Stage 0 fail-closed before provider calls;
+3. structural/cardinality gates preserved;
+4. connect <=1;
+5. authorization check <=1;
+6. iterator creation <=1;
+7. exact `limit=100, reverse=False`;
+8. maximum 100 yielded items consumed;
+9. exact release `_history_entry_from_message` is used;
+10. application `fetch_history` is not used;
+11. no materializer/DB-write path;
+12. iteration exception reports only stage/class/ordinal;
+13. conversion exception reports only stage/class/ordinal;
+14. ordinal bounds 0..100 enforced;
+15. success aggregates only counts, no message details;
+16. child output strict allowlist/redaction;
+17. child stderr never emitted raw;
+18. no write/login/discovery methods;
+19. disconnect on success and failure;
+20. transport retries only pre-remote, max 3.
 
-### Transport
-- attempt matrix;
-- pin verified;
-- host-key;
-- SSH auth;
-- remote execution.
+Run:
+- focused pytest;
+- Ruff changed Python files;
+- `git diff --check`.
 
-### Stage 0
-- whether production guards passed;
-- account cardinality exactly one;
-- manual-selected group cardinality exactly one.
+## Review handoff
 
-### Stage 1
-- `SESSION_DECRYPT_PASS`
-- `STRING_SESSION_PARSE_PASS`
-- `REFERENCE_DECRYPT_PASS`
-- `REFERENCE_PARSE_PASS`
-- `REFERENCE_PEER_MATCH_PASS`
-- `TELEGRAM_CLIENT_CONSTRUCT_PASS`
-
-### Stage 2
-- `CONNECT_PASS`
-- `IS_USER_AUTHORIZED`
-
-### Stage 3
-- `ITER_MESSAGES_STARTED`
-- `ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS`
-
-If failure:
-- `FAILURE_STAGE`
-- `RAW_EXCEPTION_CLASS`
-
-If emitted:
-- `CONNECT_CALL_COUNT`
-- `IS_USER_AUTHORIZED_CALL_COUNT`
-- `ITER_MESSAGES_CALL_COUNT`
-- `TELEGRAM_NETWORK_CALLS`
-
-Also confirm:
-- no login/write/discovery calls;
-- no message data emitted;
-- no session/reference printed;
-- no production mutation;
-- SSH trust and target unchanged.
-
-## Interpretation
-
-A. Structural session failure
-=> stored-session serialization/persistence defect.
-
-B. Reference parse/peer-match failure
-=> selected-group provider-reference defect.
-
-C. `IS_USER_AUTHORIZED=false`
-=> the stored session failed a live authorization check at probe time.
-
-D. Stage 3 raw `ValueError` / `TypeError`
-=> direct evidence that the release `fetch_history()` can falsely remap this history-stage failure as authorization-invalid.
-
-E. Stage 3 succeeds
-=> stored session, selected peer reference, live authorization, and raw first history read all work; original 409 is then either transient or caused later in the application `fetch_history`/history processing path.
-
-F. Other raw exception
-=> classify from exact exception class before any further action.
-
-Do not repair or retry during this task.
+After implementation:
+- commit on `review/telegram-mtproto-m4ah`;
+- push only that review branch;
+- do NOT run against production;
+- report full SHA;
+- focused tests PASS/count;
+- Ruff;
+- diff-check;
+- test-to-safety mapping;
+- remaining gaps.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AG2_LIVE_READY`
+`TELEGRAM_MTPROTO_M4AH1_REVIEW_READY`
 
 Then STOP.
 
