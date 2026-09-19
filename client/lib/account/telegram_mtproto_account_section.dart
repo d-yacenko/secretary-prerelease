@@ -550,27 +550,27 @@ class _TelegramMtprotoAccountSectionState
           ),
           Text('Пропущено: ${preview.skippedCounts}'),
           if (preview.truncated) const Text('Предпросмотр усечён.'),
-          for (final dialog in preview.dialogs) _peerRow(dialog),
+          if (reconcile == null)
+            for (final dialog in _uniqueDialogs(preview.dialogs))
+              _peerRow(dialog),
         ],
         if (reconcile != null) ...[
           Text(
             'Область: ${reconcile.active}; добавлено ${reconcile.activated}; '
             'убрано ${reconcile.deactivated}; без изменений ${reconcile.unchanged}',
           ),
-          for (final dialog in _scopeDialogs(reconcile)) _peerRow(dialog),
+          for (final dialog in _uniqueDialogs(reconcile.peers))
+            _peerRow(dialog),
         ],
       ],
     );
   }
 
-  List<TelegramMtprotoDialog> _scopeDialogs(
-    TelegramMtprotoScopeReconcile reconcile,
+  List<TelegramMtprotoDialog> _uniqueDialogs(
+    List<TelegramMtprotoDialog> dialogs,
   ) {
     final byPeer = <int, TelegramMtprotoDialog>{};
-    for (final dialog in _preview?.dialogs ?? const <TelegramMtprotoDialog>[]) {
-      byPeer[dialog.peerId] = dialog;
-    }
-    for (final dialog in reconcile.peers) {
+    for (final dialog in dialogs) {
       byPeer[dialog.peerId] = dialog;
     }
     return byPeer.values.toList();
@@ -578,11 +578,12 @@ class _TelegramMtprotoAccountSectionState
 
   Widget _peerRow(TelegramMtprotoDialog dialog) {
     return ListTile(
+      key: Key('telegram_mtproto_scope_peer_${dialog.peerId}'),
       dense: true,
       title: Text(dialog.title),
       subtitle: Text('${dialog.kind}${dialog.isMuted ? ' · muted' : ''}'),
       trailing: TextButton(
-        key: Key('telegram_mtproto_sync_peer_${dialog.peerId}'),
+        key: Key('telegram_mtproto_sync_scope_peer_${dialog.peerId}'),
         onPressed: _groupsBusy ? null : () => _syncPeer(dialog.peerId),
         child: const Text('Синхронизировать'),
       ),

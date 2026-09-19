@@ -128,8 +128,8 @@ void main() {
       httpClient: MockClient((request) async {
         if (request.url.path.endsWith('/status')) {
           return http.Response(
-            jsonEncode({'configured': false, 'connected': false}),
-            200,
+            jsonEncode({'detail': 'Telegram MTProto is not configured'}),
+            503,
           );
         }
         return http.Response('{}', 404);
@@ -362,50 +362,165 @@ void main() {
     },
   );
 
-  testWidgets('reconcile peer sync uses exact scope endpoint and summary', (
+  testWidgets(
+    'reconcile replaces preview peers authoritatively and syncs exact peer',
+    (tester) async {
+      final calls = <String>[];
+      final client = SecretaryApiClient(
+        httpClient: MockClient((request) async {
+          calls.add('${request.method} ${request.url.path}');
+          final path = request.url.path;
+          if (path.endsWith('/status')) {
+            return http.Response(jsonEncode(_connectedStatus()), 200);
+          }
+          if (path.endsWith('/sync-scope/preview')) {
+            return http.Response(
+              jsonEncode({
+                'dialogs': [
+                  {
+                    'peer_id': 666,
+                    'kind': 'private',
+                    'title': 'A',
+                    'username': 'a',
+                    'is_muted': false,
+                  },
+                  {
+                    'peer_id': 777,
+                    'kind': 'private',
+                    'title': 'B',
+                    'username': 'b',
+                    'is_muted': false,
+                  },
+                ],
+                'truncated': false,
+                'skipped_counts': {},
+                'configured_folder_count': 1,
+              }),
+              200,
+            );
+          }
+          if (path.endsWith('/sync-scope/reconcile')) {
+            return http.Response(
+              jsonEncode({
+                'active': 2,
+                'activated': 1,
+                'deactivated': 0,
+                'unchanged': 0,
+                'peers': [
+                  {
+                    'peer_id': 777,
+                    'kind': 'private',
+                    'title': 'B',
+                    'username': 'b',
+                    'is_muted': false,
+                  },
+                  {
+                    'peer_id': 888,
+                    'kind': 'supergroup',
+                    'title': 'C',
+                    'username': 'c',
+                    'is_muted': false,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          if (path.endsWith('/sync-scope/peers/888/sync')) {
+            return http.Response(
+              jsonEncode({
+                'peer_id': 888,
+                'scanned': 2,
+                'materialized': 2,
+                'created': 1,
+                'updated': 1,
+                'unchanged': 0,
+                'skipped': 0,
+                'jobs_enqueued': 0,
+                'history_complete': true,
+              }),
+              200,
+            );
+          }
+          return _scopeResponse(path);
+        }),
+      );
+      client.configure(baseUrl: 'https://secretary.example', token: 'token');
+      await _pumpSection(tester, client);
+      await tester.tap(find.byKey(const Key('telegram_mtproto_preview_scope')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('telegram_mtproto_scope_peer_666')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('telegram_mtproto_scope_peer_777')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('telegram_mtproto_reconcile_scope')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('telegram_mtproto_scope_peer_666')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('telegram_mtproto_scope_peer_777')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('telegram_mtproto_scope_peer_888')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('telegram_mtproto_sync_scope_peer_777')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('telegram_mtproto_sync_scope_peer_888')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('telegram_mtproto_sync_scope_peer_888')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        calls,
+        contains('POST /telegram/mtproto/sync-scope/peers/888/sync'),
+      );
+      expect(find.textContaining('created 1'), findsOneWidget);
+    },
+  );
+
+  testWidgets('ignore muted round trip preserves zero folder selection', (
     tester,
   ) async {
-    final calls = <String>[];
+    final requests = <http.Request>[];
+    var saved = false;
     final client = SecretaryApiClient(
       httpClient: MockClient((request) async {
-        calls.add('${request.method} ${request.url.path}');
+        requests.add(request);
         final path = request.url.path;
         if (path.endsWith('/status')) {
           return http.Response(jsonEncode(_connectedStatus()), 200);
         }
-        if (path.endsWith('/sync-scope/reconcile')) {
+        if (path.endsWith('/sync-folders') && request.method == 'GET') {
           return http.Response(
-            jsonEncode({
-              'active': 1,
-              'activated': 1,
-              'deactivated': 0,
-              'unchanged': 0,
-              'peers': [
-                {
-                  'peer_id': 777,
-                  'kind': 'private',
-                  'title': 'Alice',
-                  'username': 'alice',
-                  'is_muted': false,
-                },
-              ],
-            }),
+            jsonEncode({'folders': [], 'ignore_muted': !saved}),
             200,
           );
         }
-        if (path.endsWith('/sync-scope/peers/777/sync')) {
+        if (path.endsWith('/sync-folders') && request.method == 'PUT') {
+          saved = true;
           return http.Response(
-            jsonEncode({
-              'peer_id': 777,
-              'scanned': 2,
-              'materialized': 2,
-              'created': 1,
-              'updated': 1,
-              'unchanged': 0,
-              'skipped': 0,
-              'jobs_enqueued': 0,
-              'history_complete': true,
-            }),
+            jsonEncode({'folders': [], 'ignore_muted': false}),
+            200,
+          );
+        }
+        if (path.endsWith('/groups/-100') && request.method == 'PATCH') {
+          return http.Response(
+            jsonEncode({'peer_id': -100, 'selected': false}),
             200,
           );
         }
@@ -414,13 +529,32 @@ void main() {
     );
     client.configure(baseUrl: 'https://secretary.example', token: 'token');
     await _pumpSection(tester, client);
-    await tester.tap(find.byKey(const Key('telegram_mtproto_reconcile_scope')));
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const Key('telegram_mtproto_ignore_muted')),
+          )
+          .value,
+      isTrue,
+    );
+    await tester.tap(find.byKey(const Key('telegram_mtproto_ignore_muted')));
+    await tester.tap(find.byKey(const Key('telegram_mtproto_save_folders')));
     await tester.pumpAndSettle();
-    expect(find.text('Alice'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('telegram_mtproto_sync_peer_777')));
+    final put = requests.firstWhere((request) => request.method == 'PUT');
+    final body = jsonDecode(put.body) as Map<String, dynamic>;
+    expect(body['folder_names'], isEmpty);
+    expect(body['ignore_muted'], isFalse);
+
+    await tester.tap(find.byKey(const Key('telegram_mtproto_group_-100')));
     await tester.pumpAndSettle();
-    expect(calls, contains('POST /telegram/mtproto/sync-scope/peers/777/sync'));
-    expect(find.textContaining('created 1'), findsOneWidget);
+    expect(
+      tester
+          .widget<SwitchListTile>(
+            find.byKey(const Key('telegram_mtproto_ignore_muted')),
+          )
+          .value,
+      isFalse,
+    );
   });
 
   testWidgets('forum and unavailable groups are explicit and non-actionable', (
