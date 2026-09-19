@@ -1058,6 +1058,42 @@ class NotificationOut {
 
   String? get proposalDescription => proposal['description'] as String? ?? body;
 
+  String? get telegramTransportEventType {
+    if (proposal['type'] != 'transport_event' ||
+        proposal['provider'] != 'telegram' ||
+        proposal['transport'] != 'mtproto') {
+      return null;
+    }
+    final value = proposal['event_type'];
+    if (value is! String ||
+        !const {
+          'message_created',
+          'message_edited',
+          'message_deleted',
+        }.contains(value)) {
+      return null;
+    }
+    return value;
+  }
+
+  bool get isTelegramMtprotoTransportEvent =>
+      telegramTransportEventType != null;
+
+  String? get telegramTransportConversationTitle {
+    final value = proposal['conversation_title'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  String? get telegramTransportOccurredAt {
+    final value = proposal['occurred_at'];
+    return value is String && DateTime.tryParse(value) != null ? value : null;
+  }
+
+  String? get telegramTransportEditedAt {
+    final value = proposal['edited_at'];
+    return value is String && DateTime.tryParse(value) != null ? value : null;
+  }
+
   factory NotificationOut.fromJson(Map<String, dynamic> json) {
     return NotificationOut(
       id: json['id'] as String,
