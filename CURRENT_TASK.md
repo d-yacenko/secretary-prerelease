@@ -1,141 +1,181 @@
-# Current task — Telegram MTProto M4AR: refresh stale Linux desktop client
+# Current task — Telegram MTProto M4ARR: distinguish Linux client crash from launcher/session lifetime
 
 ## Status
 
-Production backend/runtime is healthy and deployed at:
+Production backend/runtime remains healthy at:
 `8091736337689b68b4510126e74d9e409397f696`
 
 Production Alembic:
 `0046`
 
-Telegram MTProto backend is configured and the human already completed MTProto authorization successfully through the existing application flow.
+Telegram MTProto backend is configured and the human authorization is already complete.
 
-M4A is currently BLOCKED at the client presentation layer.
+M4AR built the exact Linux client successfully from:
+`8091736337689b68b4510126e74d9e409397f696`
 
-User evidence shows the Account screen contains:
-- the legacy Telegram Bot connection block;
-- then immediately the generic Sync section;
-- NO `Telegram MTProto` section.
+Focused Flutter tests:
+87 passed.
 
-At exact production release SHA `8091736337689b68b4510126e74d9e409397f696`, `client/lib/account/account_screen.dart` unconditionally renders `TelegramMtprotoAccountSection` between Connections and Sync.
+Release bundle build:
+PASS.
 
-Therefore the currently running desktop client is stale relative to the deployed backend/release.
+However the fresh client window closed twice during live human observation:
+- once shortly after first rendering;
+- once after opening Account/Profile and scrolling.
 
-M3 only rebuilt/recreated backend `api` and `worker`; Flutter desktop client is not part of production Compose.
+The prior launch was performed from Executor-controlled shell/process context, so this may be either:
+1. a real client/native crash; OR
+2. the GUI child being terminated when the execution shell/session/timeout ended.
 
-This task authorizes only **M4AR — build and launch a fresh Linux desktop client from the exact deployed release SHA so the human can continue M4A**.
+M4AR is therefore NOT accepted.
 
-No backend deploy, schema change, production ref move, or production env mutation is authorized.
+This task authorizes only **M4ARR — process-lifetime-safe detached launch plus sanitized crash diagnosis**.
+
+No product-code fix is authorized yet.
+
+## No backend / production changes
+
+Do NOT:
+- deploy backend;
+- move production ref;
+- change production DB/schema/env/services;
+- run Alembic;
+- change Telegram auth/session;
+- select sync scope;
+- run history sync;
+- retire Bot API.
 
 ## Exact client source
 
-Build client from exact:
-
+Use exact:
 `CLIENT_RELEASE_SHA=8091736337689b68b4510126e74d9e409397f696`
 
-Do not build from a newer moving `main`.
+Do not build or launch a newer moving `main`.
 
-Use a separate clean checkout/worktree for this exact SHA if necessary.
+Reuse the exact M4AR bundle only if its source SHA and bundle integrity are still provable. Otherwise rebuild from a clean detached exact-SHA worktree.
 
-## Safety
+Do not change source files.
+
+## Preserve user state
 
 Do NOT:
-- delete or overwrite the currently installed/running client before verification;
-- delete SharedPreferences or secure storage;
-- remove/reissue the Secretary bearer token;
-- ask the human to paste bearer token, Telegram code, 2FA password, or session data into terminal/chat;
-- inspect or print secure-storage contents;
-- modify production backend/DB/.env/services;
-- move Git refs;
-- change client source code;
-- create a new branch/commit.
+- delete/overwrite the installed client;
+- clear SharedPreferences;
+- clear secure storage;
+- remove/reissue bearer token;
+- redo Telegram auth unless the fresh UI itself reports disconnected;
+- inspect or print bearer/session/code/password values.
 
-If building the exact existing client requires a code change, STOP and report a blocker.
+## Diagnose process ownership first
 
-## Platform discovery
+Before launch, determine:
+- whether any old `personal_secretary` process is still alive;
+- whether the previously launched fresh process is gone;
+- whether the prior execution mechanism attached the GUI process to a shell/process group that would be reaped on command completion.
 
-Non-destructively determine:
-- whether the current user session is Linux desktop;
-- currently running Secretary client process/binary path if discoverable without secrets;
-- whether an older bundle is being launched.
+Do not kill unrelated user processes.
 
-Do not kill the old client until the fresh bundle is built and verified launchable.
+Record only PID/path/process-group/session metadata. Do not inspect process environment.
 
-If this is not Linux desktop, STOP and report the actual platform so Architect can authorize the correct client refresh path.
+## Stable detached launch
 
-## Build
+Launch the exact release bundle so it is NOT owned by the short-lived Executor command session.
 
-From exact `CLIENT_RELEASE_SHA`:
+Preferred pattern:
+- use a persistent user-session mechanism such as `systemd-run --user` when available; OR
+- use a properly detached `nohup + setsid` wrapper with stdin closed.
 
-1. `cd client`
-2. `flutter pub get`
-3. run the relevant existing client tests for Account/MTProto presentation;
-4. build Linux release bundle:
-   `flutter build linux --release`
+Requirements:
+- command invocation returns while GUI process continues;
+- process has its own session/process group independent of the Executor shell;
+- keep old installed client untouched;
+- do not create a permanent desktop launcher yet;
+- do not use `flutter run`.
 
-Expected bundle executable:
-`client/build/linux/x64/release/bundle/personal_secretary`
+The wrapper must record:
+- child PID;
+- eventual exit code/signal marker to a temporary non-secret status file.
 
-Do not run `intermediates_do_not_run/personal_secretary`.
+Stdout/stderr handling:
+- never print the full log blindly;
+- redirect to a temporary file if needed for crash diagnosis;
+- if the process exits, inspect only sanitized crash/backtrace/error lines;
+- redact bearer tokens, URLs containing credentials, provider/account/user identifiers, Telegram phone/session/auth material, and secret-like values before reporting;
+- delete the temporary diagnostic log after extracting sanitized crash evidence, unless Architect explicitly asks to preserve it.
 
-Verify:
-- build PASS;
-- bundle executable exists;
-- bundle libraries/assets are present;
-- RUNPATH fix completed as defined by current CMake/install rules;
-- no source changes;
-- exact source SHA remains `8091736337689b68b4510126e74d9e409397f696`.
+## Survival check before human interaction
 
-## Launch verification
+After detached launch:
+1. verify the exact executable path;
+2. verify the process is alive after at least 15 seconds;
+3. verify it remains alive after at least 90 seconds with no human interaction;
+4. verify the Executor shell command/session can end without killing the GUI process.
 
-Launch the fresh release bundle directly from its bundle path.
+If the process dies before human interaction:
+- capture exit code/signal;
+- capture sanitized crash evidence;
+- report M4ARR blocked;
+- do NOT attempt a code fix.
 
-Do not replace the existing launcher/install yet.
+If the process survives:
+return the marker:
+`TELEGRAM_MTPROTO_M4ARR_HUMAN_UI_CHECK_READY`
 
-Preferred verification:
-- human opens Account screen in the fresh bundle;
-- `Telegram MTProto` section is visible between Connections and Sync;
-- connected state is shown if existing local app credentials/preferences are reused;
-- if Secretary client authentication is required, let the human use the existing UI; do not request or inspect bearer token;
-- do not redo Telegram auth unless the UI truly reports disconnected.
+and STOP while leaving the fresh client running for the human.
 
-If the MTProto section is visible, STOP before any sync and report success.
+## Human verification stage
 
-Do not choose folders/groups and do not run the first history sync in M4AR. That remains M4A after client refresh.
+The human will then:
+- bring the fresh Secretary window to front;
+- open Account/Profile;
+- scroll to the area between Connections and Sync;
+- confirm whether `Telegram MTProto` is visible;
+- spend at least ~30 seconds on the Account screen / scroll normally.
 
-## If the fresh bundle still lacks MTProto section
+No folder/group selection and no sync yet.
 
-STOP and report:
-- exact source SHA;
-- build result;
-- binary path;
-- screenshot/UI fact;
-- whether the expected widget key/source is present in source;
-- no code change attempted.
+If the window closes during human interaction, the next Executor cycle may inspect the previously prepared status/diagnostic evidence without relaunching blindly.
 
-Marker:
-`TELEGRAM_MTPROTO_M4AR_CLIENT_REFRESH_BLOCKED`
+## If a real crash is proven
 
-## Completion report
+Report:
+- executable path;
+- source SHA;
+- uptime before exit;
+- exit code or terminating signal;
+- whether it happened without interaction or during Account scroll;
+- sanitized top crash/backtrace frames / native library involved when available;
+- whether a core dump exists (metadata only; do not upload or inspect sensitive memory contents without separate authorization);
+- source area plausibly implicated, if determinable from symbols/logs.
 
-Return:
-- platform;
-- exact client source SHA;
-- build command/result;
-- relevant focused test result;
-- fresh bundle path;
-- whether fresh bundle launched;
-- whether Account shows `Telegram MTProto`;
-- whether connected status is visible;
-- confirmation old installed client was not deleted/overwritten;
-- confirmation secure storage/preferences were not cleared;
-- confirmation no secrets were inspected/printed;
-- confirmation production backend/schema/ref/env untouched;
-- clean exact-SHA worktree.
+Then STOP with:
+`TELEGRAM_MTPROTO_M4ARR_REAL_CRASH_CONFIRMED`
 
-Success marker:
-`TELEGRAM_MTPROTO_M4AR_CLIENT_REFRESH_READY`
+Do not modify code in this task.
 
-Then STOP for Architect/human verification.
+## If no crash and MTProto UI is visible
+
+Report:
+- detached mechanism used;
+- process survived shell completion + 90s idle;
+- human Account/Profile interaction survived;
+- Telegram MTProto section visible;
+- connected status visible yes/no;
+- installed old client untouched;
+- user storage untouched;
+- no secrets inspected/printed;
+- production backend untouched.
+
+Final marker:
+`TELEGRAM_MTPROTO_M4ARR_CLIENT_STABLE_READY`
+
+Then STOP for Architect review before returning to M4A scope selection.
+
+## If UI survives but MTProto section is still absent
+
+Report exact UI fact and stop:
+`TELEGRAM_MTPROTO_M4ARR_UI_MISMATCH_BLOCKED`
+
+No code changes.
 
 `CURRENT_TASK.md` is the source of active authorization.
