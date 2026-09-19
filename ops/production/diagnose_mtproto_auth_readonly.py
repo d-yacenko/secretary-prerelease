@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ EXPECTED_PIN = "SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs"
 MAX_ATTEMPTS = 3
 REMOTE_BEGIN = "REMOTE_DIAGNOSTIC_BEGIN"
 REMOTE_END = "REMOTE_DIAGNOSTIC_END"
+PEER_SEGMENT = re.compile(r"(?<=/)-?\d+(?=/|$)")
 
 
 class DiagnosticError(RuntimeError):
@@ -61,6 +63,11 @@ def build_ssh_argv(target: str, port: int, known_hosts_path: str) -> list[str]:
         "python3",
         "-",
     ]
+
+
+def normalize_route(path: str) -> str:
+    """Hide both positive and negative numeric peer path segments."""
+    return PEER_SEGMENT.sub("<peer>", path)
 
 
 def _failure_class(stderr: str) -> str:
@@ -222,6 +229,9 @@ def classify_error(value):
         return "none"
     return "other-sanitized"
 
+def normalize_route(path):
+    return re.sub(r"(?<=/)-?\d+(?=/|$)", "<peer>", path)
+
 def main():
     emit("REMOTE_DIAGNOSTIC_BEGIN", "true")
     try:
@@ -276,10 +286,12 @@ def main():
         emit("ACCOUNT_FRESHNESS", "unknown")
         emit("ACTIVE_AUTH_CHALLENGE_COUNT", query(ids["db"], db_env, "SELECT count(*) FROM telegram_mtproto_auth_challenges WHERE expires_at > now()"))
         emit("MANUAL_SELECTED_GROUP_COUNT", query(ids["db"], db_env, "SELECT count(*) FROM telegram_mtproto_chat_selections WHERE manual_selected IS TRUE"))
-        emit("CONFIGURED_SYNC_FOLDER_COUNT", query(ids["db"], db_env, "SELECT count(*) FROM telegram_mtproto_sync_folders"))
+        folder_count = query(ids["db"], db_env, "SELECT count(*) FROM telegram_mtproto_sync_folders")
+        emit("CONFIGURED_SYNC_FOLDER_COUNT", folder_count)
         active = query(ids["db"], db_env, "SELECT count(*) FROM telegram_mtproto_chat_selections WHERE scope_active IS TRUE")
         emit("ACTIVE_SCOPE_COUNT", active)
-        emit("RECONCILE_SCOPE_PROVIDER_CALLS_POSSIBLE", "true" if active != "0" else "false")
+        emit("RECURRING_SCOPE_PROVIDER_CALL_POSSIBLE", "true" if folder_count != "0" else "false")
+        emit("RECURRING_HISTORY_PROVIDER_CALL_POSSIBLE", "true" if active != "0" else "false")
 
         job_rows = query(ids["db"], db_env, "SELECT status || '|' || count(*) FROM jobs WHERE type='sync_telegram_mtproto' GROUP BY status ORDER BY status")
         emit("TELEGRAM_JOB_EXISTS", "true" if job_rows else "false")
@@ -289,7 +301,7 @@ def main():
                 emit("TELEGRAM_JOB_" + status.upper(), count)
         recent = query(ids["db"], db_env, "SELECT CASE WHEN count(*)>0 THEN 'true' ELSE 'false' END FROM jobs WHERE type='sync_telegram_mtproto' AND updated_at >= now() - interval '24 hours'")
         emit("TELEGRAM_JOB_RECENT_24H", recent)
-        categories = query(ids["db"], db_env, "SELECT count(*) || '|' || CASE WHEN lower(coalesce(last_error,'')) ~ '(auth|authkey|session|unauthor)' THEN 'authorization-invalid' WHEN lower(coalesce(last_error,'')) ~ '(unavailable|flood|server|timeout|network|transient)' THEN 'provider-unavailable' WHEN last_error IS NULL THEN 'none' ELSE 'other-sanitized' END FROM jobs WHERE type='sync_telegram_mtproto' AND status='failed' GROUP BY 2 ORDER BY 2")
+        categories = query(ids["db"], db_env, "WITH classified AS (SELECT CASE WHEN payload->>'last_error_kind' IN ('authorization-invalid','authentication') THEN 'authorization-invalid' WHEN lower(coalesce(payload->>'last_error_retryable',''))='true' THEN 'retryable' WHEN lower(coalesce(last_error,'')) ~ '(auth|authkey|session|unauthor)' THEN 'authorization-invalid' WHEN lower(coalesce(last_error,'')) ~ '(unavailable|flood|server|timeout|network|transient)' THEN 'provider-unavailable' WHEN last_error IS NULL THEN 'none' ELSE 'other-sanitized' END AS category FROM jobs WHERE type='sync_telegram_mtproto' AND status='failed') SELECT count(*) || '|' || category FROM classified GROUP BY category ORDER BY category")
         for row in categories.splitlines():
             count, category = row.split("|", 1)
             emit("TELEGRAM_JOB_FAILURE_CATEGORY", category + ":" + count)
@@ -300,12 +312,14 @@ def main():
         statuses = set()
         worker_auth = False
         worker_unavailable = False
-        manual_auth = False
-        manual_409 = False
+        manual_group_route = False
+        manual_group_auth = False
+        manual_group_409 = False
+        scope_peer_route = False
         classes = set()
         for service in ("api", "worker"):
             logs = run(["docker", "logs", "--since", "24h", ids[service]])
-            text = logs.stdout if logs.returncode == 0 else ""
+            text = "\n".join(part for part in (logs.stdout, logs.stderr) if part)
             for line in text.splitlines():
                 low = line.lower()
                 for name in evidence:
@@ -319,19 +333,26 @@ def main():
                     worker_auth = True
                 if service == "worker" and re.search(r"provider.*unavailable|floodwait|servererror|network", low):
                     worker_unavailable = True
+                if "/telegram/mtproto/groups/" in low and "/sync" in low:
+                    manual_group_route = True
+                    if "409" in low or "conflict" in low:
+                        manual_group_409 = True
+                    if re.search(r"authorization.*(invalid|no longer valid)", low):
+                        manual_group_auth = True
+                if "/telegram/mtproto/sync-scope/peers/" in low:
+                    scope_peer_route = True
                 if "telegram/mtproto" in low:
                     path = re.search(r"/telegram/mtproto/[a-z0-9_/{}/-]+", low)
                     if path:
-                        routes.add(re.sub(r"/\d+", "/<peer>", path.group(0).split("?")[0]))
+                        routes.add(normalize_route(path.group(0).split("?")[0]))
                     for code in re.findall(r"\b(?:2|4|5)\d\d\b", low):
                         statuses.add(code)
-                if "sync-scope" in low and ("409" in low or "conflict" in low):
-                    manual_409 = True
-                if "sync-scope" in low and re.search(r"authorization.*(invalid|no longer valid)", low):
-                    manual_auth = True
         emit("MTPROTO_ROUTES", ",".join(sorted(routes)) if routes else "none")
         emit("MTPROTO_HTTP_STATUSES", ",".join(sorted(statuses)) if statuses else "none")
-        emit("MANUAL_GROUP_SYNC_AUTH_INVALID_OR_409", "true" if manual_auth or manual_409 else "unknown")
+        emit("MANUAL_GROUP_SYNC_ROUTE_OBSERVED", "true" if manual_group_route else "false")
+        emit("MANUAL_GROUP_SYNC_HTTP_409", "true" if manual_group_409 else "false")
+        emit("MANUAL_GROUP_SYNC_AUTHORIZATION_INVALID", "true" if manual_group_auth else "unknown")
+        emit("SCOPE_PEER_SYNC_ROUTE_OBSERVED", "true" if scope_peer_route else "false")
         emit("WORKER_AUTHORIZATION_INVALID", "true" if worker_auth else "false")
         emit("WORKER_PROVIDER_UNAVAILABLE", "true" if worker_unavailable else "false")
         emit("NORMALIZED_ERROR_CLASSES", ",".join(sorted(classes)) if classes else "none")

@@ -36,6 +36,9 @@ def test_ssh_argv_is_exact_and_temp_file_lives_through_process(
     assert diagnostic.run_diagnostic() == 0
     argv = observed["argv"]
     assert argv[:2] == ["ssh", "-p"]
+    assert argv[2] == "22"
+    assert "root@web-itx.duckdns.org" in argv
+    assert argv[-2:] == ["python3", "-"]
     assert "BatchMode=yes" in argv
     assert "StrictHostKeyChecking=yes" in argv
     assert "GlobalKnownHostsFile=/dev/null" in argv
@@ -94,6 +97,60 @@ def test_authentication_failure_does_not_retry(monkeypatch: pytest.MonkeyPatch) 
     assert calls == 1
 
 
+def test_remote_started_failure_does_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    _verified(monkeypatch)
+    calls = 0
+
+    def fake_run(argv, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(argv, 1, diagnostic.REMOTE_BEGIN + "\n", "")
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
+    with pytest.raises(diagnostic.DiagnosticError):
+        diagnostic.run_diagnostic()
+    assert calls == 1
+
+
+def test_peer_route_normalization_hides_positive_and_negative_ids() -> None:
+    assert diagnostic.normalize_route("/telegram/mtproto/groups/123/sync") == "/telegram/mtproto/groups/<peer>/sync"
+    assert diagnostic.normalize_route("/telegram/mtproto/sync-scope/peers/-456/sync") == "/telegram/mtproto/sync-scope/peers/<peer>/sync"
+
+
+def test_remote_helper_distinguishes_manual_group_route_and_scope_route() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert '"/telegram/mtproto/groups/"' in helper
+    assert '"/telegram/mtproto/sync-scope/peers/"' in helper
+    assert "MANUAL_GROUP_SYNC_ROUTE_OBSERVED" in helper
+    assert "MANUAL_GROUP_SYNC_HTTP_409" in helper
+    assert "MANUAL_GROUP_SYNC_AUTHORIZATION_INVALID" in helper
+
+
+def test_remote_helper_reads_both_log_streams_without_emitting_raw_lines() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert "logs.stdout" in helper and "logs.stderr" in helper
+    assert "print(line" not in helper
+    assert "emit(line" not in helper
+    assert 'emit("TELEGRAM_JOB_FAILURE_CATEGORY", category + ":" + count)' in helper
+
+
+def test_failure_category_query_uses_structured_fields_and_valid_grouping() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert "payload->>'last_error_kind'" in helper
+    assert "payload->>'last_error_retryable'" in helper
+    assert "WITH classified AS" in helper
+    assert "GROUP BY 2" not in helper
+    assert "GROUP BY category" in helper
+
+
+def test_recurring_provider_call_inference_matches_scope_contract() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    assert "RECURRING_SCOPE_PROVIDER_CALL_POSSIBLE" in helper
+    assert "RECURRING_HISTORY_PROVIDER_CALL_POSSIBLE" in helper
+    assert 'folder_count != "0"' in helper
+    assert 'active != "0"' in helper
+
+
 def test_remote_helper_has_one_session_and_no_mutation_or_provider_path() -> None:
     helper = diagnostic.REMOTE_HELPER
     assert helper.count("REMOTE_DIAGNOSTIC_BEGIN") == 1
@@ -107,5 +164,7 @@ def test_remote_helper_has_one_session_and_no_mutation_or_provider_path() -> Non
     assert "INSERT" not in helper
     assert "UPDATE" not in helper
     assert "DELETE" not in helper
+    assert "REMOTE_DIAGNOSTIC_END" in helper
+    assert 'emit("TELEGRAM_JOB_FAILURE_CATEGORY", category + ":" + count)' in helper
     for forbidden in ("provider_ref", "access_hash", "api_hash", "bearer"):
         assert forbidden not in helper
