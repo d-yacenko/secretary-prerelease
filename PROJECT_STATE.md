@@ -37,16 +37,15 @@
 - C2B blocking defect: reconciliation can swallow an unexpected local Notification persistence failure under broad candidate isolation after edit/delete mutation, risking committed object convergence with a permanently missing deterministic event.
 - C2B blocking verification gap: required focused matrix was not completed; missing explicit conflict-path, backfill/replay, service/inactive, missing-edited-at/metadata-only, outgoing-delete/transient/mismatch, and Notification API behavior coverage.
 - Accepted C2B semantics: deterministic UUIDv5 transport notifications for created/edited/deleted inbound Telegram MTProto events; initial/backfill anti-spam; Q1 AI quarantine preserved; generic Notification API lifecycle; typed local persistence boundary including SAVEPOINT creation; deterministic PK-conflict recovery; local notification persistence failures cannot silently commit edit/delete convergence without the corresponding event.
-- Telegram MTProto C3A implementation `d761d1aeab6b99530910a0292ba82e322a5885b3`: REVIEWED / REJECTED PENDING C3AR2.
+- Telegram MTProto C3A/C3AR/C3AR2 Flutter account/auth/scope UX: ACCEPTED / INTEGRATED TO MAIN at merge `f6f66dff6e03ae290dc7fc68d945734eba9a99a5`. Reviewed implementation tip is `b8455ec7b48106a284d81e50c524c8d8ef278d19`.
 - Accepted C3A direction: Flutter-only integration over existing MTProto endpoints; typed client models/methods; in-memory challenge state; account/folder/scope/group controls; backend/migrations/production untouched.
-- Telegram MTProto C3AR corrective `8c136b742a3d2ba67cb083d32cb88b6c438d3850`: REVIEWED / REJECTED PENDING C3AR2. Accepted improvements: explicit phone/code/password state machine, reconcile peers actionable, forum/unavailable group metadata explicit, MTProto action 401s routed through global AuthController, analyzer head adds zero diagnostics versus base.
-- C3AR2 blockers/gaps: preview rows and merged reconcile rows can duplicate peers and keep stale preview-only peers actionable after reconcile; server-not-configured widget coverage must exercise the real HTTP 503 backend contract; `ignore_muted` true/false round-trip needs explicit request/state proof.
-- Current authorized phase: Telegram MTProto C3AR2 scope-rendering and contract-test corrective, exactly as specified in `CURRENT_TASK.md`.
+- Accepted C3A semantics: explicit in-memory phone/code/password state machine; real 503 server-not-configured handling; connected identity; folder/ignore-muted configuration including zero-folder state; preview/reconcile authoritative peer scope without stale duplicates; manual groups with forum/unavailable state; exact per-peer/group sync; 401s route through global AuthController; no backend/client Telegram SDK changes.
+- Current authorized phase: Telegram MTProto C3B Inbox transport-event presentation, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
-- C3 is split: C3A account/auth/sync-scope Flutter UX first; planned next phase after C3A acceptance is C3B Telegram-specific inbox/notification presentation, then a newly frozen migration-bearing rollout.
+- C3A is accepted. Current C3B adds Telegram-specific Inbox/notification presentation over existing source objects and deterministic transport events. Planned phase after C3B acceptance: newly freeze migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3AR2.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3B.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
