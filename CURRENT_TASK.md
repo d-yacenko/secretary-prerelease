@@ -1,204 +1,152 @@
-# Current task — Telegram MTProto M4AD final retry: live read-only production diagnosis
+# Current task — Production SSH M4ADH3: exact invocation transport proof
 
 ## Status
 
-Production backend/runtime expected:
-`8091736337689b68b4510126e74d9e409397f696`
+Telegram M4AD remains blocked before live read-only production inspection.
 
-Production Alembic expected:
-`0046`
-
-Human completed MTProto login, folders/groups loaded, one manual group was selected, and the first manual sync returned:
-`Telegram MTProto authorization is no longer valid`
-
-Official Telegram Active Devices still shows the newly created Secretary MTProto session as active.
-
-M4ADH/M4ADH2 have now cleared the SSH infrastructure blocker:
-
-- repository-pinned ED25519 fingerprint:
-  `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`
-- three independent keyscans were stable;
-- exact repository `_verified_known_hosts()` returned one matching ED25519 line;
-- `ssh-keygen -F web-itx.duckdns.org` matched the generated file;
+M4ADH2 proved locally:
+- exact repository `_verified_known_hosts()` returns one `ssh-ed25519` line;
+- fingerprint is exactly `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`;
+- `ssh-keygen -F web-itx.duckdns.org` matches;
 - inherited SSH config does not alter target/port/proxy/canonicalization;
-- strict no-auth probes A/B/C all passed host-key verification;
-- previous SSH failure is classified invocation-specific/transient.
+- no-auth probes A/B/C all pass host-key verification.
 
-Do NOT change `target.json`, the pin, SSH config, or known_hosts.
+Yet the later M4AD authenticated read-only invocation again failed before remote execution with a "no known key"/host-key verification failure.
 
-This task authorizes only **live read-only M4AD production diagnosis**.
+Therefore this task authorizes only **M4ADH3 — prove the exact SSH argv/temp-file lifecycle used for the M4AD session**.
 
-## Required SSH invocation contract
+Do not run Telegram diagnostics yet.
 
-Build the temporary known_hosts file using the exact current repository helper:
+## Safety
 
-`ops/production/deploy.py::_verified_known_hosts()`
+Allowed:
+- local repository helper execution;
+- temporary files;
+- sanitized `ssh -G` / `ssh -vvv`;
+- one strict authenticated SSH transport proof that runs only remote `true` or `printf M4ADH3_OK`.
 
-for:
-- target `root@web-itx.duckdns.org`
-- port `22`
-- expected fingerprint `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`
+Forbidden:
+- any production data inspection beyond the transport proof;
+- DB/log/docker commands;
+- production writes;
+- Telegram/provider calls;
+- host-key bypass;
+- changing `target.json`, SSH config, known_hosts, code, env, refs.
 
-For the authenticated read-only SSH session use inherited SSH config plus explicit:
+Do not print private key paths/contents, tokens, IPs, credentials, or unrelated SSH config.
 
-- `BatchMode=yes`
-- `StrictHostKeyChecking=yes`
-- `UserKnownHostsFile=<exact temp file>`
-- `GlobalKnownHostsFile=/dev/null`
-- `HostKeyAlgorithms=ssh-ed25519`
-- short connect timeout
+## Step 1 — construct exact temp known_hosts
 
-Do NOT use `-F /dev/null` for the authenticated session, because normal identity/auth configuration may still be needed.
+In the SAME process/session that will launch SSH:
+- import/reuse current `ops/production/deploy.py::_verified_known_hosts()`;
+- target `root@web-itx.duckdns.org`, port 22;
+- expected fingerprint `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`;
+- write returned line to a temp file;
+- keep the temp file alive/open until AFTER ssh exits.
 
-If host-key verification fails again, STOP. Do not bypass it.
+Before ssh exec, prove:
+- temp path exists = yes;
+- temp file size > 0 = yes;
+- `ssh-keygen -F web-itx.duckdns.org -f <temp>` matches = yes;
+- fingerprint from that matched line = pinned fingerprint.
 
-## Allowed read-only production actions
+Do not print base64 key material.
 
-- Git ref/worktree inspection;
-- `docker ps`, `docker inspect`;
-- sanitized `docker logs` for api/worker;
-- read-only PostgreSQL SELECTs;
-- read-only code/file inspection.
+## Step 2 — print sanitized exact argv
 
-## Forbidden
+Build exactly one SSH argv list, no shell-string reconstruction:
 
-Do NOT:
-- re-authenticate Telegram;
-- retry manual history sync;
-- click/apply scope;
-- make ad-hoc Telegram/provider calls;
-- run direct Telethon probes;
-- decrypt or print the stored Telegram session;
-- restart/recreate services;
-- write to DB;
-- edit env;
-- run Alembic writes;
-- move refs;
-- change code;
-- mutate production;
-- touch Bot API;
-- change MTProto AI quarantine.
+- `ssh`
+- `-p 22`
+- `-o BatchMode=yes`
+- `-o StrictHostKeyChecking=yes`
+- `-o UserKnownHostsFile=<temp>`
+- `-o GlobalKnownHostsFile=/dev/null`
+- `-o HostKeyAlgorithms=ssh-ed25519`
+- `-o ConnectTimeout=5`
+- `root@web-itx.duckdns.org`
+- remote command `true`
 
-Do not print:
-- Secretary user/account IDs;
-- Telegram user IDs;
-- peer IDs;
-- phone;
-- session ciphertext/plaintext;
-- bearer tokens;
-- credential key/API hash;
-- provider references;
-- IP addresses;
-- raw message content.
+Report sanitized argv preserving option names/order, but replace temp path with `<temp>`.
 
-## 1. Production state
+Do not invoke through `sh -c` or nested quoting.
 
-Read-only verify:
+## Step 3 — parser/effective config for this exact argv
 
-- production ref exact `8091736337689b68b4510126e74d9e409397f696`;
-- runtime api/worker exact release provenance if determinable read-only;
-- Alembic exact `0046`;
-- DB/api/worker healthy/running;
-- production worktree clean.
+Before connection, run `ssh -G` with the SAME option set and target.
 
-Return PASS/FAIL without secrets.
+Report only:
+- hostname;
+- port;
+- strictHostKeyChecking;
+- hostKeyAlgorithms contains ssh-ed25519 yes/no;
+- userKnownHostsFile resolves to exact temp file yes/no;
+- globalKnownHostsFile is /dev/null yes/no;
+- hostKeyAlias;
+- proxyjump/proxycommand presence.
 
-## 2. Persisted MTProto state
+If any field differs from the intended contract, STOP and classify INVOCATION_CONSTRUCTION_DEFECT.
 
-Using read-only SELECTs, return only booleans/counts:
+## Step 4 — one authenticated transport proof
 
-- exactly one MTProto account row for the affected Secretary user: yes/no;
-- `session_encrypted` non-empty: yes/no;
-- account row freshness consistent with the recent login: yes/no;
-- active auth challenge count;
-- manual-selected group count;
-- configured sync-folder count;
-- active scope count.
+Run the exact argv from Step 2.
 
-Do NOT decrypt session material.
+Success criterion:
+- host-key verification passes;
+- SSH authentication succeeds;
+- remote `true` exits 0.
 
-## 3. Recurring Telegram job / concurrency
+No other remote command is authorized.
 
-Inspect:
+If it succeeds:
+return `PRODUCTION_SSH_M4ADH3_TRANSPORT_PASS` and STOP.
 
-- whether a recurring Telegram MTProto sync job exists;
-- status: pending/running/failed;
-- last run/failure relative to login/manual-sync attempt;
-- sanitized failure class/category if persisted;
-- whether current folder/scope state would cause `reconcile_scope` to issue provider calls;
-- whether a worker provider-call window plausibly overlapped the manual sync.
+If it fails:
+- rerun the SAME argv once with `-vvv`;
+- capture only sanitized lines needed to determine:
+  - exact host used for key lookup;
+  - server host-key type;
+  - server host-key fingerprint;
+  - which UserKnownHostsFile OpenSSH opened;
+  - whether a matching key was found;
+  - final host-key/auth failure reason.
+- do not print identity file paths, IPs, environment, private keys, or unrelated config.
 
-Do not trigger/rearm anything.
+Also record immediately after failure:
+- temp file still exists yes/no;
+- parser still matches yes/no;
+- fingerprint still equals pin yes/no.
 
-## 4. API/worker evidence
+No more retries.
 
-Inspect only the narrow recent window around:
-- MTProto auth completion;
-- folder/group discovery;
-- manual group selection;
-- first manual group sync.
+## Classification
 
-Return:
-- MTProto route names and status codes if logs contain them;
-- normalized exception/error class names;
-- whether manual sync returned HTTP 409 authorization-invalid;
-- whether worker independently saw authorization-invalid or provider-unavailable;
-- evidence yes/no for:
-  - `AUTH_KEY_DUPLICATED`
-  - `AuthKeyDuplicatedError`
-  - `AUTH_KEY_UNREGISTERED`
-  - `AuthKeyUnregisteredError`
-  - `SESSION_REVOKED`
-  - `SessionRevokedError`
-  - `UnauthorizedError`
-  - `AuthKeyNotFound`
-
-Do not print raw exception payloads containing identifiers.
-
-## 5. Exact release code-path confirmation
-
-At exact release SHA confirm:
-
-- `session_encrypted` is written only by authorized-account save/update;
-- discovery/history/worker do not overwrite it;
-- manual group selection does not overwrite it;
-- history sync decrypts and uses that same stored session;
-- status endpoint is DB-only and can render connected despite provider auth invalidity;
-- fake/unit auth tests do not prove real Telethon 2FA StringSession reopen behavior;
-- `AuthKeyDuplicatedError` is not explicitly classified and state its actual fallback path.
-
-## 6. Classification
-
-Choose only from evidence:
-
-A. provider authorization truly revoked/unregistered;
-B. likely concurrent auth-key duplication;
-C. stored-session persistence/corruption defect;
-D. insufficient evidence.
-
-Do not repair or re-login during this task.
-
-If D, propose the smallest separately authorized next diagnostic/test.
+Choose one:
+A. temp-file lifecycle defect;
+B. argv/option construction defect;
+C. shell/wrapper quoting defect;
+D. SSH identity/auth failure after host-key PASS;
+E. transient host-key/network inconsistency;
+F. transport proof PASS; previous M4AD invocation path was defective/transient;
+G. insufficient evidence.
 
 ## Completion report
 
 Return:
-
-- strict pinned SSH verification PASS/FAIL;
-- production ref/runtime/Alembic/health;
-- MTProto account/challenge/selection/scope booleans/counts;
-- recurring Telegram job state;
-- sanitized API/worker evidence;
-- AuthKeyDuplicated evidence yes/no;
-- exact code-path conclusions;
-- classification A/B/C/D with evidence;
-- confirmation no Telegram/provider call was made by diagnostic;
-- confirmation no session was decrypted/printed;
-- confirmation no production mutation occurred.
+- temp lifecycle checks;
+- sanitized exact argv;
+- exact `ssh -G` contract checks;
+- transport proof result;
+- sanitized decisive verbose evidence if failed;
+- classification;
+- smallest next step;
+- confirmation no production data inspection occurred;
+- confirmation no Telegram/provider call occurred;
+- confirmation no host-key bypass or production mutation occurred.
 
 Final marker:
-
-`TELEGRAM_MTPROTO_M4AD_DIAGNOSIS_READY`
+- success: `PRODUCTION_SSH_M4ADH3_TRANSPORT_PASS`
+- failure: `PRODUCTION_SSH_M4ADH3_DIAGNOSIS_READY`
 
 Then STOP.
 
