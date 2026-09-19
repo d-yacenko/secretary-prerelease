@@ -1561,11 +1561,13 @@ class _NotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isTelegramTransport = notification.isTelegramMtprotoTransportEvent;
     final urgent = notificationIsUrgent(notification);
     final isNew = notification.status == 'new';
     final colorScheme = Theme.of(context).colorScheme;
 
     return Card(
+      key: Key('notification_card_${notification.id}'),
       color: urgent
           ? colorScheme.errorContainer.withValues(alpha: isNew ? 0.35 : 0.2)
           : isNew
@@ -1577,37 +1579,51 @@ class _NotificationCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              notification.title,
+              isTelegramTransport
+                  ? telegramTransportEventTitle(notification)
+                  : notification.title,
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 4),
-            Text(
-              'Приоритет: ${notificationPriorityLabel(notification.priority)}',
-            ),
-            if (notification.proposalType != null)
+            if (isTelegramTransport) ...[
+              if (telegramTransportEventBody(notification) != null)
+                Text(telegramTransportEventBody(notification)!),
+              if (telegramTransportEventTimestamp(notification) != null)
+                Text(
+                  'Время: ${formatUserDateTime(telegramTransportEventTimestamp(notification))}',
+                ),
+            ] else ...[
               Text(
-                'Тип: ${notificationProposalTypeLabel(notification.proposalType!)}',
+                'Приоритет: ${notificationPriorityLabel(notification.priority)}',
               ),
-            Text('Источник: ${notificationEvidenceLabel(notification)}'),
-            if (notification.proposalDescription != null)
-              Text(notification.proposalDescription!),
-            if (notification.proposedAction != null)
-              Text(
-                'Действие: ${notificationProposedActionLabel(notification.proposedAction!)}',
-              ),
+              if (notification.proposalType != null)
+                Text(
+                  'Тип: ${notificationProposalTypeLabel(notification.proposalType!)}',
+                ),
+              Text('Источник: ${notificationEvidenceLabel(notification)}'),
+              if (notification.proposalDescription != null)
+                Text(notification.proposalDescription!),
+              if (notification.proposedAction != null)
+                Text(
+                  'Действие: ${notificationProposedActionLabel(notification.proposedAction!)}',
+                ),
+            ],
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               children: [
                 FilledButton(
+                  key: Key('notification_accept_${notification.id}'),
                   onPressed: isMutating ? null : onAccept,
-                  child: const Text('Принять'),
+                  child: Text(isTelegramTransport ? 'Готово' : 'Принять'),
                 ),
                 OutlinedButton(
+                  key: Key('notification_ignore_${notification.id}'),
                   onPressed: isMutating ? null : onIgnore,
                   child: const Text('Пропустить'),
                 ),
                 TextButton(
+                  key: Key('notification_context_${notification.id}'),
                   onPressed: isMutating ? null : onOpenContext,
                   child: const Text('Открыть контекст'),
                 ),

@@ -65,3 +65,30 @@ String notificationEvidenceLabel(NotificationOut notification) {
 bool notificationIsUrgent(NotificationOut notification) {
   return notification.priority == 'urgent' || notification.priority == 'high';
 }
+
+String telegramTransportEventTitle(NotificationOut notification) {
+  final title = notification.telegramTransportConversationTitle;
+  final suffix = title == null ? '' : ' · $title';
+  switch (notification.telegramTransportEventType) {
+    case 'message_created':
+      return 'Telegram · Новое сообщение$suffix';
+    case 'message_edited':
+      return 'Telegram · Сообщение изменено$suffix';
+    case 'message_deleted':
+      return 'Telegram · Сообщение удалено$suffix';
+    default:
+      return notification.title;
+  }
+}
+
+String? telegramTransportEventBody(NotificationOut notification) {
+  final body = notification.body?.trim();
+  return body == null || body.isEmpty ? null : body;
+}
+
+String? telegramTransportEventTimestamp(NotificationOut notification) {
+  return notification.telegramTransportEventType == 'message_edited'
+      ? (notification.telegramTransportEditedAt ??
+            notification.telegramTransportOccurredAt)
+      : notification.telegramTransportOccurredAt;
+}
