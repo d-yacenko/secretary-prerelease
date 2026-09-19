@@ -1,193 +1,251 @@
-# Current task — Telegram MTProto C3B: Inbox transport-event presentation
+# Current task — Telegram rollout RF1: freeze new migration-bearing release candidate
 
 ## Status
 
-Telegram MTProto C3A/C3AR/C3AR2 Flutter account/auth/scope UX is **ACCEPTED and integrated to main**.
+Telegram MTProto user-facing chain is now complete through C3B:
 
-Accepted implementation tip:
-`b8455ec7b48106a284d81e50c524c8d8ef278d19`
+- C2B/C2BR/C2BR2 deterministic transport notifications: ACCEPTED / MAIN
+- C3A/C3AR/C3AR2 Flutter account/auth/scope UX: ACCEPTED / MAIN
+- C3B Inbox transport-event presentation: ACCEPTED / MAIN
 
-Integration merge:
-`f6f66dff6e03ae290dc7fc68d945734eba9a99a5`
+C3B reviewed implementation tip:
+`ef27577b61b5762e00c5f96183f9abec05e64e36`
 
-This task authorizes only **C3B — Telegram-specific Inbox presentation for already-existing MTProto source objects and deterministic transport notifications**.
+C3B integration merge:
+`e503f680543d2eeafbfbb9b641b1b1942d7990ca`
+
+The previous migration-bearing release candidate:
+`917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`
+MUST NOT be deployed as-is because it predates Q1/C1/C2/C3 Telegram messenger work.
+
+This task authorizes only **RF1 — freeze and validate a new release candidate**.
 
 Production remains untouched:
 - production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- production Alembic `0041`;
-- repository Alembic head must remain `0046`;
-- M3 NOT authorized;
-- Bot API retirement NOT authorized.
+- production Alembic `0041 / 0041`;
+- production health currently PASS;
+- M3 production migration-bearing cutover is NOT AUTHORIZED;
+- Bot API retirement is NOT AUTHORIZED.
+
+Repository migration head must remain exactly:
+`0046`
+
+No `0047` is authorized.
 
 ## Goal
 
-Make Telegram MTProto messages/events understandable in the existing Flutter Inbox without changing the accepted backend notification semantics.
+Produce a single exact Git SHA that is suitable to become the next migration-bearing release candidate, together with reproducible readiness evidence.
 
-Use existing:
-- `InboxSourceObjectOut`;
-- `NotificationOut`;
-- existing Inbox notification actions;
-- existing object/context navigation.
+RF1 is NOT a deployment task.
 
-Do not invent a parallel Telegram inbox.
+Do not connect to production SSH.
+Do not mutate production DB, env, services, containers, refs, or runtime.
 
-## Transport-event identification
+## Base / branch
 
-A deterministic Telegram MTProto transport notification is identified only when proposal fields match:
-- `type == "transport_event"`;
-- `provider == "telegram"`;
-- `transport == "mtproto"`.
+Create branch:
+`review/telegram-mtproto-rf1-release-freeze`
 
-Supported event types:
-- `message_created`;
-- `message_edited`;
-- `message_deleted`.
+Start from exact:
+`RF1_BASE_SHA=e503f680543d2eeafbfbb9b641b1b1942d7990ca`
 
-Unknown/malformed proposal values must fall back safely to generic notification presentation.
+If main later moves only because Architect updates task/state/recovery documentation, do NOT rebase merely for those documentation commits.
 
-## Required presentation
+## Required work
 
-For Telegram MTProto transport events, present human-readable localized UI rather than raw proposal type/action labels.
+### 1. Release candidate inventory
 
-At minimum:
-- created -> clearly indicate a new Telegram message;
-- edited -> clearly indicate a Telegram message was edited;
-- deleted -> clearly indicate a Telegram message was deleted;
-- show `conversation_title` when present;
-- show notification body/preview when meaningful;
-- show a sensible timestamp using `occurred_at`, and for edits optionally `edited_at`;
-- do NOT show raw `event_key`, `account_id`, `peer_id`, `message_id`, provider references, access hashes, session data, or credentials.
+Produce a machine-readable or clearly structured release manifest in the repository containing at minimum:
 
-The generic existing notification presentation must remain unchanged for non-transport notifications.
+- exact candidate Git SHA;
+- migration range:
+  `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`;
+- repository Alembic head;
+- production starting Alembic revision: `0041`;
+- production starting runtime/ref: `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- accepted Telegram feature milestones included in this candidate:
+  A1/A2, A3, A4.1-A4.4, Q1, C1A, C1B, C2A, C2B, C3A, C3B;
+- canonical MTProto AI quarantine default:
+  `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- explicit statement that Bot API retirement is not part of this candidate;
+- explicit statement that production cutover is not performed by RF1.
 
-## Notification actions
+Prefer extending an existing release/readiness artifact if the repository already has one. Do not create competing deployment conventions.
 
-The backend C2B contract is already accepted:
-- transport-event `accept` is generic/non-task and creates no task/object/edge/embed job;
-- ignore/resolve are generic;
-- mark-read is existing API.
+### 2. Migration-chain validation
 
-Client behavior for Telegram transport events:
-- do not label the primary action as if it creates/approves a task;
-- use a neutral completion label such as `Готово` for the existing accept action;
-- keep `Пропустить` for ignore;
-- keep/open context using existing `source_object_id` context path;
-- opening context for a new unread transport event should mark it read using the existing mark-read API before/alongside navigation, without blocking context opening on a non-auth mark-read failure;
-- 401 from mark-read must still use the global AuthController failure path;
-- do not introduce new backend endpoints.
+Against an isolated/disposable PostgreSQL database, validate the exact accepted chain:
 
-Non-transport notification buttons and semantics must remain exactly as before.
+`0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`
 
-## Source object presentation
+Required proof:
+- database starts at exactly `0041`;
+- upgrade to head succeeds;
+- resulting revision is exactly `0046`;
+- application/backend can start or execute its standard DB readiness path at `0046`;
+- no unexpected extra Alembic heads;
+- no `0047`;
+- migration scripts are deterministic/re-runnable in the accepted harness sense.
 
-Telegram MTProto materialized message objects already enter the generic Inbox feed.
+If the existing M1 migration harness already proves part of this, reuse it and extend only where necessary for the new candidate.
 
-Ensure Telegram MTProto source objects:
-- retain existing generic feed ordering/grouping/bookmark/review-rail behavior;
-- display Telegram provider identity consistently through existing provider/icon/presentation helpers;
-- do not expose provider-reference/access-hash/session metadata;
-- are not duplicated into a second Telegram-only feed.
+Do NOT test against production.
 
-If the existing generic source card already satisfies these invariants, prefer tests/presentation helpers over a large rewrite.
+### 3. Fresh-install validation
 
-## Client helpers/models
+Using an isolated/disposable PostgreSQL database:
+- create/upgrade schema from repository-supported fresh-install path to `0046`;
+- prove one head only;
+- run the backend smoke/readiness test expected by the existing project conventions.
 
-Prefer small typed/helper accessors around `NotificationOut.proposal` rather than scattering raw map lookups through widgets.
+This is to catch dependencies that only work on an incremental 0041->0046 path.
 
-Helpers should safely parse:
-- whether this is Telegram MTProto transport event;
-- event type;
-- conversation title;
-- occurred/edited timestamp;
-- source object id already supplied by `NotificationOut.sourceObjectId`.
+### 4. Application regression gate
 
-Malformed values must return null/fallback, never throw during Inbox rendering.
+Run the broadest practical regression suites relevant to the release candidate, including:
 
-## Testing
+Backend:
+- core backend test suite or the repository's accepted release regression subset;
+- Telegram A1-A4.4;
+- Q1;
+- C1A/C1B;
+- C2A/C2B;
+- source-sync/worker recurring;
+- existing notification suite on isolated DB where required.
 
-Add focused Flutter tests covering at minimum:
-- created event card presentation;
-- edited event card presentation;
-- deleted event card presentation;
-- conversation title/body preview;
-- no raw event/account/peer/message identifiers rendered;
-- malformed/unknown transport proposal safely falls back;
-- non-transport notification presentation/actions unchanged;
-- transport-event primary button label is neutral and still calls existing accept endpoint;
-- ignore still calls existing ignore endpoint;
-- open context uses source object path and invokes mark-read for unread/new transport event;
-- mark-read non-auth failure does not prevent context navigation;
-- mark-read 401 routes to AuthController;
-- already-read transport event does not issue redundant mark-read;
-- Telegram source objects remain in normal Inbox feed and do not duplicate.
+Client:
+- relevant Flutter account/API/Inbox suites including C3A/C3B;
+- existing client smoke/regression suite used for release readiness;
+- full `flutter analyze` using the accepted baseline rule if repository baseline findings remain.
 
-Also run relevant existing Inbox/notification/API regressions.
+Static:
+- Ruff for changed Python files if RF1 changes Python;
+- Dart format for changed Dart if RF1 changes Dart;
+- `git diff --check`.
 
-## Required checks
+RF1 should ideally change only release/readiness artifacts/tests/harness code. Product behavior changes are not expected.
 
-- focused C3B Flutter tests;
-- relevant existing Inbox/notification/API tests;
-- `dart format --output=none --set-exit-if-changed` on changed Dart files;
-- full `flutter analyze`.
+### 5. Environment/config readiness audit
 
-If full analyze is non-zero, use the same accepted baseline method:
-- exact base `f6f66dff6e03ae290dc7fc68d945734eba9a99a5`;
-- C3B head;
-- same command;
-- report base/head/common/base-only/head-only;
-- head-only must be zero.
+Without reading or printing production secret values, verify the candidate's required configuration contract.
 
-Also:
-- `git diff --check`;
-- repository Alembic head exactly `0046`;
-- clean worktree.
+At minimum enumerate and classify:
+- required existing production variables;
+- newly required variables introduced between production runtime and candidate;
+- optional variables/defaults;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false` default;
+- Telegram API ID/hash presence requirement;
+- credential-encryption key requirement;
+- source-sync Telegram interval default/override;
+- no secret values in logs/artifacts/tests.
 
-Backend changes are not expected or authorized.
+Do NOT copy secret values into Git, reports, commands, or test fixtures.
+
+If the repository already has env-example/config docs, update them only if they are incomplete for the accepted candidate.
+
+### 6. Deployment preflight reuse
+
+Inspect and reuse the accepted Production Deploy Contract v2 and M1/M2 readiness tooling.
+
+Prove that the new candidate can be fed into the existing deployment process without introducing a parallel path.
+
+RF1 must document:
+- exact pre-deploy checks;
+- exact migration step expected during a future authorized M3;
+- exact health/readiness checks expected after migration/app start;
+- exact ref verification;
+- exact conditions that must abort a future cutover before destructive progress.
+
+Do not execute production deployment.
+
+### 7. Rollback / failure plan
+
+Document a concrete future-M3 failure plan for this exact candidate.
+
+At minimum distinguish:
+- failure before migrations;
+- migration failure while production DB is between 0041 and 0046;
+- application start/health failure after DB reaches 0046;
+- MTProto-specific runtime failure with otherwise healthy app;
+- client release failure independent of backend migration.
+
+Do not claim schema downgrade is safe unless existing migrations/tests actually prove it.
+
+If downgrade is not guaranteed, state the forward-fix / restore-from-backup strategy required by existing project conventions.
+
+### 8. Candidate immutability
+
+At completion:
+- worktree clean;
+- branch pushed;
+- exact remote SHA confirmed;
+- no uncommitted generated artifacts;
+- candidate SHA must be suitable for Architect to record as the only allowed M3 candidate.
+
+Do not move production ref.
+
+## Acceptance evidence
+
+Return an RF1 matrix:
+`readiness invariant -> exact test/check/artifact -> result`
+
+Include:
+- incremental 0041->0046 migration;
+- fresh install ->0046;
+- one Alembic head;
+- no 0047;
+- backend regression;
+- Telegram regression;
+- notification regression;
+- source-sync recurring;
+- client C3A/C3B regressions;
+- analyzer baseline;
+- env/config audit;
+- deploy-contract compatibility;
+- rollback plan;
+- clean worktree;
+- remote SHA;
+- production untouched.
 
 ## Explicitly out of scope
 
-Do NOT implement:
-- a separate Telegram inbox/navigation tree;
-- reply/edit/delete compose UX in Inbox;
-- OS-level notifications;
-- websocket/SSE;
-- realtime Telethon listener;
-- client-side Telegram SDK;
-- backend notification redesign;
-- new backend endpoints;
-- migration `0047`;
-- production deploy/ref move;
-- production DB/env mutation;
-- Bot API retirement.
+Do NOT:
+- deploy to production;
+- SSH to production;
+- run Alembic against production;
+- change production env;
+- restart production services;
+- move production branch/ref;
+- log into Telegram from production;
+- import production Telegram history;
+- disable/delete Bot API integration;
+- create migration `0047`;
+- implement new product features;
+- redesign deploy pipeline.
 
-## Branch / deliverable
+If a product or migration defect is discovered that requires code changes beyond narrow release-readiness fixes, STOP and report the blocker instead of widening RF1.
 
-Create:
-`review/telegram-mtproto-c3b-inbox`
-
-Start from exact:
-`C3B_BASE_SHA=f6f66dff6e03ae290dc7fc68d945734eba9a99a5`
-
-If main later moves only for Architect task/state/recovery documentation, do NOT rebase merely for those docs.
+## Deliverable
 
 Return:
-- `C3B_BASE_SHA`;
-- `C3B_SHA`;
+- `RF1_BASE_SHA=e503f680543d2eeafbfbb9b641b1b1942d7990ca`;
+- `RF1_SHA=<exact sha>`;
 - changed files;
-- transport-event helper/presentation design;
-- action/mark-read behavior;
-- focused test matrix/results;
-- existing regressions;
-- analyzer/base comparison;
-- Dart format;
-- `git diff --check`;
-- Alembic `0046`;
+- release manifest path/content summary;
+- exact migration validation results;
+- fresh-install validation;
+- regression results;
+- env/config readiness audit;
+- deploy-contract compatibility summary;
+- rollback/failure plan;
+- analyzer/static results;
+- Alembic head `0046`;
 - clean worktree;
 - remote branch SHA;
-- backend/migrations/production untouched.
+- production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C3B_INBOX_READY`
+`TELEGRAM_MTPROTO_RF1_RELEASE_FREEZE_READY`
 
 Then STOP for Architect review.
 
