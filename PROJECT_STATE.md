@@ -37,12 +37,15 @@
 - C2B blocking defect: reconciliation can swallow an unexpected local Notification persistence failure under broad candidate isolation after edit/delete mutation, risking committed object convergence with a permanently missing deterministic event.
 - C2B blocking verification gap: required focused matrix was not completed; missing explicit conflict-path, backfill/replay, service/inactive, missing-edited-at/metadata-only, outgoing-delete/transient/mismatch, and Notification API behavior coverage.
 - Accepted C2B semantics: deterministic UUIDv5 transport notifications for created/edited/deleted inbound Telegram MTProto events; initial/backfill anti-spam; Q1 AI quarantine preserved; generic Notification API lifecycle; typed local persistence boundary including SAVEPOINT creation; deterministic PK-conflict recovery; local notification persistence failures cannot silently commit edit/delete convergence without the corresponding event.
-- Current authorized phase: Telegram MTProto C3A Flutter account connection and sync-scope UX, exactly as specified in `CURRENT_TASK.md`.
+- Telegram MTProto C3A implementation `d761d1aeab6b99530910a0292ba82e322a5885b3`: REVIEWED / REJECTED PENDING C3AR.
+- Accepted C3A direction: Flutter-only integration over existing MTProto endpoints; typed client models/methods; in-memory challenge state; account/folder/scope/group controls; backend/migrations/production untouched.
+- C3A blockers: code and 2FA password states are conflated; reconcile peers are not rendered/actionable; forum/unavailable group metadata is incomplete; authenticated-session 401 handling is inconsistent across MTProto actions.
+- Current authorized phase: Telegram MTProto C3AR client auth-state and scope UX corrective, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
 - C3 is split: C3A account/auth/sync-scope Flutter UX first; planned next phase after C3A acceptance is C3B Telegram-specific inbox/notification presentation, then a newly frozen migration-bearing rollout.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3A.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3AR.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
