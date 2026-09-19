@@ -1,127 +1,234 @@
-# Current task — Telegram MTProto M4AF: local stored-session/reference structural probe
+# Current task — Telegram MTProto M4AG1: implement deterministic one-shot history-stage probe
 
 ## Status
 
-M4AE human provider-backed discovery probe: PASS.
+M4AF ad-hoc structural probe was blocked before remote runtime by another strict SSH host-key failure.
 
-Observed:
-- first reopen showed only Secretary-server connectivity failure;
-- subsequent repeated reopens loaded connected MTProto identity, folders, and groups normally;
-- no Telegram authorization-invalid error appeared.
+Do not repeat M4AF manually.
 
-Therefore the currently stored MTProto session can reconnect and perform Telegram discovery calls.
+M4AE already proved the currently stored MTProto session can:
+- decrypt successfully through the application path;
+- initialize Telethon StringSession/TelegramClient;
+- connect to Telegram;
+- remain authorized;
+- perform provider-backed folders/groups discovery repeatedly without auth-invalid.
 
-Earlier manual group sync still returned HTTP 409 surfaced as:
-`Telegram MTProto authorization is no longer valid`.
+Therefore the remaining unknown is specifically the selected-group provider reference and the raw Telethon history-read stage.
 
-Exact release code fact:
-`TelethonMtprotoTransport.fetch_history()` maps both real auth-loss exceptions AND generic
-`ValueError` / `TypeError` to `TelegramMtprotoAuthorizationInvalidError`.
+Exact release fact:
+`TelethonMtprotoTransport.fetch_history()` maps broad `ValueError` / `TypeError` failures to
+`TelegramMtprotoAuthorizationInvalidError`, which can make a non-auth history failure look like a revoked session.
 
-Before making any new Telegram history/provider call, this task authorizes only a **local structural validation of the already-stored session and selected-group provider reference**.
+This task authorizes only **implementation + local tests + review-branch push** for a deterministic, one-shot history-stage probe.
 
-## Goal
+NO production execution is authorized yet.
 
-Determine whether the failure can already be reproduced locally before any Telegram network call.
+## Base / branch
 
-Classify independently:
+Create a new review branch from exact reviewed diagnostic SHA:
+`ec4f51be6882433210d62ec6dbcfcdb19563be83`
 
-1. encrypted session can be decrypted in memory;
-2. decrypted session can initialize Telethon `StringSession`;
-3. encrypted selected-group provider reference can be decrypted in memory;
-4. provider reference JSON/shape can be parsed by the exact release helper;
-5. `validate_provider_peer_reference(..., expected_peer_id=...)` passes;
-6. constructing `TelegramClient(StringSession(session), api_id, api_hash)` succeeds WITHOUT calling `connect()`.
+Preferred branch:
+`review/telegram-mtproto-m4ag`
 
-No Telegram network call is authorized.
+Do not modify main or production.
 
-## Production / transport
+## Deliverable
 
-Use the already-reviewed strict pinned SSH pattern.
+Preferred new script:
+`ops/production/diagnose_mtproto_history_stage.py`
 
-Production expected:
-- release `8091736337689b68b4510126e74d9e409397f696`;
-- Alembic `0046`.
+It may reuse/import the already-reviewed deterministic SSH transport helpers from:
+`ops/production/diagnose_mtproto_auth_readonly.py`
 
-Read-only production access only.
+Do not weaken or duplicate trust logic unnecessarily.
 
-## Authorized actions
+## Local SSH transport requirements
 
-- strict pinned SSH;
-- read-only DB SELECTs needed to identify the single MTProto account and single manual-selected group;
-- execute a short Python diagnostic inside the existing backend runtime/container;
-- use existing application `CredentialEncryption`;
-- decrypt session/reference **only in process memory**;
-- instantiate `StringSession`;
-- call exact release local reference parser/validator;
-- instantiate `TelegramClient` object without connecting;
-- emit only sanitized booleans/stage/class names.
+Reuse exact reviewed behavior:
 
-## Strictly forbidden
+- canonical `deploy.py::_verified_known_hosts()`;
+- target `root@web-itx.duckdns.org`;
+- port 22;
+- pinned fingerprint `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`;
+- fresh temp known_hosts per transport attempt;
+- temp file alive through subprocess completion;
+- direct argv, no local `sh -c`;
+- `BatchMode=yes`;
+- `StrictHostKeyChecking=yes`;
+- `GlobalKnownHostsFile=/dev/null`;
+- `HostKeyAlgorithms=ssh-ed25519`;
+- `ConnectTimeout=5`;
+- maximum 3 attempts only for pre-remote transport/host-key establishment failures;
+- authentication failure stops immediately;
+- any remote-started probe failure stops immediately;
+- no unpinned key acceptance;
+- no user known_hosts/config mutation.
 
-Do NOT:
-- call `client.connect()`;
-- call `is_user_authorized()`;
-- call `iter_dialogs()`, `iter_messages()`, `get_messages()`, `get_me()`, or any Telegram API;
-- make any Telegram/provider network call;
-- print decrypted session/reference;
-- print encrypted session/reference;
-- print account/user/Telegram/peer IDs;
-- print phone, username, title, provider ref, access hash, API hash, API ID, credential key, tokens;
-- mutate DB;
-- retry login;
-- retry Sync;
-- Apply Scope;
-- restart/recreate services;
-- edit env/files;
-- run Alembic writes;
-- change Git refs;
-- change Bot API or MTProto AI flags.
+## Remote probe design
 
-## Required sanitized output
+The future probe is intended to run inside the existing production backend runtime/container.
 
-Return only:
+During this implementation task, DO NOT run it against production.
 
-- production release/ref match: true/false;
-- Alembic 0046: true/false;
-- exactly one MTProto account: true/false;
-- exactly one manual-selected group: true/false;
+The remote helper must perform stages in this exact order and stop at the first failure.
 
-Structural stages:
-- `SESSION_DECRYPT_PASS=true/false`
-- `STRING_SESSION_PARSE_PASS=true/false`
-- `REFERENCE_DECRYPT_PASS=true/false`
-- `REFERENCE_PARSE_PASS=true/false`
-- `REFERENCE_PEER_MATCH_PASS=true/false`
-- `TELEGRAM_CLIENT_CONSTRUCT_PASS=true/false`
+### Stage 0 — production guard
 
-If a stage fails:
-- emit only `FAILURE_STAGE=<stage>`
-- emit only the Python exception class name, e.g. `ValueError`, `TypeError`, or application exception class;
-- do NOT emit exception message if it may contain sensitive values.
+Read-only confirm:
+- runtime/ref exact `8091736337689b68b4510126e74d9e409397f696`;
+- Alembic `0046`;
+- exactly one MTProto account;
+- exactly one manual-selected group.
 
-Also confirm:
-- `TELEGRAM_NETWORK_CALLS=0`
-- `SESSION_OR_REFERENCE_PRINTED=false`
-- `PRODUCTION_MUTATION=false`
+No IDs emitted.
 
-## Interpretation
+### Stage 1 — local stored-state structure
 
-A. Local session parse fails
-=> stored-session persistence/serialization defect is strongly indicated.
+In process memory only:
 
-B. Local provider-reference parse/peer-match fails
-=> stored selected-group provider-reference defect is strongly indicated.
+1. decrypt the stored account session using existing application `CredentialEncryption`;
+2. initialize `StringSession(session)`;
+3. decrypt the single selected-group `provider_peer_reference_encrypted`;
+4. parse it using exact release local reference helper;
+5. validate it against the selected row's peer id using exact release `validate_provider_peer_reference`;
+6. construct `TelegramClient(StringSession(session), api_id, api_hash)` without network.
 
-C. All local structural stages pass
-=> stored session/reference are structurally valid; next step may be a separately-authorized one-shot live `fetch_history` stage probe with sanitized exception-class telemetry.
+Emit only:
+- `SESSION_DECRYPT_PASS`
+- `STRING_SESSION_PARSE_PASS`
+- `REFERENCE_DECRYPT_PASS`
+- `REFERENCE_PARSE_PASS`
+- `REFERENCE_PEER_MATCH_PASS`
+- `TELEGRAM_CLIENT_CONSTRUCT_PASS`
 
-Do not perform that live provider probe during M4AF.
+### Stage 2 — one live authorization check
 
-## Completion
+Only if all local structural stages pass:
+
+- call `client.connect()` exactly once;
+- call `client.is_user_authorized()` exactly once;
+- emit only:
+  - `CONNECT_PASS=true/false`
+  - `IS_USER_AUTHORIZED=true/false`
+
+If not authorized, stop.
+
+No re-login.
+
+### Stage 3 — one raw Telethon history-read probe
+
+Only if authorized:
+
+- use the already validated InputPeer;
+- execute a read-only history iteration equivalent to the first real manual-sync fetch:
+  - `iter_messages(input_peer, limit=1, reverse=False)`;
+- consume at most one item;
+- do not inspect/emit message text, sender, IDs, timestamps, titles, or metadata;
+- do not materialize anything;
+- do not write DB;
+- do not call application `fetch_history()`, because its broad mapping hides the raw exception class.
+
+Emit only:
+- `ITER_MESSAGES_STARTED=true/false`
+- `ITER_MESSAGES_ONE_ITEM_OR_EMPTY_PASS=true/false`
+
+If an exception occurs, emit only:
+- `FAILURE_STAGE=<sanitized stage>`
+- `RAW_EXCEPTION_CLASS=<Python/Telethon class name only>`
+
+Never emit exception messages.
+
+Always disconnect in `finally`.
+
+## Forbidden provider operations
+
+The helper MUST NOT call:
+- send_message;
+- edit_message;
+- delete_messages;
+- send_read_acknowledge;
+- mark read;
+- any write RPC;
+- login/code/password methods;
+- folder/group discovery;
+- more than the one authorized history-read iteration.
+
+No automatic provider retry.
+
+## Output allowlist
+
+The remote output must be strictly allowlisted to:
+
+- production guard booleans;
+- structural stage booleans;
+- connect/auth booleans;
+- history stage booleans;
+- sanitized stage name;
+- exception class name;
+- `TELEGRAM_PROVIDER_CALL_COUNT`;
+- `PRODUCTION_MUTATION=false`;
+- `SESSION_OR_REFERENCE_PRINTED=false`.
+
+It must never emit:
+- user/account/Telegram/peer IDs;
+- phone;
+- usernames/titles;
+- encrypted/decrypted session;
+- provider reference;
+- access hash;
+- message IDs/text/content;
+- API ID/hash;
+- credential key;
+- tokens;
+- IPs;
+- raw logs;
+- exception message/traceback.
+
+## Required local tests
+
+Add explicit tests for at least:
+
+1. exact reviewed strict SSH argv/target/port/pin behavior is reused;
+2. no local shell wrapper;
+3. temp known_hosts lifecycle;
+4. max-3 retry only for pre-remote transport failures;
+5. auth failure no retry;
+6. remote-started failure no retry;
+7. Stage 3 cannot run before all structural stages pass and authorization is true;
+8. `client.connect()` called at most once;
+9. `is_user_authorized()` called at most once;
+10. `iter_messages(... limit=1, reverse=False)` called at most once;
+11. no application `fetch_history()` call;
+12. no Telegram write/login/discovery methods;
+13. one-item/empty iterator result never emits message data;
+14. raw exception output is class name only, no message/traceback;
+15. positive/negative peer ids cannot appear in output;
+16. session/reference/API credentials cannot appear in output;
+17. helper contains no DB-write / production mutation command;
+18. client disconnect executes on success and failure.
+
+Run:
+- focused pytest;
+- Ruff on changed Python files;
+- `git diff --check`.
+
+## Review handoff
+
+After tests:
+- commit on `review/telegram-mtproto-m4ag`;
+- push only that review branch;
+- do not run production probe;
+- report:
+  - full SHA;
+  - test count/pass;
+  - Ruff result;
+  - diff-check result;
+  - concise mapping of tests to safety properties;
+  - any remaining gap.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AF_STRUCTURAL_READY`
+`TELEGRAM_MTPROTO_M4AG1_REVIEW_READY`
 
 Then STOP.
 
