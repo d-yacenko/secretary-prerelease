@@ -1,109 +1,149 @@
-# Current task — Telegram MTProto M4ARR2: persistent human-session client launch
+# Current task — Telegram MTProto M4AD: production authorization-invalid diagnosis
 
 ## Status
 
-Production backend/runtime remains healthy at:
+Production backend/runtime remains:
 `8091736337689b68b4510126e74d9e409397f696`
 
 Production Alembic:
 `0046`
 
-M4AR exact-SHA Linux client build:
-PASS.
+Fresh exact-SHA Linux client is available and exposes the Telegram MTProto controls.
 
-M4ARR established that the fresh Flutter client is not proven to crash:
-- fresh client stays alive while Executor shell/session remains active;
-- `systemd-run --user` is unavailable;
-- `setsid + nohup` children are reaped when the Executor sandbox ends;
-- a control detached `sleep` is terminated the same way;
-- bundle logs contain no crash evidence.
+Human completed Telegram login through the existing MTProto UI, including 2FA. After authorization:
+- connected identity rendered;
+- folders rendered;
+- groups rendered;
+- human selected exactly one manual group;
+- the group-selection provider discovery succeeded.
 
-Therefore the window closures are an Executor-sandbox lifetime limitation, not a confirmed Flutter crash.
+On the first explicit manual group sync:
+- no history counters appeared;
+- the UI showed `Telegram MTProto authorization is no longer valid`.
 
-Live human evidence now shows the fresh client DOES expose the MTProto controls, but the user cannot complete Telegram code entry before the Executor sandbox terminates the process. At least 2 minutes of uninterrupted human interaction is required.
+Official Telegram -> Active Devices currently shows the newly created Secretary MTProto session as active. This is human-observed evidence only; do not print or persist its identifiers/location metadata.
 
-Important correction: any earlier Executor claim that human MTProto authorization was already complete must NOT be treated as authoritative until the persistent client itself reaches and reports connected state. Current human evidence shows authorization is still in progress.
+Important: the Account/status UI can still display a connected account because `TelegramMtprotoAuthService.status()` is DB-row based and does not live-probe Telegram authorization.
 
-This task authorizes only **M4ARR2 — make the exact release bundle available in a stable user-owned preview location and hand off launch to the human's normal desktop session**.
+This task authorizes only **M4AD — sanitized read-only diagnosis of why persisted MTProto authorization became invalid between successful discovery and first history sync**.
 
-No code change, backend deploy, schema change, production ref move, production env mutation, scope selection, or sync is authorized.
+Do NOT re-authenticate, retry history sync, alter scope, deploy code, mutate production, or touch Telegram sessions.
 
-## Exact client source
+## User safety
 
-Use only:
-`CLIENT_RELEASE_SHA=8091736337689b68b4510126e74d9e409397f696`
+Until M4AD completes:
+- do not retry Telegram login;
+- do not terminate the new Telegram session from Telegram Devices;
+- do not retry Sync;
+- do not click Apply Scope;
+- keep Bot API untouched.
 
-Reuse the already-built exact-SHA release bundle only if its provenance is still verified. Otherwise rebuild from a clean detached worktree at that SHA.
+## Production diagnostic authorization
 
-## Stable preview location
+A narrowly scoped read-only production inspection is authorized.
 
-Copy the complete release bundle, without altering its contents, to a stable user-owned preview path outside the Executor temp sandbox.
+Use only the canonical committed production target and strict SSH host-key verification from existing production tooling.
 
-Preferred path:
-`$HOME/.local/share/personal-secretary-preview/8091736337689b68b4510126e74d9e409397f696/bundle/`
+Allowed read-only actions:
+- Git/ref/worktree verification;
+- docker inspect / docker ps;
+- sanitized docker logs for api/worker;
+- read-only PostgreSQL SELECTs;
+- read-only file/code inspection.
 
-Requirements:
-- do not overwrite/remove the user's existing installed Secretary client;
-- do not alter existing desktop launcher;
-- do not clear SharedPreferences;
-- do not clear secure storage;
-- do not remove/reissue bearer tokens;
-- do not inspect secrets;
-- preserve executable permissions and bundle layout;
-- verify the copied executable and required bundle libraries/assets exist;
-- record a non-secret integrity check (for example executable SHA256) internally for source/copy comparison, but do not expose secret data.
+Forbidden:
+- service restart/recreate;
+- DB writes;
+- env edits;
+- Alembic writes;
+- ref moves;
+- ad-hoc Telegram/provider auth calls;
+- direct Telethon connection/probe;
+- decrypting/printing session content;
+- Telegram logout/revoke;
+- code changes.
 
-## Human launch handoff
+Do not print account IDs, Telegram user IDs, peer IDs, phone, session ciphertext/plaintext, bearer tokens, credential key/API hash, provider references, IP addresses, or raw user content.
 
-Do NOT launch the GUI from the Executor sandbox.
+## Diagnostic questions
 
-Instead, after preparing the stable preview bundle, return exactly one safe command for the human to run in their own normal terminal/session, for example:
+### 1. Persisted account state
 
-`"$HOME/.local/share/personal-secretary-preview/8091736337689b68b4510126e74d9e409397f696/bundle/personal_secretary"`
+Using read-only DB inspection, return booleans/counts only:
+- exactly one MTProto account row exists for the affected Secretary user;
+- `session_encrypted` is non-empty;
+- account row freshness is consistent with the recent login (relative freshness only);
+- active auth challenge count is zero after completed login;
+- selected manual-group count;
+- configured sync-folder count;
+- active scope count.
 
-The human terminal/session must remain open while using the app. The client may run for as long as needed.
+Do NOT decrypt or print the session.
 
-Do not ask the human to run the command with sudo.
+### 2. Recurring worker concurrency
 
-Do not include bearer tokens, API URLs with credentials, Telegram phone/code/password, or environment secrets in the command line.
+Inspect:
+- whether a Telegram recurring source-sync job exists;
+- sanitized status: pending/running/failed;
+- last run/failure relative to login/sync attempt;
+- sanitized failure category/class if persisted;
+- whether current configured folder/scope state could have caused `reconcile_scope` provider calls concurrently with the manual sync.
 
-## Human UI goal
+Do not trigger/rearm jobs.
 
-After the human launches the preview client:
+### 3. API/worker evidence
 
-1. Open Account/Profile.
-2. Confirm separate `Telegram MTProto` section is visible.
-3. If disconnected:
-   - human enters phone in UI;
-   - human requests code;
-   - human enters Telegram code in UI;
-   - if prompted, human enters 2FA password in the obscured UI field.
-4. Wait until the UI reports connected.
-
-The human must have at least 2 minutes; preferably leave the app open indefinitely until they explicitly close it.
-
-No scope selection or sync yet.
-
-## Executor stop point
-
-After preparing the stable preview bundle and returning the launch command, STOP.
+Inspect only the narrow time window around the latest MTProto login/group-selection/manual-sync activity.
 
 Return:
-- exact source SHA;
-- stable preview bundle path;
-- bundle copy/provenance verification PASS;
-- existing installed client untouched;
-- user storage untouched;
-- production untouched;
-- one exact human launch command.
+- route names/status codes for MTProto auth/group/sync calls if present;
+- normalized exception/error class names where available;
+- whether manual sync returned authorization-invalid;
+- whether worker independently observed authorization-invalid/provider-unavailable in the same window;
+- whether any `AUTH_KEY_DUPLICATED` / `AuthKeyDuplicatedError` evidence exists;
+- whether any `AUTH_KEY_UNREGISTERED`, `SESSION_REVOKED`, `UnauthorizedError`, or `AuthKeyNotFound` class evidence exists.
+
+Do not print raw exception payloads if they may contain identifiers.
+
+### 4. Code-path audit at exact release SHA
+
+Prove:
+- `session_encrypted` is written only by authorized-account save/update paths, not discovery/history/worker;
+- group selection does not overwrite account session;
+- history sync decrypts the same stored account session;
+- status endpoint is DB-only and can display connected despite provider auth invalidity;
+- existing fake/unit auth tests do not prove a real Telethon 2FA StringSession can be reopened for later provider calls;
+- identify whether `AuthKeyDuplicatedError` is explicitly classified; if not, state its actual current fallback path.
+
+### 5. Classification
+
+Do NOT repair or re-login during M4AD.
+
+Classify evidence as one of:
+A. provider authorization truly revoked/unregistered;
+B. likely concurrent auth-key duplication;
+C. stored-session persistence/corruption defect;
+D. insufficient evidence.
+
+If evidence is insufficient, propose the smallest separately-authorized diagnostic/test.
+
+## Completion report
+
+Return:
+- production ref/runtime and health, read-only;
+- account/challenge/selection/scope booleans/counts;
+- recurring job state;
+- sanitized API/worker evidence;
+- exact code-path conclusions;
+- whether AuthKeyDuplicated evidence exists;
+- classification A/B/C/D and why;
+- confirmation no Telegram/provider call was made by diagnostic;
+- confirmation no session was decrypted/printed;
+- confirmation no production mutation occurred.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4ARR2_HUMAN_LAUNCH_READY`
+`TELEGRAM_MTPROTO_M4AD_DIAGNOSIS_READY`
 
 Then STOP.
-
-## After human connected
-
-The human will report back that the preview UI shows connected. Only then may Architect authorize continuation of M4A scope selection / first controlled sync.
 
 `CURRENT_TASK.md` is the source of active authorization.
