@@ -20,7 +20,7 @@
 - Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
 - M2 production readiness retry: READY.
 - Production runtime/ref remains `5cce4b57b14e0052a038acae1354a2821a2bb77b`; no deployment/ref move occurred.
-- M3 migration-bearing production cutover is NOT AUTHORIZED.
+- M3 migration-bearing production cutover is AUTHORIZED only by current `CURRENT_TASK.md` for exact release `8091736337689b68b4510126e74d9e409397f696`, rollback `5cce4b57b14e0052a038acae1354a2821a2bb77b`, and `0041 -> 0046`.
 - Telegram Bot API retirement is NOT AUTHORIZED.
 - Telegram API Terms clarification remains pending through external support channels.
 - Product direction while clarification is pending: complete MTProto as a full ordinary messenger while keeping MTProto-derived objects outside ML/LLM by default.
@@ -42,15 +42,16 @@
 - Accepted C3A semantics: explicit in-memory phone/code/password state machine; real 503 server-not-configured handling; connected identity; folder/ignore-muted configuration including zero-folder state; preview/reconcile authoritative peer scope without stale duplicates; manual groups with forum/unavailable state; exact per-peer/group sync; 401s route through global AuthController; no backend/client Telegram SDK changes.
 - Telegram MTProto C3B Inbox transport-event presentation: ACCEPTED / INTEGRATED TO MAIN at merge `e503f680543d2eeafbfbb9b641b1b1942d7990ca`. Reviewed implementation tip is `ef27577b61b5762e00c5f96183f9abec05e64e36`.
 - Accepted C3B semantics: typed Telegram MTProto transport-event detection; localized created/edited/deleted Inbox presentation; neutral `Готово` accept label; existing generic accept/ignore semantics preserved; existing best-effort mark-read/context navigation reused; raw transport identifiers are not rendered; Telegram source objects remain in the normal Inbox feed without duplication.
-- Telegram rollout RF1 implementation `a90716602d35cf5525554a1005a543dd8dda5491`: REVIEWED / REJECTED PENDING RF1R.
-- Accepted RF1 evidence: disposable incremental 0041->0046 PASS; fresh-install ->0046 PASS; focused Telegram/notification/source-sync/client gates PASS; Flutter analyzer head-only diagnostics zero; production untouched.
-- RF1 blockers: release SHA identity is ambiguous because manifest/readiness name `e503f680543d2eeafbfbb9b641b1b1942d7990ca` while RF1 head is `a90716602d35cf5525554a1005a543dd8dda5491`; rollback documentation contradicts the actual automatic downgrade path in `remote_migrate_deploy.py`; full backend 93 failed + 8 errors lacks exact base/head failed-node comparison.
-- Current authorized phase: Telegram rollout RF1R release identity / rollback proof / backend-baseline corrective, exactly as specified in `CURRENT_TASK.md`.
+- Telegram rollout RF1/RF1R release freeze: ACCEPTED / INTEGRATED TO MAIN at merge `9e74e892fa133b68679af1e3152d0a6947cd99f6`.
+- Exact accepted RF1R release candidate eligible for M3: `8091736337689b68b4510126e74d9e409397f696`.
+- Validated product base `e503f680543d2eeafbfbb9b641b1b1942d7990ca` is NOT an M3 release SHA; RF1 head `a90716602d35cf5525554a1005a543dd8dda5491` is superseded.
+- Accepted RF1/RF1R evidence: disposable incremental 0041->0046 PASS; fresh install ->0046 PASS; intermediate downgrade matrix 0042..0046 ->0041 PASS with sentinel preservation; round-trip 0041->0046->0041->0046 PASS; focused Telegram/notification/source-sync/client gates PASS; Flutter analyzer head-only diagnostics zero; full backend comparison has head-only failed/error identities zero; production untouched.
+- Current authorized phase: Production Migration Rollout M3 exact Telegram MTProto cutover, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
-- C3A and C3B are accepted. RF1 is not yet accepted; RF1R must close release identity, downgrade proof, and backend baseline evidence before any M3 candidate can be frozen. M3 remains NOT authorized.
+- C3A/C3B and RF1/RF1R are accepted. M3 is now authorized only for exact release SHA `8091736337689b68b4510126e74d9e409397f696`, exact rollback SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b`, and exact schema transition `0041 -> 0046` through the accepted migration harness.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during RF1R.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during M3, except the exact production ref move / accepted migration harness actions explicitly authorized by `CURRENT_TASK.md`.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
