@@ -5,7 +5,13 @@ freeze and validation gate only; it performs no production cutover.
 
 ## Candidate and migration boundary
 
-- Candidate code SHA: `e503f680543d2eeafbfbb9b641b1b1942d7990ca`
+- Validated product base SHA: `e503f680543d2eeafbfbb9b641b1b1942d7990ca`
+- This is not an M3 release SHA. The deployable `release_sha` is deliberately
+  unassigned until Architect records it in `CURRENT_TASK.md` /
+  `PROJECT_STATE.md` after RF1R review.
+- RF1 head `a90716602d35cf5525554a1005a543dd8dda5491` is superseded by the
+  accepted RF1R head; that RF1R head becomes the only M3 candidate eligible
+  after Architect review.
 - Production starting runtime/ref: `5cce4b57b14e0052a038acae1354a2821a2bb77b`
 - Production starting Alembic: `0041`
 - Required repository head: `0046`
@@ -64,9 +70,15 @@ direct SSH or ad-hoc Compose path is permitted.
 
 - Before migration: abort and restore the rollback application only if the
   existing harness proves that no destructive step occurred.
-- Between `0041` and `0046`: do not claim automatic downgrade safety; stop the
-  application writers, preserve the database, and require the separately
-  authorized recovery policy using backup/restore or a proven forward fix.
+- Before application cutover, with api/worker stopped and no runtime MTProto
+  data possible, downgrade `0042..0046 -> 0041` is permitted only under the
+  disposable proof recorded for RF1R. Between `0041` and `0046`, preserve the
+  database and use only that proven writers-stopped path.
+- After application cutover at `0046`, downgrade is permitted only after the
+  harness proves current api/worker are stopped, the DB is exactly `0046`, and
+  all guarded MTProto tables are empty. If rows exist, or revision,
+  emptiness, or container state cannot be proven, downgrade is blocked and
+  break-glass/forward-fix/backup-restore planning is required.
 - After `0046` with unhealthy application: preserve schema/data and use the
   accepted rollback guard; if MTProto data exists or emptiness is uncertain,
   do not downgrade and require break-glass/forward-fix or restore planning.

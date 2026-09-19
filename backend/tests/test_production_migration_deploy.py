@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -353,3 +356,46 @@ def test_rollback_scope_is_application_only_and_no_ref_move():
     assert 'compose("up", "-d", "--no-deps", "--force-recreate", "api", "worker")' in source
     assert 'git("push"' not in source
     assert 'git("fetch"' in source
+
+
+def _compose_environment(**overrides: str) -> dict[str, dict[str, str]]:
+    env = {"PATH": os.environ["PATH"], **overrides}
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(ROOT / "infra/compose.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    config = json.loads(result.stdout)
+    return {
+        name: service["environment"]
+        for name, service in config["services"].items()
+        if name in {"api", "worker"}
+    }
+
+
+def test_compose_mtproto_defaults_match_rf1_contract_without_printing_secrets():
+    environment = _compose_environment()
+    for service in ("api", "worker"):
+        assert environment[service]["TELEGRAM_MTPROTO_AI_ENABLED"] == "false"
+        assert environment[service]["SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS"] == "60"
+
+
+def test_compose_mtproto_overrides_match_between_api_and_worker():
+    environment = _compose_environment(
+        TELEGRAM_MTPROTO_AI_ENABLED="true",
+        SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS="75",
+    )
+    for service in ("api", "worker"):
+        assert environment[service]["TELEGRAM_MTPROTO_AI_ENABLED"] == "true"
+        assert environment[service]["SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS"] == "75"
