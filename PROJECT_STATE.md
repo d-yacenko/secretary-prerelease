@@ -40,12 +40,14 @@
 - Telegram MTProto C3A/C3AR/C3AR2 Flutter account/auth/scope UX: ACCEPTED / INTEGRATED TO MAIN at merge `f6f66dff6e03ae290dc7fc68d945734eba9a99a5`. Reviewed implementation tip is `b8455ec7b48106a284d81e50c524c8d8ef278d19`.
 - Accepted C3A direction: Flutter-only integration over existing MTProto endpoints; typed client models/methods; in-memory challenge state; account/folder/scope/group controls; backend/migrations/production untouched.
 - Accepted C3A semantics: explicit in-memory phone/code/password state machine; real 503 server-not-configured handling; connected identity; folder/ignore-muted configuration including zero-folder state; preview/reconcile authoritative peer scope without stale duplicates; manual groups with forum/unavailable state; exact per-peer/group sync; 401s route through global AuthController; no backend/client Telegram SDK changes.
-- Current authorized phase: Telegram MTProto C3B Inbox transport-event presentation, exactly as specified in `CURRENT_TASK.md`.
+- Telegram MTProto C3B Inbox transport-event presentation: ACCEPTED / INTEGRATED TO MAIN at merge `e503f680543d2eeafbfbb9b641b1b1942d7990ca`. Reviewed implementation tip is `ef27577b61b5762e00c5f96183f9abec05e64e36`.
+- Accepted C3B semantics: typed Telegram MTProto transport-event detection; localized created/edited/deleted Inbox presentation; neutral `Готово` accept label; existing generic accept/ignore semantics preserved; existing best-effort mark-read/context navigation reused; raw transport identifiers are not rendered; Telegram source objects remain in the normal Inbox feed without duplication.
+- Current authorized phase: Telegram rollout RF1 release-candidate freeze/readiness validation, exactly as specified in `CURRENT_TASK.md`.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
-- C3A is accepted. Current C3B adds Telegram-specific Inbox/notification presentation over existing source objects and deterministic transport events. Planned phase after C3B acceptance: newly freeze migration-bearing rollout.
+- C3A and C3B are accepted. Current RF1 freezes and validates a new migration-bearing release candidate after the full Telegram messenger chain. M3 remains NOT authorized until RF1 is reviewed and accepted.
 - Existing release candidate `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb` must NOT be deployed as-is because it predates the AI quarantine and subsequent Telegram messenger work.
-- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during C3B.
+- No production ref move, deploy, service mutation, Alembic write, DB mutation, env mutation, production MTProto login/history import, bot disable/delete, or destructive cleanup is authorized during RF1.
 - IMAP IDLE: NOT STARTED.
 
 `CURRENT_TASK.md` is the source of active authorization.
