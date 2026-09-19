@@ -1,16 +1,20 @@
-# Current task — Telegram MTProto C3A: Flutter account connection and sync-scope UX
+# Current task — Telegram MTProto C3AR: client auth-state and scope UX corrective
 
 ## Status
 
-Telegram MTProto C2B/C2BR/C2BR2 deterministic notification/event surface is **ACCEPTED and integrated to main**.
+Telegram MTProto C2B/C2BR/C2BR2 deterministic notifications are ACCEPTED / INTEGRATED TO MAIN.
 
-Accepted implementation tip:
-`2653de562f72ddb0b81063fb816a02b330022a4b`
+C3A implementation under review:
+`d761d1aeab6b99530910a0292ba82e322a5885b3`
 
-Integration merge:
-`0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`
+C3A is **REJECTED pending this narrow C3AR corrective**.
 
-C3 is split. This task authorizes only **C3A — client account/auth/sync-scope UX**.
+Accepted C3A direction:
+- Flutter-only integration over the existing `/telegram/mtproto/*` backend contract;
+- typed API models/client methods;
+- in-memory auth challenge state;
+- folder/scope/group controls in the existing Account screen;
+- no backend, migration, or production changes.
 
 Production remains untouched:
 - runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
@@ -19,159 +23,154 @@ Production remains untouched:
 - M3 NOT authorized;
 - Bot API retirement NOT authorized.
 
-Canonical AI flag remains:
-`TELEGRAM_MTPROTO_AI_ENABLED=false` by default.
+## Blocking issue 1 — code challenge and 2FA states are conflated
 
-## Goal
+At C3A SHA `d761d1aeab6b99530910a0292ba82e322a5885b3`, once `auth/start` succeeds, the UI renders BOTH:
+- Telegram code input/submit;
+- 2FA password input/submit.
 
-Expose the already-existing Telegram MTProto account and scope-management backend capabilities in the Flutter client without changing backend semantics.
+The password field is therefore visible and actionable before the backend has returned `password_required`.
 
-Use the existing backend contract in `backend/app/api/telegram_mtproto.py`. Do not create replacement endpoints.
+Correct this with an explicit in-memory auth step/state.
 
-## Required client API/model support
+Required behavior:
+- after `auth/start`: show code challenge only;
+- before `password_required`: do NOT render or enable password input/submit;
+- after code result `password_required`: clear the code, transition to password-only state, and render obscured password input;
+- after code result `authorized`: clear challenge/code/password state and refresh connected status without ever showing the password step;
+- after password authorization: clear challenge/code/password state and refresh connected status;
+- abandon/restart clears code/password and returns to phone/start state;
+- challenge/password-required state remains memory-only and does not survive widget/app reconstruction.
 
-Add typed client models and `SecretaryApiClient` methods for the existing endpoints needed by this UX:
+Add widget tests for BOTH:
+1. phone -> code -> authorized, proving password UI never appears;
+2. phone -> code -> password_required -> password -> authorized.
 
-Auth/status:
-- `GET /telegram/mtproto/status`
-- `POST /telegram/mtproto/auth/start`
-- `POST /telegram/mtproto/auth/code`
-- `POST /telegram/mtproto/auth/password`
+## Blocking issue 2 — reconciled peers are not actionable
 
-Scope/folders:
-- `GET /telegram/mtproto/folders`
-- `GET /telegram/mtproto/sync-folders`
-- `PUT /telegram/mtproto/sync-folders`
-- `GET /telegram/mtproto/sync-scope/preview`
-- `POST /telegram/mtproto/sync-scope/reconcile`
-- `POST /telegram/mtproto/sync-scope/peers/{peer_id}/sync`
+The backend `POST /telegram/mtproto/sync-scope/reconcile` returns `peers`, but C3A currently renders only reconcile counts. Per-peer sync rows are rendered only for preview dialogs.
 
-Manual groups:
-- `GET /telegram/mtproto/groups`
-- `PATCH /telegram/mtproto/groups/{peer_id}`
-- `POST /telegram/mtproto/groups/{peer_id}/sync`
+Required:
+- render reconciled peers as well;
+- private/group/supergroup peers returned by reconcile must be visible and have the existing explicit scope-peer sync action;
+- avoid duplicate rows if the same peer is already visible from the current preview; one clear current-scope list is preferred;
+- preserve sanitized sync summary behavior.
 
-Preserve backend field names and meaning exactly.
+Add a widget test where reconcile returns at least one peer and prove its per-peer sync button calls:
+`POST /telegram/mtproto/sync-scope/peers/{peer_id}/sync`
+and renders the returned summary.
 
-Do not expose or persist Telegram session strings, provider references, access hashes, API hash, credentials, or passwords beyond the transient form submission needed for the existing auth endpoint.
+## Blocking issue 3 — required manual-group metadata is incomplete
 
-## Account screen UX
+C3A required the group list to expose:
+- title;
+- username;
+- kind;
+- forum status;
+- availability;
+- selected state.
 
-Integrate MTProto into the existing account/settings experience, following current client patterns rather than building a separate navigation system.
+Current UI renders title, username, kind and selected controls, while forum/availability are not explicitly presented.
 
-Required states:
-1. MTProto backend not configured;
-2. configured but not connected;
-3. auth code challenge active;
-4. 2FA password required;
-5. connected account;
-6. provider temporarily unavailable/error;
-7. authorization invalid/reconnect-required style state where applicable.
+Required:
+- present forum status when `is_forum=true`;
+- present unavailable state explicitly in text/semantics, not only by disabled controls;
+- unavailable group selection/sync remains disabled;
+- selected state remains represented by the existing control.
 
-### Login flow
+Add focused widget coverage for:
+- forum group presentation;
+- unavailable group presentation and non-actionability.
 
-When not connected:
-- phone input;
-- start auth;
-- code input;
-- if backend returns `password_required`, show password input;
-- on authorization success refresh MTProto status and connected account display;
-- never log password/code/session values;
-- prevent duplicate submits while request is in flight;
-- show backend-safe error detail using existing client error patterns.
+## Blocking issue 4 — authenticated-session failure handling is inconsistent
 
-Display connected identity using backend `display_name`, username, and Telegram user id where available.
+`AuthenticationException` extends `ApiException`.
 
-Do not add disconnect/delete semantics unless an existing authorized backend endpoint already exists. C3A must not invent destructive account removal.
+C3A handles it explicitly in status/auth/load-scope, but these action methods currently catch only `ApiException`:
+- save folders;
+- preview scope;
+- reconcile scope;
+- toggle group;
+- sync scope peer;
+- sync group.
 
-## Sync-folder UX
+Therefore an HTTP 401 on those paths is consumed as ordinary UI error instead of invoking the existing global `AuthController.handleAuthenticationFailure()` convention.
 
-For a connected account:
-- load available Telegram folders;
-- load currently configured sync folders;
-- allow selecting zero or more folder names;
-- allow configuring `ignore_muted`;
-- save through existing `PUT /telegram/mtproto/sync-folders`;
-- preview resulting active scope via existing preview endpoint;
-- reconcile scope explicitly after save or through a clearly labelled user action;
-- surface preview counts/truncation/skipped counts without exposing provider references.
+Correct consistently:
+- on `AuthenticationException`, invoke `authController.handleAuthenticationFailure()`;
+- do not also surface it as a Telegram provider error;
+- preserve 400/404/409/410/422/503 handling through the existing safe `ApiException` presentation conventions.
 
-Zero selected folders is a valid backend-supported state; do not silently substitute defaults.
+Add at least one focused widget regression for an authenticated MTProto action returning 401 and prove the AuthController transitions through the existing authentication-failure path.
 
-## Manual group UX
+## Verification gap — prove required C3A flows, not only aggregate test count
 
-For connected account:
-- list groups from existing groups endpoint;
-- show title/username/kind/forum/available/selected;
-- allow manual selected toggle through existing PATCH endpoint;
-- unavailable groups must not look actionable;
-- allow explicit manual sync of a selected group;
-- show bounded sync result summary (scanned/materialized/created/updated/unchanged/skipped/history_complete).
+The C3A report says 39 focused/regression tests passed, but the new focused files contain only six top-level tests and do not explicitly prove all required UX transitions.
 
-Do not add infinite scrolling/provider-specific references unless required by the existing contract.
+For C3AR, return an acceptance matrix:
+`required invariant -> exact test name -> file`
 
-## Scope peer sync
-
-For dialogs returned by sync-scope preview/reconcile:
-- allow explicit per-peer sync using the existing scope peer sync endpoint;
-- support private/group/supergroup peer kinds returned by the backend;
-- show sync result summary consistently with manual group sync.
-
-## Source preference interaction
-
-Do not duplicate generic source preference settings already present in the account UI.
-If Telegram MTProto already appears through the generic source preference list, preserve that behavior and keep C3A controls focused on MTProto authorization and scope selection.
-
-## UX / safety invariants
-
-- no secrets in UI state serialization, logs, snackbars, debug prints, test golden text, or analytics;
-- password field obscured;
-- auth code/password cleared after successful authorization and when abandoning/restarting challenge;
-- stale challenge state must not survive app restart unless the current client already has an explicit secure pattern for that exact kind of sensitive ephemeral state;
-- no WebSocket/SSE/realtime listener;
-- no client-side Telegram SDK;
-- no direct Telegram network calls from Flutter;
-- no background daemon;
-- no backend semantic changes merely to simplify UI.
-
-## Testing
-
-Add focused Flutter tests covering at minimum:
-- MTProto status parsing: not configured / disconnected / connected;
-- auth start -> code authorized;
-- auth start -> code password_required -> password authorized;
+The matrix must include at minimum:
+- server not configured presentation;
+- configured/disconnected;
+- connected identity;
+- direct code authorization without 2FA;
+- password-required flow;
 - duplicate-submit protection;
-- sensitive code/password is not rendered after success;
-- folder load/current-selection/save;
-- zero-folder selection remains zero;
-- ignore-muted round trip;
-- scope preview rendering including truncated/skipped counts;
-- scope reconcile action;
+- sensitive code/password gone after success;
+- zero-folder selection save remains zero;
+- ignore-muted request/response behavior;
+- preview truncated/skipped counts;
+- reconcile counts + reconcile peer action;
 - group selected toggle;
-- unavailable group not actionable;
-- group sync summary;
-- scope peer sync summary;
-- API error presentation for 400/409/410/503 paths using existing client error conventions.
+- forum label;
+- unavailable group label/non-actionability;
+- manual group sync summary;
+- scope-peer sync summary;
+- sanitized 400/409/410/503 presentation;
+- 401 global auth failure behavior.
 
-Also run relevant existing account/API/inbox Flutter tests.
+Do not add redundant tests if an existing exact widget/API test already proves an invariant; cite exact existing names where appropriate.
 
-Required checks:
+## Flutter analyze acceptance
+
+The previous report states:
+- targeted analyze PASS;
+- full `flutter analyze` has existing repository baseline findings.
+
+C3AR acceptance requires one of:
+1. full `flutter analyze` PASS; OR
+2. exact evidence that the full-analyze diagnostics are pre-existing:
+   - run the same full command at exact C3A base `0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`;
+   - run it at C3AR head;
+   - report diagnostics/count for both;
+   - C3AR must introduce zero new analyzer diagnostics.
+
+Do not modify unrelated baseline files merely to make this task green.
+
+## Required checks
+
+Run:
+- focused C3A/C3AR Flutter tests;
+- relevant existing Account/API client regressions;
 - `dart format --output=none --set-exit-if-changed` on changed Dart files;
-- `flutter analyze`;
-- focused Flutter tests;
-- relevant existing client regression tests;
-- backend tests only if backend files are changed (backend changes are not expected);
+- full `flutter analyze` with the baseline comparison rule above if non-zero;
 - `git diff --check`;
-- repository Alembic head remains `0046`.
+- repository Alembic head exactly `0046`.
+
+Backend changes are not expected and are not authorized unless a hard blocker is first reported instead of implemented.
 
 ## Explicitly out of scope
 
 Do NOT implement:
-- C3B Telegram-specific inbox/notification presentation;
-- OS-level desktop/mobile notifications;
-- websocket/SSE/realtime Telethon listener;
-- backend auth/scope redesign;
-- new backend endpoint unless a hard blocker is proven and reported before implementation;
+- C3B Telegram-specific Inbox/notification presentation;
+- backend MTProto auth/scope redesign;
+- new backend endpoints;
+- disconnect/delete account semantics;
+- OS notifications;
+- websocket/SSE;
+- realtime Telethon listener;
+- client-side Telegram SDK;
 - migration `0047`;
 - production deploy/ref move;
 - production DB/env mutation;
@@ -179,32 +178,35 @@ Do NOT implement:
 
 ## Branch / deliverable
 
-Create branch:
+Continue existing branch:
 `review/telegram-mtproto-c3a-client-account`
 
-Start from exact:
-`C3A_BASE_SHA=0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319`
+Continue from exact:
+`C3AR_BASE_SHA=d761d1aeab6b99530910a0292ba82e322a5885b3`
 
-If `main` has moved only because Architect updated `CURRENT_TASK.md`, `PROJECT_STATE.md`, or encrypted recovery context after this authorization, do NOT rebase merely for those documentation commits. The reviewed code base remains the exact SHA above unless Architect explicitly changes it.
+Create exactly one corrective commit on top.
+Do not rewrite/squash the reviewed C3A commit.
 
 Return:
-- `C3A_BASE_SHA`;
-- `C3A_SHA`;
+- `C3AR_BASE_SHA`;
+- `C3AR_SHA`;
 - changed files;
-- API/model additions;
-- implemented UX states;
-- focused test list/results;
-- existing client regression results;
-- `flutter analyze`;
+- exact auth-state correction;
+- reconcile-peer rendering/action correction;
+- group metadata correction;
+- 401 handling correction;
+- acceptance matrix mapping invariants -> exact tests;
+- focused/regression test results;
+- full analyze result or exact base/head baseline comparison;
 - Dart format check;
 - `git diff --check`;
 - Alembic head `0046`;
 - clean worktree;
 - remote branch SHA;
-- production untouched.
+- backend/migrations/production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C3A_CLIENT_ACCOUNT_READY`
+`TELEGRAM_MTPROTO_C3AR_CLIENT_ACCOUNT_READY`
 
 Then STOP for Architect review.
 
