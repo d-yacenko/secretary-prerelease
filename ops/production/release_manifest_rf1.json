@@ -1,0 +1,35 @@
+{
+  "release_id": "telegram-mtproto-rf1",
+  "validated_product_base_sha": "e503f680543d2eeafbfbb9b641b1b1942d7990ca",
+  "validated_product_base_is_m3_release": false,
+  "deployable_release_sha": null,
+  "deployable_release_sha_authority": "Architect authorization in CURRENT_TASK.md / PROJECT_STATE.md after RF1R review",
+  "rf1r_branch_head_eligibility": "The accepted RF1R branch head is the only SHA eligible for M3 after Architect review",
+  "superseded_rf1_head": "a90716602d35cf5525554a1005a543dd8dda5491",
+  "migration_range": ["0041", "0042", "0043", "0044", "0045", "0046"],
+  "repository_alembic_head": "0046",
+  "production_start": {
+    "alembic": "0041",
+    "runtime_sha": "5cce4b57b14e0052a038acae1354a2821a2bb77b"
+  },
+  "telegram_milestones": [
+    "A1/A2",
+    "A3",
+    "A4.1-A4.4",
+    "Q1",
+    "C1A",
+    "C1B",
+    "C2A",
+    "C2B",
+    "C3A",
+    "C3B"
+  ],
+  "telegram_mtproto_ai_enabled_default": false,
+  "bot_api_retirement_included": false,
+  "production_cutover_performed_by_rf1": false,
+  "deployment_entrypoints": {
+    "schema_neutral": "ops/production/deploy.py",
+    "migration_bearing": "ops/production/migrate_deploy.py",
+    "runtime_verification": "ops/production/verify_google_sync.py"
+  }
+}
