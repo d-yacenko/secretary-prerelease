@@ -1,191 +1,88 @@
-# Current task — Telegram MTProto M4ADH4R3: one approved live diagnostic run
+# Current task — Telegram MTProto M4AE: human provider-backed discovery probe
 
 ## Status
 
-M4ADH4 corrective diagnostic harness is REVIEW ACCEPTED for one live read-only run.
+M4ADH4R3 live read-only diagnosis completed successfully on approved diagnostic SHA
+`ec4f51be6882433210d62ec6dbcfcdb19563be83`.
 
-Approved branch:
-`review/production-ssh-m4adh4`
-
-Approved exact harness SHA:
-`ec4f51be6882433210d62ec6dbcfcdb19563be83`
-
-Base implementation:
-`a17925e5c0d38c4da79fca9c013d208052827fd6`
-
-Focused tests reported:
-`11 passed`
-
-Ruff:
-PASS
-
-`git diff --check`:
-PASS
-
-Architect review confirmed:
-- invalid failure-category SQL fixed;
-- recurring provider-call inference now follows exact release semantics;
-- actual manual group sync route is distinguished from scope-peer sync;
-- positive and negative peer IDs are normalized to `<peer>`;
-- both Docker log stdout and stderr are inspected in memory;
-- raw log lines are not emitted;
-- transport retry/auth/remote-start behavior remains fail-closed;
-- origin review branch resolves exactly to approved corrective SHA.
-
-This acceptance is only for the diagnostic harness. It is NOT a merge/integration acceptance for main or production code.
-
-## Existing live evidence
-
-Previous partial M4ADH4 run established:
-- production runtime/ref match expected release: true;
-- production worktree clean: true;
-- health PASS;
-- api/worker/db running: true;
-- DB healthy: true;
-- DB TCP auth PASS;
-- Alembic 0046: true;
-- exactly one MTProto account: true;
-- encrypted session non-empty: true;
-- active auth challenges: 0;
-- manual-selected groups: 1;
-- configured folders: 0;
-- active scope: 0;
-- Telegram recurring job exists and had recent activity.
-
-Exact release code semantics additionally establish:
-- with configured folders = 0, recurring `reconcile_scope()/preview_scope()` does not make Telegram discovery/history network calls;
-- with active scope = 0, recurring history sync has no peer to sync;
-- a manual-selected-only group is not recurring-history-synced.
-
-The remaining missing evidence is the corrected sanitized job/log pass.
-
-## Authorization
-
-This task authorizes exactly **one execution** of the approved harness at exact SHA:
-`ec4f51be6882433210d62ec6dbcfcdb19563be83`
-
-No code changes before the run.
-
-No second run unless the harness itself consumes a bounded transport retry according to its already-reviewed internal max-3 transport policy.
-
-## Executor preparation
-
-1. Fetch origin.
-2. Checkout/use exact review branch SHA `ec4f51be6882433210d62ec6dbcfcdb19563be83`.
-3. Require clean worktree.
-4. Verify:
-   - branch remote points to exact SHA;
-   - diagnostic script content is from exact SHA;
-   - target.json pin remains unchanged.
-5. Do NOT amend, rebase, cherry-pick, or modify files.
-
-## Run
-
-Execute the approved:
-`ops/production/diagnose_mtproto_auth_readonly.py`
-
-exactly once.
-
-Its internal strict SSH behavior is authoritative:
-- pinned ED25519 verification;
-- direct argv;
-- temp known_hosts lifecycle;
-- no host-key bypass;
-- max 3 attempts only for pre-remote transport establishment;
-- auth failure stops;
-- any remote-started diagnostic failure stops;
-- first successful SSH session performs full read-only diagnostic.
-
-## Forbidden
-
-Do NOT:
-- retry Telegram login;
-- retry manual group sync;
-- Apply Scope;
-- make any ad-hoc Telegram/provider call;
-- run direct Telethon;
-- decrypt/print session;
-- mutate DB;
-- restart/recreate services;
-- edit env/files on production;
-- run Alembic writes;
-- change production/main refs;
-- deploy the harness;
-- modify Bot API;
-- change MTProto AI flag;
-- change SSH config/known_hosts/target.json.
-
-Do not print raw logs or forbidden identifiers/secrets.
-
-## Required report
-
-Return the harness sanitized output, summarized as:
-
-### Transport
-- attempt matrix;
-- pin/host-key/auth/remote execution status.
-
-### Production
-- release/runtime/ref match;
-- worktree clean;
-- health;
-- api/worker/db running;
-- DB healthy/TCP auth;
-- Alembic 0046.
-
-### MTProto DB
-- exactly-one account;
+Live production facts:
+- runtime/ref match expected release `8091736337689b68b4510126e74d9e409397f696`;
+- Alembic `0046`;
+- health/api/worker/db healthy/running;
+- exactly one MTProto account;
 - encrypted session non-empty;
-- active challenge count;
-- manual-selected group count;
-- configured folder count;
-- active scope count.
+- active auth challenges = 0;
+- manual-selected groups = 1;
+- configured folders = 0;
+- active scope = 0;
+- recurring Telegram job exists/pending/recent;
+- recurring scope provider call possible = false;
+- recurring history provider call possible = false;
+- manual group sync route observed = true;
+- manual group sync HTTP 409 = true;
+- worker authorization-invalid/provider-unavailable evidence = false;
+- requested AuthKeyDuplicated/AuthKeyUnregistered/SessionRevoked/Unauthorized/AuthKeyNotFound tokens = false.
 
-### Recurring worker
-- job exists/status counts/recent activity;
-- failure categories;
-- `RECURRING_SCOPE_PROVIDER_CALL_POSSIBLE`;
-- `RECURRING_HISTORY_PROVIDER_CALL_POSSIBLE`;
-- overlap conclusion based on these facts.
+Classification remains D / insufficient evidence.
 
-### API/worker logs
-- normalized observed MTProto routes;
-- observed MTProto HTTP status codes;
-- manual group sync route observed yes/no;
-- manual group sync HTTP 409 yes/no;
-- manual group sync authorization-invalid evidence yes/no/unknown;
-- worker authorization-invalid yes/no;
-- worker provider-unavailable yes/no;
-- normalized error classes;
-- exact evidence booleans for:
-  - AUTH_KEY_DUPLICATED
-  - AuthKeyDuplicatedError
-  - AUTH_KEY_UNREGISTERED
-  - AuthKeyUnregisteredError
-  - SESSION_REVOKED
-  - SessionRevokedError
-  - UnauthorizedError
-  - AuthKeyNotFound
+Important release-code fact:
+`TelethonMtprotoTransport.fetch_history()` maps both real authorization-loss conditions AND
+`ValueError` / `TypeError` to
+`TelegramMtprotoAuthorizationInvalidError("Telegram MTProto authorization is no longer valid")`.
 
-### Classification
+Therefore the UI message does not yet prove Telegram revoked the session.
 
-Choose only from evidence:
-A. provider authorization truly revoked/unregistered;
-B. likely concurrent auth-key duplication;
-C. stored-session persistence/corruption defect;
-D. insufficient evidence.
+This task authorizes only **M4AE — one human UI provider-backed discovery probe using the existing connected session**.
 
-Do not repair/re-authenticate.
+## Human action
 
-Also confirm:
-- no Telegram/provider call made by diagnostic;
-- no session decrypted/printed;
-- no production mutation;
-- no SSH trust data changed.
+Do not use Executor for this task.
 
-Final marker:
-`TELEGRAM_MTPROTO_M4ADH4R3_LIVE_READY`
+In the already-running exact-release preview client:
 
-Then STOP.
+1. Navigate away from Account/Profile if currently open.
+2. Re-open Account/Profile so `TelegramMtprotoAccountSection` is recreated and `_loadStatus()` runs.
+3. Do not press:
+   - Login / Get code;
+   - Sync;
+   - Apply Scope;
+   - Save folders;
+   - any group checkbox.
+4. Wait until the Telegram MTProto section finishes loading.
+
+Expected code path on connected status:
+- GET status (DB-only);
+- then `_loadScopeData()` issues:
+  - GET folders (provider-backed discovery);
+  - GET configured sync-folders (DB-only);
+  - GET groups (provider-backed discovery).
+
+The human should report only one of:
+
+A. **DISCOVERY_PASS**
+- connected identity shown;
+- folders/groups populate normally;
+- no red MTProto authorization error appears.
+
+B. **DISCOVERY_AUTH_INVALID**
+- red `Telegram MTProto authorization is no longer valid` appears while loading folders/groups.
+
+C. **DISCOVERY_OTHER_ERROR**
+- another error appears; provide screenshot/text, excluding secrets.
+
+No other action is authorized.
+
+## Interpretation
+
+- DISCOVERY_PASS strongly proves the currently stored session can still reconnect and make Telegram read calls; this would make the earlier manual-sync 409 more likely to be fetch_history-specific/misclassified rather than a generally revoked session.
+- DISCOVERY_AUTH_INVALID means the stored session currently fails even discovery and justifies a separately-authorized one-shot provider-auth diagnostic or controlled re-auth plan.
+- DISCOVERY_OTHER_ERROR requires classification before further action.
+
+No production mutation, no login, no sync, no scope change.
+
+Final human report marker is one of:
+`TELEGRAM_MTPROTO_M4AE_DISCOVERY_PASS`
+`TELEGRAM_MTPROTO_M4AE_DISCOVERY_AUTH_INVALID`
+`TELEGRAM_MTPROTO_M4AE_DISCOVERY_OTHER_ERROR`
 
 `CURRENT_TASK.md` is the source of active authorization.
