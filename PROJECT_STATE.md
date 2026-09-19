@@ -3,8 +3,8 @@
 - Active development repository: `d-yacenko/secretary-prerelease`.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
-- Production branch: `5cce4b57b14e0052a038acae1354a2821a2bb77b`.
+- Production application/runtime: `8091736337689b68b4510126e74d9e409397f696`.
+- Production branch/ref: `8091736337689b68b4510126e74d9e409397f696`.
 - Production Alembic: `0046 / 0046`.
 - Production health: PASS.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
@@ -21,6 +21,10 @@
 - M2 production readiness retry: READY.
 - Production runtime/ref is `8091736337689b68b4510126e74d9e409397f696` after successful M3 cutover.
 - Production Migration Rollout M3: SUCCESS. Production ref/runtime is exact `8091736337689b68b4510126e74d9e409397f696`; production Alembic is `0046`; api/worker/db healthy; DB container/volume and `.env` preserved; no Telegram login/history import occurred; Bot API untouched.
+- Telegram MTProto M4 activation: human login including Telegram 2FA completed through the exact-release client; one manual group was selected; initial manual group history sync returned HTTP 409 surfaced as `Telegram MTProto authorization is no longer valid`.
+- Telegram MTProto M4AD/M4ADH4R3 diagnostics: strict pinned SSH transport verified; production runtime/ref remains exact `8091736337689b68b4510126e74d9e409397f696`; Alembic `0046`; health/api/worker/db PASS; exactly one MTProto account; encrypted session non-empty; challenges 0; manual-selected groups 1; configured folders 0; active scope 0; recurring Telegram job pending/recent but cannot make scope/history provider calls in this state; manual group sync route/HTTP 409 confirmed; no worker auth/provider error evidence and no AuthKeyDuplicated/AuthKeyUnregistered/SessionRevoked/Unauthorized/AuthKeyNotFound evidence.
+- Telegram MTProto M4AE human discovery probe: PASS. First reopen showed only Secretary-server connectivity failure; subsequent repeated reopens loaded connected identity, folders, and groups through provider-backed discovery without Telegram authorization error. Current stored MTProto session is therefore demonstrably usable for Telegram discovery; the earlier history-sync auth-invalid message remains history-path-specific/misclassified until further diagnosis.
+- Exact release `fetch_history()` currently maps broad `ValueError`/`TypeError` failures to `TelegramMtprotoAuthorizationInvalidError`, so the manual-sync message alone does not prove session revocation.
 - Telegram Bot API retirement is NOT AUTHORIZED.
 - Telegram API Terms clarification remains pending through external support channels.
 - Product direction while clarification is pending: complete MTProto as a full ordinary messenger while keeping MTProto-derived objects outside ML/LLM by default.
