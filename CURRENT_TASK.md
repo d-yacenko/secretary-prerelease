@@ -1,4 +1,4 @@
-# Current task — Telegram MTProto M4ARR: distinguish Linux client crash from launcher/session lifetime
+# Current task — Telegram MTProto M4ARR2: persistent human-session client launch
 
 ## Status
 
@@ -8,174 +8,102 @@ Production backend/runtime remains healthy at:
 Production Alembic:
 `0046`
 
-Telegram MTProto backend is configured and the human authorization is already complete.
-
-M4AR built the exact Linux client successfully from:
-`8091736337689b68b4510126e74d9e409397f696`
-
-Focused Flutter tests:
-87 passed.
-
-Release bundle build:
+M4AR exact-SHA Linux client build:
 PASS.
 
-However the fresh client window closed twice during live human observation:
-- once shortly after first rendering;
-- once after opening Account/Profile and scrolling.
+M4ARR established that the fresh Flutter client is not proven to crash:
+- fresh client stays alive while Executor shell/session remains active;
+- `systemd-run --user` is unavailable;
+- `setsid + nohup` children are reaped when the Executor sandbox ends;
+- a control detached `sleep` is terminated the same way;
+- bundle logs contain no crash evidence.
 
-The prior launch was performed from Executor-controlled shell/process context, so this may be either:
-1. a real client/native crash; OR
-2. the GUI child being terminated when the execution shell/session/timeout ended.
+Therefore the window closures are an Executor-sandbox lifetime limitation, not a confirmed Flutter crash.
 
-M4AR is therefore NOT accepted.
+Live human evidence now shows the fresh client DOES expose the MTProto controls, but the user cannot complete Telegram code entry before the Executor sandbox terminates the process. At least 2 minutes of uninterrupted human interaction is required.
 
-This task authorizes only **M4ARR — process-lifetime-safe detached launch plus sanitized crash diagnosis**.
+Important correction: any earlier Executor claim that human MTProto authorization was already complete must NOT be treated as authoritative until the persistent client itself reaches and reports connected state. Current human evidence shows authorization is still in progress.
 
-No product-code fix is authorized yet.
+This task authorizes only **M4ARR2 — make the exact release bundle available in a stable user-owned preview location and hand off launch to the human's normal desktop session**.
 
-## No backend / production changes
-
-Do NOT:
-- deploy backend;
-- move production ref;
-- change production DB/schema/env/services;
-- run Alembic;
-- change Telegram auth/session;
-- select sync scope;
-- run history sync;
-- retire Bot API.
+No code change, backend deploy, schema change, production ref move, production env mutation, scope selection, or sync is authorized.
 
 ## Exact client source
 
-Use exact:
+Use only:
 `CLIENT_RELEASE_SHA=8091736337689b68b4510126e74d9e409397f696`
 
-Do not build or launch a newer moving `main`.
+Reuse the already-built exact-SHA release bundle only if its provenance is still verified. Otherwise rebuild from a clean detached worktree at that SHA.
 
-Reuse the exact M4AR bundle only if its source SHA and bundle integrity are still provable. Otherwise rebuild from a clean detached exact-SHA worktree.
+## Stable preview location
 
-Do not change source files.
+Copy the complete release bundle, without altering its contents, to a stable user-owned preview path outside the Executor temp sandbox.
 
-## Preserve user state
-
-Do NOT:
-- delete/overwrite the installed client;
-- clear SharedPreferences;
-- clear secure storage;
-- remove/reissue bearer token;
-- redo Telegram auth unless the fresh UI itself reports disconnected;
-- inspect or print bearer/session/code/password values.
-
-## Diagnose process ownership first
-
-Before launch, determine:
-- whether any old `personal_secretary` process is still alive;
-- whether the previously launched fresh process is gone;
-- whether the prior execution mechanism attached the GUI process to a shell/process group that would be reaped on command completion.
-
-Do not kill unrelated user processes.
-
-Record only PID/path/process-group/session metadata. Do not inspect process environment.
-
-## Stable detached launch
-
-Launch the exact release bundle so it is NOT owned by the short-lived Executor command session.
-
-Preferred pattern:
-- use a persistent user-session mechanism such as `systemd-run --user` when available; OR
-- use a properly detached `nohup + setsid` wrapper with stdin closed.
+Preferred path:
+`$HOME/.local/share/personal-secretary-preview/8091736337689b68b4510126e74d9e409397f696/bundle/`
 
 Requirements:
-- command invocation returns while GUI process continues;
-- process has its own session/process group independent of the Executor shell;
-- keep old installed client untouched;
-- do not create a permanent desktop launcher yet;
-- do not use `flutter run`.
+- do not overwrite/remove the user's existing installed Secretary client;
+- do not alter existing desktop launcher;
+- do not clear SharedPreferences;
+- do not clear secure storage;
+- do not remove/reissue bearer tokens;
+- do not inspect secrets;
+- preserve executable permissions and bundle layout;
+- verify the copied executable and required bundle libraries/assets exist;
+- record a non-secret integrity check (for example executable SHA256) internally for source/copy comparison, but do not expose secret data.
 
-The wrapper must record:
-- child PID;
-- eventual exit code/signal marker to a temporary non-secret status file.
+## Human launch handoff
 
-Stdout/stderr handling:
-- never print the full log blindly;
-- redirect to a temporary file if needed for crash diagnosis;
-- if the process exits, inspect only sanitized crash/backtrace/error lines;
-- redact bearer tokens, URLs containing credentials, provider/account/user identifiers, Telegram phone/session/auth material, and secret-like values before reporting;
-- delete the temporary diagnostic log after extracting sanitized crash evidence, unless Architect explicitly asks to preserve it.
+Do NOT launch the GUI from the Executor sandbox.
 
-## Survival check before human interaction
+Instead, after preparing the stable preview bundle, return exactly one safe command for the human to run in their own normal terminal/session, for example:
 
-After detached launch:
-1. verify the exact executable path;
-2. verify the process is alive after at least 15 seconds;
-3. verify it remains alive after at least 90 seconds with no human interaction;
-4. verify the Executor shell command/session can end without killing the GUI process.
+`"$HOME/.local/share/personal-secretary-preview/8091736337689b68b4510126e74d9e409397f696/bundle/personal_secretary"`
 
-If the process dies before human interaction:
-- capture exit code/signal;
-- capture sanitized crash evidence;
-- report M4ARR blocked;
-- do NOT attempt a code fix.
+The human terminal/session must remain open while using the app. The client may run for as long as needed.
 
-If the process survives:
-return the marker:
-`TELEGRAM_MTPROTO_M4ARR_HUMAN_UI_CHECK_READY`
+Do not ask the human to run the command with sudo.
 
-and STOP while leaving the fresh client running for the human.
+Do not include bearer tokens, API URLs with credentials, Telegram phone/code/password, or environment secrets in the command line.
 
-## Human verification stage
+## Human UI goal
 
-The human will then:
-- bring the fresh Secretary window to front;
-- open Account/Profile;
-- scroll to the area between Connections and Sync;
-- confirm whether `Telegram MTProto` is visible;
-- spend at least ~30 seconds on the Account screen / scroll normally.
+After the human launches the preview client:
 
-No folder/group selection and no sync yet.
+1. Open Account/Profile.
+2. Confirm separate `Telegram MTProto` section is visible.
+3. If disconnected:
+   - human enters phone in UI;
+   - human requests code;
+   - human enters Telegram code in UI;
+   - if prompted, human enters 2FA password in the obscured UI field.
+4. Wait until the UI reports connected.
 
-If the window closes during human interaction, the next Executor cycle may inspect the previously prepared status/diagnostic evidence without relaunching blindly.
+The human must have at least 2 minutes; preferably leave the app open indefinitely until they explicitly close it.
 
-## If a real crash is proven
+No scope selection or sync yet.
 
-Report:
-- executable path;
-- source SHA;
-- uptime before exit;
-- exit code or terminating signal;
-- whether it happened without interaction or during Account scroll;
-- sanitized top crash/backtrace frames / native library involved when available;
-- whether a core dump exists (metadata only; do not upload or inspect sensitive memory contents without separate authorization);
-- source area plausibly implicated, if determinable from symbols/logs.
+## Executor stop point
 
-Then STOP with:
-`TELEGRAM_MTPROTO_M4ARR_REAL_CRASH_CONFIRMED`
+After preparing the stable preview bundle and returning the launch command, STOP.
 
-Do not modify code in this task.
-
-## If no crash and MTProto UI is visible
-
-Report:
-- detached mechanism used;
-- process survived shell completion + 90s idle;
-- human Account/Profile interaction survived;
-- Telegram MTProto section visible;
-- connected status visible yes/no;
-- installed old client untouched;
+Return:
+- exact source SHA;
+- stable preview bundle path;
+- bundle copy/provenance verification PASS;
+- existing installed client untouched;
 - user storage untouched;
-- no secrets inspected/printed;
-- production backend untouched.
+- production untouched;
+- one exact human launch command.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4ARR_CLIENT_STABLE_READY`
+`TELEGRAM_MTPROTO_M4ARR2_HUMAN_LAUNCH_READY`
 
-Then STOP for Architect review before returning to M4A scope selection.
+Then STOP.
 
-## If UI survives but MTProto section is still absent
+## After human connected
 
-Report exact UI fact and stop:
-`TELEGRAM_MTPROTO_M4ARR_UI_MISMATCH_BLOCKED`
-
-No code changes.
+The human will report back that the preview UI shows connected. Only then may Architect authorize continuation of M4A scope selection / first controlled sync.
 
 `CURRENT_TASK.md` is the source of active authorization.
