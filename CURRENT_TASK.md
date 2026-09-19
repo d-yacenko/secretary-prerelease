@@ -1,223 +1,281 @@
-# Current task — Telegram rollout RF1R: release identity, rollback proof, and baseline corrective
+# Current task — Production Migration Rollout M3: exact Telegram MTProto cutover
 
 ## Status
 
-Telegram MTProto C3B is ACCEPTED / INTEGRATED TO MAIN.
+Telegram MTProto product chain A1/A2 through C3B is ACCEPTED.
 
-RF1 implementation under review:
-`a90716602d35cf5525554a1005a543dd8dda5491`
+RF1/RF1R release freeze is ACCEPTED.
 
-RF1 is **REJECTED pending this narrow RF1R corrective**.
+The only Architect-authorized M3 release candidate is exactly:
+`M3_RELEASE_SHA=8091736337689b68b4510126e74d9e409397f696`
 
-Accepted RF1 evidence/direction:
-- incremental disposable PostgreSQL upgrade `0041 -> 0046` passed;
-- fresh-install disposable PostgreSQL reached `0046`;
-- focused Telegram/Q1/C1/C2, notification/worker, source-sync, and C3A/C3B client suites passed;
-- Flutter analyzer introduced zero head-only diagnostics;
-- production remained untouched;
-- `SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS` Compose propagation was correctly identified as release-config debt.
-
-Production remains untouched:
-- runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
-- Alembic `0041 / 0041`;
-- M3 production cutover is NOT AUTHORIZED;
-- Bot API retirement is NOT AUTHORIZED.
-
-Repository Alembic head must remain exactly `0046`.
-No `0047` is authorized.
-
-## Blocking issue 1 — release SHA identity is ambiguous
-
-RF1 branch head is:
-`a90716602d35cf5525554a1005a543dd8dda5491`
-
-But both:
-- `ops/production/release_manifest_rf1.json`; and
-- `docs/telegram-mtproto-rf1-readiness.md`
-
-declare the candidate SHA as:
-`e503f680543d2eeafbfbb9b641b1b1942d7990ca`.
-
-That cannot be accepted because `a907...` adds runtime-relevant release configuration to `infra/compose.yaml`, specifically propagation of:
-`SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS`.
-
-A future M3 must have exactly one unambiguous release SHA.
-
-### Required correction
-
-Do NOT attempt to embed the final RF1R commit SHA inside a file that is part of that same commit. A Git commit cannot safely self-reference its own final SHA.
-
-Instead make the repository artifact semantics explicit:
-
-- replace ambiguous `candidate_sha` with a field such as:
-  `validated_product_base_sha` = `e503f680543d2eeafbfbb9b641b1b1942d7990ca`;
-- add an explicit machine-readable field stating that the deployable `release_sha` is bound by Architect authorization after RF1R review, not inferred from `validated_product_base_sha`;
-- state clearly that the accepted RF1R branch head, once reviewed, is the only SHA eligible for M3;
-- state clearly that `e503...` is a validated product-code base, NOT the M3 release SHA;
-- state clearly that `a907...` is superseded by RF1R once the corrective is accepted;
-- future M3 must receive its exact `--release-sha` from `CURRENT_TASK.md` / `PROJECT_STATE.md` Architect authorization.
-
-The final RF1R SHA will be recorded by Architect after review.
-
-No alternate release ref/tag convention is authorized in this corrective.
-
-## Blocking issue 2 — documented rollback policy contradicts the accepted migration harness
-
-RF1 readiness documentation currently says that a failure while DB is between `0041` and `0046` must not rely on automatic downgrade.
-
-But accepted `ops/production/remote_migrate_deploy.py` does this when migration has started and cutover has not completed:
-`alembic downgrade 0041`.
-
-This contradiction must be resolved with evidence, not wording alone.
-
-### Required disposable rollback proof
-
-Using isolated/disposable PostgreSQL only, prove the structural downgrade path while application writers are stopped and before any MTProto runtime data can be created.
-
-At minimum, for EACH intermediate revision:
-- start from exact `0041`;
-- upgrade to `0042`, then downgrade to `0041`;
-- repeat independently for `0043`;
-- repeat independently for `0044`;
-- repeat independently for `0045`;
-- repeat independently for `0046`;
-- after each downgrade verify direct DB Alembic revision is exactly `0041`;
-- verify a pre-existing core sentinel row/data item created at `0041` remains intact;
-- verify no unexpected Alembic heads.
-
-Also run a full empty-runtime round trip:
-`0041 -> 0046 -> 0041 -> 0046`
-and finish at exactly `0046`.
-
-This proof is only for the **pre-live / writers-stopped / no-runtime-MTProto-data** downgrade path.
-
-For the post-live path, reuse and cite the existing fail-closed guards in:
-`backend/tests/test_production_migration_deploy.py`
-that prove:
-- MTProto non-empty blocks downgrade;
-- MTProto emptiness uncertainty blocks downgrade;
-- stopped current api/worker is required before emptiness proof;
-- revision uncertainty blocks downgrade.
-
-### Required documentation correction
-
-Bring `docs/telegram-mtproto-rf1-readiness.md` into exact agreement with the harness:
-
-- before app goes live, with api/worker stopped and no runtime MTProto data possible, downgrade `0042..0046 -> 0041` is permitted only because RF1R disposable tests prove the path;
-- after app has gone live at `0046`, downgrade is allowed only if the existing harness first proves current api/worker are stopped, DB is exactly `0046`, and all guarded MTProto tables are empty;
-- if MTProto rows exist OR emptiness/revision/container-state cannot be proven, downgrade is blocked and break-glass/forward-fix/backup-restore planning is required;
-- never imply arbitrary downgrade safety outside these proven conditions.
-
-If any required intermediate downgrade proof fails, STOP and report RF1R blocker. Do NOT modify migration `0042..0046` in this task.
-
-## Blocking issue 3 — full backend baseline claim is not proven
-
-RF1 reports:
-- 3073 passed;
-- 93 failed;
-- 8 errors;
-- 3 skipped;
-
-and says failures are existing baseline debt/fixture issues.
-
-That claim needs exact evidence.
-
-Run the same full backend-suite command in the same isolated environment at:
-
-Base:
+RF1 validated product base:
 `e503f680543d2eeafbfbb9b641b1b1942d7990ca`
 
-RF1R head:
-`<new head>`
+The product-base SHA above is NOT an authorized release SHA.
+
+RF1 head:
+`a90716602d35cf5525554a1005a543dd8dda5491`
+is superseded and is NOT authorized for deployment.
+
+Exact production rollback/runtime SHA:
+`M3_ROLLBACK_SHA=5cce4b57b14e0052a038acae1354a2821a2bb77b`
+
+Exact schema transition:
+`0041 -> 0046`
+
+Repository migration head:
+`0046`
+
+No `0047` is authorized.
+
+RF1/RF1R integration merge on main:
+`9e74e892fa133b68679af1e3152d0a6947cd99f6`
+
+This task authorizes M3 production cutover only through the accepted migration harness.
+
+Telegram Bot API retirement remains NOT AUTHORIZED.
+Production MTProto login/history import remains NOT AUTHORIZED during M3.
+
+## Mandatory execution path
+
+Use only:
+- `ops/production/migrate_deploy.py`
+- its accepted streamed `remote_migrate_deploy.py`
+- existing committed production target / strict SSH host-key contract
+- existing accepted runtime-verification helpers
+
+Do NOT use ad-hoc SSH/Compose/Alembic commands as a substitute for the harness.
+Do NOT modify deployment scripts during execution.
+
+If the harness reports a blocker, STOP and report it. Do not improvise around it.
+
+## Local preflight before production ref move
+
+Required:
+- local branch is `main`;
+- local worktree clean;
+- `git fetch --prune origin`;
+- local `HEAD == origin/main`;
+- exact release SHA resolves:
+  `8091736337689b68b4510126e74d9e409397f696`;
+- exact rollback SHA resolves:
+  `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- rollback is an ancestor of release;
+- repository Alembic has exactly one head: `0046`;
+- no `0047`;
+- exact migration delta from rollback to release is only accepted `0042..0046`;
+- current remote `origin/production` is exactly rollback SHA before ref move.
+
+If any local preflight fails:
+- do NOT move `production`;
+- do NOT contact production for mutating actions;
+- report M3 BLOCKED.
+
+## Exact production ref move
+
+Only after all local preflight checks pass, move:
+
+`refs/heads/production`
+
+from exact expected old SHA:
+
+`5cce4b57b14e0052a038acae1354a2821a2bb77b`
+
+to exact release SHA:
+
+`8091736337689b68b4510126e74d9e409397f696`
+
+Use an atomic expected-old/lease guard. Do not use an unguarded force push.
+
+After the move:
+- fetch/verify `origin/production`;
+- require exact equality to release SHA before invoking the migration harness.
+
+If the guarded ref move fails:
+- STOP;
+- do not run migration harness;
+- report M3 BLOCKED.
+
+## Exact harness execution
+
+Run the accepted harness with exact arguments:
+
+`--release-sha 8091736337689b68b4510126e74d9e409397f696`
+`--rollback-sha 5cce4b57b14e0052a038acae1354a2821a2bb77b`
+`--from-alembic 0041`
+`--to-alembic 0046`
+
+No other release/rollback/from/to value is authorized.
+
+The harness must itself prove before destructive progress:
+- strict production host identity;
+- canonical repository/origin;
+- clean production checkout;
+- current production checkout exact rollback SHA;
+- `origin/production` exact release SHA;
+- db/api/worker state valid;
+- API health PASS;
+- DB TCP auth PASS;
+- DB revision exact `0041`;
+- production env file present and unchanged;
+- release Compose environment valid;
+- Telegram API credentials present/valid without printing values;
+- DB/credential-key invariants unchanged;
+- candidate build succeeds before downtime.
+
+Accepted sequence:
+1. build release api/worker while old application is live;
+2. stop api + worker only;
+3. keep DB container/volume unchanged;
+4. migrate exactly to `0046`;
+5. verify direct DB revision `0046`;
+6. recreate/start api + worker only;
+7. verify DB container/volume/.env unchanged;
+8. verify api/worker recreated and running;
+9. verify health PASS;
+10. verify direct DB revision exact `0046`.
+
+## Failure/ref reconciliation rules
+
+The Git `production` ref must not be left knowingly inconsistent with the final recovered runtime.
+
+### A. Failure before migration/live cutover, rollback runtime remains/restores 5cce...
+
+If harness fails and proves/returns to:
+- application runtime = rollback SHA;
+- DB = `0041`;
+- old api/worker healthy;
+
+then restore `refs/heads/production` from exact release SHA back to exact rollback SHA using an expected-old/lease guard.
+
+Verify remote ref = rollback SHA.
+
+Then STOP and report M3 FAILED / ROLLED BACK.
+
+### B. Migration started but accepted automatic pre-live rollback succeeds
+
+If harness:
+- downgrades DB back to `0041`;
+- restores rollback app;
+- health passes;
+
+restore `production` ref back to rollback SHA with guarded expected-old semantics.
+
+Then STOP and report M3 FAILED / ROLLED BACK.
+
+### C. Successful cutover
+
+If harness returns success:
+- do NOT restore production ref;
+- require production ref exact release SHA;
+- continue post-cutover verification below.
+
+### D. Break-glass / rollback blocked / uncertain state
+
+If harness emits or implies:
+- `BREAK_GLASS_REQUIRED=true`;
+- rollback blocked because MTProto data exists;
+- revision uncertainty;
+- container/writer-state uncertainty;
+- rollback/downgrade failed;
+- DB/app state cannot be proven;
+
+DO NOT move `production` ref again automatically.
+DO NOT run ad-hoc downgrade, truncate/delete Telegram data, restore backup, or force app checkout.
+
+STOP immediately and report exact sanitized markers/state for Architect review.
+
+## Post-cutover verification after harness success
+
+Verify using accepted/read-only tooling:
+
+- `origin/production == 8091736337689b68b4510126e74d9e409397f696`;
+- production checkout/runtime exact release SHA;
+- DB Alembic exactly `0046`;
+- one Alembic revision/head only;
+- api running;
+- worker running;
+- DB healthy;
+- health endpoint PASS;
+- DB container identity unchanged from harness preflight;
+- DB volume unchanged;
+- `.env` unchanged;
+- production Telegram credentials were not printed/modified;
+- `SECRETARY_CREDENTIAL_KEY` unchanged;
+- `TELEGRAM_MTPROTO_AI_ENABLED` remains false unless a pre-existing explicitly authorized production override says otherwise; do not mutate it in M3;
+- source-sync MTProto interval resolves through accepted Compose contract;
+- run existing production runtime verification appropriate to the deployment contract, including the accepted Google sync verification helper if its preconditions remain valid.
+
+Do NOT log in a Telegram personal account during M3.
+Do NOT run Telegram history import during M3.
+Do NOT disable/delete the Bot API integration.
+
+## Production data protection
+
+M3 must not:
+- recreate/remove DB service;
+- replace DB volume;
+- edit production `.env`;
+- rotate credentials;
+- expose secret values/hashes;
+- delete/truncate MTProto tables;
+- manually repair DB rows;
+- run migration `0047`;
+- perform an unreviewed forward fix.
+
+Any such need is a blocker requiring a new Architect task.
+
+## Final success criteria
+
+M3 succeeds only if all are true:
+- production ref exact release SHA;
+- runtime exact release SHA;
+- Alembic exact `0046`;
+- health PASS;
+- api + worker running;
+- DB container/volume preserved;
+- env preserved;
+- no secret exposure;
+- no unauthorized Telegram login/import;
+- Bot API not retired;
+- production worktree clean;
+- no break-glass marker.
+
+## Completion report
 
 Return:
-- base passed/failed/error/skipped counts;
-- head passed/failed/error/skipped counts;
-- exact set of base failed/error test node IDs;
-- exact set of head failed/error test node IDs;
-- common failed/error IDs;
-- base-only failed/error IDs;
-- head-only failed/error IDs.
+- `M3_RELEASE_SHA=8091736337689b68b4510126e74d9e409397f696`;
+- `M3_ROLLBACK_SHA=5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- starting `origin/production` SHA;
+- guarded production-ref move result;
+- harness exact command arguments;
+- harness sanitized output markers;
+- migration result;
+- final DB Alembic revision;
+- final production ref;
+- final runtime/checkout SHA;
+- api/worker/db health/state;
+- DB container/volume preservation;
+- env preservation;
+- runtime verification results;
+- confirmation no secret values were printed;
+- confirmation no Telegram login/history import occurred;
+- confirmation Bot API retirement did not occur;
+- final production worktree cleanliness.
 
-Acceptance requires:
-`HEAD_ONLY_FAILED_OR_ERROR = 0`
+Success marker:
+`PRODUCTION_MIGRATION_ROLLOUT_M3_SUCCESS`
 
-If head adds any new failure/error, RF1R is blocked.
+If clean rollback restored old runtime/schema/ref:
+`PRODUCTION_MIGRATION_ROLLOUT_M3_ROLLED_BACK`
 
-Do not fix unrelated baseline debt.
+If blocked before mutation:
+`PRODUCTION_MIGRATION_ROLLOUT_M3_BLOCKED`
 
-## Config completeness corrective
+If break-glass/manual Architect decision is required:
+`PRODUCTION_MIGRATION_ROLLOUT_M3_BREAK_GLASS_REQUIRED`
 
-RF1 correctly added:
-`SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS=60`
-to `.env.example` and Compose.
-
-Also add the canonical installation flag explicitly to `.env.example`:
-`TELEGRAM_MTPROTO_AI_ENABLED=false`
-
-Add/extend focused Compose-config tests proving:
-- api resolves `TELEGRAM_MTPROTO_AI_ENABLED=false` by default;
-- worker resolves the same;
-- api resolves `SOURCE_SYNC_TELEGRAM_MTPROTO_INTERVAL_SECONDS=60` by default;
-- worker resolves the same;
-- explicit overrides propagate equally to api and worker;
-- no secret values are printed by the test.
-
-Do not change application defaults; this is contract/documentation/Compose verification only.
-
-## Required revalidation
-
-Re-run:
-- incremental disposable `0041 -> 0046`;
-- fresh install -> `0046`;
-- new intermediate downgrade matrix;
-- full empty-runtime `0041 -> 0046 -> 0041 -> 0046`;
-- `backend/tests/test_production_migration_deploy.py`;
-- focused Compose-config tests;
-- Telegram/Q1/C1/C2 regression subset;
-- isolated notification/worker/source-sync release subsets;
-- C3A/C3B client release subset;
-- full Flutter analyze baseline comparison;
-- `git diff --check`;
-- Ruff for changed Python files only;
-- Dart format only if Dart changes unexpectedly;
-- Alembic head exactly `0046`.
-
-RF1R should not change product behavior.
-
-## Branch / deliverable
-
-Continue existing branch:
-`review/telegram-mtproto-rf1-release-freeze`
-
-Continue from exact:
-`RF1R_BASE_SHA=a90716602d35cf5525554a1005a543dd8dda5491`
-
-Create exactly one corrective commit on top.
-Do not rewrite/squash RF1.
-
-Return:
-- `RF1R_BASE_SHA`;
-- `RF1R_SHA`;
-- changed files;
-- corrected manifest semantics;
-- proof that `e503...` is only the validated product base and not the future M3 release SHA;
-- intermediate downgrade matrix results;
-- `0041 -> 0046 -> 0041 -> 0046` result;
-- exact existing post-live downgrade guard tests cited;
-- full backend base/head comparison with exact failed/error node-ID sets and head-only count;
-- Compose-config default/override tests;
-- release regression results;
-- analyzer comparison;
-- Ruff/static results;
-- Alembic `0046`;
-- clean worktree;
-- remote branch SHA;
-- production untouched.
-
-Final marker:
-`TELEGRAM_MTPROTO_RF1R_RELEASE_FREEZE_READY`
-
-Then STOP for Architect review.
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
