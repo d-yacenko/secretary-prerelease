@@ -1,88 +1,128 @@
-# Current task — Telegram MTProto M4AE: human provider-backed discovery probe
+# Current task — Telegram MTProto M4AF: local stored-session/reference structural probe
 
 ## Status
 
-M4ADH4R3 live read-only diagnosis completed successfully on approved diagnostic SHA
-`ec4f51be6882433210d62ec6dbcfcdb19563be83`.
+M4AE human provider-backed discovery probe: PASS.
 
-Live production facts:
-- runtime/ref match expected release `8091736337689b68b4510126e74d9e409397f696`;
-- Alembic `0046`;
-- health/api/worker/db healthy/running;
-- exactly one MTProto account;
-- encrypted session non-empty;
-- active auth challenges = 0;
-- manual-selected groups = 1;
-- configured folders = 0;
-- active scope = 0;
-- recurring Telegram job exists/pending/recent;
-- recurring scope provider call possible = false;
-- recurring history provider call possible = false;
-- manual group sync route observed = true;
-- manual group sync HTTP 409 = true;
-- worker authorization-invalid/provider-unavailable evidence = false;
-- requested AuthKeyDuplicated/AuthKeyUnregistered/SessionRevoked/Unauthorized/AuthKeyNotFound tokens = false.
+Observed:
+- first reopen showed only Secretary-server connectivity failure;
+- subsequent repeated reopens loaded connected MTProto identity, folders, and groups normally;
+- no Telegram authorization-invalid error appeared.
 
-Classification remains D / insufficient evidence.
+Therefore the currently stored MTProto session can reconnect and perform Telegram discovery calls.
 
-Important release-code fact:
-`TelethonMtprotoTransport.fetch_history()` maps both real authorization-loss conditions AND
-`ValueError` / `TypeError` to
-`TelegramMtprotoAuthorizationInvalidError("Telegram MTProto authorization is no longer valid")`.
+Earlier manual group sync still returned HTTP 409 surfaced as:
+`Telegram MTProto authorization is no longer valid`.
 
-Therefore the UI message does not yet prove Telegram revoked the session.
+Exact release code fact:
+`TelethonMtprotoTransport.fetch_history()` maps both real auth-loss exceptions AND generic
+`ValueError` / `TypeError` to `TelegramMtprotoAuthorizationInvalidError`.
 
-This task authorizes only **M4AE — one human UI provider-backed discovery probe using the existing connected session**.
+Before making any new Telegram history/provider call, this task authorizes only a **local structural validation of the already-stored session and selected-group provider reference**.
 
-## Human action
+## Goal
 
-Do not use Executor for this task.
+Determine whether the failure can already be reproduced locally before any Telegram network call.
 
-In the already-running exact-release preview client:
+Classify independently:
 
-1. Navigate away from Account/Profile if currently open.
-2. Re-open Account/Profile so `TelegramMtprotoAccountSection` is recreated and `_loadStatus()` runs.
-3. Do not press:
-   - Login / Get code;
-   - Sync;
-   - Apply Scope;
-   - Save folders;
-   - any group checkbox.
-4. Wait until the Telegram MTProto section finishes loading.
+1. encrypted session can be decrypted in memory;
+2. decrypted session can initialize Telethon `StringSession`;
+3. encrypted selected-group provider reference can be decrypted in memory;
+4. provider reference JSON/shape can be parsed by the exact release helper;
+5. `validate_provider_peer_reference(..., expected_peer_id=...)` passes;
+6. constructing `TelegramClient(StringSession(session), api_id, api_hash)` succeeds WITHOUT calling `connect()`.
 
-Expected code path on connected status:
-- GET status (DB-only);
-- then `_loadScopeData()` issues:
-  - GET folders (provider-backed discovery);
-  - GET configured sync-folders (DB-only);
-  - GET groups (provider-backed discovery).
+No Telegram network call is authorized.
 
-The human should report only one of:
+## Production / transport
 
-A. **DISCOVERY_PASS**
-- connected identity shown;
-- folders/groups populate normally;
-- no red MTProto authorization error appears.
+Use the already-reviewed strict pinned SSH pattern.
 
-B. **DISCOVERY_AUTH_INVALID**
-- red `Telegram MTProto authorization is no longer valid` appears while loading folders/groups.
+Production expected:
+- release `8091736337689b68b4510126e74d9e409397f696`;
+- Alembic `0046`.
 
-C. **DISCOVERY_OTHER_ERROR**
-- another error appears; provide screenshot/text, excluding secrets.
+Read-only production access only.
 
-No other action is authorized.
+## Authorized actions
+
+- strict pinned SSH;
+- read-only DB SELECTs needed to identify the single MTProto account and single manual-selected group;
+- execute a short Python diagnostic inside the existing backend runtime/container;
+- use existing application `CredentialEncryption`;
+- decrypt session/reference **only in process memory**;
+- instantiate `StringSession`;
+- call exact release local reference parser/validator;
+- instantiate `TelegramClient` object without connecting;
+- emit only sanitized booleans/stage/class names.
+
+## Strictly forbidden
+
+Do NOT:
+- call `client.connect()`;
+- call `is_user_authorized()`;
+- call `iter_dialogs()`, `iter_messages()`, `get_messages()`, `get_me()`, or any Telegram API;
+- make any Telegram/provider network call;
+- print decrypted session/reference;
+- print encrypted session/reference;
+- print account/user/Telegram/peer IDs;
+- print phone, username, title, provider ref, access hash, API hash, API ID, credential key, tokens;
+- mutate DB;
+- retry login;
+- retry Sync;
+- Apply Scope;
+- restart/recreate services;
+- edit env/files;
+- run Alembic writes;
+- change Git refs;
+- change Bot API or MTProto AI flags.
+
+## Required sanitized output
+
+Return only:
+
+- production release/ref match: true/false;
+- Alembic 0046: true/false;
+- exactly one MTProto account: true/false;
+- exactly one manual-selected group: true/false;
+
+Structural stages:
+- `SESSION_DECRYPT_PASS=true/false`
+- `STRING_SESSION_PARSE_PASS=true/false`
+- `REFERENCE_DECRYPT_PASS=true/false`
+- `REFERENCE_PARSE_PASS=true/false`
+- `REFERENCE_PEER_MATCH_PASS=true/false`
+- `TELEGRAM_CLIENT_CONSTRUCT_PASS=true/false`
+
+If a stage fails:
+- emit only `FAILURE_STAGE=<stage>`
+- emit only the Python exception class name, e.g. `ValueError`, `TypeError`, or application exception class;
+- do NOT emit exception message if it may contain sensitive values.
+
+Also confirm:
+- `TELEGRAM_NETWORK_CALLS=0`
+- `SESSION_OR_REFERENCE_PRINTED=false`
+- `PRODUCTION_MUTATION=false`
 
 ## Interpretation
 
-- DISCOVERY_PASS strongly proves the currently stored session can still reconnect and make Telegram read calls; this would make the earlier manual-sync 409 more likely to be fetch_history-specific/misclassified rather than a generally revoked session.
-- DISCOVERY_AUTH_INVALID means the stored session currently fails even discovery and justifies a separately-authorized one-shot provider-auth diagnostic or controlled re-auth plan.
-- DISCOVERY_OTHER_ERROR requires classification before further action.
+A. Local session parse fails
+=> stored-session persistence/serialization defect is strongly indicated.
 
-No production mutation, no login, no sync, no scope change.
+B. Local provider-reference parse/peer-match fails
+=> stored selected-group provider-reference defect is strongly indicated.
 
-Final human report marker is one of:
-`TELEGRAM_MTPROTO_M4AE_DISCOVERY_PASS`
-`TELEGRAM_MTPROTO_M4AE_DISCOVERY_AUTH_INVALID`
-`TELEGRAM_MTPROTO_M4AE_DISCOVERY_OTHER_ERROR`
+C. All local structural stages pass
+=> stored session/reference are structurally valid; next step may be a separately-authorized one-shot live `fetch_history` stage probe with sanitized exception-class telemetry.
+
+Do not perform that live provider probe during M4AF.
+
+## Completion
+
+Final marker:
+`TELEGRAM_MTPROTO_M4AF_STRUCTURAL_READY`
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
