@@ -1,189 +1,190 @@
-# Current task — Telegram MTProto M4ADH4R2: corrective harness review fixes
+# Current task — Telegram MTProto M4ADH4R3: one approved live diagnostic run
 
 ## Status
 
-M4ADH4 implementation `a17925e5c0d38c4da79fca9c013d208052827fd6` on branch
-`review/production-ssh-m4adh4` is REVIEWED and NOT ACCEPTED yet.
+M4ADH4 corrective diagnostic harness is REVIEW ACCEPTED for one live read-only run.
 
-The first live run did obtain useful read-only production facts, but the remote helper stopped before log analysis.
-
-Confirmed blockers in the implementation:
-
-1. **Invalid failure-category SQL**
-   - the query selects one expression but uses `GROUP BY 2 ORDER BY 2`;
-   - this is the direct cause of `FAILURE_STAGE=database-query`.
-
-2. **Wrong recurring-provider-call inference**
-   - current helper derives `RECONCILE_SCOPE_PROVIDER_CALLS_POSSIBLE` from active scope count;
-   - exact release behavior is:
-     `TelegramMtprotoRecurringSyncService.run()` -> `reconcile_scope()` -> `preview_scope()`;
-   - `preview_scope()` returns locally when configured folders are empty, before Telegram discovery/fetch calls;
-   - with configured folders = 0, that recurring reconcile path does not make a Telegram provider network call;
-   - manual-selected groups are not recurring-history-synced unless `scope_active` is true.
-
-3. **Wrong manual-group-sync log detection / unsafe peer normalization**
-   - actual manual endpoint is `POST /telegram/mtproto/groups/{peer_id}/sync`;
-   - helper currently tests `sync-scope` for the manual 409/auth-invalid condition;
-   - negative Telegram peer IDs must never appear in emitted normalized routes.
-
-4. **Incomplete log stream inspection**
-   - subprocess captures stdout and stderr separately;
-   - helper currently scans only `docker logs` stdout;
-   - diagnostic must safely inspect both streams without printing raw lines.
-
-5. **Test coverage incomplete**
-   - existing five tests do not explicitly cover all required retry/redaction/target/port/output properties.
-
-This task authorizes only **M4ADH4R2 corrective changes on the existing review branch plus local tests**.
-
-NO production rerun is authorized yet.
-
-## Branch / base
-
-Continue on:
+Approved branch:
 `review/production-ssh-m4adh4`
+
+Approved exact harness SHA:
+`ec4f51be6882433210d62ec6dbcfcdb19563be83`
 
 Base implementation:
 `a17925e5c0d38c4da79fca9c013d208052827fd6`
 
-Do not modify main or production.
+Focused tests reported:
+`11 passed`
 
-## Required corrective changes
+Ruff:
+PASS
 
-### A. Fix job failure-category query
+`git diff --check`:
+PASS
 
-Replace the invalid positional grouping with valid PostgreSQL SQL.
+Architect review confirmed:
+- invalid failure-category SQL fixed;
+- recurring provider-call inference now follows exact release semantics;
+- actual manual group sync route is distinguished from scope-peer sync;
+- positive and negative peer IDs are normalized to `<peer>`;
+- both Docker log stdout and stderr are inspected in memory;
+- raw log lines are not emitted;
+- transport retry/auth/remote-start behavior remains fail-closed;
+- origin review branch resolves exactly to approved corrective SHA.
 
-Prefer deriving sanitized recurring failure evidence from existing structured fields where possible:
-- `status`;
-- `payload->>'last_error_kind'`;
-- `payload->>'last_error_retryable'`;
-- sanitized `last_error` class name.
+This acceptance is only for the diagnostic harness. It is NOT a merge/integration acceptance for main or production code.
 
-Do not emit raw `last_error` text.
+## Existing live evidence
 
-At minimum output aggregate/boolean facts sufficient to distinguish:
-- authentication;
-- transient/provider-unavailable;
-- unknown/other;
-- exact stored error class evidence for `TelegramMtprotoAuthorizationInvalidError` and `TelegramMtprotoProviderUnavailableError` when present.
+Previous partial M4ADH4 run established:
+- production runtime/ref match expected release: true;
+- production worktree clean: true;
+- health PASS;
+- api/worker/db running: true;
+- DB healthy: true;
+- DB TCP auth PASS;
+- Alembic 0046: true;
+- exactly one MTProto account: true;
+- encrypted session non-empty: true;
+- active auth challenges: 0;
+- manual-selected groups: 1;
+- configured folders: 0;
+- active scope: 0;
+- Telegram recurring job exists and had recent activity.
 
-No IDs.
+Exact release code semantics additionally establish:
+- with configured folders = 0, recurring `reconcile_scope()/preview_scope()` does not make Telegram discovery/history network calls;
+- with active scope = 0, recurring history sync has no peer to sync;
+- a manual-selected-only group is not recurring-history-synced.
 
-### B. Correct recurring provider-call inference
+The remaining missing evidence is the corrected sanitized job/log pass.
 
-Use exact release semantics.
+## Authorization
 
-For the current recurring path:
-- configured folders > 0 => `reconcile_scope()/preview_scope()` can call Telegram;
-- configured folders = 0 => preview returns without Telegram discovery/fetch;
-- after reconcile, history sync only targets `scope_active=true` selections;
-- a merely manual-selected, non-scope-active group is not recurring-history-synced.
+This task authorizes exactly **one execution** of the approved harness at exact SHA:
+`ec4f51be6882433210d62ec6dbcfcdb19563be83`
 
-Emit sanitized facts such as:
-- `RECURRING_SCOPE_PROVIDER_CALL_POSSIBLE=true/false`;
-- `RECURRING_HISTORY_PROVIDER_CALL_POSSIBLE=true/false`.
+No code changes before the run.
 
-Do not infer concurrency solely from `active scope`.
+No second run unless the harness itself consumes a bounded transport retry according to its already-reviewed internal max-3 transport policy.
 
-### C. Detect the actual manual group sync
+## Executor preparation
 
-Detect only the actual route:
-`/telegram/mtproto/groups/{peer_id}/sync`
+1. Fetch origin.
+2. Checkout/use exact review branch SHA `ec4f51be6882433210d62ec6dbcfcdb19563be83`.
+3. Require clean worktree.
+4. Verify:
+   - branch remote points to exact SHA;
+   - diagnostic script content is from exact SHA;
+   - target.json pin remains unchanged.
+5. Do NOT amend, rebase, cherry-pick, or modify files.
 
-Normalize any numeric peer segment, including negative IDs, to:
-`/<peer>/`
+## Run
 
-Never emit a raw peer ID.
+Execute the approved:
+`ops/production/diagnose_mtproto_auth_readonly.py`
 
-Return:
-- manual group sync route observed yes/no;
-- HTTP 409 observed for that route yes/no;
-- authorization-invalid class/text evidence yes/no/unknown, only if safely observable.
+exactly once.
 
-Do not confuse with:
-`/telegram/mtproto/sync-scope/peers/{peer_id}/sync`.
-
-### D. Inspect both Docker log streams safely
-
-For `docker logs`, inspect both captured stdout and stderr in memory.
-
-Never emit raw log lines.
-
-Only emit:
-- normalized route names;
-- HTTP status codes associated with MTProto route lines;
-- whitelisted normalized exception/error class tokens;
-- exact evidence booleans requested by M4ADH4.
-
-### E. Fix route/output redaction
-
-All emitted route normalization must redact:
-- positive numeric peer IDs;
-- negative numeric peer IDs.
-
-No user/account/peer IDs, phones, provider refs, session material, secrets, IPs, or raw content may be emitted.
-
-### F. Keep transport/retry semantics fail-closed
-
-Preserve:
-- exact pinned key;
-- exact target/port;
+Its internal strict SSH behavior is authoritative:
+- pinned ED25519 verification;
 - direct argv;
-- no local shell wrapper;
-- temp known_hosts lifetime through SSH;
-- max 3 attempts;
-- retry ONLY pre-remote transport/host-key establishment failure;
-- auth failure does not retry;
-- any remote-started diagnostic failure does not retry;
-- no unpinned key acceptance.
+- temp known_hosts lifecycle;
+- no host-key bypass;
+- max 3 attempts only for pre-remote transport establishment;
+- auth failure stops;
+- any remote-started diagnostic failure stops;
+- first successful SSH session performs full read-only diagnostic.
 
-## Required focused tests
+## Forbidden
 
-Expand focused tests so every property below has an explicit assertion:
+Do NOT:
+- retry Telegram login;
+- retry manual group sync;
+- Apply Scope;
+- make any ad-hoc Telegram/provider call;
+- run direct Telethon;
+- decrypt/print session;
+- mutate DB;
+- restart/recreate services;
+- edit env/files on production;
+- run Alembic writes;
+- change production/main refs;
+- deploy the harness;
+- modify Bot API;
+- change MTProto AI flag;
+- change SSH config/known_hosts/target.json.
 
-1. exact target is `root@web-itx.duckdns.org`;
-2. exact port is `22`;
-3. complete strict SSH option set;
-4. no local shell wrapper;
-5. temp known_hosts exists throughout subprocess;
-6. pin mismatch blocks before SSH;
-7. maximum 3 attempts with fresh verified temp files;
-8. ONLY pre-remote transport failure retries;
-9. authentication failure does not retry;
-10. remote-started failure does not retry;
-11. successful SSH session runs diagnostic in that same session;
-12. remote helper has no Telegram/provider call path;
-13. remote helper has no session decryption path;
-14. remote helper contains no production-write commands;
-15. negative and positive peer IDs are redacted from normalized route output;
-16. manual group route is distinguished from sync-scope peer route;
-17. HTTP 409 detection is tied to the manual group sync route;
-18. both docker-log stdout and stderr are inspected;
-19. failure-category SQL is valid-by-construction and does not use the broken `GROUP BY 2`;
-20. output sanitizer/allowlist cannot emit forbidden identifiers/secrets/raw log lines;
-21. recurring provider-call inference matches configured-folder/scope semantics.
+Do not print raw logs or forbidden identifiers/secrets.
 
-Run:
-- focused pytest;
-- Ruff on changed Python files;
-- `git diff --check`.
+## Required report
 
-## Review handoff only
+Return the harness sanitized output, summarized as:
 
-After corrections:
-- commit on the same review branch;
-- push the review branch;
-- report full corrective SHA;
-- report exact test count/pass;
-- report Ruff and diff-check;
-- summarize each blocker and its fix;
-- explicitly list any remaining coverage gap.
+### Transport
+- attempt matrix;
+- pin/host-key/auth/remote execution status.
 
-Do NOT rerun production diagnostic yet.
+### Production
+- release/runtime/ref match;
+- worktree clean;
+- health;
+- api/worker/db running;
+- DB healthy/TCP auth;
+- Alembic 0046.
+
+### MTProto DB
+- exactly-one account;
+- encrypted session non-empty;
+- active challenge count;
+- manual-selected group count;
+- configured folder count;
+- active scope count.
+
+### Recurring worker
+- job exists/status counts/recent activity;
+- failure categories;
+- `RECURRING_SCOPE_PROVIDER_CALL_POSSIBLE`;
+- `RECURRING_HISTORY_PROVIDER_CALL_POSSIBLE`;
+- overlap conclusion based on these facts.
+
+### API/worker logs
+- normalized observed MTProto routes;
+- observed MTProto HTTP status codes;
+- manual group sync route observed yes/no;
+- manual group sync HTTP 409 yes/no;
+- manual group sync authorization-invalid evidence yes/no/unknown;
+- worker authorization-invalid yes/no;
+- worker provider-unavailable yes/no;
+- normalized error classes;
+- exact evidence booleans for:
+  - AUTH_KEY_DUPLICATED
+  - AuthKeyDuplicatedError
+  - AUTH_KEY_UNREGISTERED
+  - AuthKeyUnregisteredError
+  - SESSION_REVOKED
+  - SessionRevokedError
+  - UnauthorizedError
+  - AuthKeyNotFound
+
+### Classification
+
+Choose only from evidence:
+A. provider authorization truly revoked/unregistered;
+B. likely concurrent auth-key duplication;
+C. stored-session persistence/corruption defect;
+D. insufficient evidence.
+
+Do not repair/re-authenticate.
+
+Also confirm:
+- no Telegram/provider call made by diagnostic;
+- no session decrypted/printed;
+- no production mutation;
+- no SSH trust data changed.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4ADH4R2_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4ADH4R3_LIVE_READY`
 
 Then STOP.
 
