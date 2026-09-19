@@ -18,6 +18,7 @@ import 'identity_profile_template.dart';
 import 'semantic_context_template.dart';
 import 'source_preferences_list.dart';
 import 'system_assistant_account_section.dart';
+import 'telegram_mtproto_account_section.dart';
 import 'voice_output_policy_account_section.dart';
 
 class AccountScreen extends StatefulWidget {
@@ -1194,6 +1195,11 @@ class _AccountScreenState extends State<AccountScreen>
                       onDisconnectTeams: _disconnectTeams,
                     ),
                 ],
+              ),
+              const SizedBox(height: 16),
+              TelegramMtprotoAccountSection(
+                apiClient: widget.apiClient,
+                authController: widget.authController,
               ),
               const SizedBox(height: 16),
               AccountSectionCard(

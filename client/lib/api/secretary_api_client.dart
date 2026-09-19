@@ -235,6 +235,119 @@ class SecretaryApiClient {
     return TelegramLinkResult.fromJson(body);
   }
 
+  Future<TelegramMtprotoStatus> getTelegramMtprotoStatus() async {
+    final body = await _request('GET', '/telegram/mtproto/status');
+    return TelegramMtprotoStatus.fromJson(body);
+  }
+
+  Future<TelegramMtprotoAuthStart> startTelegramMtprotoAuth({
+    required String phone,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/auth/start',
+      jsonBody: {'phone': phone},
+    );
+    return TelegramMtprotoAuthStart.fromJson(body);
+  }
+
+  Future<TelegramMtprotoAuthCode> submitTelegramMtprotoCode({
+    required String challengeId,
+    required String code,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/auth/code',
+      jsonBody: {'challenge_id': challengeId, 'code': code},
+    );
+    return TelegramMtprotoAuthCode.fromJson(body);
+  }
+
+  Future<TelegramMtprotoAccount> submitTelegramMtprotoPassword({
+    required String challengeId,
+    required String password,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/auth/password',
+      jsonBody: {'challenge_id': challengeId, 'password': password},
+    );
+    return TelegramMtprotoAccount.fromJson(body);
+  }
+
+  Future<TelegramMtprotoFolderList> getTelegramMtprotoFolders() async {
+    final body = await _request('GET', '/telegram/mtproto/folders');
+    return TelegramMtprotoFolderList.fromJson(body);
+  }
+
+  Future<TelegramMtprotoConfiguredFolders>
+  getTelegramMtprotoSyncFolders() async {
+    final body = await _request('GET', '/telegram/mtproto/sync-folders');
+    return TelegramMtprotoConfiguredFolders.fromJson(body);
+  }
+
+  Future<TelegramMtprotoConfiguredFolders> putTelegramMtprotoSyncFolders({
+    required List<String> folderNames,
+    required bool ignoreMuted,
+  }) async {
+    final body = await _request(
+      'PUT',
+      '/telegram/mtproto/sync-folders',
+      jsonBody: {'folder_names': folderNames, 'ignore_muted': ignoreMuted},
+    );
+    return TelegramMtprotoConfiguredFolders.fromJson(body);
+  }
+
+  Future<TelegramMtprotoScopePreview> previewTelegramMtprotoScope() async {
+    final body = await _request('GET', '/telegram/mtproto/sync-scope/preview');
+    return TelegramMtprotoScopePreview.fromJson(body);
+  }
+
+  Future<TelegramMtprotoScopeReconcile> reconcileTelegramMtprotoScope() async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/sync-scope/reconcile',
+    );
+    return TelegramMtprotoScopeReconcile.fromJson(body);
+  }
+
+  Future<TelegramMtprotoHistorySync> syncTelegramMtprotoScopePeer(
+    int peerId,
+  ) async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/sync-scope/peers/$peerId/sync',
+    );
+    return TelegramMtprotoHistorySync.fromJson(body);
+  }
+
+  Future<TelegramMtprotoGroupList> getTelegramMtprotoGroups() async {
+    final body = await _request('GET', '/telegram/mtproto/groups');
+    return TelegramMtprotoGroupList.fromJson(body);
+  }
+
+  Future<TelegramMtprotoGroupSelection> setTelegramMtprotoGroupSelected({
+    required int peerId,
+    required bool selected,
+  }) async {
+    final body = await _request(
+      'PATCH',
+      '/telegram/mtproto/groups/$peerId',
+      jsonBody: {'selected': selected},
+    );
+    return TelegramMtprotoGroupSelection.fromJson(body);
+  }
+
+  Future<TelegramMtprotoHistorySync> syncTelegramMtprotoGroup(
+    int peerId,
+  ) async {
+    final body = await _request(
+      'POST',
+      '/telegram/mtproto/groups/$peerId/sync',
+    );
+    return TelegramMtprotoHistorySync.fromJson(body);
+  }
+
   Future<TeamsAuthorizationUrl> getTeamsAuthorizationUrl() async {
     final body = await _request(
       'POST',

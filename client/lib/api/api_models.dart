@@ -322,6 +322,342 @@ class TelegramLinkResult {
   }
 }
 
+class TelegramMtprotoAccount {
+  TelegramMtprotoAccount({
+    required this.id,
+    required this.telegramUserId,
+    this.username,
+    this.displayName,
+  });
+
+  final String id;
+  final int telegramUserId;
+  final String? username;
+  final String? displayName;
+
+  factory TelegramMtprotoAccount.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoAccount(
+      id: json['id'] as String,
+      telegramUserId: json['telegram_user_id'] as int,
+      username: json['username'] as String?,
+      displayName: json['display_name'] as String?,
+    );
+  }
+}
+
+class TelegramMtprotoStatus {
+  TelegramMtprotoStatus({
+    required this.configured,
+    required this.connected,
+    this.account,
+  });
+
+  final bool configured;
+  final bool connected;
+  final TelegramMtprotoAccount? account;
+
+  factory TelegramMtprotoStatus.fromJson(Map<String, dynamic> json) {
+    final account = json['account'];
+    return TelegramMtprotoStatus(
+      configured: json['configured'] as bool? ?? false,
+      connected: json['connected'] as bool? ?? false,
+      account: account is Map<String, dynamic>
+          ? TelegramMtprotoAccount.fromJson(account)
+          : null,
+    );
+  }
+}
+
+class TelegramMtprotoAuthStart {
+  TelegramMtprotoAuthStart({
+    required this.challengeId,
+    required this.expiresAt,
+  });
+
+  final String challengeId;
+  final String expiresAt;
+
+  factory TelegramMtprotoAuthStart.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoAuthStart(
+      challengeId: json['challenge_id'] as String,
+      expiresAt: json['expires_at'] as String,
+    );
+  }
+}
+
+class TelegramMtprotoAuthCode {
+  TelegramMtprotoAuthCode({required this.status, this.account});
+
+  final String status;
+  final TelegramMtprotoAccount? account;
+
+  factory TelegramMtprotoAuthCode.fromJson(Map<String, dynamic> json) {
+    final account = json['account'];
+    return TelegramMtprotoAuthCode(
+      status: json['status'] as String,
+      account: account is Map<String, dynamic>
+          ? TelegramMtprotoAccount.fromJson(account)
+          : null,
+    );
+  }
+}
+
+class TelegramMtprotoFolder {
+  TelegramMtprotoFolder({required this.folderId, required this.name});
+
+  final int folderId;
+  final String name;
+
+  factory TelegramMtprotoFolder.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoFolder(
+      folderId: json['folder_id'] as int,
+      name: json['name'] as String,
+    );
+  }
+}
+
+class TelegramMtprotoConfiguredFolder {
+  TelegramMtprotoConfiguredFolder({
+    required this.folderId,
+    required this.name,
+    required this.ignoreMuted,
+  });
+
+  final int folderId;
+  final String name;
+  final bool ignoreMuted;
+
+  factory TelegramMtprotoConfiguredFolder.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoConfiguredFolder(
+      folderId: json['folder_id'] as int,
+      name: json['name'] as String,
+      ignoreMuted: json['ignore_muted'] as bool? ?? true,
+    );
+  }
+}
+
+class TelegramMtprotoFolderList {
+  TelegramMtprotoFolderList({required this.folders, required this.truncated});
+
+  final List<TelegramMtprotoFolder> folders;
+  final bool truncated;
+
+  factory TelegramMtprotoFolderList.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoFolderList(
+      folders: (json['folders'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TelegramMtprotoFolder.fromJson)
+          .toList(),
+      truncated: json['truncated'] as bool? ?? false,
+    );
+  }
+}
+
+class TelegramMtprotoConfiguredFolders {
+  TelegramMtprotoConfiguredFolders({
+    required this.folders,
+    required this.ignoreMuted,
+  });
+
+  final List<TelegramMtprotoConfiguredFolder> folders;
+  final bool ignoreMuted;
+
+  factory TelegramMtprotoConfiguredFolders.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoConfiguredFolders(
+      folders: (json['folders'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TelegramMtprotoConfiguredFolder.fromJson)
+          .toList(),
+      ignoreMuted: json['ignore_muted'] as bool? ?? true,
+    );
+  }
+}
+
+class TelegramMtprotoDialog {
+  TelegramMtprotoDialog({
+    required this.peerId,
+    required this.kind,
+    required this.title,
+    this.username,
+    required this.isMuted,
+  });
+
+  final int peerId;
+  final String kind;
+  final String title;
+  final String? username;
+  final bool isMuted;
+
+  factory TelegramMtprotoDialog.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoDialog(
+      peerId: json['peer_id'] as int,
+      kind: json['kind'] as String,
+      title: json['title'] as String,
+      username: json['username'] as String?,
+      isMuted: json['is_muted'] as bool? ?? false,
+    );
+  }
+}
+
+class TelegramMtprotoScopePreview {
+  TelegramMtprotoScopePreview({
+    required this.dialogs,
+    required this.truncated,
+    required this.skippedCounts,
+    required this.configuredFolderCount,
+  });
+
+  final List<TelegramMtprotoDialog> dialogs;
+  final bool truncated;
+  final Map<String, int> skippedCounts;
+  final int configuredFolderCount;
+
+  factory TelegramMtprotoScopePreview.fromJson(Map<String, dynamic> json) {
+    final skipped = json['skipped_counts'];
+    return TelegramMtprotoScopePreview(
+      dialogs: (json['dialogs'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TelegramMtprotoDialog.fromJson)
+          .toList(),
+      truncated: json['truncated'] as bool? ?? false,
+      skippedCounts: skipped is Map<String, dynamic>
+          ? skipped.map((key, value) => MapEntry(key, value as int))
+          : const {},
+      configuredFolderCount: json['configured_folder_count'] as int? ?? 0,
+    );
+  }
+}
+
+class TelegramMtprotoScopeReconcile {
+  TelegramMtprotoScopeReconcile({
+    required this.active,
+    required this.activated,
+    required this.deactivated,
+    required this.unchanged,
+    required this.peers,
+  });
+
+  final int active;
+  final int activated;
+  final int deactivated;
+  final int unchanged;
+  final List<TelegramMtprotoDialog> peers;
+
+  factory TelegramMtprotoScopeReconcile.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoScopeReconcile(
+      active: json['active'] as int? ?? 0,
+      activated: json['activated'] as int? ?? 0,
+      deactivated: json['deactivated'] as int? ?? 0,
+      unchanged: json['unchanged'] as int? ?? 0,
+      peers: (json['peers'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TelegramMtprotoDialog.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class TelegramMtprotoGroup {
+  TelegramMtprotoGroup({
+    required this.peerId,
+    required this.kind,
+    required this.title,
+    this.username,
+    required this.isForum,
+    required this.selected,
+    required this.available,
+  });
+
+  final int peerId;
+  final String kind;
+  final String title;
+  final String? username;
+  final bool isForum;
+  final bool selected;
+  final bool available;
+
+  factory TelegramMtprotoGroup.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoGroup(
+      peerId: json['peer_id'] as int,
+      kind: json['kind'] as String,
+      title: json['title'] as String,
+      username: json['username'] as String?,
+      isForum: json['is_forum'] as bool? ?? false,
+      selected: json['selected'] as bool? ?? false,
+      available: json['available'] as bool? ?? false,
+    );
+  }
+}
+
+class TelegramMtprotoGroupList {
+  TelegramMtprotoGroupList({required this.groups, required this.truncated});
+
+  final List<TelegramMtprotoGroup> groups;
+  final bool truncated;
+
+  factory TelegramMtprotoGroupList.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoGroupList(
+      groups: (json['groups'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TelegramMtprotoGroup.fromJson)
+          .toList(),
+      truncated: json['truncated'] as bool? ?? false,
+    );
+  }
+}
+
+class TelegramMtprotoGroupSelection {
+  TelegramMtprotoGroupSelection({required this.peerId, required this.selected});
+
+  final int peerId;
+  final bool selected;
+
+  factory TelegramMtprotoGroupSelection.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoGroupSelection(
+      peerId: json['peer_id'] as int,
+      selected: json['selected'] as bool? ?? false,
+    );
+  }
+}
+
+class TelegramMtprotoHistorySync {
+  TelegramMtprotoHistorySync({
+    required this.peerId,
+    required this.scanned,
+    required this.materialized,
+    required this.created,
+    required this.updated,
+    required this.unchanged,
+    required this.skipped,
+    required this.jobsEnqueued,
+    required this.historyComplete,
+  });
+
+  final int peerId;
+  final int scanned;
+  final int materialized;
+  final int created;
+  final int updated;
+  final int unchanged;
+  final int skipped;
+  final int jobsEnqueued;
+  final bool historyComplete;
+
+  factory TelegramMtprotoHistorySync.fromJson(Map<String, dynamic> json) {
+    return TelegramMtprotoHistorySync(
+      peerId: json['peer_id'] as int,
+      scanned: json['scanned'] as int? ?? 0,
+      materialized: json['materialized'] as int? ?? 0,
+      created: json['created'] as int? ?? 0,
+      updated: json['updated'] as int? ?? 0,
+      unchanged: json['unchanged'] as int? ?? 0,
+      skipped: json['skipped'] as int? ?? 0,
+      jobsEnqueued: json['jobs_enqueued'] as int? ?? 0,
+      historyComplete: json['history_complete'] as bool? ?? false,
+    );
+  }
+}
+
 class TeamsConnection {
   TeamsConnection({
     required this.configured,
@@ -820,10 +1156,14 @@ class InboxConversationStack {
     return InboxConversationStack(
       stackId: json['stack_id'] as String,
       fingerprint: json['fingerprint'] as String? ?? json['stack_id'] as String,
-      objectIds: (json['object_ids'] as List<dynamic>).map((e) => e as String).toList(),
-      displayObjectIds: (json['display_object_ids'] as List<dynamic>? ?? json['object_ids'] as List<dynamic>)
+      objectIds: (json['object_ids'] as List<dynamic>)
           .map((e) => e as String)
           .toList(),
+      displayObjectIds:
+          (json['display_object_ids'] as List<dynamic>? ??
+                  json['object_ids'] as List<dynamic>)
+              .map((e) => e as String)
+              .toList(),
       provider: json['provider'] as String,
       conversationLabel: json['conversation_label'] as String,
       messageCount: json['message_count'] as int,
@@ -837,11 +1177,7 @@ class InboxConversationStack {
 }
 
 class InboxConversationGroup {
-  const InboxConversationGroup({
-    required this.type,
-    this.objectId,
-    this.stack,
-  });
+  const InboxConversationGroup({required this.type, this.objectId, this.stack});
 
   final String type;
   final String? objectId;
@@ -971,9 +1307,13 @@ class InboxOut {
       reviewMarker: rawMarker is Map<String, dynamic>
           ? InboxReviewMarker.fromJson(rawMarker)
           : null,
-      conversationGroups: (json['conversation_groups'] as List<dynamic>? ?? const [])
-          .map((e) => InboxConversationGroup.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      conversationGroups:
+          (json['conversation_groups'] as List<dynamic>? ?? const [])
+              .map(
+                (e) =>
+                    InboxConversationGroup.fromJson(e as Map<String, dynamic>),
+              )
+              .toList(),
     );
   }
 }
@@ -998,9 +1338,13 @@ class InboxFeedPage {
           .toList(),
       nextCursor: json['next_cursor'] as String?,
       hasMore: json['has_more'] as bool? ?? false,
-      conversationGroups: (json['conversation_groups'] as List<dynamic>? ?? const [])
-          .map((e) => InboxConversationGroup.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      conversationGroups:
+          (json['conversation_groups'] as List<dynamic>? ?? const [])
+              .map(
+                (e) =>
+                    InboxConversationGroup.fromJson(e as Map<String, dynamic>),
+              )
+              .toList(),
     );
   }
 }
