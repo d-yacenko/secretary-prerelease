@@ -1,136 +1,141 @@
-# Current task — Telegram MTProto C3AR2: unify scope rendering and close contract tests
+# Current task — Telegram MTProto C3B: Inbox transport-event presentation
 
 ## Status
 
-Telegram MTProto C2B/C2BR/C2BR2 deterministic notifications are ACCEPTED / INTEGRATED TO MAIN.
+Telegram MTProto C3A/C3AR/C3AR2 Flutter account/auth/scope UX is **ACCEPTED and integrated to main**.
 
-C3A implementation:
-`d761d1aeab6b99530910a0292ba82e322a5885b3`
+Accepted implementation tip:
+`b8455ec7b48106a284d81e50c524c8d8ef278d19`
 
-C3AR corrective:
-`8c136b742a3d2ba67cb083d32cb88b6c438d3850`
+Integration merge:
+`f6f66dff6e03ae290dc7fc68d945734eba9a99a5`
 
-C3AR fixes are accepted in direction:
-- explicit phone/code/password auth state machine;
-- password UI appears only after `password_required`;
-- reconcile peers became actionable;
-- group forum/unavailable metadata is explicit;
-- MTProto action 401s route through `AuthController.handleAuthenticationFailure()`;
-- full analyzer comparison reports zero new diagnostics.
-
-C3A/C3AR is still **REJECTED pending this narrow C3AR2 corrective**.
+This task authorizes only **C3B — Telegram-specific Inbox presentation for already-existing MTProto source objects and deterministic transport notifications**.
 
 Production remains untouched:
-- runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
+- production runtime/ref `5cce4b57b14e0052a038acae1354a2821a2bb77b`;
 - production Alembic `0041`;
 - repository Alembic head must remain `0046`;
 - M3 NOT authorized;
 - Bot API retirement NOT authorized.
 
-## Blocking issue 1 — preview/reconcile scope rows are still duplicated and can become stale
+## Goal
 
-At C3AR SHA `8c136b742a3d2ba67cb083d32cb88b6c438d3850`:
+Make Telegram MTProto messages/events understandable in the existing Flutter Inbox without changing the accepted backend notification semantics.
 
-- preview rows are rendered directly with:
-  `for (final dialog in preview.dialogs) _peerRow(dialog)`
-- after reconcile, rows are rendered again from `_scopeDialogs(reconcile)`;
-- `_scopeDialogs(reconcile)` itself merges preview dialogs and reconcile peers.
+Use existing:
+- `InboxSourceObjectOut`;
+- `NotificationOut`;
+- existing Inbox notification actions;
+- existing object/context navigation.
 
-Therefore:
-1. a peer present in both preview and reconcile can be rendered twice;
-2. a peer present only in the old preview can remain visible/actionable after reconcile even if reconcile removed/deactivated it.
+Do not invent a parallel Telegram inbox.
 
-This violates the C3AR requirement for one clear current-scope list without duplicates.
+## Transport-event identification
 
-Correct narrowly.
+A deterministic Telegram MTProto transport notification is identified only when proposal fields match:
+- `type == "transport_event"`;
+- `provider == "telegram"`;
+- `transport == "mtproto"`.
 
-Required presentation invariant:
-- before reconcile result exists: render the current preview dialog list;
-- after reconcile result exists: render the current reconcile `peers` list as authoritative current scope;
-- each `peer_id` appears at most once;
-- a peer that existed in preview but is absent from the reconcile result must disappear from the actionable current-scope list;
-- do not merge stale preview membership into reconciled membership;
-- private/group/supergroup peer sync action remains available for the authoritative displayed list;
-- preview counts/truncated/skipped information may remain visible as historical preview information, but its dialog rows must not be duplicated alongside reconciled rows.
+Supported event types:
+- `message_created`;
+- `message_edited`;
+- `message_deleted`.
 
-Add a focused widget regression that:
-1. preview returns peers A and B;
-2. reconcile returns peers B and C;
-3. after preview, A and B each appear once;
-4. after reconcile, actionable current-scope rows are exactly B and C, each once;
-5. A is no longer actionable/visible as current scope;
-6. syncing B or C uses the existing exact scope-peer endpoint.
+Unknown/malformed proposal values must fall back safely to generic notification presentation.
 
-Use stable widget keys for peer rows/sync actions so the test does not depend on ambiguous text counts.
+## Required presentation
 
-## Verification gap 2 — test server-not-configured against the real backend contract
+For Telegram MTProto transport events, present human-readable localized UI rather than raw proposal type/action labels.
 
-The current widget test models server-not-configured as:
-HTTP 200 with `{"configured": false, "connected": false}`.
+At minimum:
+- created -> clearly indicate a new Telegram message;
+- edited -> clearly indicate a Telegram message was edited;
+- deleted -> clearly indicate a Telegram message was deleted;
+- show `conversation_title` when present;
+- show notification body/preview when meaningful;
+- show a sensible timestamp using `occurred_at`, and for edits optionally `edited_at`;
+- do NOT show raw `event_key`, `account_id`, `peer_id`, `message_id`, provider references, access hashes, session data, or credentials.
 
-But the existing backend route calls `_require_configured()` first and the real contract for an unconfigured MTProto backend is:
-- HTTP 503
-- safe detail: `Telegram MTProto is not configured`.
+The generic existing notification presentation must remain unchanged for non-transport notifications.
 
-The implementation already has logic intended to map that safe 503 detail to the “not configured” UI. Prove that real path.
+## Notification actions
 
-Required:
-- change/add the focused test so the status request returns the real 503 response body;
-- prove the UI renders the server-not-configured state;
-- do not change backend behavior for this task.
+The backend C2B contract is already accepted:
+- transport-event `accept` is generic/non-task and creates no task/object/edge/embed job;
+- ignore/resolve are generic;
+- mark-read is existing API.
 
-You may keep model parsing coverage for `configured=false` separately if useful, but it does not replace the real route-contract widget test.
+Client behavior for Telegram transport events:
+- do not label the primary action as if it creates/approves a task;
+- use a neutral completion label such as `Готово` for the existing accept action;
+- keep `Пропустить` for ignore;
+- keep/open context using existing `source_object_id` context path;
+- opening context for a new unread transport event should mark it read using the existing mark-read API before/alongside navigation, without blocking context opening on a non-auth mark-read failure;
+- 401 from mark-read must still use the global AuthController failure path;
+- do not introduce new backend endpoints.
 
-## Verification gap 3 — explicit ignore_muted round-trip proof
+Non-transport notification buttons and semantics must remain exactly as before.
 
-The C3AR acceptance report did not map the required `ignore_muted` round-trip to an exact test, and the current zero-folder widget test only proves that a PUT occurred; it does not prove the boolean sent to the backend.
+## Source object presentation
 
-Add focused evidence that:
-- configured sync folders response with `ignore_muted=true` initializes the switch to true;
-- toggling it to false and saving sends:
-  `{"folder_names": <current selected names>, "ignore_muted": false}`;
-- the zero-folder case still sends an empty `folder_names` list rather than substituting defaults;
-- a subsequent loaded configured response with false is represented as false.
+Telegram MTProto materialized message objects already enter the generic Inbox feed.
 
-This can be one focused widget/API test if it proves the whole round trip.
+Ensure Telegram MTProto source objects:
+- retain existing generic feed ordering/grouping/bookmark/review-rail behavior;
+- display Telegram provider identity consistently through existing provider/icon/presentation helpers;
+- do not expose provider-reference/access-hash/session metadata;
+- are not duplicated into a second Telegram-only feed.
 
-## Acceptance evidence
+If the existing generic source card already satisfies these invariants, prefer tests/presentation helpers over a large rewrite.
 
-Return an updated acceptance matrix:
-`required invariant -> exact test name -> file`
+## Client helpers/models
 
-It must explicitly include:
-- real 503 server-not-configured UI path;
-- configured/disconnected;
-- connected identity;
-- direct code auth without 2FA;
-- password-required auth;
-- duplicate submit protection;
-- sensitive state cleared after success;
-- zero-folder save;
-- ignore_muted true->false round trip;
-- preview truncated/skipped counts;
-- preview/reconcile authoritative peer replacement with no duplicates/stale rows;
-- reconcile peer sync exact endpoint + summary;
-- group selected toggle;
-- forum label;
-- unavailable group label/non-actionability;
-- manual group sync summary;
-- 401 global auth failure;
-- sanitized 400/409/410/503 API error convention.
+Prefer small typed/helper accessors around `NotificationOut.proposal` rather than scattering raw map lookups through widgets.
+
+Helpers should safely parse:
+- whether this is Telegram MTProto transport event;
+- event type;
+- conversation title;
+- occurred/edited timestamp;
+- source object id already supplied by `NotificationOut.sourceObjectId`.
+
+Malformed values must return null/fallback, never throw during Inbox rendering.
+
+## Testing
+
+Add focused Flutter tests covering at minimum:
+- created event card presentation;
+- edited event card presentation;
+- deleted event card presentation;
+- conversation title/body preview;
+- no raw event/account/peer/message identifiers rendered;
+- malformed/unknown transport proposal safely falls back;
+- non-transport notification presentation/actions unchanged;
+- transport-event primary button label is neutral and still calls existing accept endpoint;
+- ignore still calls existing ignore endpoint;
+- open context uses source object path and invokes mark-read for unread/new transport event;
+- mark-read non-auth failure does not prevent context navigation;
+- mark-read 401 routes to AuthController;
+- already-read transport event does not issue redundant mark-read;
+- Telegram source objects remain in normal Inbox feed and do not duplicate.
+
+Also run relevant existing Inbox/notification/API regressions.
 
 ## Required checks
 
-Run:
-- focused C3A/C3AR/C3AR2 Flutter tests;
-- relevant existing Account/API client regressions;
+- focused C3B Flutter tests;
+- relevant existing Inbox/notification/API tests;
 - `dart format --output=none --set-exit-if-changed` on changed Dart files;
 - full `flutter analyze`.
 
-If full analyze remains non-zero:
-- compare exact base `0cdcbaa0498f8e4c1ef3033c5c7d544bb8590319` vs C3AR2 head with the same command;
-- report base count, head count, common/base-only/head-only;
-- C3AR2 must introduce zero new diagnostics.
+If full analyze is non-zero, use the same accepted baseline method:
+- exact base `f6f66dff6e03ae290dc7fc68d945734eba9a99a5`;
+- C3B head;
+- same command;
+- report base/head/common/base-only/head-only;
+- head-only must be zero.
 
 Also:
 - `git diff --check`;
@@ -142,13 +147,14 @@ Backend changes are not expected or authorized.
 ## Explicitly out of scope
 
 Do NOT implement:
-- C3B Telegram-specific Inbox/notification presentation;
-- backend MTProto redesign/new endpoints;
-- disconnect/delete account semantics;
-- OS notifications;
+- a separate Telegram inbox/navigation tree;
+- reply/edit/delete compose UX in Inbox;
+- OS-level notifications;
 - websocket/SSE;
 - realtime Telethon listener;
 - client-side Telegram SDK;
+- backend notification redesign;
+- new backend endpoints;
 - migration `0047`;
 - production deploy/ref move;
 - production DB/env mutation;
@@ -156,25 +162,23 @@ Do NOT implement:
 
 ## Branch / deliverable
 
-Continue existing branch:
-`review/telegram-mtproto-c3a-client-account`
+Create:
+`review/telegram-mtproto-c3b-inbox`
 
-Continue from exact:
-`C3AR2_BASE_SHA=8c136b742a3d2ba67cb083d32cb88b6c438d3850`
+Start from exact:
+`C3B_BASE_SHA=f6f66dff6e03ae290dc7fc68d945734eba9a99a5`
 
-Create exactly one corrective commit on top.
-Do not rewrite/squash C3A or C3AR.
+If main later moves only for Architect task/state/recovery documentation, do NOT rebase merely for those docs.
 
 Return:
-- `C3AR2_BASE_SHA`;
-- `C3AR2_SHA`;
+- `C3B_BASE_SHA`;
+- `C3B_SHA`;
 - changed files;
-- exact scope-rendering correction;
-- real-503 test proof;
-- ignore_muted round-trip proof;
-- updated acceptance matrix;
-- focused/regression results;
-- analyzer result/baseline comparison;
+- transport-event helper/presentation design;
+- action/mark-read behavior;
+- focused test matrix/results;
+- existing regressions;
+- analyzer/base comparison;
 - Dart format;
 - `git diff --check`;
 - Alembic `0046`;
@@ -183,7 +187,7 @@ Return:
 - backend/migrations/production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_C3AR2_CLIENT_ACCOUNT_READY`
+`TELEGRAM_MTPROTO_C3B_INBOX_READY`
 
 Then STOP for Architect review.
 
