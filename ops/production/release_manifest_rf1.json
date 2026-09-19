@@ -1,0 +1,30 @@
+{
+  "release_id": "telegram-mtproto-rf1",
+  "candidate_sha": "e503f680543d2eeafbfbb9b641b1b1942d7990ca",
+  "migration_range": ["0041", "0042", "0043", "0044", "0045", "0046"],
+  "repository_alembic_head": "0046",
+  "production_start": {
+    "alembic": "0041",
+    "runtime_sha": "5cce4b57b14e0052a038acae1354a2821a2bb77b"
+  },
+  "telegram_milestones": [
+    "A1/A2",
+    "A3",
+    "A4.1-A4.4",
+    "Q1",
+    "C1A",
+    "C1B",
+    "C2A",
+    "C2B",
+    "C3A",
+    "C3B"
+  ],
+  "telegram_mtproto_ai_enabled_default": false,
+  "bot_api_retirement_included": false,
+  "production_cutover_performed_by_rf1": false,
+  "deployment_entrypoints": {
+    "schema_neutral": "ops/production/deploy.py",
+    "migration_bearing": "ops/production/migrate_deploy.py",
+    "runtime_verification": "ops/production/verify_google_sync.py"
+  }
+}
