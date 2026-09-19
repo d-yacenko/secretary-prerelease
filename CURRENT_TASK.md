@@ -1,148 +1,118 @@
-# Current task — Telegram MTProto M4AD: production authorization-invalid diagnosis
+# Current task — Production SSH M4ADH: re-establish canonical host-key trust
 
 ## Status
 
-Production backend/runtime remains:
-`8091736337689b68b4510126e74d9e409397f696`
+Telegram M4AD read-only production diagnosis is BLOCKED before SSH authentication because the canonical strict host-key check fails.
 
-Production Alembic:
-`0046`
+Canonical production target:
+`root@web-itx.duckdns.org:22`
 
-Fresh exact-SHA Linux client is available and exposes the Telegram MTProto controls.
+Repository-pinned fingerprint:
+`SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs`
 
-Human completed Telegram login through the existing MTProto UI, including 2FA. After authorization:
-- connected identity rendered;
-- folders rendered;
-- groups rendered;
-- human selected exactly one manual group;
-- the group-selection provider discovery succeeded.
+This same fingerprint was present in:
+- accepted M1 harness SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`;
+- deployed release SHA `8091736337689b68b4510126e74d9e409397f696`.
 
-On the first explicit manual group sync:
-- no history counters appeared;
-- the UI showed `Telegram MTProto authorization is no longer valid`.
+M3 previously succeeded through the strict SSH harness. Therefore a current mismatch must be treated as a production trust-anchor event, not bypassed.
 
-Official Telegram -> Active Devices currently shows the newly created Secretary MTProto session as active. This is human-observed evidence only; do not print or persist its identifiers/location metadata.
+This task authorizes only **M4ADH — non-authenticating host-key discovery and independent human verification preparation**.
 
-Important: the Account/status UI can still display a connected account because `TelegramMtprotoAuthService.status()` is DB-row based and does not live-probe Telegram authorization.
+It does NOT authorize changing `target.json`, connecting with relaxed host-key checking, logging into production, or continuing M4AD yet.
 
-This task authorizes only **M4AD — sanitized read-only diagnosis of why persisted MTProto authorization became invalid between successful discovery and first history sync**.
+## Hard safety rules
 
-Do NOT re-authenticate, retry history sync, alter scope, deploy code, mutate production, or touch Telegram sessions.
+Do NOT:
+- use `StrictHostKeyChecking=no`;
+- use `UserKnownHostsFile=/dev/null` without an independently verified temporary known_hosts entry;
+- accept a new key interactively;
+- edit/remove user's normal `~/.ssh/known_hosts`;
+- update `ops/production/target.json`;
+- SSH-authenticate to production while the key is unverified;
+- mutate production or Telegram;
+- print private keys or credentials.
 
-## User safety
+Public SSH host-key fingerprints are safe to report.
 
-Until M4AD completes:
-- do not retry Telegram login;
-- do not terminate the new Telegram session from Telegram Devices;
-- do not retry Sync;
-- do not click Apply Scope;
-- keep Bot API untouched.
+## Step 1 — DNS observation
 
-## Production diagnostic authorization
+Without SSH authentication:
+- resolve `web-itx.duckdns.org` using the local resolver;
+- if practical, also query at least one independent public resolver;
+- report sanitized A/AAAA addresses;
+- repeat resolution at least twice separated by a short interval to detect rotation;
+- compare whether results are stable.
 
-A narrowly scoped read-only production inspection is authorized.
+DNS agreement is supporting evidence only, NOT sufficient host identity proof.
 
-Use only the canonical committed production target and strict SSH host-key verification from existing production tooling.
+## Step 2 — advertised SSH host keys
 
-Allowed read-only actions:
-- Git/ref/worktree verification;
-- docker inspect / docker ps;
-- sanitized docker logs for api/worker;
-- read-only PostgreSQL SELECTs;
-- read-only file/code inspection.
+Use `ssh-keyscan` only; do not authenticate.
 
-Forbidden:
-- service restart/recreate;
-- DB writes;
-- env edits;
-- Alembic writes;
-- ref moves;
-- ad-hoc Telegram/provider auth calls;
-- direct Telethon connection/probe;
-- decrypting/printing session content;
-- Telegram logout/revoke;
-- code changes.
+For every advertised key type returned on port 22:
+- compute SHA256 fingerprint using `ssh-keygen -lf ... -E sha256`;
+- report key type + fingerprint;
+- never print full key material unless necessary; fingerprints are enough.
 
-Do not print account IDs, Telegram user IDs, peer IDs, phone, session ciphertext/plaintext, bearer tokens, credential key/API hash, provider references, IP addresses, or raw user content.
+Repeat the scan at least 3 times.
 
-## Diagnostic questions
+Determine:
+- whether the repository-pinned fingerprint `SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs` appears on ANY scan;
+- whether presented fingerprints are stable across scans;
+- whether different DNS addresses present different key sets.
 
-### 1. Persisted account state
+If the pinned fingerprint appears again:
+- STOP and report that the mismatch may have been transient/routing-related;
+- do not update the repository;
+- final marker `PRODUCTION_SSH_M4ADH_PIN_REAPPEARED`.
 
-Using read-only DB inspection, return booleans/counts only:
-- exactly one MTProto account row exists for the affected Secretary user;
-- `session_encrypted` is non-empty;
-- account row freshness is consistent with the recent login (relative freshness only);
-- active auth challenge count is zero after completed login;
-- selected manual-group count;
-- configured sync-folder count;
-- active scope count.
+If it does not appear:
+continue to Step 3.
 
-Do NOT decrypt or print the session.
+## Step 3 — independent verification handoff
 
-### 2. Recurring worker concurrency
+Because network keyscan cannot prove identity after a mismatch, do NOT trust or commit any newly observed fingerprint yet.
 
-Inspect:
-- whether a Telegram recurring source-sync job exists;
-- sanitized status: pending/running/failed;
-- last run/failure relative to login/sync attempt;
-- sanitized failure category/class if persisted;
-- whether current configured folder/scope state could have caused `reconcile_scope` provider calls concurrently with the manual sync.
+Return the candidate fingerprints and ask the human to independently verify the actual server host key using a trusted out-of-band path, preferably the hosting/provider console attached to the production machine.
 
-Do not trigger/rearm jobs.
+Human console command for ED25519 if available:
 
-### 3. API/worker evidence
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256`
 
-Inspect only the narrow time window around the latest MTProto login/group-selection/manual-sync activity.
+If ED25519 is absent, inspect the public `/etc/ssh/ssh_host_*_key.pub` files and compute fingerprints for the key types actually advertised.
 
-Return:
-- route names/status codes for MTProto auth/group/sync calls if present;
-- normalized exception/error class names where available;
-- whether manual sync returned authorization-invalid;
-- whether worker independently observed authorization-invalid/provider-unavailable in the same window;
-- whether any `AUTH_KEY_DUPLICATED` / `AuthKeyDuplicatedError` evidence exists;
-- whether any `AUTH_KEY_UNREGISTERED`, `SESSION_REVOKED`, `UnauthorizedError`, or `AuthKeyNotFound` class evidence exists.
+The human should return ONLY:
+- key type;
+- SHA256 fingerprint.
 
-Do not print raw exception payloads if they may contain identifiers.
+Do not ask for any private key content.
 
-### 4. Code-path audit at exact release SHA
+If the human has an already-open SSH session that was established before the mismatch and is unquestionably the production host, that session may also be used only to run the same read-only fingerprint command.
 
-Prove:
-- `session_encrypted` is written only by authorized-account save/update paths, not discovery/history/worker;
-- group selection does not overwrite account session;
-- history sync decrypts the same stored account session;
-- status endpoint is DB-only and can display connected despite provider auth invalidity;
-- existing fake/unit auth tests do not prove a real Telethon 2FA StringSession can be reopened for later provider calls;
-- identify whether `AuthKeyDuplicatedError` is explicitly classified; if not, state its actual current fallback path.
+## Step 4 — no automatic trust update
 
-### 5. Classification
+Do not edit `target.json` even if one candidate looks plausible.
 
-Do NOT repair or re-login during M4AD.
-
-Classify evidence as one of:
-A. provider authorization truly revoked/unregistered;
-B. likely concurrent auth-key duplication;
-C. stored-session persistence/corruption defect;
-D. insufficient evidence.
-
-If evidence is insufficient, propose the smallest separately-authorized diagnostic/test.
+Once the human supplies an independently verified fingerprint matching one of the observed advertised fingerprints, STOP for Architect authorization of a separate tiny repository trust-anchor update.
 
 ## Completion report
 
 Return:
-- production ref/runtime and health, read-only;
-- account/challenge/selection/scope booleans/counts;
-- recurring job state;
-- sanitized API/worker evidence;
-- exact code-path conclusions;
-- whether AuthKeyDuplicated evidence exists;
-- classification A/B/C/D and why;
-- confirmation no Telegram/provider call was made by diagnostic;
-- confirmation no session was decrypted/printed;
-- confirmation no production mutation occurred.
+- current pinned fingerprint;
+- DNS observations/stability;
+- advertised SSH key type/fingerprint set for each scan;
+- whether pinned fingerprint reappeared;
+- whether candidate set is stable;
+- exact human console command needed for independent verification;
+- confirmation no SSH authentication occurred;
+- confirmation no host-key bypass occurred;
+- confirmation no production/repository mutation occurred.
 
-Final marker:
-`TELEGRAM_MTPROTO_M4AD_DIAGNOSIS_READY`
+If independent human verification is required:
+`PRODUCTION_SSH_M4ADH_HUMAN_HOSTKEY_CONFIRM_REQUIRED`
+
+If pinned key reappeared:
+`PRODUCTION_SSH_M4ADH_PIN_REAPPEARED`
 
 Then STOP.
 
