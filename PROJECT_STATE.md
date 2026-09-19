@@ -49,7 +49,8 @@
 - Current authorized phase: Telegram MTProto M4A production account activation and first controlled sync, exactly as specified in `CURRENT_TASK.md`.
 - M4A production preflight: PASS at production runtime/ref `8091736337689b68b4510126e74d9e409397f696`, Alembic `0046`, health/api/worker/db PASS, MTProto backend configured.
 - M4A human Telegram authorization: COMPLETE through existing Account/Settings -> Telegram MTProto UI; connected status confirmed; no sensitive auth/session values inspected or logged; AI quarantine remains disabled; Bot API untouched.
-- M4A current stop point: human-approved sync scope required before any first sync. No folders/groups/default all-account scope were selected automatically; first sync has not run.
+- M4A current stop point revised: user UI evidence shows the running desktop client is stale. At deployed release SHA `8091736337689b68b4510126e74d9e409397f696`, AccountScreen unconditionally includes `TelegramMtprotoAccountSection` between Connections and Sync, but the user's current client shows legacy Telegram Bot block followed directly by Sync. M3 rebuilt backend api/worker only; Flutter desktop client is outside production Compose.
+- Current authorized phase: M4AR stale Linux desktop client refresh from exact release SHA, without backend/schema/ref/env mutation. First sync remains deferred until the refreshed client visibly exposes the MTProto section.
 - C2A uses the existing Postgres recurring source-sync lane; no long-lived Telegram listener/daemon is authorized.
 - C2A target default Telegram polling cadence is 60 seconds, configurable through the existing `source_sync_telegram_mtproto_interval_seconds` setting.
 - C3A/C3B and RF1/RF1R are accepted. M3 is now authorized only for exact release SHA `8091736337689b68b4510126e74d9e409397f696`, exact rollback SHA `5cce4b57b14e0052a038acae1354a2821a2bb77b`, and exact schema transition `0041 -> 0046` through the accepted migration harness.
