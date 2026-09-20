@@ -1,50 +1,95 @@
-# Current task — Telegram MTProto M4AR2 complete: await next authorization
+# Current task — Telegram MTProto M4AS1: one controlled backfill continuation Sync
 
 ## Status
 
-M4AR2 read-only reconstruction is complete.
+The first post-fix human Sync completed successfully and committed persistent progress.
 
 Production runtime/ref:
 `b7fbdc71584cfde042a998fbfefb06015175a205`
 
-Post-Sync persisted state:
+Persisted state after that Sync:
 - `INITIAL_STATE=false`
 - `HISTORY_COMPLETE_BEFORE=false`
 - `BACKFILL_CURSOR_PRESENT_BEFORE=true`
 
-Pre-Sync state was:
-- `INITIAL_STATE=true`
-- `HISTORY_COMPLETE_BEFORE=false`
-- `BACKFILL_CURSOR_PRESENT_BEFORE=false`
+Therefore initial import succeeded, but the bounded 14-day history backfill is not complete.
 
-Read-only structural verification:
-- production/runtime guards PASS;
-- Alembic `0046`;
-- account/manual-selection cardinality PASS;
-- session/reference decrypt/parse/peer-match PASS;
-- `FAILURE_SUBSTAGE=NONE`;
-- `RAW_EXCEPTION_CLASS=NONE`;
-- `TELEGRAM_NETWORK_CALLS=0`;
-- no DB writes/materialization;
-- no production mutation.
+The existing UI exposes the per-Sync aggregate summary only while the Account screen remains mounted.
 
-Conclusion:
-- the deployed `None -> 0` Telethon bound normalization fixed the prior initial iterator `TypeError`;
-- the single human Sync completed successfully and committed persistent history progress;
-- history is not yet complete and a backfill cursor remains.
+## Goal
 
-## Authorization state
+Perform exactly ONE additional human-controlled Sync of the same already-selected Telegram group to continue the bounded backfill.
 
-No additional Telegram/provider action is currently authorized.
+This task is HUMAN UI ONLY.
+
+No Executor SSH, provider probe, login, discovery, or production mutation is authorized.
+
+## Human procedure
+
+1. Launch/open the persistent Secretary preview client.
+2. Open Account / Telegram MTProto.
+3. Confirm:
+   - account is connected;
+   - the same previously selected group remains selected.
+4. Do NOT Apply Scope.
+5. Press `Синхронизировать` exactly once for that same selected group.
+6. Stay on the Account screen until the operation finishes.
+7. Capture the visible Sync summary immediately before navigating away.
+
+Expected summary format includes safe aggregate values such as:
+- scanned
+- materialized
+- created
+- updated
+- unchanged
+- skipped
+- history_complete
+
+Do not include peer/account/group IDs in the report.
+
+## One-shot rule
+
+Exactly one Sync click is authorized.
+
+If it errors:
+- do not retry;
+- do not leave and re-enter to attempt again;
+- do not login/re-login;
+- do not Apply Scope;
+- do not change group/folder selection.
+
+If it succeeds and `history_complete=false`:
+- STOP; another backfill continuation requires a new authorization.
+
+If it succeeds and `history_complete=true`:
+- STOP; bounded initial history backfill is complete.
+
+## Strictly forbidden
 
 Do NOT:
-- click Sync again;
-- Apply Scope;
-- run provider probes;
-- login/re-login;
-- change group/folder selection;
-- mutate production.
+- click Sync more than once;
+- run human-shell provider probes;
+- use Executor or manual SSH;
+- run migrations;
+- edit production;
+- enable MTProto AI;
+- change Bot API;
+- change scope/selections;
+- login/re-login.
 
-A later task may authorize another bounded Sync to continue backfill.
+## Required report
+
+Return only:
+- account connected: yes/no;
+- same selected group present: yes/no;
+- Sync clicked: exactly once;
+- visible aggregate summary without IDs;
+- `history_complete=true|false`;
+- or exact user-facing error if it fails.
+
+Final marker:
+`TELEGRAM_MTPROTO_M4AS1_BACKFILL_SYNC_COMPLETE`
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
