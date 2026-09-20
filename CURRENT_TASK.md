@@ -1,102 +1,98 @@
-# Current task — Telegram MTProto M4AR1: one human manual Sync after bound-normalization deploy
+# Current task — Telegram MTProto M4AR2: reconstruct one-shot Sync outcome read-only
 
 ## Status
 
-Production deploy M4AQ1 is complete and PASS.
+The single M4AR1 human Sync click was used after deploying:
 
-Production runtime/ref:
 `b7fbdc71584cfde042a998fbfefb06015175a205`
 
-Alembic:
-`0046`
+The user navigated away from the Account screen before observing the result and then returned.
 
-Runtime invariants:
-- API/worker recreated and healthy;
-- DB container unchanged;
-- DB volume unchanged;
-- `.env` unchanged;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API untouched;
-- stored Telegram MTProto session and selection state preserved by deploy.
+The Flutter Account widget keeps the latest Sync summary only in local in-memory `_lastSync` state. Navigating away disposes that state, so no counters are expected after returning.
 
-The deployed fix normalizes absent Telethon history bounds:
-- `min_message_id=None -> min_id=0`
-- `max_message_id=None -> max_id=0`
-
-M4AO2 previously proved the old runtime failed before the first message at:
-- `STAGE_3_PAGE1_ITERATION`
-- `RAW_EXCEPTION_CLASS=TypeError`
-- seen/converted = 0/0
-after connect and authorization PASS.
+Do NOT perform a second Sync.
 
 ## Goal
 
-Perform exactly ONE human-controlled manual Sync of the already-selected Telegram group through the existing Secretary UI.
+Reconstruct whether the one-shot Sync advanced persistent Telegram history state, using the already-reviewed zero-provider human-shell structural probe.
 
-This task is HUMAN UI ONLY.
+No Telegram/provider calls.
+No DB writes.
+No production mutation.
 
-No Executor production SSH or provider probe is authorized.
+## Authorization
 
-## Human procedure
+BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for exactly one run of:
 
-Use the existing fresh/persistent Secretary client already connected to the production backend.
+`ops/production/manual_mtproto_structural_probe.sh`
 
-1. Open Account / Telegram MTProto controls.
-2. Confirm the existing account still appears connected.
-3. Confirm the previously manually-selected group is still selected.
-4. Do NOT Apply Scope.
-5. Press Sync exactly once for that already-selected group.
-6. Wait for the UI result.
-7. Capture the exact sanitized outcome:
-   - success indication / imported-count summary if shown; or
-   - exact user-facing error text/status.
-8. Then STOP.
+against expected production release:
 
-## One-shot rule
+`b7fbdc71584cfde042a998fbfefb06015175a205`
 
-Exactly one Sync click is authorized.
+This is HUMAN SHELL ONLY.
 
-If it errors:
-- do not retry;
-- do not log out/re-login;
-- do not re-enter code/password;
-- do not Apply Scope;
-- do not change selection;
-- do not refresh/discover folders/groups as a workaround.
+Executor subprocess SSH is not authorized.
 
-If the UI itself refreshes status automatically as part of normal rendering, that is acceptable; do not manually trigger unrelated discovery actions.
+## Exact command
+
+From the proven human sandbox shell:
+
+```bash
+cd ~/work/secretary-prerelease
+git fetch origin
+git checkout --detach origin/main
+git rev-parse HEAD
+bash ops/production/manual_mtproto_structural_probe.sh b7fbdc71584cfde042a998fbfefb06015175a205
+```
+
+The local checkout may be current `origin/main`; the probe itself must require production HEAD/ref exact release SHA above.
+
+## Interpretation
+
+The important persisted fields are:
+
+- `INITIAL_STATE`
+- `HISTORY_COMPLETE_BEFORE`
+- `BACKFILL_CURSOR_PRESENT_BEFORE`
+
+Known pre-Sync state was:
+
+- `INITIAL_STATE=true`
+- `HISTORY_COMPLETE_BEFORE=false`
+- `BACKFILL_CURSOR_PRESENT_BEFORE=false`
+
+Earlier provider evidence proved the selected group has history. Therefore:
+
+- if `INITIAL_STATE=false`, the one-shot Sync advanced persistent history state;
+- if `INITIAL_STATE=true`, do not retry; report result and STOP for further read-only diagnosis.
+
+Also require:
+- `TELEGRAM_NETWORK_CALLS=0`
+- `FAILURE_SUBSTAGE=NONE`
+- production/runtime guards PASS.
 
 ## Strictly forbidden
 
 Do NOT:
-- run the human-shell provider probe again;
-- run application/provider diagnostics before seeing the Sync result;
-- use Executor SSH;
-- use manual production SSH/Compose;
-- mutate production;
+- click Sync again;
+- run the two-page provider probe;
+- connect to Telegram;
+- construct TelegramClient;
+- login/re-login;
+- Apply Scope;
+- change group/folder selection;
+- write DB;
+- materialize/upsert;
+- restart/recreate services;
 - run migrations;
+- change production files/env/refs;
 - enable MTProto AI;
-- change Bot API;
-- change Telegram scope/selections;
-- perform a second Sync.
+- change Bot API.
 
 ## Required report
 
-Return only the human-observed sanitized result:
-- account connected status: yes/no;
-- selected group still present: yes/no;
-- Sync clicked: exactly once;
-- final UI success/error text;
-- any visible aggregate count/status that contains no IDs/content/secrets.
-
-Do not include:
-- message contents;
-- account/group/peer IDs;
-- session/reference values;
-- Telegram credentials.
-
-Final marker after reporting:
-`TELEGRAM_MTPROTO_M4AR1_HUMAN_SYNC_COMPLETE`
+Paste the complete sanitized probe output back to the Architect.
 
 Then STOP.
 
