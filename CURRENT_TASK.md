@@ -1,143 +1,183 @@
-# Current task — Telegram MTProto M4AO2: one human-shell two-page provider probe
+# Current task — Telegram MTProto M4AP1: normalize absent Telethon history bounds
 
 ## Status
 
-M4AO1 probe build/review is complete at canonical main commit:
+M4AO2 one-shot human-shell provider probe completed and localized the live failure.
 
-`10bed20db42677098c3c47c81140c6dec7714229`
+Observed live result:
+- production guards PASS;
+- structural/session/reference checks PASS;
+- connect PASS;
+- is_user_authorized PASS;
+- first history iterator failed before yielding any message;
+- `PAGE1_PASS=false`;
+- `PAGE1_MESSAGES_SEEN=0`;
+- `PAGE1_ENTRIES_CONVERTED=0`;
+- `PAGE1_ENTRIES_NONE=0`;
+- `FAILURE_STAGE=STAGE_3_PAGE1_ITERATION`;
+- `RAW_EXCEPTION_CLASS=TypeError`;
+- `MESSAGE_ORDINAL=1`;
+- logical provider counts connect/auth/iter = 1/1/1;
+- `TELEGRAM_NETWORK_CALLS=3`;
+- no DB writes/materialization;
+- no production mutation.
 
-Reviewed probe artifacts:
-- `ops/production/manual_mtproto_history_two_page_probe.sh`
-- `ops/production/manual_mtproto_history_two_page.py`
-- `ops/production/tests/test_manual_mtproto_history_two_page.py`
+Root cause:
+`TelethonMtprotoTransport.fetch_history` forwards absent optional bounds as explicit `None`:
 
-Local review evidence:
-- 22 focused tests PASS;
-- `bash -n` PASS;
-- Ruff PASS;
-- diff-check PASS;
-- production SSH = 0;
-- Telegram/provider calls = 0;
-- production mutation = 0.
+- `min_message_id=None -> min_id=None`
+- `max_message_id=None -> max_id=None`
 
-M4AN2 structural localization already PASS. Current production runtime/ref remains exact:
+Telethon v1 history iteration treats these bounds as numeric values during iterator initialization, including expressions equivalent to:
+- `max(offset_id, max_id)` in normal order;
+- `max(offset_id, min_id)` in reverse order.
 
-`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
+Therefore explicit `None` can raise `TypeError` before the first message is yielded.
 
-Current state before provider probe:
-- `INITIAL_STATE=true`
-- `HISTORY_COMPLETE_BEFORE=false`
-- `BACKFILL_CURSOR_PRESENT_BEFORE=false`
+This explains the M4AO2 failure and also explains why earlier raw page1 diagnostics could pass when absent bounds were omitted rather than explicitly passed as None.
 
-Earlier M4AH3 proved page1 with 100 messages and 100 exact conversions.
+## Goal
 
-## Authorization
+Implement the smallest transport-boundary fix and focused regressions.
 
-Authorize exactly ONE manual live execution of the reviewed two-page provider probe from the proven human sandbox shell.
+No production deploy in this task.
 
-This authorization is HUMAN-SHELL ONLY.
+## Executor workspace
 
-The Executor subprocess must NOT execute production SSH for this task.
+Work only from:
 
-## Exact human command
+`~/work/secretary-executor`
 
-From the canonical human-shell checkout:
+Canonical origin:
+
+`https://github.com/d-yacenko/secretary-prerelease.git`
+
+Do not use:
+- `~/work/secretary`
+- `~/work/secretary-prerelease`
+
+for implementation work.
+
+## Bootstrap
+
+Before implementation:
 
 ```bash
-cd ~/work/secretary-prerelease
 git fetch origin
-git checkout --detach origin/main
+git switch main
+git pull --ff-only
+git remote get-url origin
 git rev-parse HEAD
-bash ops/production/manual_mtproto_history_two_page_probe.sh
+git status --short
 ```
 
-Before running the probe, `git rev-parse HEAD` must equal:
+Require:
+- exact canonical origin;
+- current `origin/main`;
+- clean worktree.
 
-`10bed20db42677098c3c47c81140c6dec7714229`
+Then read:
+- `CURRENT_TASK.md`
+- `PROJECT_STATE.md`
+- `AGENTS.md`
+- `backend/app/connectors/telegram/mtproto_transport.py`
+- `backend/tests/test_telegram_mtproto_a3.py`
+- `backend/tests/test_telegram_mtproto_m4ai.py`
 
-If it does not, STOP and do not run the probe.
+## Required implementation
 
-## One-shot semantics
+In `TelethonMtprotoTransport.fetch_history`, normalize absent bounds to Telethon's numeric sentinel before calling `iter_messages`:
 
-The probe may be launched exactly once under this authorization.
+- absent `min_message_id` => `min_id=0`
+- absent `max_message_id` => `max_id=0`
 
-No automatic or manual retry.
+Keep the public method signature unchanged.
 
-A local pre-SSH failure does not consume the provider run.
+Do not change:
+- page size;
+- reverse semantics;
+- error taxonomy;
+- auth handling;
+- conversion behavior;
+- retry behavior;
+- discovery;
+- write operations;
+- DB schema;
+- materialization.
 
-The live provider run is considered started once the reviewed remote helper begins provider operations.
+Prefer the smallest explicit boundary normalization.
 
-If any live provider stage fails, STOP and return the sanitized output exactly as emitted. Do not retry.
+## Required regressions
 
-## Allowed live provider work
+Add focused tests that assert the real transport calls Telethon with numeric bounds in all relevant history modes.
 
-Maximum:
-- 2 pages;
-- 200 messages total;
-- 6 logical provider operations total;
-- connect <=2;
-- is_user_authorized <=2;
-- iter_messages <=2.
+At minimum:
 
-Page1:
-- fresh Telethon client;
-- connect;
-- authorization check;
-- iter_messages limit=100 reverse=false;
-- exact `_history_entry_from_message` conversion.
+1. Initial history:
+   - `min_message_id=None`
+   - `max_message_id=None`
+   - `reverse=False`
+   - fake client records:
+     - `min_id == 0`
+     - `max_id == 0`
 
-After page1:
-- exact production `_next_backfill_state` + cutoff semantics;
-- derive `PAGE2_REQUIRED`.
+2. Incremental history:
+   - positive `min_message_id`
+   - absent max
+   - `reverse=True`
+   - fake client records:
+     - exact positive `min_id`
+     - `max_id == 0`
 
-Page2 only if required:
-- NEW fresh Telethon client;
-- connect;
-- authorization check;
-- iter_messages max_id=derived cursor, limit<=100, reverse=false;
-- exact conversion.
+3. Backfill history:
+   - absent min
+   - positive `max_message_id`
+   - `reverse=False`
+   - fake client records:
+     - `min_id == 0`
+     - exact positive `max_id`
 
-## Strictly forbidden
+4. Preserve current provider-neutral mapping:
+   - a non-auth `TypeError` from provider iteration is still mapped to `TelegramMtprotoProviderUnavailableError`.
+   - do not weaken existing M4AI taxonomy regressions.
 
-Do NOT:
-- call Secretary Sync API;
-- call application `fetch_history`;
-- login/re-login;
-- discover folders/groups/dialogs;
-- Apply Scope;
-- perform Telegram write RPCs;
-- perform DB writes/flush/commit;
-- materialize/upsert;
-- restart/recreate services;
-- edit production files/env;
-- change refs;
-- run migrations;
-- enable MTProto AI;
-- change Bot API;
-- print raw message content, IDs, session/reference, credentials, traceback, or raw stderr;
-- retry the probe.
+5. If practical, include one regression that would fail under explicit `None` but pass under numeric sentinels, closely modeling Telethon iterator initialization.
 
-## Required outcome
+## Verification
 
-Paste the complete sanitized probe output back to the Architect.
+Run focused tests for:
+- Telegram MTProto A3 history transport/service;
+- M4AI taxonomy;
+- any newly added regression file.
 
-Expected successful terminal markers include:
-- reviewed remote terminal marker;
-- `MANUAL_M4AO1_END=true`.
+Run Ruff on changed Python files.
 
-The important diagnostic fields are:
-- PAGE1_PASS / page1 counts;
-- PAGE2_REQUIRED;
-- PAGE2_PASS / page2 counts when required;
-- CONNECT_CALL_COUNT;
-- IS_USER_AUTHORIZED_CALL_COUNT;
-- ITER_MESSAGES_CALL_COUNT;
-- TELEGRAM_NETWORK_CALLS;
-- FAILURE_STAGE / RAW_EXCEPTION_CLASS / MESSAGE_ORDINAL if failure occurs.
+Run repository diff-check / relevant static checks.
 
-Do not interpret or fix the result locally.
+No live Telegram/provider calls.
+No production SSH.
+No production mutation.
 
-Final human action:
-run once, paste output, STOP.
+## Deliverable
+
+If all checks PASS:
+- commit/push to canonical main;
+- update `PROJECT_STATE.md` with the implemented root-cause fix and verification;
+- do NOT deploy.
+
+Report:
+- commit SHA;
+- changed files;
+- focused test counts/results;
+- Ruff/diff-check;
+- confirmation production SSH = 0;
+- confirmation Telegram/provider calls = 0;
+- confirmation production mutation = 0.
+
+Final marker:
+
+`TELEGRAM_MTPROTO_M4AP1_BOUND_NORMALIZATION_READY`
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
