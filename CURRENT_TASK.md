@@ -1,187 +1,137 @@
-# Current task — Telegram MTProto M4AJR2: deploy already-promoted exact candidate
+# Current task — Telegram MTProto M4AK: one human-controlled manual Sync
 
 ## Status
 
-The GitHub production ref promotion is already complete.
+M4AJR2 production deployment: SUCCESS.
 
-Current verified GitHub refs:
-- `origin/production = 23fa07df213d5a70a6dc1d3c8b32af39228107eb`
-- current `main` is ahead with documentation/recovery commits.
-
-Accepted production release:
+Production runtime/ref:
 `23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Rollback/runtime-before-deploy SHA:
-`8091736337689b68b4510126e74d9e409397f696`
+Origin production ref:
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Expected Alembic:
+Production health:
+PASS
+
+Alembic:
 `0046`
 
-Important distinction:
-- GitHub `production` branch has already been promoted to the accepted release;
-- production runtime/container state has NOT yet been confirmed deployed to that release;
-- last verified production runtime remains rollback SHA `8091736337689b68b4510126e74d9e409397f696`.
-
-This task authorizes ONLY Phase 2: run the normal deploy harness unchanged.
-
-No production-ref promotion/update is needed or authorized during this task.
-
-## Preparation
-
-1. `git fetch origin`.
-2. Read:
-   - `origin/main:CURRENT_TASK.md`
-   - `origin/main:PROJECT_STATE.md`
-   - `origin/main:AGENTS.md`
-   - `docs/deploy.md`
-   - production files named by that runbook.
-3. Use canonical clean local `main`.
-4. Require local `main == origin/main`.
-5. Verify:
-   - `origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
-   - release SHA exists locally;
-   - rollback SHA exists locally.
-6. Do NOT move any GitHub ref in this task.
-
-If `origin/production` is not exact release SHA, STOP.
-
-## Authorized deploy command
-
-Run exactly the existing normal deployment harness, unchanged:
-
-`python3 ops/production/deploy.py --release-sha 23fa07df213d5a70a6dc1d3c8b32af39228107eb --rollback-sha 8091736337689b68b4510126e74d9e409397f696 --expected-alembic 0046`
-
-Do not edit `deploy.py` or `remote_deploy.py`.
-
-Do not bypass the harness with manual SSH.
-
-## Harness preflight expectations
-
-The harness must fail closed unless all required conditions pass, including:
-
-- canonical local checkout;
-- clean local main;
-- local main == origin/main;
-- canonical target.json;
-- pinned production SSH host key;
-- schema-neutral release;
-- production repo clean;
-- production origin correct;
-- `origin/production == release SHA`;
-- current production HEAD is either rollback SHA or release SHA;
-- db/api/worker present;
-- DB healthy;
-- API/worker running;
-- health endpoint PASS;
-- DB volume captured;
-- .env hash captured;
-- API/worker required environment consistent;
-- DB TCP auth PASS;
-- Alembic 0046.
-
-If harness blocks before runtime mutation:
-STOP and report exact sanitized reason.
-
-## Authorized runtime mutation
-
-Only the existing harness may:
-
-- switch production checkout to exact release SHA;
-- build api + worker;
-- recreate api + worker.
-
-Must preserve:
-
-- DB container;
-- DB volume/data;
+Preserved:
+- DB container/volume/data;
 - .env;
-- credential encryption key;
+- credential key;
 - stored Telegram session;
-- Telegram selections/scope;
-- AI flag;
-- Bot API state;
-- SSH trust data.
+- existing selected group/scope;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- Bot API state.
 
-No migration is authorized; Alembic must remain 0046.
+No Telegram login/history/manual Sync was performed during deploy.
+
+## Goal
+
+Perform exactly ONE human-controlled manual Sync of the already-selected Telegram group through the current Secretary UI, then STOP and report the result.
+
+This task is a human validation step, not an automated retry loop.
+
+## Preconditions
+
+Before clicking Sync:
+
+- use the current Secretary client already connected to the deployed backend;
+- do NOT re-login;
+- do NOT enter Telegram code/password;
+- do NOT change selected groups;
+- do NOT change folders;
+- do NOT Apply Scope;
+- do NOT revoke Telegram session;
+- do NOT restart or redeploy production.
+
+If the Telegram account/group controls do not load normally, STOP and report the visible UI state instead of attempting login or repair.
+
+## Human action
+
+Navigate to the existing Telegram MTProto account/group section.
+
+Locate the already-selected manual group.
+
+Press that group's:
+`Синхронизировать`
+
+Exactly ONCE.
+
+Do not press Sync again, even if:
+- no counters appear immediately;
+- an error appears;
+- the UI looks unchanged.
+
+Do not click global/folder Apply Scope.
+
+## Evidence to report
+
+After the single Sync action, report exactly what the UI shows.
+
+### If success
+
+Report:
+- whether an error banner/message appeared;
+- any visible counters/results, including scanned/materialized/created/updated/unchanged/skipped if shown;
+- whether history_complete or equivalent state is visible;
+- whether the group remains selected;
+- whether connected account identity remains visible.
+
+### If failure
+
+Report:
+- exact user-visible error text;
+- whether connected account identity remains visible;
+- whether groups/folders still load after the failure;
+- whether the selected group remains selected;
+- whether any counters appeared before the error.
+
+Do NOT retry.
+
+## Interpretation
+
+A. Sync succeeds
+=> M4 activation path is operational after taxonomy fix. Next step is verification of imported objects/UI behavior and then close M4 activation.
+
+B. HTTP/UI provider-unavailable style error
+=> taxonomy fix is working; capture exact visible message and stop. Do not re-login.
+
+C. Authorization-invalid appears again
+=> stop immediately. This would now be meaningful evidence because the broad ValueError/TypeError remap has been removed.
+
+D. No counters / generic Secretary connectivity error
+=> stop and report exact UI state; do not infer Telegram auth failure.
 
 ## Strictly forbidden
 
 Do NOT:
-
-- move `origin/production`, `main`, tags, or any other ref;
-- manually SSH around deploy.py;
-- manually git-switch production outside harness;
-- deploy any other SHA;
-- run migration 0047;
-- change schema;
-- recreate/delete DB container or volume;
-- edit .env;
-- change credential key;
-- login/re-login Telegram;
-- submit Telegram code/password;
-- run Telegram manual Sync/history import;
+- retry Sync;
+- re-login;
+- enter Telegram auth code/password;
 - Apply Scope;
-- change groups/folders;
+- change group/folder selections;
+- revoke/delete session;
+- run diagnostic scripts;
+- mutate production;
 - enable MTProto AI;
-- change/retire Bot API;
-- change target.json or SSH trust;
-- perform unrelated cleanup.
+- change Bot API.
 
-## Rollback
+## Final report
 
-If rollout fails after service recreation, use the harness's built-in rollback to:
-
-`8091736337689b68b4510126e74d9e409397f696`
-
-If runtime rollback succeeds:
-- STOP;
-- report final runtime SHA and health;
-- do NOT change GitHub `origin/production` during this task. Ref restoration, if required, needs separate authorization because this task explicitly forbids ref movement.
-
-## Required report
-
-### Preflight / transport
-- origin/production exact release: true/false;
-- target/pin;
-- SSH;
-- production old HEAD;
-- production worktree clean;
-- API/worker/DB pre-state;
-- DB health;
-- health endpoint;
-- Alembic.
-
-### Rollout
-- release HEAD selected;
-- API recreated;
-- worker recreated;
-- DB container unchanged;
-- DB volume unchanged;
-- env file unchanged;
-- migration action: none.
-
-### Final
-- production runtime/ref SHA;
-- origin/production SHA;
-- health;
-- API/worker/DB status;
-- Alembic;
-- DB/env/key preservation;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API untouched;
-- Telegram login/history actions: none.
-
-If rollback:
-- sanitized failure reason;
-- rollback PASS/FAIL;
-- final runtime SHA;
-- final health.
+Return:
+- one Sync click performed: yes/no;
+- visible result/error;
+- counters if any;
+- account connected status;
+- group selection state;
+- whether folders/groups still load;
+- confirmation no retry/re-login/scope change occurred.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AJR2_DEPLOY_READY`
+`TELEGRAM_MTPROTO_M4AK_HUMAN_SYNC_READY`
 
 Then STOP.
-
-After successful deploy, the NEXT phase will be a separate human-controlled manual Sync of the already-selected Telegram group. Do not perform it during this task.
 
 `CURRENT_TASK.md` is the source of active authorization.
