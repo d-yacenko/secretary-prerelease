@@ -89,3 +89,5 @@
 `CURRENT_TASK.md` is the source of active authorization.
 
 - Bootstrap correction: prior `ssh_credentials_unavailable` conclusion from SSH_AUTH_SOCK/ssh-add/ssh -G inspection was a false negative. Human evidence showed successful `ssh root@web-itx.duckdns.org` from the same sandbox. Canonical SSH readiness is now determined by an actual pinned read-only `BatchMode=yes` SSH no-op; agent/socket/key-inventory checks are non-gating diagnostics only. If simple sandbox SSH succeeds while a harness fails, investigate invocation differences rather than credentials.
+
+- Bootstrap correction 2: repeated `ssh_invocation_mismatch` came specifically from treating `BatchMode=yes` as mandatory even though direct sandbox SSH to the canonical production user succeeds. For BREAK-GLASS read-only diagnostics, the required invariant is now strict pinned host-key verification plus public-key-only auth (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, `PreferredAuthentications=publickey`). `BatchMode` is non-gating for this diagnostic path. Normal deploy harness remains unchanged.
