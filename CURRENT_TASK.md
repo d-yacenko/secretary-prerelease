@@ -1,202 +1,195 @@
-# Current task — Telegram MTProto M4AM1R2: accept structural/preflight failure protocol
+# Current task — Telegram MTProto M4AM2: one approved live two-page history probe
 
 ## Status
 
-M4AM1R implementation:
-`ee04da7c88dc2fec1e838a92d07ab841beb25892`
+The deterministic two-page history diagnostic is ARCHITECT ACCEPTED for exactly one live execution.
 
-Branch:
+Approved branch:
 `review/telegram-mtproto-m4am`
 
-Architect review: NOT yet accepted for live execution.
+Approved exact SHA:
+`48816aedd639268770b2fb67caa22e048ce03493`
 
-Confirmed fixed:
-- realistic PAGE1 PASS + PAGE2 REQUIRED + PAGE2 failure is accepted;
-- PAGE2 success/failure contradictions are rejected;
-- PAGE1 success/failure contradictions are rejected;
-- success totals are checked against page sums;
-- `_history_entry_from_message(...) is None` now emits safe `InvalidHistoryEntry`;
-- inner structural `fail(...)` is terminal via exit 0;
-- provider budget/fresh-client/no-write/no-materialization behavior remains intact.
+Production runtime/ref expected:
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-One protocol blocker remains.
+Current origin/production at task creation:
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-## Blocker — parser rejects structural/preflight failures
+Reported/reviewed verification:
+- focused tests: 51 passed;
+- Ruff PASS;
+- git diff --check PASS;
+- strict pinned SSH;
+- no DB writes/materialization/application fetch_history;
+- fresh TelegramClient per history page;
+- <=2 pages / <=200 messages / <=6 bounded provider-operation calls;
+- sanitized page-specific + structural failure protocol.
 
-Current `parse_output()` treats every `FAILURE_STAGE` as if it must be PAGE1 or PAGE2.
+This authorizes ONLY one diagnostic execution. It is not approval to merge/deploy the diagnostic harness.
 
-Therefore valid sanitized failures such as:
+## Goal
 
-- `STAGE_1_IMPORTS`
-- `STAGE_1_DB_SESSION`
-- `STAGE_1_SESSION_DECRYPT`
-- `STAGE_1_REFERENCE_DECRYPT`
-- `STAGE_1_REFERENCE_PARSE`
-- `STAGE_1_REFERENCE_PEER_MATCH`
+Determine whether the current production-like manual history sequence fails on:
+- page 1;
+- page 2/backfill;
+- iteration;
+- exact conversion;
+- auth/connect;
+- or currently passes completely.
 
-are rejected with:
-`failure stage is not page-specific`.
+Do not retry the Secretary Sync during this phase.
 
-Additionally the outer remote helper emits:
+## Preparation
 
-- `STAGE_0_RELEASE_REF`
-- `STAGE_0_PRODUCTION_REF`
-- `STAGE_0_WORKTREE`
+1. `git fetch origin`.
+2. Read:
+   - `origin/main:CURRENT_TASK.md`
+   - `origin/main:PROJECT_STATE.md`
+   - `origin/main:AGENTS.md`
+3. Use exact diagnostic SHA:
+   `48816aedd639268770b2fb67caa22e048ce03493`
+4. Require clean local worktree.
+5. Verify:
+   - `origin/review/telegram-mtproto-m4am == 48816aedd639268770b2fb67caa22e048ce03493`;
+   - `origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
+   - `ops/production/target.json` unchanged.
+6. Do not edit/amend/rebase/cherry-pick before run.
 
-but these are not currently present in `FAILURE_STAGES`, so those guard failures are also rejected by the parent parser.
+## Single authorized execution
 
-This violates the diagnostic contract: valid sanitized pre-provider failures must survive intact.
+Run exactly once from the approved diagnostic SHA:
 
-## Required fix
+`python3 ops/production/diagnose_mtproto_history_two_page.py`
 
-### 1. Add explicit preflight/structural stages
+Built-in maximum 3 SSH attempts are allowed only before remote execution starts.
 
-Add to the accepted failure-stage set:
+Once the remote begin marker has been observed:
+- no retry;
+- no second manual execution.
 
-- `STAGE_0_RELEASE_REF`
-- `STAGE_0_PRODUCTION_REF`
-- `STAGE_0_WORKTREE`
+## Provider budget
 
-Keep existing STAGE_1 and page stages.
+The probe itself may perform only what its reviewed contract permits:
 
-### 2. Classify failure stage families
+- page 1 only if current production state requires it;
+- page 2 only if the reproduced production state requires it;
+- fresh TelegramClient per page;
+- connect <=2 total;
+- is_user_authorized <=2 total;
+- iter_messages <=2 total;
+- consume <=200 total messages;
+- exact _history_entry_from_message conversion only;
+- total bounded provider-operation counter <=6.
 
-Parser must distinguish three families:
+Always disconnect each created client.
 
-#### Preflight / structural failures
+No discovery/login/write RPCs.
 
-Includes:
-- STAGE_0_RELEASE_REF
-- STAGE_0_PRODUCTION_REF
-- STAGE_0_WORKTREE
-- STAGE_1_IMPORTS
-- STAGE_1_DB_SESSION
-- STAGE_1_SESSION_DECRYPT
-- STAGE_1_REFERENCE_DECRYPT
-- STAGE_1_REFERENCE_PARSE
-- STAGE_1_REFERENCE_PEER_MATCH
+## Strictly forbidden
 
-For these:
-- require `RAW_EXCEPTION_CLASS`;
-- require `MESSAGE_ORDINAL`;
-- require `TELEGRAM_NETWORK_CALLS`;
-- reject PAGE1_PASS/PAGE2_PASS;
-- reject page success totals;
-- provider network calls must be 0 for STAGE_0/STAGE_1 structural failures;
-- preserve any already-emitted safe structural booleans;
-- accept sanitized result.
+Do NOT:
+- run the probe a second time;
+- retry Secretary Sync;
+- call application fetch_history();
+- materialize/upsert objects;
+- write DB;
+- login/re-login;
+- submit Telegram code/password;
+- discover folders/groups;
+- Apply Scope;
+- change selections;
+- send/edit/delete/mark-read;
+- emit message/peer/user IDs;
+- emit message text/body/sender/timestamps;
+- emit session/reference/credentials;
+- print raw traceback/stderr;
+- restart/recreate production;
+- edit production files/env;
+- change refs;
+- run migrations;
+- enable MTProto AI;
+- change Bot API.
 
-#### PAGE1 failures
+## Required report
 
-Keep current page1 consistency rules.
+Return only sanitized harness facts.
 
-#### PAGE2 failures
+### Transport/guards
+- attempt count;
+- pin;
+- host-key;
+- SSH auth;
+- remote execution;
+- production release/ref/worktree guards.
 
-Keep current page2 consistency rules:
-- PAGE1_PASS=true;
-- PAGE2_REQUIRED=true;
-- no PAGE2_PASS;
-- no overall success totals.
+### Structural state
+- account exactly one;
+- manual-selected group exactly one;
+- INITIAL_STATE;
+- HISTORY_COMPLETE_BEFORE;
+- BACKFILL_CURSOR_PRESENT_BEFORE;
+- session decrypt/StringSession parse;
+- reference decrypt/parse/peer-match.
 
-### 3. Network-call field required on all failures
+### Page sequence
+- PAGE2_REQUIRED;
+- PAGE1_PASS if emitted;
+- PAGE1_MESSAGES_SEEN;
+- PAGE1_ENTRIES_CONVERTED;
+- PAGE1_ENTRIES_NONE;
+- PAGE2_PASS if emitted;
+- PAGE2_MESSAGES_SEEN;
+- PAGE2_ENTRIES_CONVERTED;
+- PAGE2_ENTRIES_NONE;
+- totals;
+- call counts;
+- TELEGRAM_NETWORK_CALLS.
 
-Require:
-`TELEGRAM_NETWORK_CALLS`
+### Failure
+If failure occurs:
+- FAILURE_STAGE;
+- RAW_EXCEPTION_CLASS;
+- MESSAGE_ORDINAL;
+- TELEGRAM_NETWORK_CALLS;
+- any safe fields already emitted before failure.
 
-for every failure result.
+Also confirm:
+- no DB writes/materialization;
+- no content/IDs/session/reference emitted;
+- no login/discovery/write RPC;
+- production unchanged.
 
-For structural/preflight failures:
-- must equal 0.
+## Interpretation
 
-For page failures:
-- must remain within existing bound and coherent enough for the attempted stage.
+A. STAGE_0 / STAGE_1 structural failure
+=> harness/runtime/state issue; no Telegram auth conclusion.
 
-No need to overfit exact Telethon packet counts; use the probe's own bounded operation counter.
+B. PAGE1 connect/auth failure
+=> current live session/connect issue at first history page.
 
-### 4. Preserve fail-closed behavior
+C. PAGE1 iteration/conversion ValueError/TypeError
+=> exact non-auth root class localized to first page.
 
-Still reject:
-- unknown stages;
-- duplicate keys;
-- malformed booleans/counts;
-- stderr;
-- child nonzero;
-- raw/unknown output;
-- impossible success/failure combinations.
+D. PAGE2 connect/auth failure
+=> first page currently works, second fresh-client page fails at connect/auth.
 
-Do not loosen raw-output filtering.
+E. PAGE2 iteration/conversion ValueError/TypeError
+=> exact root localized to second/backfill page; explains M4AK 503 path if reproducible.
 
-## Authorization
+F. PAGE1/PAGE2 conversion InvalidHistoryEntry
+=> exact message conversion returned None on that page.
 
-This task authorizes only:
-- minimal parser/protocol corrective;
-- focused tests;
-- Ruff;
-- git diff --check;
-- commit + push on same review branch.
+G. Both required pages PASS
+=> current provider sequence works now; M4AK 503 was transient/intermittent. Do not retry Sync in this task.
 
-NO production SSH.
-NO live provider probe.
-NO Sync retry.
+H. PAGE2_REQUIRED=false and PAGE1 PASS
+=> current production state does not require a second page; current required provider sequence passes. M4AK 503 was transient/intermittent or state changed only if separately proven.
 
-## Branch / base
-
-Continue:
-`review/telegram-mtproto-m4am`
-
-Base:
-`ee04da7c88dc2fec1e838a92d07ab841beb25892`
-
-Do not modify main or production.
-
-## Required executable tests
-
-At minimum:
-
-1. `STAGE_1_IMPORTS` sanitized failure is accepted;
-2. `STAGE_1_DB_SESSION` sanitized failure is accepted;
-3. each decrypt/reference STAGE_1 failure is accepted;
-4. `STAGE_0_RELEASE_REF` accepted;
-5. `STAGE_0_PRODUCTION_REF` accepted;
-6. `STAGE_0_WORKTREE` accepted;
-7. structural failure + PAGE1_PASS rejected;
-8. structural failure + PAGE2_PASS rejected;
-9. structural failure + success totals rejected;
-10. structural/preflight failure with TELEGRAM_NETWORK_CALLS != 0 rejected;
-11. any failure missing TELEGRAM_NETWORK_CALLS rejected;
-12. page1/page2 failure tests from M4AM1R remain PASS;
-13. realistic page2 failure remains accepted;
-14. success protocol remains unchanged;
-15. stderr/nonzero/malformed remain fail-closed;
-16. provider-call maximum/fresh-client/no-write/no-materialization tests remain PASS.
-
-Prefer tests that call `parse_output()` with the exact shapes emitted by the real outer/inner helpers, not only string-search assertions.
-
-## Verification
-
-Run:
-- focused pytest;
-- Ruff changed Python;
-- `git diff --check`.
-
-## Handoff
-
-Commit/push only:
-`review/telegram-mtproto-m4am`
-
-Report:
-- full corrective SHA;
-- focused tests count/pass;
-- Ruff;
-- diff-check;
-- exact stage-family parser changes;
-- proof structural/preflight failures preserve sanitized protocol;
-- remaining gaps.
-
-Do NOT execute production probe.
+Do not repair/retry during M4AM2.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AM1R2_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AM2_LIVE_READY`
 
 Then STOP.
 
