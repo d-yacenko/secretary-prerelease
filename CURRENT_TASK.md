@@ -1,136 +1,172 @@
-# Current task — Telegram MTProto M4AK: one human-controlled manual Sync
+# Current task — Telegram MTProto M4AL1: sanitized read-only log inspection after M4AK
 
 ## Status
 
-M4AJR2 production deployment: SUCCESS.
-
-Production runtime/ref:
+M4AK human Sync was performed exactly once on production runtime:
 `23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Origin production ref:
-`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
+Visible result:
+`Telegram provider is temporarily unavailable`
 
-Production health:
-PASS
+After reopening Account settings:
+- connected account remained visible;
+- folders/groups continued to load;
+- no authorization-invalid banner remained.
 
-Alembic:
-`0046`
+No retry/re-login/Apply Scope/group-folder change occurred.
 
-Preserved:
-- DB container/volume/data;
-- .env;
-- credential key;
-- stored Telegram session;
-- existing selected group/scope;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API state.
-
-No Telegram login/history/manual Sync was performed during deploy.
+This task authorizes a zero-provider-call, read-only production log inspection only.
 
 ## Goal
 
-Perform exactly ONE human-controlled manual Sync of the already-selected Telegram group through the current Secretary UI, then STOP and report the result.
+Determine whether the single M4AK request left any sanitized evidence that narrows the failure:
+- HTTP status;
+- known MTProto exception class name;
+- history/provider stage indication;
+- API vs worker origin.
 
-This task is a human validation step, not an automated retry loop.
+Do not make any Telegram provider calls.
+
+## Authorization mode
+
+BREAK-GLASS READ-ONLY SSH is explicitly authorized for this task because normal deploy tooling does not expose logs.
+
+Use ONLY the canonical target from:
+`ops/production/target.json`
+
+Use strict pinned ED25519 verification exactly as in the accepted production diagnostics:
+- BatchMode=yes
+- StrictHostKeyChecking=yes
+- temporary UserKnownHostsFile containing only the verified pinned host key
+- GlobalKnownHostsFile=/dev/null
+
+No host discovery/fallback/alternative target.
 
 ## Preconditions
 
-Before clicking Sync:
+Verify locally:
+- clean checkout;
+- current main == origin/main;
+- origin/production == `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
+- target.json unchanged.
 
-- use the current Secretary client already connected to the deployed backend;
-- do NOT re-login;
-- do NOT enter Telegram code/password;
-- do NOT change selected groups;
-- do NOT change folders;
-- do NOT Apply Scope;
-- do NOT revoke Telegram session;
-- do NOT restart or redeploy production.
+On remote, before reading logs:
+- production HEAD == `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
+- worktree clean;
+- api/worker/db running;
+- Alembic 0046.
 
-If the Telegram account/group controls do not load normally, STOP and report the visible UI state instead of attempting login or repair.
+If any guard fails: STOP.
 
-## Human action
+## Allowed remote operations
 
-Navigate to the existing Telegram MTProto account/group section.
+Read-only only:
+- `git rev-parse`, `git status`;
+- `docker compose ps`;
+- `docker compose logs` for api/worker;
+- read-only health/Alembic checks.
 
-Locate the already-selected manual group.
+Inspect only a narrow recent window sufficient to include the one M4AK click, preferably last 30 minutes.
 
-Press that group's:
-`Синхронизировать`
+Do not print raw logs to the user/report.
 
-Exactly ONCE.
+## Sanitized parsing
 
-Do not press Sync again, even if:
-- no counters appear immediately;
-- an error appears;
-- the UI looks unchanged.
+Server-side/local parser may inspect raw logs transiently but must emit ONLY aggregate/sanitized facts.
 
-Do not click global/folder Apply Scope.
+Allowed output fields:
 
-## Evidence to report
+- `M4AK_ROUTE_SEEN=true|false`
+- `M4AK_HTTP_503_COUNT=<bounded integer>`
+- `M4AK_HTTP_409_COUNT=<bounded integer>`
+- `API_EXCEPTION_CLASS=<allowlisted class token|none>`
+- `WORKER_EXCEPTION_CLASS=<allowlisted class token|none>`
+- `AUTH_INVALID_EVIDENCE=true|false`
+- `PROVIDER_UNAVAILABLE_EVIDENCE=true|false`
+- `VALUE_ERROR_EVIDENCE=true|false`
+- `TYPE_ERROR_EVIDENCE=true|false`
+- `FLOOD_WAIT_EVIDENCE=true|false`
+- `AUTH_KEY_EVIDENCE=true|false`
+- `SESSION_REVOKED_EVIDENCE=true|false`
+- `UNAUTHORIZED_EVIDENCE=true|false`
+- `RAW_TRACEBACK_PRESENT=true|false`
+- `TELEGRAM_NETWORK_CALLS=0`
 
-After the single Sync action, report exactly what the UI shows.
+Known allowlisted exception class tokens may include only:
+- ValueError
+- TypeError
+- FloodWaitError
+- AuthKeyError
+- AuthKeyNotFound
+- AuthKeyUnregisteredError
+- SessionRevokedError
+- UnauthorizedError
+- TelegramMtprotoProviderUnavailableError
+- TelegramMtprotoAuthorizationInvalidError
+- none
 
-### If success
+If another exception class appears, emit:
+`API_EXCEPTION_CLASS=OTHER`
+or
+`WORKER_EXCEPTION_CLASS=OTHER`
+without message text.
 
-Report:
-- whether an error banner/message appeared;
-- any visible counters/results, including scanned/materialized/created/updated/unchanged/skipped if shown;
-- whether history_complete or equivalent state is visible;
-- whether the group remains selected;
-- whether connected account identity remains visible.
+Do NOT emit:
+- peer/group IDs;
+- Telegram user ID/username/display name;
+- message IDs/content;
+- session/reference;
+- request bodies;
+- tokens/cookies/headers;
+- DB IDs;
+- raw log lines;
+- exception messages/tracebacks.
 
-### If failure
+## Forbidden
 
-Report:
-- exact user-visible error text;
-- whether connected account identity remains visible;
-- whether groups/folders still load after the failure;
-- whether the selected group remains selected;
-- whether any counters appeared before the error.
-
-Do NOT retry.
+Do NOT:
+- call Telegram;
+- retry Sync;
+- use application fetch_history;
+- run diagnostic provider probes;
+- re-login;
+- Apply Scope;
+- mutate DB;
+- mutate files/env;
+- restart/recreate services;
+- change refs;
+- change SSH trust;
+- run migrations;
+- enable AI;
+- touch Bot API.
 
 ## Interpretation
 
-A. Sync succeeds
-=> M4 activation path is operational after taxonomy fix. Next step is verification of imported objects/UI behavior and then close M4 activation.
+A. ValueError/TypeError evidence
+=> taxonomy fix is working and root class is non-auth. Next task should reproduce the exact second-page/history stage read-only.
 
-B. HTTP/UI provider-unavailable style error
-=> taxonomy fix is working; capture exact visible message and stop. Do not re-login.
+B. FloodWait evidence
+=> provider throttling/transient; no re-login. Decide on retry/backoff UX separately.
 
-C. Authorization-invalid appears again
-=> stop immediately. This would now be meaningful evidence because the broad ValueError/TypeError remap has been removed.
+C. AuthKey/SessionRevoked/Unauthorized evidence
+=> genuine auth signal; stop before any re-login and review exact evidence.
 
-D. No counters / generic Secretary connectivity error
-=> stop and report exact UI state; do not infer Telegram auth failure.
+D. Only route 503/provider-unavailable, no root class
+=> logs are insufficient. Next task is one narrow second-page read-only probe.
 
-## Strictly forbidden
+E. No route evidence
+=> do not retry Sync. Report log visibility gap; next diagnostic still requires explicit authorization.
 
-Do NOT:
-- retry Sync;
-- re-login;
-- enter Telegram auth code/password;
-- Apply Scope;
-- change group/folder selections;
-- revoke/delete session;
-- run diagnostic scripts;
-- mutate production;
-- enable MTProto AI;
-- change Bot API.
+## Required report
 
-## Final report
-
-Return:
-- one Sync click performed: yes/no;
-- visible result/error;
-- counters if any;
-- account connected status;
-- group selection state;
-- whether folders/groups still load;
-- confirmation no retry/re-login/scope change occurred.
+Return only:
+- preflight guards;
+- sanitized fields above;
+- production unchanged;
+- provider calls = 0.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AK_HUMAN_SYNC_READY`
+`TELEGRAM_MTPROTO_M4AL1_LOG_REVIEW_READY`
 
 Then STOP.
 
