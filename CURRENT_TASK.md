@@ -1,114 +1,59 @@
-# Current task — Telegram MTProto M4AN1R2: restore executor SSH readiness outside production
+# Current task — Executor bootstrap standardization recorded
 
 ## Status
 
-M4AN1R established that the current Executor environment has no usable ambient SSH credential path.
+The repeated Git/SSH environment churn has been converted from phase-specific troubleshooting into a persistent Executor bootstrap invariant.
 
-Observed local-only facts:
-- SSH client available;
-- SSH_AUTH_SOCK set;
-- SSH_AUTH_SOCK path is a valid socket;
-- ssh-agent query did not yield usable identities;
-- SSH agent key count = 0;
-- no readable identity-file candidates were found;
-- M4AM/M4AN do not set an explicit IdentityFile/IdentityAgent;
-- production SSH therefore depends on ambient/default credentials;
-- production network connections = 0;
-- Telegram/provider calls = 0.
+Canonical bootstrap policy is now recorded in:
 
-This is an Executor-environment blocker, not a Secretary runtime or Telegram conclusion.
+- `AGENTS.md`
+- `docs/executor_bootstrap.md`
+- `docs/deploy.md`
+- `PROJECT_STATE.md`
+- `secretary_architect_context_encrypted.md` (encrypted recovery context, password supplied by Architect)
 
-## Goal
+## Canonical bootstrap
 
-Restore or re-enter an Executor environment where the pre-existing authorized production SSH credential path is available, then verify readiness LOCALLY ONLY.
+Before every Executor work cycle:
 
-This task does NOT authorize a production SSH connection.
+1. Use only the canonical repository:
+   `https://github.com/d-yacenko/secretary-prerelease.git`
+2. If the current checkout is wrong-origin, unrelated, dirty, or contains unknown local state, do not repair/clean/repoint it; leave it untouched and use a fresh temporary canonical clone.
+3. Fetch/read the active authorization from canonical `origin/main`.
+4. Verify exact task-authorized SHAs/refs.
+5. For production/runtime work, use the canonical target/pinned host-key contract and the pre-existing Executor/workstation SSH credential integration.
+6. Do not create/copy/request new production private-key material as a workaround.
+7. Git/worktree/SSH readiness is plumbing and occurs in the same work cycle as the actual task; do not create separate product phases for each bootstrap stop.
+8. If bootstrap cannot be established, emit one concise sanitized `EXECUTOR_BOOTSTRAP_BLOCKED=<reason>` and STOP.
+9. A local/bootstrap/pre-SSH stop is not a product/provider result and does not consume a one-shot live/provider authorization before its defined start marker.
 
-## Important boundary
+## Current M4 position
 
-Do not create new production credentials.
+- Production runtime/ref remains exact `23fa07df213d5a70a6dc1d3c8b32af39228107eb`.
+- M4AK manual Sync produced provider-neutral 503, while account/group discovery remained usable.
+- M4AM2R2 provider-sequence diagnostic was executed exactly once but stopped structurally at `STAGE_1_DB_SESSION` with `TELEGRAM_NETWORK_CALLS=0`.
+- M4AN1 zero-provider structural localization later failed before authenticated SSH because the then-current Executor environment lacked the previously available SSH credential path.
+- These Executor-environment failures are not Telegram/auth conclusions.
 
-Do not copy private keys into the repository.
+## Runtime authorization
 
-Do not ask the user to paste private keys, passwords, passphrases, tokens, recovery codes, or key material into chat.
+This task records process/context only.
 
-Do not modify production.
+It does NOT authorize:
+- production SSH;
+- M4AN retry;
+- M4AM retry;
+- Telegram provider calls;
+- Secretary Sync retry;
+- re-login;
+- Apply Scope;
+- DB/production mutation.
 
-The intended action is to restore the same pre-existing credential mechanism that previously allowed M4AM2R2 / production deployment SSH to authenticate.
+The next runtime task, when explicitly authorized, should use the canonical bootstrap and then resume the zero-provider structural localization of the broad `STAGE_1_DB_SESSION` without creating intermediate Git/SSH phases.
 
-Examples of acceptable environment-level recovery, performed by the human/Executor outside repo mutation:
-- return to the shell/session where the SSH agent already has the authorized key loaded;
-- restart/reconnect the Executor environment if its credential forwarding/agent integration was lost;
-- use the normal workstation/agent credential integration already used for prior successful production tasks.
-
-Do not generate/add a new key unless separately authorized outside this task.
-
-## Local verification after credential restoration
-
-Without connecting to production, rerun only:
-
-- SSH_AUTH_SOCK set/valid check;
-- `ssh-add -l` sanitized count;
-- `ssh -G web-itx.duckdns.org` sanitized parsing;
-- readable identity candidate count.
-
-Return only:
-
-- `SSH_AUTH_SOCK_SET=true|false`
-- `SSH_AUTH_SOCK_VALID=true|false`
-- `SSH_AGENT_QUERY_OK=true|false`
-- `SSH_AGENT_KEY_COUNT=<n>`
-- `SSH_CONFIG_PARSE_PASS=true|false`
-- `CONFIG_USER_IS_ROOT=true|false`
-- `IDENTITY_AGENT_CONFIGURED=true|false`
-- `IDENTITY_FILE_COUNT=<n>`
-- `IDENTITIES_ONLY=true|false`
-- `PUBKEY_AUTH_ENABLED=true|false`
-- `READABLE_IDENTITY_FILE_COUNT=<n>`
-- `AMBIENT_CREDENTIAL_PATH_AVAILABLE=true|false`
-
-Do not print:
-- key fingerprints;
-- identity paths;
-- agent socket path;
-- config contents;
-- private/public key material.
-
-## Success condition
-
-Ready only if:
-`AMBIENT_CREDENTIAL_PATH_AVAILABLE=true`
-
-and at least one of:
-- valid agent with usable key count > 0;
-- readable identity file candidate usable by SSH config.
-
-If still false:
-STOP. Do not attempt production SSH.
-
-## Forbidden
-
-Do NOT:
-- connect to production;
-- run ssh against production;
-- run ssh-keyscan;
-- retry M4AN1;
-- retry M4AM;
-- retry Secretary Sync;
-- change repository refs/files;
-- change production;
-- create/copy/commit SSH private keys;
-- print secrets;
-- call Telegram.
-
-## Handoff
-
-If local credential readiness becomes true, report the sanitized readiness fields and final marker:
-
-`TELEGRAM_MTPROTO_M4AN1R2_SSH_READY`
+Final marker for this documentation task:
+`EXECUTOR_BOOTSTRAP_STANDARDIZED`
 
 Then STOP.
-
-A separate task will authorize any production SSH retry.
 
 `CURRENT_TASK.md` is the source of active authorization.
