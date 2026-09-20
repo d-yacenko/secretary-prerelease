@@ -1,198 +1,145 @@
-# Current task — Telegram MTProto M4AH2R: runtime-stage diagnostics and child-scope fix
+# Current task — Telegram MTProto M4AH2R2: enforce child stderr fail-closed
 
 ## Status
 
-M4AH2 was executed exactly once on approved SHA:
-`0e512795c2e389f1e84e7682457395b3daee7bd0`.
+M4AH2R corrective implementation:
+`162eb4cc7cd677bf8d9ef97df194ec0f514d60f0`
 
-Transport:
-- strict pinned SSH PASS on attempt 1;
-- SSH auth PASS;
-- remote helper started;
-- no production mutation.
+Branch:
+`review/telegram-mtproto-m4ah`
 
-Sanitized result:
-- `FAILURE_STAGE=STAGE_1_RUNTIME`;
-- `RAW_EXCEPTION_CLASS=RuntimeError`;
-- `MESSAGE_ORDINAL=0`;
-- `TELEGRAM_NETWORK_CALLS=0`.
+Architect review: almost accepted, but NOT yet authorized for live execution.
 
-Therefore M4AH2 produced no Telegram/auth/history evidence.
+Confirmed good:
+- origin review branch points exactly to corrective SHA;
+- child owns `PAGE_SIZE = 100`;
+- embedded child compiles;
+- import failures are sanitized as `STAGE_1_IMPORTS`;
+- DB session/query failures are sanitized as `STAGE_1_DB_SESSION`;
+- valid sanitized child failures exit 0;
+- success requires `ENTRIES_NONE=0`, required counts, and seen == converted;
+- raw child stdout is still filtered by the outer local allowlist;
+- provider-call limits and no-write semantics remain intact.
 
-Static review found an additional guaranteed child-script defect:
-- the embedded API-container child probe references `PAGE_SIZE`;
-- `PAGE_SIZE` is defined in the outer remote helper but NOT inside the child script scope;
-- if runtime startup were fixed, Stage 3 would later fail with a child-scope `NameError`.
+One blocking gap remains.
 
-This task authorizes only **corrective implementation + local tests + review-branch push**.
+## Blocker — nested child stderr is ignored
 
-NO production execution is authorized.
+Inside the remote helper:
+
+`result = run(COMPOSE + ["exec", "-T", "api", "python3", "-"], input=probe)`
+
+captures BOTH child stdout and child stderr.
+
+Current code checks:
+- `result.returncode != 0`
+
+but does NOT check:
+- `result.stderr`.
+
+Therefore a child process may:
+- return 0;
+- emit allowlisted stdout;
+- also emit unexpected stderr;
+
+and the harness can still accept the stdout result.
+
+The required contract is:
+**any non-empty child stderr must fail closed and must never be echoed raw.**
+
+## Authorization
+
+This task authorizes only:
+- minimal corrective implementation;
+- focused local tests;
+- Ruff;
+- `git diff --check`;
+- commit + push on the same review branch.
+
+NO production execution.
 
 ## Branch / base
 
-Continue on:
+Continue:
 `review/telegram-mtproto-m4ah`
 
 Base:
-`0e512795c2e389f1e84e7682457395b3daee7bd0`
+`162eb4cc7cd677bf8d9ef97df194ec0f514d60f0`
 
 Do not modify main or production.
 
-## Goal
+## Required fix
 
-Make the inner API-container probe self-diagnosing and self-contained so that:
+Immediately after the nested API-container child returns:
 
-1. import/runtime/bootstrap failures are surfaced as sanitized child failure stages/classes instead of collapsing to outer `STAGE_1_RUNTIME / RuntimeError`;
-2. `PAGE_SIZE=100` is defined inside the child script itself;
-3. success protocol is internally consistent:
-   - `FIRST_PAGE_PASS=true` requires `ENTRIES_NONE=0`;
-4. no raw child stderr/stdout is leaked.
+- if `result.returncode != 0` OR `result.stderr` is non-empty:
+  - do NOT print child stdout;
+  - do NOT print child stderr;
+  - emit only sanitized harness failure;
+  - `MESSAGE_ORDINAL=0`;
+  - `TELEGRAM_NETWORK_CALLS=0`;
+  - normal remote end marker;
+  - no retry after remote start.
 
-## Required fix A — child-scope PAGE_SIZE
+Preferred sanitized stage:
+`STAGE_1_RUNTIME`
 
-Inside the embedded child Python script itself, define:
+Do not include the child exception message, stderr content, traceback, IDs, secrets, or raw output.
 
-`PAGE_SIZE = 100`
-
-Do not rely on the outer helper variable.
-
-Tests must prove the child script compiles and that `PAGE_SIZE` is available where `iter_messages(... limit=PAGE_SIZE ...)` is executed.
-
-## Required fix B — sanitized inner bootstrap/import diagnostics
-
-The current child script has top-level imports before `run_probe()`.
-If one of those imports fails, the child process exits nonzero and the outer helper only sees generic runtime failure.
-
-Refactor so import/bootstrap failures are converted inside the child process into the same strict protocol.
-
-At minimum distinguish sanitized stages:
-
-- `STAGE_1_IMPORTS`
-- `STAGE_1_DB_SESSION`
-- existing structural stages thereafter.
-
-Allowed example behavior:
-
-- import failure:
-  - `FAILURE_STAGE=STAGE_1_IMPORTS`
-  - `RAW_EXCEPTION_CLASS=<class-name-only>`
-  - `MESSAGE_ORDINAL=0`
-  - `TELEGRAM_NETWORK_CALLS=0`
-
-- SessionLocal/open/query bootstrap failure:
-  - `FAILURE_STAGE=STAGE_1_DB_SESSION`
-  - class only
-  - ordinal 0
-  - network calls 0
-
-Do not emit exception messages or tracebacks.
-
-The child should return process exit code 0 after a valid sanitized diagnostic failure so the parent parser can preserve the real stage/class.
-
-## Required fix C — parent child-process handling
-
-If child:
+Only when:
 - returncode == 0;
-- stderr empty;
-- stdout follows strict allowlist;
+- child stderr exactly empty;
 
-then preserve sanitized diagnostic failure/success.
+may the remote helper forward child stdout to the existing outer allowlist parser.
 
-If child:
-- returncode != 0; OR
-- stderr non-empty; OR
-- malformed/unknown output;
+## Required tests
 
-then parent must fail closed without echoing raw child content.
+Add executable tests proving:
 
-The parent may emit:
-- `FAILURE_STAGE=OUTPUT_ALLOWLIST` or another hardcoded local harness stage;
-- `MESSAGE_ORDINAL=0`;
-- `TELEGRAM_NETWORK_CALLS=0`.
+1. nested child returncode=0 + non-empty stderr fails closed;
+2. child stdout is NOT forwarded when stderr is non-empty;
+3. child stderr is NOT forwarded;
+4. sanitized output contains only:
+   - `FAILURE_STAGE=STAGE_1_RUNTIME`
+   - safe class token if current protocol requires it;
+   - `MESSAGE_ORDINAL=0`
+   - `TELEGRAM_NETWORK_CALLS=0`
+   - remote end marker;
+5. nested child nonzero exit remains fail-closed with no raw stdout/stderr;
+6. nested child exit 0 + empty stderr + valid stdout remains preserved;
+7. all previous M4AH/M4AH2R tests remain PASS.
 
-Do not regress to generic raw RuntimeError hiding a valid child protocol result.
-
-## Required fix D — success protocol invariants
-
-Tighten `parse_page_output()`.
-
-If `FIRST_PAGE_PASS=true`, require all:
-- no `FAILURE_STAGE`;
-- `ENTRIES_NONE=0`;
-- `MESSAGES_SEEN` present;
-- `ENTRIES_CONVERTED` present;
-- `MESSAGES_SEEN == ENTRIES_CONVERTED`;
-- all success counts 0..100.
-
-If failure:
-- require:
-  - `FAILURE_STAGE`;
-  - `RAW_EXCEPTION_CLASS`;
-  - `MESSAGE_ORDINAL`;
-- reject `FIRST_PAGE_PASS`.
-
-Do not allow synthetic success payloads with `ENTRIES_NONE>0`.
-
-## Required fix E — preserve exact provider behavior
-
-Do not alter the intended live probe behavior:
-- connect <= 1;
-- auth check <= 1;
-- one `iter_messages(input_peer, limit=100, reverse=False)`;
-- consume <= 100 yielded messages;
-- exact `_history_entry_from_message()`;
-- first conversion exception => stop;
-- first `None` => `InvalidHistoryEntry`;
-- no application `fetch_history()`;
-- no materialization;
-- no DB writes;
-- no login/discovery/write RPC;
-- disconnect in finally.
-
-## Required focused tests
-
-Add/adjust explicit executable tests for at least:
-
-1. embedded child script compiles independently;
-2. child defines `PAGE_SIZE=100` in its own scope;
-3. import failure -> sanitized `STAGE_1_IMPORTS`, class only, ordinal 0, calls 0;
-4. DB session/query bootstrap failure -> sanitized `STAGE_1_DB_SESSION`, class only, ordinal 0, calls 0;
-5. sanitized child failure exits 0 and is preserved by parent;
-6. nonzero child exit never leaks raw stderr/stdout;
-7. child stderr never leaks;
-8. malformed child output fails closed;
-9. success with `ENTRIES_NONE>0` rejected;
-10. success missing counts rejected;
-11. success requires seen == converted;
-12. failure requires stage/class/ordinal;
-13. Stage 2/3 provider-call limits unchanged;
-14. `limit=100, reverse=False` unchanged;
-15. no application `fetch_history()`;
-16. no materialization/DB-write/login/discovery/write RPC;
-17. disconnect success/failure;
-18. all existing M4AH safety tests remain passing.
+Do not weaken:
+- strict SSH pinning;
+- Stage 0 guards;
+- output allowlist;
+- PAGE_SIZE=100;
+- provider-call budget;
+- no DB writes/login/discovery/write RPC;
+- disconnect finally.
 
 Run:
 - focused pytest;
-- Ruff on changed Python;
+- Ruff changed Python;
 - `git diff --check`.
 
 ## Review handoff
 
-After fixes:
-- commit on same review branch;
-- push only `review/telegram-mtproto-m4ah`;
-- do NOT run production probe;
-- report:
-  - full corrective SHA;
-  - focused test count/pass;
-  - Ruff;
-  - diff-check;
-  - blocker -> fix summary;
-  - remaining gaps.
+Commit and push only:
+`review/telegram-mtproto-m4ah`
+
+Report:
+- full corrective SHA;
+- focused test count/pass;
+- Ruff;
+- diff-check;
+- exact stderr fix;
+- remaining gaps.
+
+Do NOT run production probe.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AH2R_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AH2R2_REVIEW_READY`
 
 Then STOP.
 
