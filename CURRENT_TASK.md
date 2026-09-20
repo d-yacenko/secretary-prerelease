@@ -1,233 +1,167 @@
-# Current task — Telegram MTProto M4AN1: zero-provider structural localization
+# Current task — Telegram MTProto M4AN1R: local-only SSH credential readiness
 
 ## Status
 
-M4AM2R2 executed the approved live probe exactly once.
+M4AN1 did not reach production remote execution.
 
-Result:
-- canonical fresh clone/preflight PASS;
-- `FAILURE_STAGE=STAGE_1_DB_SESSION`;
-- `RAW_EXCEPTION_CLASS=RuntimeError`;
-- `MESSAGE_ORDINAL=0`;
-- `TELEGRAM_NETWORK_CALLS=0`;
-- page/provider calls = 0;
-- no production mutation.
+Confirmed:
+- canonical target/pin local check PASS;
+- strict host-key verification PASS;
+- SSH authentication/remote execution FAIL;
+- remote helper did not start;
+- no production guards obtained;
+- no structural child;
+- no Telegram/provider calls;
+- no DB writes/materialization;
+- production unchanged.
 
-No Telegram provider operation occurred.
-
-The M4AM two-page provider probe MUST NOT be run again in this task.
-
-The current `STAGE_1_DB_SESSION` is intentionally/accidentally broad and can represent several different pre-provider failures. This task authorizes one read-only structural localization only.
+Earlier M4AM2R2 did authenticate successfully and start remote code from the same canonical target, so this task must determine whether the current Executor environment has lost or changed SSH credential availability.
 
 ## Goal
 
-Identify exactly which pre-provider substage caused the M4AM2R2 stop, while making ZERO Telegram network/provider calls.
+Inspect only the LOCAL SSH client/agent configuration relevant to authentication.
 
-Distinguish at least:
+Do NOT connect to production in this task.
 
-1. remote release/ref/worktree guard;
-2. compose config;
-3. db/api/worker running;
-4. DB health;
-5. Alembic 0046;
-6. API-container Python child start;
-7. child imports;
-8. SessionLocal DB query;
-9. account cardinality;
-10. manual-selected group cardinality;
-11. current history-state read;
-12. CredentialEncryption construction;
-13. stored session decrypt + StringSession parse;
-14. stored reference decrypt/parse/peer-match;
-15. child return code;
-16. whether child emitted ANY stderr.
+## Canonical target
 
-Stop before TelegramClient construction.
+Use target metadata only to identify the destination name for local config expansion:
 
-## Authorization
+`root@web-itx.duckdns.org`
 
-BREAK-GLASS READ-ONLY SSH is explicitly authorized for this task.
+Do not run ssh/ssh-keyscan/openssl/nc/curl or any command that opens a network connection to the production host.
 
-Use only the canonical production target and pinned ED25519 fingerprint from:
-`ops/production/target.json`
+## Allowed local checks
 
+Run locally and emit only sanitized booleans/counts.
+
+1. SSH client availability:
+- `ssh -V` may be invoked locally;
+- report `SSH_CLIENT_AVAILABLE=true|false`;
+- do not report full version string unless needed.
+
+2. SSH agent environment:
+- whether `SSH_AUTH_SOCK` is set;
+- whether its path exists and is a socket;
+- do NOT print the path.
+
+Emit:
+- `SSH_AUTH_SOCK_SET=true|false`
+- `SSH_AUTH_SOCK_VALID=true|false`
+
+3. Agent key inventory:
+If SSH_AUTH_SOCK is valid, run `ssh-add -l`.
+
+Do NOT print key fingerprints/comments/key material.
+
+Emit only:
+- `SSH_AGENT_QUERY_OK=true|false`
+- `SSH_AGENT_KEY_COUNT=<bounded integer>`
+
+Interpret ssh-add exit 1/no identities as query succeeded with key count 0 where appropriate.
+If no usable agent exists:
+- `SSH_AGENT_QUERY_OK=false`
+- key count 0.
+
+4. Expanded SSH config, local-only:
 Use:
-- BatchMode=yes;
-- StrictHostKeyChecking=yes;
-- temporary verified UserKnownHostsFile;
-- GlobalKnownHostsFile=/dev/null;
-- HostKeyAlgorithms=ssh-ed25519.
+`ssh -G web-itx.duckdns.org`
 
-No alternative host discovery/fallback.
+This must not connect.
 
-## Local source
+Parse locally and do NOT print raw output.
 
-Use a fresh canonical clone or another known-clean canonical checkout of:
+Emit only:
+- `SSH_CONFIG_PARSE_PASS=true|false`
+- `CONFIG_USER_IS_ROOT=true|false`
+- `IDENTITY_AGENT_CONFIGURED=true|false`
+- `IDENTITY_FILE_COUNT=<bounded integer>`
+- `IDENTITIES_ONLY=true|false`
+- `PUBKEY_AUTH_ENABLED=true|false`
 
-`https://github.com/d-yacenko/secretary-prerelease.git`
+Do NOT emit identity file paths, agent socket paths, usernames other than boolean root match, proxy commands, hostnames, or config contents.
 
-Read:
-- `origin/main:CURRENT_TASK.md`
-- `origin/main:PROJECT_STATE.md`
-- `origin/main:AGENTS.md`
-- `docs/deploy.md`
-- relevant production helper files.
+5. Local identity-file usability:
+For each identity file resolved by `ssh -G`, expand `~` locally and check only:
+- file exists;
+- regular file;
+- readable.
 
-Require:
-- `origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`
-- canonical target.json unchanged.
+Do NOT read key contents.
+Do NOT hash/fingerprint keys.
+Do NOT print paths.
 
-## Remote preflight
+Emit:
+- `READABLE_IDENTITY_FILE_COUNT=<bounded integer>`
 
-Read-only verify:
-- production HEAD exact `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
-- origin/production exact same SHA;
-- worktree clean.
+6. Compare against M4AM/M4AN SSH argv semantics from repository source, without network:
+- report whether either harness explicitly sets `IdentityFile`, `IdentityAgent`, or `IdentitiesOnly`;
+- report whether both otherwise rely on ambient/default SSH credential resolution.
 
-If any fails: STOP.
+Emit:
+- `M4AM_EXPLICIT_IDENTITY=false|true`
+- `M4AN_EXPECTS_AMBIENT_IDENTITY=false|true`
+- `AMBIENT_CREDENTIAL_PATH_AVAILABLE=true|false`
 
-## Structural localization
-
-Run the equivalent outer checks separately and emit only booleans/stage tokens:
-
-- `COMPOSE_CONFIG_PASS`
-- `DB_RUNNING_PASS`
-- `API_RUNNING_PASS`
-- `WORKER_RUNNING_PASS`
-- `DB_HEALTH_PASS`
-- `ALEMBIC_0046_PASS`
-
-Then run exactly one read-only Python child through the same invocation shape used by the probe:
-
-`docker compose ... exec -T api python3 -`
-
-The child must:
-
-- import the exact app modules used by M4AM;
-- open `SessionLocal` read-only;
-- query MTProto accounts;
-- query manual-selected chat selections;
-- emit only cardinality booleans;
-- read history state into local variables but emit only booleans;
-- construct `CredentialEncryption`;
-- decrypt stored session but never print it;
-- parse `StringSession`;
-- decrypt stored provider reference but never print it;
-- parse/validate reference against the selected peer;
-- STOP before TelegramClient construction;
-- make no Telegram calls.
-
-Safe child outputs:
-
-- `IMPORTS_PASS=true|false`
-- `DB_QUERY_PASS=true|false`
-- `ACCOUNT_EXACTLY_ONE=true|false`
-- `MANUAL_SELECTED_EXACTLY_ONE=true|false`
-- `HISTORY_STATE_READ_PASS=true|false`
-- `INITIAL_STATE=true|false`
-- `HISTORY_COMPLETE_BEFORE=true|false`
-- `BACKFILL_CURSOR_PRESENT_BEFORE=true|false`
-- `CREDENTIAL_ENCRYPTION_CONSTRUCT_PASS=true|false`
-- `SESSION_DECRYPT_PASS=true|false`
-- `STRING_SESSION_PARSE_PASS=true|false`
-- `REFERENCE_DECRYPT_PASS=true|false`
-- `REFERENCE_PARSE_PASS=true|false`
-- `REFERENCE_PEER_MATCH_PASS=true|false`
-- `FAILURE_SUBSTAGE=<allowlisted token|none>`
-- `RAW_EXCEPTION_CLASS=<safe class token|none>`
-- `TELEGRAM_NETWORK_CALLS=0`
-
-Parent must additionally report:
-
-- `CHILD_RETURN_CODE_ZERO=true|false`
-- `CHILD_STDERR_PRESENT=true|false`
-
-Do NOT output stderr contents.
-
-If child catches a failure, it must emit only:
-- safe failure substage;
-- safe exception class name;
-- prior safe booleans;
-and exit 0 with no traceback.
-
-Suggested allowlisted substages:
-
-- IMPORTS
-- DB_QUERY
-- ACCOUNT_CARDINALITY
-- MANUAL_SELECTION_CARDINALITY
-- HISTORY_STATE_READ
-- ENCRYPTION_CONSTRUCT
-- SESSION_DECRYPT
-- STRING_SESSION_PARSE
-- REFERENCE_DECRYPT
-- REFERENCE_PARSE
-- REFERENCE_PEER_MATCH
-- NONE
-
-## Critical diagnostic question
-
-If all child safe checks PASS but `CHILD_STDERR_PRESENT=true`, report that explicitly. The original M4AM wrapper collapses any child stderr into generic `STAGE_1_DB_SESSION`, so this would identify a harness-level false block.
-
-If outer compose/service/DB/Alembic checks PASS and child return code/stderr are clean but a child substage fails, report that exact sanitized substage/class.
-
-## Strictly forbidden
+## Forbidden
 
 Do NOT:
-- run `diagnose_mtproto_history_two_page.py` again;
-- construct TelegramClient;
-- connect to Telegram;
-- call is_user_authorized;
-- call iter_messages;
-- call application fetch_history;
+- connect to production;
+- run ssh against production;
+- run ssh-keyscan in this task;
+- retry M4AN1;
+- run M4AM diagnostic again;
+- touch production;
+- change ~/.ssh/config;
+- change agent state;
+- add/remove ssh-agent keys;
+- copy/decrypt/read private keys;
+- print identity paths/fingerprints/comments;
+- change repository refs/files;
 - retry Secretary Sync;
-- login/re-login;
-- Apply Scope;
-- discover groups/folders;
-- write DB;
-- materialize/upsert;
-- emit IDs/content/session/reference/credentials;
-- print raw stderr/traceback;
-- edit production files/env;
-- restart/recreate services;
-- change refs;
-- run migrations;
-- enable AI;
-- change Bot API.
+- call Telegram.
+
+## Interpretation
+
+A. Agent socket valid + key count >0
+=> ambient agent credentials exist. Next task may authorize exactly one authenticated read-only SSH retry.
+
+B. Agent absent/invalid or key count 0, but readable identity files exist
+=> default file-based auth may still be possible; inspect whether ssh -G would consider them. Do not connect yet.
+
+C. No agent credentials and no readable identity file candidates
+=> current Executor environment lacks an SSH credential path. Do not retry production SSH until credential availability is restored outside this task.
+
+D. ssh -G shows an unexpected local config constraint (e.g. identities-only with no usable identity)
+=> report sanitized booleans; no repair in this task.
 
 ## Required report
 
 Return only:
 
-### Transport/guards
-- target/pin PASS;
-- SSH PASS;
-- release/ref/worktree guards.
-
-### Outer structure
-- COMPOSE_CONFIG_PASS
-- DB_RUNNING_PASS
-- API_RUNNING_PASS
-- WORKER_RUNNING_PASS
-- DB_HEALTH_PASS
-- ALEMBIC_0046_PASS
-
-### Child structure
-- CHILD_RETURN_CODE_ZERO
-- CHILD_STDERR_PRESENT
-- safe child booleans listed above
-- FAILURE_SUBSTAGE
-- RAW_EXCEPTION_CLASS
-- TELEGRAM_NETWORK_CALLS=0
+- SSH_CLIENT_AVAILABLE
+- SSH_AUTH_SOCK_SET
+- SSH_AUTH_SOCK_VALID
+- SSH_AGENT_QUERY_OK
+- SSH_AGENT_KEY_COUNT
+- SSH_CONFIG_PARSE_PASS
+- CONFIG_USER_IS_ROOT
+- IDENTITY_AGENT_CONFIGURED
+- IDENTITY_FILE_COUNT
+- IDENTITIES_ONLY
+- PUBKEY_AUTH_ENABLED
+- READABLE_IDENTITY_FILE_COUNT
+- M4AM_EXPLICIT_IDENTITY
+- M4AN_EXPECTS_AMBIENT_IDENTITY
+- AMBIENT_CREDENTIAL_PATH_AVAILABLE
 
 Confirm:
-- no TelegramClient/provider calls;
-- no DB writes/materialization;
-- no raw IDs/content/session/reference;
-- production unchanged.
+- production network connections = 0;
+- no SSH config/agent/key mutation;
+- no Telegram/provider calls.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AN1_STRUCTURAL_READY`
+`TELEGRAM_MTPROTO_M4AN1R_SSH_LOCAL_READY`
 
 Then STOP.
 
