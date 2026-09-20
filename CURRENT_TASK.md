@@ -1,269 +1,192 @@
-# Current task — Telegram MTProto M4AM1: build deterministic two-page history probe
+# Current task — Telegram MTProto M4AM1R: correct two-page probe failure protocol
 
 ## Status
 
-Production runtime/ref:
-`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
+M4AM1 implementation:
+`122daf0a0c8e361919415dc478174d8c1f5f390e`
 
-M4AK human Sync:
-- exactly one click;
-- HTTP/UI result: `Telegram provider is temporarily unavailable`;
-- reopening settings restored normal connected/group discovery state;
-- no retry/re-login/scope change.
+Branch:
+`review/telegram-mtproto-m4am`
 
-M4AL1 sanitized logs:
-- route seen;
-- one HTTP 503;
-- zero 409;
-- no root exception class or traceback logged;
-- no auth-invalid evidence;
-- no provider calls made during log review.
+Architect review: NOT yet accepted for live execution.
 
-Ordinary logs are insufficient.
+Confirmed good:
+- origin review branch points exactly to implementation SHA;
+- only diagnostic script + focused test file added;
+- page size 100 / max 200;
+- production-like initial vs established history ordering;
+- optional page2 backfill;
+- fresh client construction inside per-page helper;
+- exact conversion helper and production backfill helper imported;
+- no application fetch_history/materializer/DB writes;
+- strict pinned SSH and fail-closed raw-output handling;
+- production not touched.
 
-This task authorizes ONLY implementation + tests + review-branch push for a read-only diagnostic harness.
+Three corrective issues remain.
 
-NO live production probe is authorized yet.
+## Blocker 1 — realistic page2 failure is rejected by parent parser
 
-## Goal
+Current parser contains logic equivalent to:
 
-Build a deterministic read-only diagnostic that reproduces the current production history provider sequence closely enough to classify whether failure occurs on:
+if PAGE1_PASS=true and PAGE2_REQUIRED=true and PAGE2_PASS != true:
+    reject
 
-- first history page;
-- second/backfill history page;
-- iteration;
-- exact message conversion;
-- or not at all.
+This also runs when a valid page2 failure is present.
 
-The diagnostic must not materialize objects or mutate DB state.
+Therefore the exact desired protocol:
+
+- PAGE1_PASS=true
+- PAGE2_REQUIRED=true
+- FAILURE_STAGE=STAGE_5_PAGE2_ITERATION or STAGE_5_PAGE2_CONVERSION
+- RAW_EXCEPTION_CLASS=...
+- MESSAGE_ORDINAL=...
+- no PAGE2_PASS
+
+is incorrectly rejected.
+
+Required fix:
+
+- a page2 failure must be accepted when:
+  - PAGE1_PASS=true;
+  - PAGE2_REQUIRED=true;
+  - FAILURE_STAGE is one of the PAGE2 stages;
+  - PAGE2_PASS is absent;
+  - failure fields are complete;
+  - bounded call counts are valid.
+
+- PAGE2_PASS must be required only for overall success / absence of FAILURE_STAGE.
+
+- reject impossible combinations, including:
+  - page2 failure when PAGE2_REQUIRED=false;
+  - PAGE2_PASS=true together with PAGE2 FAILURE_STAGE;
+  - page1 failure together with PAGE1_PASS=true;
+  - success totals when an incompatible failure is present.
+
+Add an executable regression using the realistic output shape produced after page1 succeeds and page2 fails.
+
+## Blocker 2 — conversion None classification must be deterministic
+
+Current child uses:
+
+`ValueError("InvalidHistoryEntry")`
+
+when `_history_entry_from_message(message)` returns None.
+
+Because only class name is emitted, this becomes:
+
+`RAW_EXCEPTION_CLASS=ValueError`
+
+and cannot be distinguished from an actual conversion ValueError.
+
+Required fix:
+
+- use a local safe exception class such as:
+  `InvalidHistoryEntry`
+- emit:
+  `RAW_EXCEPTION_CLASS=InvalidHistoryEntry`
+- keep stage page-specific:
+  - STAGE_3_PAGE1_CONVERSION
+  - STAGE_5_PAGE2_CONVERSION
+
+No exception message output.
+
+## Corrective 3 — sanitized structural failures must terminate cleanly
+
+Several child paths currently call `fail(...)` but then continue execution.
+
+Examples include cardinality/decrypt/reference failures.
+
+That can turn a valid sanitized failure into a later Python exception/stderr, which the outer layer then collapses.
+
+Required fix:
+
+- after any terminal structural `fail(...)`, execution must return/exit immediately;
+- no later access to potentially unset variables;
+- child must finish with exit 0 and no stderr after emitting the valid sanitized protocol.
+
+Do not weaken parent fail-closed behavior for genuine child nonzero/stderr.
+
+## Additional protocol tightening
+
+Review and test:
+
+- PAGE1 failure cannot coexist with PAGE1_PASS=true;
+- PAGE2 failure requires PAGE2_REQUIRED=true and PAGE1_PASS=true;
+- PAGE2 success requires PAGE2_REQUIRED=true;
+- overall no-failure success requires PAGE1_PASS=true and, if page2 required, PAGE2_PASS=true;
+- totals, when emitted on success, equal sums of page counts;
+- MESSAGES_SEEN_TOTAL == ENTRIES_CONVERTED_TOTAL;
+- per-page seen == converted;
+- ENTRIES_NONE=0;
+- each page <=100, total <=200;
+- call counts are coherent with pages actually attempted where practical.
+
+Keep raw exception class identifier-only.
+
+## Authorization
+
+This task authorizes only:
+- minimal corrective implementation;
+- focused local tests;
+- Ruff;
+- git diff --check;
+- commit + push on same review branch.
+
+NO production SSH.
+NO live provider probe.
+NO Sync retry.
 
 ## Branch / base
 
-Create:
-
+Continue:
 `review/telegram-mtproto-m4am`
 
-from current `origin/main`.
+Base:
+`122daf0a0c8e361919415dc478174d8c1f5f390e`
 
-Do not modify production.
-
-## Production semantics to reproduce
-
-Use exact release behavior from:
-
-- `TelegramMtprotoHistoryService._sync_selection`
-- `TelethonMtprotoTransport.fetch_history`
-- `_history_entry_from_message`
-- `_next_backfill_state`
-
-Key facts:
-
-- page size = 100;
-- max messages per manual sync run = 200;
-- initial sync may fetch first page:
-  `reverse=False, limit=100`
-- if current history state requires more backfill, it may fetch second page:
-  `reverse=False, max_message_id=<oldest first-page message id>, limit<=100`
-- production transport creates a fresh `TelegramClient(StringSession(session), ...)` per `fetch_history` call.
-
-The probe must mirror that fresh-client-per-page behavior.
-
-## Structural state handling
-
-Read exactly one MTProto account and exactly one manual-selected group.
-
-Read current selection history state without mutating it:
-- `history_latest_message_id`
-- `history_backfill_before_message_id`
-- `history_cutoff_at`
-- `history_complete`
-
-Do not print raw IDs or timestamps.
-
-Emit only booleans / bounded aggregate indicators such as:
-- `INITIAL_STATE=true|false`
-- `HISTORY_COMPLETE_BEFORE=true|false`
-- `BACKFILL_CURSOR_PRESENT_BEFORE=true|false`
-
-The probe should determine the provider requests that the current production state would perform.
-
-## Provider behavior
-
-For each page actually required by the reproduced production state:
-
-1. decrypt stored session/reference;
-2. build a fresh TelegramClient with StringSession;
-3. connect once;
-4. call is_user_authorized once;
-5. call exactly one iter_messages for that page;
-6. convert each yielded message with exact `_history_entry_from_message`;
-7. stop at first failure;
-8. disconnect in finally.
-
-No retries.
-
-Total maximum provider calls:
-- max 2 connects;
-- max 2 authorization checks;
-- max 2 iter_messages creations;
-- consume max 200 messages.
-
-No discovery/login/write RPCs.
-
-## Stage protocol
-
-Use narrow explicit failure stages, minimum:
-
-- `STAGE_1_IMPORTS`
-- `STAGE_1_DB_SESSION`
-- `STAGE_1_SESSION_DECRYPT`
-- `STAGE_1_REFERENCE_DECRYPT`
-- `STAGE_1_REFERENCE_PARSE`
-- `STAGE_1_REFERENCE_PEER_MATCH`
-- `STAGE_2_PAGE1_CONNECT`
-- `STAGE_2_PAGE1_AUTHORIZED`
-- `STAGE_3_PAGE1_ITERATION`
-- `STAGE_3_PAGE1_CONVERSION`
-- `STAGE_4_PAGE2_CONNECT`
-- `STAGE_4_PAGE2_AUTHORIZED`
-- `STAGE_5_PAGE2_ITERATION`
-- `STAGE_5_PAGE2_CONVERSION`
-
-If second page is not required by current production state, emit:
-`PAGE2_REQUIRED=false`
-
-If it is required:
-`PAGE2_REQUIRED=true`
-
-## Safe output
-
-Allowed aggregate fields only:
-
-- account/manual-selection cardinality booleans;
-- session/reference decrypt/parse/peer-match booleans;
-- initial/current-state booleans;
-- page1/page2 required/pass booleans;
-- per-page messages-seen and entries-converted counts (0..100);
-- `ENTRIES_NONE=0` on successful conversion;
-- stage;
-- raw exception CLASS NAME only;
-- message ordinal 0..100;
-- provider-call counts;
-- total network-call count <= 6.
-
-Do NOT emit:
-- message ids;
-- peer/group ids;
-- user ids;
-- message text/body;
-- sender ids;
-- timestamps;
-- session/reference;
-- credentials;
-- raw traceback;
-- exception messages;
-- request bodies.
-
-Unknown exception class may be emitted only as class token if it matches safe identifier syntax; otherwise `OTHER`.
-
-## Parent/child safety
-
-Use the hardened M4AH design principles:
-
-- strict pinned SSH;
-- exact target.json;
-- fail-closed parent allowlist;
-- any child stderr => fail closed;
-- nonzero child exit => fail closed;
-- malformed/unknown output => fail closed;
-- no raw stdout/stderr passthrough;
-- remote end marker required;
-- no retry after remote start.
-
-The diagnostic implementation may reuse/copy reviewed M4AH helper patterns, but do not merge old diagnostic branch code into main.
-
-## Exact production code use
-
-Where practical, import exact production helpers:
-- `_history_entry_from_message`
-- `_input_peer_from_reference`
-- `validate_provider_peer_reference`
-- `_next_backfill_state`
-
-If importing `_next_backfill_state` is undesirable due service dependencies, reproduce its logic exactly and test parity against the real helper locally.
-
-Do not call application `fetch_history()` because that would remap raw exceptions and hide the class we are trying to observe.
+Do not modify main or production runtime/ref.
 
 ## Required tests
 
-At minimum:
+At minimum add/adjust tests proving:
 
-1. embedded child compiles independently;
-2. page size owned by child = 100;
-3. max total messages = 200;
-4. current selection state determines whether page2 is required;
-5. initial sync first-page success can derive page2 cursor without emitting id;
-6. page1 ValueError/TypeError classified at PAGE1 iteration/conversion stage;
-7. page2 ValueError/TypeError classified at PAGE2 iteration/conversion stage;
-8. auth exceptions retain page-specific auth stage;
-9. conversion None => invalid-entry style conversion failure;
-10. per-page fresh client creation;
-11. max one iter_messages per page;
-12. max two pages;
-13. disconnect per page;
-14. no application fetch_history call;
-15. no DB writes/session.add/flush/commit;
-16. no materializer;
-17. no login/discovery/write RPC;
-18. no content/id leakage;
-19. child stderr/nonzero/malformed fail closed;
-20. success protocol counts consistent:
-    - seen == converted
-    - ENTRIES_NONE=0
-    - each <=100
-    - total <=200;
-21. if PAGE2_REQUIRED=false, no page2 provider call is possible.
-
-## Verification
+1. realistic PAGE1 PASS + PAGE2 REQUIRED + PAGE2 iteration failure is accepted;
+2. same for PAGE2 conversion failure;
+3. PAGE2 failure with PAGE2_REQUIRED=false is rejected;
+4. PAGE2_PASS + PAGE2 failure together rejected;
+5. PAGE1_PASS + PAGE1 failure together rejected;
+6. overall success still requires PAGE2_PASS when page2 required;
+7. conversion None emits InvalidHistoryEntry, not ValueError;
+8. structural cardinality/decrypt/reference failures terminate sanitized with exit 0/no stderr;
+9. success totals equal per-page sums;
+10. total seen == total converted;
+11. previous 30 focused tests remain passing;
+12. provider-call maximums/fresh-client/no-write/no-materialization restrictions unchanged.
 
 Run:
-- focused pytest for new diagnostic;
-- relevant M4AH safety tests if reusable;
+- focused pytest;
 - Ruff changed Python;
-- `git diff --check`.
-
-## Forbidden
-
-Do NOT:
-- run this probe against production;
-- SSH to production;
-- retry Sync;
-- re-login;
-- Apply Scope;
-- change selected groups/folders;
-- mutate production;
-- change schema/migrations;
-- enable AI;
-- change Bot API.
+- git diff --check.
 
 ## Handoff
 
-Commit and push only:
+Commit/push only:
 `review/telegram-mtproto-m4am`
 
 Report:
-- full SHA;
-- test counts;
+- full corrective SHA;
+- focused tests count/pass;
 - Ruff;
 - diff-check;
-- exact stage model;
-- proof of fresh client per page;
-- proof of max provider-call budget;
-- proof no writes/materialization/content leakage;
+- exact parser failure fix;
+- InvalidHistoryEntry behavior;
+- terminal failure behavior;
 - remaining gaps.
 
+Do NOT execute production probe.
+
 Final marker:
-`TELEGRAM_MTPROTO_M4AM1_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AM1R_REVIEW_READY`
 
 Then STOP.
 
