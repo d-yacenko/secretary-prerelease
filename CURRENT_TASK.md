@@ -1,172 +1,269 @@
-# Current task — Telegram MTProto M4AL1: sanitized read-only log inspection after M4AK
+# Current task — Telegram MTProto M4AM1: build deterministic two-page history probe
 
 ## Status
 
-M4AK human Sync was performed exactly once on production runtime:
+Production runtime/ref:
 `23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Visible result:
-`Telegram provider is temporarily unavailable`
+M4AK human Sync:
+- exactly one click;
+- HTTP/UI result: `Telegram provider is temporarily unavailable`;
+- reopening settings restored normal connected/group discovery state;
+- no retry/re-login/scope change.
 
-After reopening Account settings:
-- connected account remained visible;
-- folders/groups continued to load;
-- no authorization-invalid banner remained.
+M4AL1 sanitized logs:
+- route seen;
+- one HTTP 503;
+- zero 409;
+- no root exception class or traceback logged;
+- no auth-invalid evidence;
+- no provider calls made during log review.
 
-No retry/re-login/Apply Scope/group-folder change occurred.
+Ordinary logs are insufficient.
 
-This task authorizes a zero-provider-call, read-only production log inspection only.
+This task authorizes ONLY implementation + tests + review-branch push for a read-only diagnostic harness.
+
+NO live production probe is authorized yet.
 
 ## Goal
 
-Determine whether the single M4AK request left any sanitized evidence that narrows the failure:
-- HTTP status;
-- known MTProto exception class name;
-- history/provider stage indication;
-- API vs worker origin.
+Build a deterministic read-only diagnostic that reproduces the current production history provider sequence closely enough to classify whether failure occurs on:
 
-Do not make any Telegram provider calls.
+- first history page;
+- second/backfill history page;
+- iteration;
+- exact message conversion;
+- or not at all.
 
-## Authorization mode
+The diagnostic must not materialize objects or mutate DB state.
 
-BREAK-GLASS READ-ONLY SSH is explicitly authorized for this task because normal deploy tooling does not expose logs.
+## Branch / base
 
-Use ONLY the canonical target from:
-`ops/production/target.json`
+Create:
 
-Use strict pinned ED25519 verification exactly as in the accepted production diagnostics:
-- BatchMode=yes
-- StrictHostKeyChecking=yes
-- temporary UserKnownHostsFile containing only the verified pinned host key
-- GlobalKnownHostsFile=/dev/null
+`review/telegram-mtproto-m4am`
 
-No host discovery/fallback/alternative target.
+from current `origin/main`.
 
-## Preconditions
+Do not modify production.
 
-Verify locally:
-- clean checkout;
-- current main == origin/main;
-- origin/production == `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
-- target.json unchanged.
+## Production semantics to reproduce
 
-On remote, before reading logs:
-- production HEAD == `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
-- worktree clean;
-- api/worker/db running;
-- Alembic 0046.
+Use exact release behavior from:
 
-If any guard fails: STOP.
+- `TelegramMtprotoHistoryService._sync_selection`
+- `TelethonMtprotoTransport.fetch_history`
+- `_history_entry_from_message`
+- `_next_backfill_state`
 
-## Allowed remote operations
+Key facts:
 
-Read-only only:
-- `git rev-parse`, `git status`;
-- `docker compose ps`;
-- `docker compose logs` for api/worker;
-- read-only health/Alembic checks.
+- page size = 100;
+- max messages per manual sync run = 200;
+- initial sync may fetch first page:
+  `reverse=False, limit=100`
+- if current history state requires more backfill, it may fetch second page:
+  `reverse=False, max_message_id=<oldest first-page message id>, limit<=100`
+- production transport creates a fresh `TelegramClient(StringSession(session), ...)` per `fetch_history` call.
 
-Inspect only a narrow recent window sufficient to include the one M4AK click, preferably last 30 minutes.
+The probe must mirror that fresh-client-per-page behavior.
 
-Do not print raw logs to the user/report.
+## Structural state handling
 
-## Sanitized parsing
+Read exactly one MTProto account and exactly one manual-selected group.
 
-Server-side/local parser may inspect raw logs transiently but must emit ONLY aggregate/sanitized facts.
+Read current selection history state without mutating it:
+- `history_latest_message_id`
+- `history_backfill_before_message_id`
+- `history_cutoff_at`
+- `history_complete`
 
-Allowed output fields:
+Do not print raw IDs or timestamps.
 
-- `M4AK_ROUTE_SEEN=true|false`
-- `M4AK_HTTP_503_COUNT=<bounded integer>`
-- `M4AK_HTTP_409_COUNT=<bounded integer>`
-- `API_EXCEPTION_CLASS=<allowlisted class token|none>`
-- `WORKER_EXCEPTION_CLASS=<allowlisted class token|none>`
-- `AUTH_INVALID_EVIDENCE=true|false`
-- `PROVIDER_UNAVAILABLE_EVIDENCE=true|false`
-- `VALUE_ERROR_EVIDENCE=true|false`
-- `TYPE_ERROR_EVIDENCE=true|false`
-- `FLOOD_WAIT_EVIDENCE=true|false`
-- `AUTH_KEY_EVIDENCE=true|false`
-- `SESSION_REVOKED_EVIDENCE=true|false`
-- `UNAUTHORIZED_EVIDENCE=true|false`
-- `RAW_TRACEBACK_PRESENT=true|false`
-- `TELEGRAM_NETWORK_CALLS=0`
+Emit only booleans / bounded aggregate indicators such as:
+- `INITIAL_STATE=true|false`
+- `HISTORY_COMPLETE_BEFORE=true|false`
+- `BACKFILL_CURSOR_PRESENT_BEFORE=true|false`
 
-Known allowlisted exception class tokens may include only:
-- ValueError
-- TypeError
-- FloodWaitError
-- AuthKeyError
-- AuthKeyNotFound
-- AuthKeyUnregisteredError
-- SessionRevokedError
-- UnauthorizedError
-- TelegramMtprotoProviderUnavailableError
-- TelegramMtprotoAuthorizationInvalidError
-- none
+The probe should determine the provider requests that the current production state would perform.
 
-If another exception class appears, emit:
-`API_EXCEPTION_CLASS=OTHER`
-or
-`WORKER_EXCEPTION_CLASS=OTHER`
-without message text.
+## Provider behavior
+
+For each page actually required by the reproduced production state:
+
+1. decrypt stored session/reference;
+2. build a fresh TelegramClient with StringSession;
+3. connect once;
+4. call is_user_authorized once;
+5. call exactly one iter_messages for that page;
+6. convert each yielded message with exact `_history_entry_from_message`;
+7. stop at first failure;
+8. disconnect in finally.
+
+No retries.
+
+Total maximum provider calls:
+- max 2 connects;
+- max 2 authorization checks;
+- max 2 iter_messages creations;
+- consume max 200 messages.
+
+No discovery/login/write RPCs.
+
+## Stage protocol
+
+Use narrow explicit failure stages, minimum:
+
+- `STAGE_1_IMPORTS`
+- `STAGE_1_DB_SESSION`
+- `STAGE_1_SESSION_DECRYPT`
+- `STAGE_1_REFERENCE_DECRYPT`
+- `STAGE_1_REFERENCE_PARSE`
+- `STAGE_1_REFERENCE_PEER_MATCH`
+- `STAGE_2_PAGE1_CONNECT`
+- `STAGE_2_PAGE1_AUTHORIZED`
+- `STAGE_3_PAGE1_ITERATION`
+- `STAGE_3_PAGE1_CONVERSION`
+- `STAGE_4_PAGE2_CONNECT`
+- `STAGE_4_PAGE2_AUTHORIZED`
+- `STAGE_5_PAGE2_ITERATION`
+- `STAGE_5_PAGE2_CONVERSION`
+
+If second page is not required by current production state, emit:
+`PAGE2_REQUIRED=false`
+
+If it is required:
+`PAGE2_REQUIRED=true`
+
+## Safe output
+
+Allowed aggregate fields only:
+
+- account/manual-selection cardinality booleans;
+- session/reference decrypt/parse/peer-match booleans;
+- initial/current-state booleans;
+- page1/page2 required/pass booleans;
+- per-page messages-seen and entries-converted counts (0..100);
+- `ENTRIES_NONE=0` on successful conversion;
+- stage;
+- raw exception CLASS NAME only;
+- message ordinal 0..100;
+- provider-call counts;
+- total network-call count <= 6.
 
 Do NOT emit:
-- peer/group IDs;
-- Telegram user ID/username/display name;
-- message IDs/content;
+- message ids;
+- peer/group ids;
+- user ids;
+- message text/body;
+- sender ids;
+- timestamps;
 - session/reference;
-- request bodies;
-- tokens/cookies/headers;
-- DB IDs;
-- raw log lines;
-- exception messages/tracebacks.
+- credentials;
+- raw traceback;
+- exception messages;
+- request bodies.
+
+Unknown exception class may be emitted only as class token if it matches safe identifier syntax; otherwise `OTHER`.
+
+## Parent/child safety
+
+Use the hardened M4AH design principles:
+
+- strict pinned SSH;
+- exact target.json;
+- fail-closed parent allowlist;
+- any child stderr => fail closed;
+- nonzero child exit => fail closed;
+- malformed/unknown output => fail closed;
+- no raw stdout/stderr passthrough;
+- remote end marker required;
+- no retry after remote start.
+
+The diagnostic implementation may reuse/copy reviewed M4AH helper patterns, but do not merge old diagnostic branch code into main.
+
+## Exact production code use
+
+Where practical, import exact production helpers:
+- `_history_entry_from_message`
+- `_input_peer_from_reference`
+- `validate_provider_peer_reference`
+- `_next_backfill_state`
+
+If importing `_next_backfill_state` is undesirable due service dependencies, reproduce its logic exactly and test parity against the real helper locally.
+
+Do not call application `fetch_history()` because that would remap raw exceptions and hide the class we are trying to observe.
+
+## Required tests
+
+At minimum:
+
+1. embedded child compiles independently;
+2. page size owned by child = 100;
+3. max total messages = 200;
+4. current selection state determines whether page2 is required;
+5. initial sync first-page success can derive page2 cursor without emitting id;
+6. page1 ValueError/TypeError classified at PAGE1 iteration/conversion stage;
+7. page2 ValueError/TypeError classified at PAGE2 iteration/conversion stage;
+8. auth exceptions retain page-specific auth stage;
+9. conversion None => invalid-entry style conversion failure;
+10. per-page fresh client creation;
+11. max one iter_messages per page;
+12. max two pages;
+13. disconnect per page;
+14. no application fetch_history call;
+15. no DB writes/session.add/flush/commit;
+16. no materializer;
+17. no login/discovery/write RPC;
+18. no content/id leakage;
+19. child stderr/nonzero/malformed fail closed;
+20. success protocol counts consistent:
+    - seen == converted
+    - ENTRIES_NONE=0
+    - each <=100
+    - total <=200;
+21. if PAGE2_REQUIRED=false, no page2 provider call is possible.
+
+## Verification
+
+Run:
+- focused pytest for new diagnostic;
+- relevant M4AH safety tests if reusable;
+- Ruff changed Python;
+- `git diff --check`.
 
 ## Forbidden
 
 Do NOT:
-- call Telegram;
+- run this probe against production;
+- SSH to production;
 - retry Sync;
-- use application fetch_history;
-- run diagnostic provider probes;
 - re-login;
 - Apply Scope;
-- mutate DB;
-- mutate files/env;
-- restart/recreate services;
-- change refs;
-- change SSH trust;
-- run migrations;
+- change selected groups/folders;
+- mutate production;
+- change schema/migrations;
 - enable AI;
-- touch Bot API.
+- change Bot API.
 
-## Interpretation
+## Handoff
 
-A. ValueError/TypeError evidence
-=> taxonomy fix is working and root class is non-auth. Next task should reproduce the exact second-page/history stage read-only.
+Commit and push only:
+`review/telegram-mtproto-m4am`
 
-B. FloodWait evidence
-=> provider throttling/transient; no re-login. Decide on retry/backoff UX separately.
-
-C. AuthKey/SessionRevoked/Unauthorized evidence
-=> genuine auth signal; stop before any re-login and review exact evidence.
-
-D. Only route 503/provider-unavailable, no root class
-=> logs are insufficient. Next task is one narrow second-page read-only probe.
-
-E. No route evidence
-=> do not retry Sync. Report log visibility gap; next diagnostic still requires explicit authorization.
-
-## Required report
-
-Return only:
-- preflight guards;
-- sanitized fields above;
-- production unchanged;
-- provider calls = 0.
+Report:
+- full SHA;
+- test counts;
+- Ruff;
+- diff-check;
+- exact stage model;
+- proof of fresh client per page;
+- proof of max provider-call budget;
+- proof no writes/materialization/content leakage;
+- remaining gaps.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AL1_LOG_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AM1_REVIEW_READY`
 
 Then STOP.
 
