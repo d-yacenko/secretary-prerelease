@@ -135,7 +135,9 @@ def test_page1_value_or_type_failure_has_page1_stage(stage: str) -> None:
 )
 def test_page2_value_or_type_failure_has_page2_stage(stage: str) -> None:
     output = (
-        f"{probe.REMOTE_BEGIN}=true\nPAGE2_REQUIRED=true\n"
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "PAGE1_MESSAGES_SEEN=100\nPAGE1_ENTRIES_CONVERTED=100\n"
+        "PAGE1_ENTRIES_NONE=0\nPAGE2_REQUIRED=true\n"
         f"FAILURE_STAGE={stage}\nRAW_EXCEPTION_CLASS=TypeError\n"
         "MESSAGE_ORDINAL=1\nTELEGRAM_NETWORK_CALLS=6\n"
         f"{probe.REMOTE_END}=true\n"
@@ -143,13 +145,83 @@ def test_page2_value_or_type_failure_has_page2_stage(stage: str) -> None:
     assert probe.parse_output(output, "", 0)["FAILURE_STAGE"] == stage
 
 
+def test_realistic_page2_iteration_failure_is_accepted() -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "PAGE1_MESSAGES_SEEN=100\nPAGE1_ENTRIES_CONVERTED=100\n"
+        "PAGE1_ENTRIES_NONE=0\nPAGE2_REQUIRED=true\n"
+        "FAILURE_STAGE=STAGE_5_PAGE2_ITERATION\n"
+        "RAW_EXCEPTION_CLASS=TypeError\nMESSAGE_ORDINAL=1\n"
+        "TELEGRAM_NETWORK_CALLS=6\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    assert probe.parse_output(output, "", 0)["PAGE1_PASS"] == "true"
+
+
+def test_realistic_page2_conversion_failure_is_accepted() -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "PAGE1_MESSAGES_SEEN=100\nPAGE1_ENTRIES_CONVERTED=100\n"
+        "PAGE1_ENTRIES_NONE=0\nPAGE2_REQUIRED=true\n"
+        "FAILURE_STAGE=STAGE_5_PAGE2_CONVERSION\n"
+        "RAW_EXCEPTION_CLASS=InvalidHistoryEntry\nMESSAGE_ORDINAL=1\n"
+        "TELEGRAM_NETWORK_CALLS=6\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    assert probe.parse_output(output, "", 0)["RAW_EXCEPTION_CLASS"] == "InvalidHistoryEntry"
+
+
+def test_page2_failure_when_not_required_is_rejected() -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "PAGE1_MESSAGES_SEEN=100\nPAGE1_ENTRIES_CONVERTED=100\n"
+        "PAGE1_ENTRIES_NONE=0\nPAGE2_REQUIRED=false\n"
+        "FAILURE_STAGE=STAGE_5_PAGE2_ITERATION\nRAW_EXCEPTION_CLASS=TypeError\n"
+        "MESSAGE_ORDINAL=1\nTELEGRAM_NETWORK_CALLS=3\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_page2_pass_and_page2_failure_are_rejected() -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "PAGE1_MESSAGES_SEEN=100\nPAGE1_ENTRIES_CONVERTED=100\n"
+        "PAGE1_ENTRIES_NONE=0\nPAGE2_REQUIRED=true\nPAGE2_PASS=true\n"
+        "FAILURE_STAGE=STAGE_5_PAGE2_ITERATION\nRAW_EXCEPTION_CLASS=TypeError\n"
+        "MESSAGE_ORDINAL=1\nTELEGRAM_NETWORK_CALLS=6\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_page1_pass_and_page1_failure_are_rejected() -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"
+        "FAILURE_STAGE=STAGE_3_PAGE1_ITERATION\nRAW_EXCEPTION_CLASS=ValueError\n"
+        "MESSAGE_ORDINAL=1\nTELEGRAM_NETWORK_CALLS=3\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
 @pytest.mark.parametrize(
     "stage",
     ["STAGE_2_PAGE1_CONNECT", "STAGE_2_PAGE1_AUTHORIZED", "STAGE_4_PAGE2_CONNECT", "STAGE_4_PAGE2_AUTHORIZED"],
 )
 def test_auth_exceptions_retain_page_specific_stage(stage: str) -> None:
+    prefix = ""
+    if stage.startswith("STAGE_4_"):
+        prefix = (
+            "PAGE1_PASS=true\nPAGE1_MESSAGES_SEEN=100\n"
+            "PAGE1_ENTRIES_CONVERTED=100\nPAGE1_ENTRIES_NONE=0\n"
+            "PAGE2_REQUIRED=true\n"
+        )
     output = (
-        f"{probe.REMOTE_BEGIN}=true\nFAILURE_STAGE={stage}\n"
+        f"{probe.REMOTE_BEGIN}=true\n{prefix}FAILURE_STAGE={stage}\n"
         "RAW_EXCEPTION_CLASS=AuthKeyError\nMESSAGE_ORDINAL=0\n"
         "TELEGRAM_NETWORK_CALLS=1\n"
         f"{probe.REMOTE_END}=true\n"
@@ -165,6 +237,16 @@ def test_conversion_none_is_conversion_failure() -> None:
         f"{probe.REMOTE_END}=true\n"
     )
     assert probe.parse_output(output, "", 0)["RAW_EXCEPTION_CLASS"] == "InvalidHistoryEntry"
+
+
+def test_invalid_history_entry_is_a_local_safe_class() -> None:
+    assert "class InvalidHistoryEntry" in probe.REMOTE_HELPER
+    assert "InvalidHistoryEntry()" in probe.REMOTE_HELPER
+
+
+def test_structural_failures_are_terminal_and_sanitized() -> None:
+    assert "raise SystemExit(0)" in probe.REMOTE_HELPER
+    assert "stderr" not in probe.REMOTE_HELPER.split("child =", 1)[1].split('"""', 1)[0]
 
 
 def test_fresh_client_per_page_and_single_iterator_per_page() -> None:

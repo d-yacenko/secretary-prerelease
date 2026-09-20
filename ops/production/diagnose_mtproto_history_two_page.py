@@ -142,12 +142,41 @@ def parse_output(stdout: str, stderr: str, returncode: int) -> dict[str, str]:
         if key == "RAW_EXCEPTION_CLASS" and EXCEPTION_CLASS.fullmatch(value) is None:
             raise HistoryProbeError("invalid exception class")
         parsed[key] = value
-    if parsed.get("PAGE2_REQUIRED") == "false" and "PAGE2_PASS" in parsed:
-        raise HistoryProbeError("page2 result emitted when not required")
     if "FAILURE_STAGE" in parsed:
         required = {"RAW_EXCEPTION_CLASS", "MESSAGE_ORDINAL"}
         if not required.issubset(parsed):
             raise HistoryProbeError("failure fields incomplete")
+        failure_stage = parsed["FAILURE_STAGE"]
+        page1_failure = failure_stage in {
+            "STAGE_2_PAGE1_CONNECT",
+            "STAGE_2_PAGE1_AUTHORIZED",
+            "STAGE_3_PAGE1_ITERATION",
+            "STAGE_3_PAGE1_CONVERSION",
+        }
+        page2_failure = failure_stage in {
+            "STAGE_4_PAGE2_CONNECT",
+            "STAGE_4_PAGE2_AUTHORIZED",
+            "STAGE_5_PAGE2_ITERATION",
+            "STAGE_5_PAGE2_CONVERSION",
+        }
+        if page1_failure and (
+            parsed.get("PAGE1_PASS") == "true"
+            or "PAGE2_PASS" in parsed
+            or "MESSAGES_SEEN_TOTAL" in parsed
+            or "ENTRIES_CONVERTED_TOTAL" in parsed
+        ):
+            raise HistoryProbeError("page1 failure has incompatible success fields")
+        if page2_failure and (
+            parsed.get("PAGE1_PASS") != "true"
+            or parsed.get("PAGE2_REQUIRED") != "true"
+            or "PAGE2_PASS" in parsed
+            or "MESSAGES_SEEN_TOTAL" in parsed
+            or "ENTRIES_CONVERTED_TOTAL" in parsed
+        ):
+            raise HistoryProbeError("page2 failure has incompatible fields")
+        if not page1_failure and not page2_failure:
+            raise HistoryProbeError("failure stage is not page-specific")
+        return parsed
     for prefix in ("PAGE1", "PAGE2"):
         if parsed.get(f"{prefix}_PASS") == "true":
             seen = int(parsed.get(f"{prefix}_MESSAGES_SEEN", "-1"))
@@ -155,16 +184,32 @@ def parse_output(stdout: str, stderr: str, returncode: int) -> dict[str, str]:
             none = parsed.get(f"{prefix}_ENTRIES_NONE")
             if seen != converted or none != "0":
                 raise HistoryProbeError("inconsistent page success counts")
-    if (
-        parsed.get("PAGE1_PASS") == "true"
-        and parsed.get("PAGE2_REQUIRED") == "true"
-        and parsed.get("PAGE2_PASS") != "true"
-    ):
-        raise HistoryProbeError("required page2 missing")
-    total_seen = int(parsed.get("MESSAGES_SEEN_TOTAL", "0"))
-    total_converted = int(parsed.get("ENTRIES_CONVERTED_TOTAL", "0"))
-    if total_seen > MAX_MESSAGES or total_converted > MAX_MESSAGES:
-        raise HistoryProbeError("total count exceeds run bound")
+    if parsed.get("PAGE1_PASS") != "true":
+        raise HistoryProbeError("successful output missing page1")
+    if parsed.get("PAGE2_REQUIRED") not in {"true", "false"}:
+        raise HistoryProbeError("successful output missing page2 decision")
+    if parsed.get("PAGE2_REQUIRED") == "true":
+        if parsed.get("PAGE2_PASS") != "true":
+            raise HistoryProbeError("required page2 missing")
+    elif "PAGE2_PASS" in parsed:
+        raise HistoryProbeError("page2 result emitted when not required")
+    page_counts = {
+        "PAGE1_MESSAGES_SEEN": int(parsed.get("PAGE1_MESSAGES_SEEN", "-1")),
+        "PAGE1_ENTRIES_CONVERTED": int(parsed.get("PAGE1_ENTRIES_CONVERTED", "-1")),
+    }
+    if parsed.get("PAGE2_PASS") == "true":
+        page_counts.update(
+            PAGE2_MESSAGES_SEEN=int(parsed.get("PAGE2_MESSAGES_SEEN", "-1")),
+            PAGE2_ENTRIES_CONVERTED=int(parsed.get("PAGE2_ENTRIES_CONVERTED", "-1")),
+        )
+    total_seen = int(parsed.get("MESSAGES_SEEN_TOTAL", "-1"))
+    total_converted = int(parsed.get("ENTRIES_CONVERTED_TOTAL", "-1"))
+    if total_seen != page_counts["PAGE1_MESSAGES_SEEN"] + page_counts.get("PAGE2_MESSAGES_SEEN", 0):
+        raise HistoryProbeError("total seen does not equal page sums")
+    if total_converted != page_counts["PAGE1_ENTRIES_CONVERTED"] + page_counts.get("PAGE2_ENTRIES_CONVERTED", 0):
+        raise HistoryProbeError("total converted does not equal page sums")
+    if total_seen != total_converted or total_seen > MAX_MESSAGES:
+        raise HistoryProbeError("inconsistent total counts")
     return parsed
 
 
@@ -337,7 +382,10 @@ def fail(stage, exc, ordinal=0):
     emit("RAW_EXCEPTION_CLASS", name if name.isidentifier() else "OTHER")
     emit("MESSAGE_ORDINAL", str(max(0, min(ordinal, PAGE_SIZE))))
     emit("TELEGRAM_NETWORK_CALLS", str(network_calls))
-    return False
+    raise SystemExit(0)
+
+class InvalidHistoryEntry(RuntimeError):
+    pass
 
 network_calls = 0
 connect_calls = 0
@@ -364,8 +412,6 @@ except Exception as exc:
     emit("STAGE_0_ACCOUNT_EXACTLY_ONE", "false")
     emit("STAGE_0_MANUAL_SELECTED_GROUP_EXACTLY_ONE", "false")
     fail("STAGE_1_IMPORTS", exc)
-    emit("HISTORY_TWO_PAGE_REMOTE_END", "true")
-    raise SystemExit(0)
 
 async def run_probe():
     try:
@@ -376,8 +422,6 @@ async def run_probe():
         emit("STAGE_0_ACCOUNT_EXACTLY_ONE", "false")
         emit("STAGE_0_MANUAL_SELECTED_GROUP_EXACTLY_ONE", "false")
         fail("STAGE_1_DB_SESSION", exc)
-        emit("HISTORY_TWO_PAGE_REMOTE_END", "true")
-        return
     emit("STAGE_0_ACCOUNT_EXACTLY_ONE", str(len(accounts) == 1).lower())
     emit("STAGE_0_MANUAL_SELECTED_GROUP_EXACTLY_ONE", str(len(selections) == 1).lower())
     if len(accounts) != 1:
@@ -474,7 +518,7 @@ async def run_probe():
                         fail(stage_convert, exc, seen)
                         return None
                     if entry is None:
-                        fail(stage_convert, ValueError("InvalidHistoryEntry"), seen)
+                        fail(stage_convert, InvalidHistoryEntry(), seen)
                         return None
                     converted.append(entry)
             except Exception as exc:
