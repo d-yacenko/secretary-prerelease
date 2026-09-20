@@ -1,46 +1,27 @@
-# Current task — Telegram MTProto M4AP1: normalize absent Telethon history bounds
+# Current task — Telegram MTProto M4AQ1: deploy bound-normalization release
 
 ## Status
 
-M4AO2 one-shot human-shell provider probe completed and localized the live failure.
+User explicitly authorized production deployment.
 
-Observed live result:
-- production guards PASS;
-- structural/session/reference checks PASS;
-- connect PASS;
-- is_user_authorized PASS;
-- first history iterator failed before yielding any message;
-- `PAGE1_PASS=false`;
-- `PAGE1_MESSAGES_SEEN=0`;
-- `PAGE1_ENTRIES_CONVERTED=0`;
-- `PAGE1_ENTRIES_NONE=0`;
-- `FAILURE_STAGE=STAGE_3_PAGE1_ITERATION`;
-- `RAW_EXCEPTION_CLASS=TypeError`;
-- `MESSAGE_ORDINAL=1`;
-- logical provider counts connect/auth/iter = 1/1/1;
-- `TELEGRAM_NETWORK_CALLS=3`;
-- no DB writes/materialization;
-- no production mutation.
+GitHub production ref promotion is complete.
 
-Root cause:
-`TelethonMtprotoTransport.fetch_history` forwards absent optional bounds as explicit `None`:
+Authorized release SHA:
+`b7fbdc71584cfde042a998fbfefb06015175a205`
 
-- `min_message_id=None -> min_id=None`
-- `max_message_id=None -> max_id=None`
+Authorized rollback/runtime-before-deploy SHA:
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Telethon v1 history iteration treats these bounds as numeric values during iterator initialization, including expressions equivalent to:
-- `max(offset_id, max_id)` in normal order;
-- `max(offset_id, min_id)` in reverse order.
+Expected Alembic:
+`0046`
 
-Therefore explicit `None` can raise `TypeError` before the first message is yielded.
+Verified GitHub refs:
+- `origin/production == b7fbdc71584cfde042a998fbfefb06015175a205`
+- canonical main contains the same release and later task/state documentation only as applicable.
 
-This explains the M4AO2 failure and also explains why earlier raw page1 diagnostics could pass when absent bounds were omitted rather than explicitly passed as None.
+The release is schema-neutral: no Alembic migration change is authorized.
 
-## Goal
-
-Implement the smallest transport-boundary fix and focused regressions.
-
-No production deploy in this task.
+This task authorizes ONLY the normal production deploy harness and post-deploy verification described below.
 
 ## Executor workspace
 
@@ -56,128 +37,171 @@ Do not use:
 - `~/work/secretary`
 - `~/work/secretary-prerelease`
 
-for implementation work.
+for Executor work.
 
-## Bootstrap
+## Preparation
 
-Before implementation:
+1. `git fetch --prune origin`
+2. `git switch main`
+3. `git pull --ff-only`
+4. Verify:
+   - exact canonical origin;
+   - clean worktree;
+   - local `main == origin/main`;
+   - `origin/production == b7fbdc71584cfde042a998fbfefb06015175a205`;
+   - release SHA exists locally;
+   - rollback SHA exists locally.
+5. Read:
+   - `CURRENT_TASK.md`
+   - `PROJECT_STATE.md`
+   - `AGENTS.md`
+   - `docs/executor_bootstrap.md`
+   - `docs/deploy.md`
+   - `ops/production/deploy.py`
+   - `ops/production/remote_deploy.py`
+   - `ops/production/target.json`
+
+If any precondition fails, STOP with one sanitized blocker.
+
+Do not move any Git ref during this task.
+
+## Authorized deploy command
+
+Run exactly:
 
 ```bash
-git fetch origin
-git switch main
-git pull --ff-only
-git remote get-url origin
-git rev-parse HEAD
-git status --short
+RELEASE_SHA=b7fbdc71584cfde042a998fbfefb06015175a205
+ROLLBACK_SHA=23fa07df213d5a70a6dc1d3c8b32af39228107eb
+EXPECTED_ALEMBIC=0046
+
+python3 ops/production/deploy.py \
+  --release-sha "$RELEASE_SHA" \
+  --rollback-sha "$ROLLBACK_SHA" \
+  --expected-alembic "$EXPECTED_ALEMBIC"
 ```
 
-Require:
-- exact canonical origin;
-- current `origin/main`;
-- clean worktree.
+Use the committed deploy harness unchanged.
 
-Then read:
-- `CURRENT_TASK.md`
-- `PROJECT_STATE.md`
-- `AGENTS.md`
-- `backend/app/connectors/telegram/mtproto_transport.py`
-- `backend/tests/test_telegram_mtproto_a3.py`
-- `backend/tests/test_telegram_mtproto_m4ai.py`
+Do NOT edit `deploy.py` or `remote_deploy.py`.
 
-## Required implementation
+Do NOT bypass the harness with manual SSH or manual Compose.
 
-In `TelethonMtprotoTransport.fetch_history`, normalize absent bounds to Telethon's numeric sentinel before calling `iter_messages`:
+## Authorized runtime mutation
 
-- absent `min_message_id` => `min_id=0`
-- absent `max_message_id` => `max_id=0`
+Only the existing harness may:
 
-Keep the public method signature unchanged.
+- switch production checkout from rollback SHA to release SHA;
+- build `api` and `worker`;
+- recreate only `api` and `worker`.
 
-Do not change:
-- page size;
-- reverse semantics;
-- error taxonomy;
-- auth handling;
-- conversion behavior;
-- retry behavior;
-- discovery;
-- write operations;
-- DB schema;
-- materialization.
+Must preserve:
+- DB container;
+- DB volume/data;
+- `.env`;
+- credential-encryption key;
+- stored Telegram MTProto session;
+- Telegram selection state;
+- AI flag;
+- Bot API state;
+- Alembic `0046`.
 
-Prefer the smallest explicit boundary normalization.
+No migration is authorized.
 
-## Required regressions
+## Required post-deploy verification
 
-Add focused tests that assert the real transport calls Telethon with numeric bounds in all relevant history modes.
+After `DEPLOYMENT=PASS`, report only sanitized facts already exposed by the harness and safe read-only checks allowed by the runbook.
 
-At minimum:
+Require final:
+- production HEAD == `b7fbdc71584cfde042a998fbfefb06015175a205`;
+- `origin/production` == same;
+- production worktree clean;
+- API running/healthy;
+- worker running;
+- DB running/healthy;
+- DB container unchanged;
+- DB volume unchanged;
+- `.env` unchanged;
+- Alembic == `0046`;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- Bot API untouched;
+- Telegram login/history/provider actions during deploy = none.
 
-1. Initial history:
-   - `min_message_id=None`
-   - `max_message_id=None`
-   - `reverse=False`
-   - fake client records:
-     - `min_id == 0`
-     - `max_id == 0`
+Do not perform the human Sync in this task.
 
-2. Incremental history:
-   - positive `min_message_id`
-   - absent max
-   - `reverse=True`
-   - fake client records:
-     - exact positive `min_id`
-     - `max_id == 0`
+## Rollback
 
-3. Backfill history:
-   - absent min
-   - positive `max_message_id`
-   - `reverse=False`
-   - fake client records:
-     - `min_id == 0`
-     - exact positive `max_id`
+If the harness fails after mutation, allow only its built-in rollback to:
 
-4. Preserve current provider-neutral mapping:
-   - a non-auth `TypeError` from provider iteration is still mapped to `TelegramMtprotoProviderUnavailableError`.
-   - do not weaken existing M4AI taxonomy regressions.
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-5. If practical, include one regression that would fail under explicit `None` but pass under numeric sentinels, closely modeling Telethon iterator initialization.
+If rollback occurs:
+- STOP;
+- report sanitized failure;
+- report rollback PASS/FAIL;
+- report final runtime SHA and health;
+- do not move `origin/production` back in this task.
 
-## Verification
+A GitHub ref change after rollback would require a separate authorization.
 
-Run focused tests for:
-- Telegram MTProto A3 history transport/service;
-- M4AI taxonomy;
-- any newly added regression file.
+## Strictly forbidden
 
-Run Ruff on changed Python files.
+Do NOT:
+- run migration 0047;
+- change schema;
+- recreate/delete DB container or volume;
+- edit `.env`;
+- rotate/change credential key;
+- login/re-login Telegram;
+- submit Telegram code/password;
+- run Telegram Sync/history import;
+- Apply Scope;
+- discover groups/folders/dialogs;
+- enable MTProto AI;
+- change/retire Bot API;
+- change target.json or SSH trust;
+- manually SSH around the deploy harness;
+- perform unrelated cleanup.
 
-Run repository diff-check / relevant static checks.
+## Required report
 
-No live Telegram/provider calls.
-No production SSH.
-No production mutation.
+### Preflight
+- canonical repo/main clean/exact;
+- origin/production exact release;
+- target/pin PASS;
+- SSH PASS;
+- production old HEAD;
+- production worktree clean;
+- API/worker/DB pre-state;
+- DB health;
+- API health;
+- Alembic.
 
-## Deliverable
+### Rollout
+- release HEAD selected;
+- API recreated;
+- worker recreated;
+- DB container unchanged;
+- DB volume unchanged;
+- env file unchanged;
+- migration action: none.
 
-If all checks PASS:
-- commit/push to canonical main;
-- update `PROJECT_STATE.md` with the implemented root-cause fix and verification;
-- do NOT deploy.
-
-Report:
-- commit SHA;
-- changed files;
-- focused test counts/results;
-- Ruff/diff-check;
-- confirmation production SSH = 0;
-- confirmation Telegram/provider calls = 0;
-- confirmation production mutation = 0.
+### Final
+- production runtime SHA;
+- origin/production SHA;
+- health;
+- API/worker/DB status;
+- Alembic;
+- DB/env/key preservation;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- Bot API untouched;
+- Telegram login/history/provider actions: none.
 
 Final marker:
 
-`TELEGRAM_MTPROTO_M4AP1_BOUND_NORMALIZATION_READY`
+`TELEGRAM_MTPROTO_M4AQ1_DEPLOY_READY`
 
 Then STOP.
+
+After successful deploy, the next phase will be a separate human-controlled single manual Sync of the already-selected Telegram group.
 
 `CURRENT_TASK.md` is the source of active authorization.
