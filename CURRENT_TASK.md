@@ -56,7 +56,7 @@ Verify:
 - `origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 - canonical target.json unchanged;
 - pinned production host-key contract intact;
-- pre-existing ambient SSH credential integration is available.
+- actual pinned read-only `BatchMode=yes` SSH no-op to the canonical target succeeds. Do not use ssh-agent/key inventory as a gating condition.
 
 If bootstrap cannot be established before remote execution:
 
@@ -247,7 +247,7 @@ If PASS, only:
 - authorized refs/SHAs: PASS
 - clean/exact checkout: PASS
 - target/pin: PASS
-- SSH auth path: PASS
+- pinned BatchMode SSH no-op: PASS
 
 ### Remote guards
 - production HEAD/ref/worktree: PASS/FAIL
