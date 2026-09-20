@@ -78,7 +78,11 @@ printf '%s\n' 'CANONICAL_REPO_PASS=true'
 printf '%s\n' 'TARGET_PIN_PASS=true'
 
 REMOTE_HELPER="$TMPDIR_LOCAL/remote.sh"
-cat >"$REMOTE_HELPER" <<'REMOTE'
+# Stream the same closed protocol validator to the remote shell in memory.
+PROTOCOL_FILE="$SCRIPT_DIR/manual_mtproto_structural_protocol.py"
+[ -f "$PROTOCOL_FILE" ] || fail "protocol_missing"
+printf 'PROTOCOL_VALIDATOR=%q\n' "$(cat "$PROTOCOL_FILE")" >"$REMOTE_HELPER"
+cat >>"$REMOTE_HELPER" <<'REMOTE'
 #!/usr/bin/env bash
 set -u
 
@@ -90,10 +94,15 @@ emit_bool() {
   printf '%s=%s\n' "$1" "$2"
 }
 
+outer_blocked() {
+  printf 'M4AM_GENERIC_DB_STAGE_CAUSE=%s\n' "$1"
+  printf '%s\n' 'MANUAL_M4AN2_REMOTE_TERMINAL=blocked'
+  exit 0
+}
+
 cd "$REPO" 2>/dev/null || {
   printf '%s\n' 'REMOTE_REPO_PASS=false'
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=REMOTE_REPO'
-  exit 0
+  outer_blocked REMOTE_REPO
 }
 
 head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -105,16 +114,14 @@ if [ "$prod" = "$EXPECTED_RELEASE" ]; then emit_bool REMOTE_PRODUCTION_REF_PASS 
 if [ -z "$dirty" ]; then emit_bool REMOTE_WORKTREE_CLEAN true; else emit_bool REMOTE_WORKTREE_CLEAN false; fi
 
 if [ "$head" != "$EXPECTED_RELEASE" ] || [ "$prod" != "$EXPECTED_RELEASE" ] || [ -n "$dirty" ]; then
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=REMOTE_GUARD'
-  exit 0
+  outer_blocked REMOTE_GUARD
 fi
 
 if "${COMPOSE[@]}" config --format json >/dev/null 2>/dev/null; then
   emit_bool COMPOSE_CONFIG_PASS true
 else
   emit_bool COMPOSE_CONFIG_PASS false
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=COMPOSE_CONFIG'
-  exit 0
+  outer_blocked COMPOSE_CONFIG
 fi
 
 service_running() {
@@ -126,9 +133,9 @@ service_running() {
   [ "$state" = "true" ]
 }
 
-if service_running db; then emit_bool DB_RUNNING_PASS true; else emit_bool DB_RUNNING_PASS false; printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=DB_RUNNING'; exit 0; fi
-if service_running api; then emit_bool API_RUNNING_PASS true; else emit_bool API_RUNNING_PASS false; printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=API_RUNNING'; exit 0; fi
-if service_running worker; then emit_bool WORKER_RUNNING_PASS true; else emit_bool WORKER_RUNNING_PASS false; printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=WORKER_RUNNING'; exit 0; fi
+if service_running db; then emit_bool DB_RUNNING_PASS true; else emit_bool DB_RUNNING_PASS false; outer_blocked DB_RUNNING; fi
+if service_running api; then emit_bool API_RUNNING_PASS true; else emit_bool API_RUNNING_PASS false; outer_blocked API_RUNNING; fi
+if service_running worker; then emit_bool WORKER_RUNNING_PASS true; else emit_bool WORKER_RUNNING_PASS false; outer_blocked WORKER_RUNNING; fi
 
 db_cid="$("${COMPOSE[@]}" ps -q db 2>/dev/null | head -n 1)"
 db_health="$(docker inspect -f '{{.State.Health.Status}}' "$db_cid" 2>/dev/null || true)"
@@ -136,17 +143,17 @@ if [ "$db_health" = "healthy" ]; then
   emit_bool DB_HEALTH_PASS true
 else
   emit_bool DB_HEALTH_PASS false
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=DB_HEALTH'
-  exit 0
+  outer_blocked DB_HEALTH
 fi
 
-revision="$("${COMPOSE[@]}" exec -T db sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" -At -c "SELECT version_num FROM alembic_version"' 2>/dev/null || true)"
+# docker exec must not consume the remaining SSH-streamed bash script.
+emit_bool ALEMBIC_CHECK_STARTED true
+revision="$("${COMPOSE[@]}" exec -T db sh -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" -At -c "SELECT version_num FROM alembic_version"' </dev/null 2>/dev/null || true)"
 if [ "$revision" = "0046" ]; then
   emit_bool ALEMBIC_0046_PASS true
 else
   emit_bool ALEMBIC_0046_PASS false
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=ALEMBIC'
-  exit 0
+  outer_blocked ALEMBIC
 fi
 
 child_out="$(mktemp)"
@@ -154,6 +161,7 @@ child_err="$(mktemp)"
 cleanup_child() { rm -f "$child_out" "$child_err"; }
 trap cleanup_child EXIT
 
+emit_bool CHILD_STARTED true
 "${COMPOSE[@]}" exec -T api python3 - >"$child_out" 2>"$child_err" <<'PY'
 from __future__ import annotations
 
@@ -164,13 +172,21 @@ def emit(key: str, value: str) -> None:
 
 def safe_class(exc: BaseException) -> str:
     name = type(exc).__name__
-    return name if name.isidentifier() else "OTHER"
+    allowed = {
+        "RuntimeError", "ValueError", "TypeError", "AttributeError", "ImportError",
+        "ModuleNotFoundError", "OperationalError", "ProgrammingError", "DatabaseError",
+        "InterfaceError", "InvalidToken", "KeyError", "IndexError", "UnicodeDecodeError",
+        "InvalidRequestError", "StatementError",
+        "TelegramMtprotoProviderReferenceInvalidError",
+    }
+    return name if name in allowed else "OTHER"
 
 
 def fail(stage: str, exc: BaseException) -> None:
     emit("FAILURE_SUBSTAGE", stage)
     emit("RAW_EXCEPTION_CLASS", safe_class(exc))
     emit("TELEGRAM_NETWORK_CALLS", "0")
+    emit("M4AN2_CHILD_TERMINAL", "complete")
     raise SystemExit(0)
 
 
@@ -285,60 +301,18 @@ emit("REFERENCE_PEER_MATCH_PASS", "true")
 emit("FAILURE_SUBSTAGE", "NONE")
 emit("RAW_EXCEPTION_CLASS", "NONE")
 emit("TELEGRAM_NETWORK_CALLS", "0")
+emit("M4AN2_CHILD_TERMINAL", "complete")
 PY
 child_rc=$?
 
 if [ "$child_rc" -eq 0 ]; then emit_bool CHILD_RETURN_CODE_ZERO true; else emit_bool CHILD_RETURN_CODE_ZERO false; fi
 if [ -s "$child_err" ]; then emit_bool CHILD_STDERR_PRESENT true; else emit_bool CHILD_STDERR_PRESENT false; fi
 
-protocol_ok=true
-while IFS= read -r line; do
-  case "$line" in
-    IMPORTS_PASS=true|IMPORTS_PASS=false|
-    DB_QUERY_PASS=true|DB_QUERY_PASS=false|
-    ACCOUNT_EXACTLY_ONE=true|ACCOUNT_EXACTLY_ONE=false|
-    MANUAL_SELECTED_EXACTLY_ONE=true|MANUAL_SELECTED_EXACTLY_ONE=false|
-    HISTORY_STATE_READ_PASS=true|HISTORY_STATE_READ_PASS=false|
-    INITIAL_STATE=true|INITIAL_STATE=false|
-    HISTORY_COMPLETE_BEFORE=true|HISTORY_COMPLETE_BEFORE=false|
-    BACKFILL_CURSOR_PRESENT_BEFORE=true|BACKFILL_CURSOR_PRESENT_BEFORE=false|
-    CREDENTIAL_ENCRYPTION_CONSTRUCT_PASS=true|CREDENTIAL_ENCRYPTION_CONSTRUCT_PASS=false|
-    SESSION_DECRYPT_PASS=true|SESSION_DECRYPT_PASS=false|
-    STRING_SESSION_PARSE_PASS=true|STRING_SESSION_PARSE_PASS=false|
-    REFERENCE_DECRYPT_PASS=true|REFERENCE_DECRYPT_PASS=false|
-    REFERENCE_PARSE_PASS=true|REFERENCE_PARSE_PASS=false|
-    REFERENCE_PEER_MATCH_PASS=true|REFERENCE_PEER_MATCH_PASS=false|
-    TELEGRAM_NETWORK_CALLS=0)
-      printf '%s\n' "$line"
-      ;;
-    FAILURE_SUBSTAGE=IMPORTS|FAILURE_SUBSTAGE=DB_QUERY|FAILURE_SUBSTAGE=ACCOUNT_CARDINALITY|
-    FAILURE_SUBSTAGE=MANUAL_SELECTION_CARDINALITY|FAILURE_SUBSTAGE=HISTORY_STATE_READ|
-    FAILURE_SUBSTAGE=ENCRYPTION_CONSTRUCT|FAILURE_SUBSTAGE=SESSION_DECRYPT|
-    FAILURE_SUBSTAGE=STRING_SESSION_PARSE|FAILURE_SUBSTAGE=REFERENCE_DECRYPT|
-    FAILURE_SUBSTAGE=REFERENCE_PARSE|FAILURE_SUBSTAGE=REFERENCE_PEER_MATCH|FAILURE_SUBSTAGE=NONE)
-      printf '%s\n' "$line"
-      ;;
-    RAW_EXCEPTION_CLASS=NONE)
-      printf '%s\n' "$line"
-      ;;
-    RAW_EXCEPTION_CLASS=*)
-      value="${line#RAW_EXCEPTION_CLASS=}"
-      if printf '%s' "$value" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
-        printf '%s\n' "$line"
-      else
-        protocol_ok=false
-      fi
-      ;;
-    *)
-      protocol_ok=false
-      ;;
-  esac
-done <"$child_out"
-
-if [ "$protocol_ok" != true ]; then
-  printf '%s\n' 'M4AM_GENERIC_DB_STAGE_CAUSE=CHILD_PROTOCOL'
-  exit 0
+if ! python3 -c "$PROTOCOL_VALIDATOR" child "$child_out" 2>/dev/null; then
+  emit_bool CHILD_TERMINAL_RESULT invalid
+  outer_blocked CHILD_PROTOCOL
 fi
+emit_bool CHILD_TERMINAL_RESULT valid
 
 failure="$(sed -n 's/^FAILURE_SUBSTAGE=//p' "$child_out" | tail -n 1)"
 peer_pass="$(sed -n 's/^REFERENCE_PEER_MATCH_PASS=//p' "$child_out" | tail -n 1)"
@@ -354,6 +328,7 @@ else
 fi
 
 printf '%s\n' 'TELEGRAM_MTPROTO_M4AN2_STRUCTURAL_READY'
+printf '%s\n' 'MANUAL_M4AN2_REMOTE_TERMINAL=structural'
 REMOTE
 
 set +e
@@ -368,9 +343,17 @@ ssh -T \
   -o PreferredAuthentications=publickey \
   "$SSH_TARGET" \
   bash -s -- "$EXPECTED_RELEASE" \
-  <"$REMOTE_HELPER" 2>"$SSH_ERR"
+  <"$REMOTE_HELPER" >"$TMPDIR_LOCAL/remote.stdout" 2>"$SSH_ERR"
 ssh_rc=$?
+python3 "$PROTOCOL_FILE" remote "$TMPDIR_LOCAL/remote.stdout" 2>/dev/null
+protocol_rc=$?
 set -e
+
+if [ "$protocol_rc" -eq 3 ]; then
+  fail "remote_incomplete"
+elif [ "$protocol_rc" -ne 0 ]; then
+  fail "remote_protocol"
+fi
 
 if [ "$ssh_rc" -ne 0 ]; then
   printf '%s\n' 'MANUAL_M4AN2_BLOCKED=ssh_failed'
