@@ -285,3 +285,29 @@ Final marker:
 Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
+
+
+## Human-shell bridge
+
+Because the Executor subprocess does not share the same SSH credential/broker context as the human sandbox terminal, the canonical manual bridge for this task is:
+
+`ops/production/manual_mtproto_structural_probe.sh`
+
+It is intended to be launched from the human sandbox shell where ordinary SSH already works.
+
+The script:
+- verifies the canonical local repo and target metadata;
+- verifies the pinned ED25519 host key;
+- uses public-key-only SSH auth with password and keyboard-interactive disabled;
+- performs only the zero-provider structural localization authorized above;
+- never constructs TelegramClient;
+- never performs Telegram/provider calls;
+- never writes DB/materializes data;
+- emits only sanitized booleans/stage/class facts.
+
+Run from a fresh/canonical checkout on current main:
+
+`bash ops/production/manual_mtproto_structural_probe.sh`
+
+Then paste its output back to the Architect.
+
