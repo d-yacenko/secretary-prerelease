@@ -171,6 +171,73 @@ def test_realistic_page2_conversion_failure_is_accepted() -> None:
     assert probe.parse_output(output, "", 0)["RAW_EXCEPTION_CLASS"] == "InvalidHistoryEntry"
 
 
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "STAGE_1_IMPORTS",
+        "STAGE_1_DB_SESSION",
+        "STAGE_1_SESSION_DECRYPT",
+        "STAGE_1_REFERENCE_DECRYPT",
+        "STAGE_1_REFERENCE_PARSE",
+        "STAGE_1_REFERENCE_PEER_MATCH",
+        "STAGE_0_RELEASE_REF",
+        "STAGE_0_PRODUCTION_REF",
+        "STAGE_0_WORKTREE",
+    ],
+)
+def test_structural_and_preflight_failures_are_accepted(stage: str) -> None:
+    output = (
+        f"{probe.REMOTE_BEGIN}=true\nSTAGE_0_ACCOUNT_EXACTLY_ONE=false\n"
+        f"FAILURE_STAGE={stage}\nRAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\n"
+        f"{probe.REMOTE_END}=true\n"
+    )
+    assert probe.parse_output(output, "", 0)["FAILURE_STAGE"] == stage
+
+
+def test_structural_failure_with_page_success_is_rejected() -> None:
+    output = (
+        "FAILURE_STAGE=STAGE_1_DB_SESSION\nRAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\nPAGE1_PASS=true\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_structural_failure_with_page2_success_is_rejected() -> None:
+    output = (
+        "FAILURE_STAGE=STAGE_1_REFERENCE_PARSE\nRAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\nPAGE2_PASS=true\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_structural_failure_with_totals_is_rejected() -> None:
+    output = (
+        "FAILURE_STAGE=STAGE_0_WORKTREE\nRAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\n"
+        "MESSAGES_SEEN_TOTAL=0\nENTRIES_CONVERTED_TOTAL=0\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_structural_failure_with_network_calls_is_rejected() -> None:
+    output = (
+        "FAILURE_STAGE=STAGE_1_IMPORTS\nRAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=1\n"
+    )
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
+def test_any_failure_requires_network_call_count() -> None:
+    output = "FAILURE_STAGE=STAGE_3_PAGE1_ITERATION\nRAW_EXCEPTION_CLASS=ValueError\nMESSAGE_ORDINAL=1\n"
+    with pytest.raises(probe.HistoryProbeError):
+        probe.parse_output(output, "", 0)
+
+
 def test_page2_failure_when_not_required_is_rejected() -> None:
     output = (
         f"{probe.REMOTE_BEGIN}=true\nPAGE1_PASS=true\n"

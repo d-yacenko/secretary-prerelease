@@ -30,6 +30,9 @@ REMOTE_END = "HISTORY_TWO_PAGE_REMOTE_END"
 EXCEPTION_CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 
 FAILURE_STAGES = {
+    "STAGE_0_RELEASE_REF",
+    "STAGE_0_PRODUCTION_REF",
+    "STAGE_0_WORKTREE",
     "STAGE_1_IMPORTS",
     "STAGE_1_DB_SESSION",
     "STAGE_1_SESSION_DECRYPT",
@@ -44,6 +47,17 @@ FAILURE_STAGES = {
     "STAGE_4_PAGE2_AUTHORIZED",
     "STAGE_5_PAGE2_ITERATION",
     "STAGE_5_PAGE2_CONVERSION",
+}
+STRUCTURAL_FAILURE_STAGES = {
+    "STAGE_0_RELEASE_REF",
+    "STAGE_0_PRODUCTION_REF",
+    "STAGE_0_WORKTREE",
+    "STAGE_1_IMPORTS",
+    "STAGE_1_DB_SESSION",
+    "STAGE_1_SESSION_DECRYPT",
+    "STAGE_1_REFERENCE_DECRYPT",
+    "STAGE_1_REFERENCE_PARSE",
+    "STAGE_1_REFERENCE_PEER_MATCH",
 }
 
 BOOLEAN_KEYS = {
@@ -147,6 +161,20 @@ def parse_output(stdout: str, stderr: str, returncode: int) -> dict[str, str]:
         if not required.issubset(parsed):
             raise HistoryProbeError("failure fields incomplete")
         failure_stage = parsed["FAILURE_STAGE"]
+        if "TELEGRAM_NETWORK_CALLS" not in parsed:
+            raise HistoryProbeError("failure missing network count")
+        if failure_stage in STRUCTURAL_FAILURE_STAGES:
+            if parsed["TELEGRAM_NETWORK_CALLS"] != "0":
+                raise HistoryProbeError("structural failure has provider calls")
+            forbidden = {
+                "PAGE1_PASS",
+                "PAGE2_PASS",
+                "MESSAGES_SEEN_TOTAL",
+                "ENTRIES_CONVERTED_TOTAL",
+            }
+            if forbidden.intersection(parsed):
+                raise HistoryProbeError("structural failure has success fields")
+            return parsed
         page1_failure = failure_stage in {
             "STAGE_2_PAGE1_CONNECT",
             "STAGE_2_PAGE1_AUTHORIZED",
