@@ -26,6 +26,21 @@ The canonical runtime identity is:
 
 No Executor may try alternative hosts, IP addresses, directories, `.env` files, Compose files, or repositories when a production preflight fails.
 
+## Executor bootstrap prerequisite
+
+Before any production deploy, rollback, recovery, verification, or BREAK-GLASS runtime task, the Executor must first satisfy `docs/executor_bootstrap.md`.
+
+This prerequisite is operational plumbing, not a production phase. In particular:
+
+- use the canonical repository `https://github.com/d-yacenko/secretary-prerelease.git`;
+- do not reuse/repair an unrelated dirty or wrong-origin checkout; use a fresh temporary canonical clone instead;
+- verify task-authorized refs/SHAs exactly;
+- use the pre-existing Executor/workstation SSH credential integration;
+- do not create/copy/request new production private-key material as a workaround;
+- if bootstrap fails before remote execution, report one sanitized bootstrap blocker and stop rather than creating a chain of production/product diagnostic phases.
+
+A bootstrap/pre-SSH failure is not evidence about the deployed application, database, or provider, and it does not consume a one-shot provider authorization unless the task's defined remote/provider start marker was reached.
+
 ## Mandatory deployment entrypoint
 
 Normal production deployment must use:
