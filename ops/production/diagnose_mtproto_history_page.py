@@ -43,6 +43,8 @@ PAGE_COUNT_LIMITS = {
 }
 PAGE_FAILURE_STAGES = {
     *history_stage_diagnostic.FAILURE_STAGES,
+    "STAGE_1_IMPORTS",
+    "STAGE_1_DB_SESSION",
     "STAGE_3_ITERATION",
     "STAGE_3_CONVERSION",
 }
@@ -81,6 +83,14 @@ def parse_page_output(stdout: str, stderr: str, returncode: int) -> dict[str, st
             raise HistoryPageError("failure missing ordinal/class")
         if "FIRST_PAGE_PASS" in parsed:
             raise HistoryPageError("failed page cannot pass")
+    if parsed.get("FIRST_PAGE_PASS") == "true":
+        required = {"ENTRIES_NONE", "MESSAGES_SEEN", "ENTRIES_CONVERTED"}
+        if not required.issubset(parsed) or "FAILURE_STAGE" in parsed:
+            raise HistoryPageError("incomplete success")
+        if parsed["ENTRIES_NONE"] != "0":
+            raise HistoryPageError("successful page contains empty entries")
+        if parsed["MESSAGES_SEEN"] != parsed["ENTRIES_CONVERTED"]:
+            raise HistoryPageError("success counts diverge")
     return parsed
 
 
@@ -229,19 +239,42 @@ try:
     if revision.returncode != 0 or revision.stdout.strip() != "0046":
         stop("STAGE_0_ALEMBIC", RuntimeError())
 
-    probe = r"""from sqlalchemy import select
-from app.connectors.telegram.mtproto_transport import _history_entry_from_message, _input_peer_from_reference, validate_provider_peer_reference
-from app.connectors.google.encryption import CredentialEncryption
-from app.core.config import settings
-from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
-from app.db.session import SessionLocal
-from telethon import TelegramClient
-from telethon.sessions import StringSession
+    probe = r"""import asyncio
+
+PAGE_SIZE = 100
+
+def emit(key, value):
+    print(f"{key}={value}", flush=True)
+
+def emit_failure(stage, exc):
+    emit("FAILURE_STAGE", stage)
+    emit("RAW_EXCEPTION_CLASS", type(exc).__name__)
+    emit("MESSAGE_ORDINAL", "0")
+    emit("TELEGRAM_NETWORK_CALLS", "0")
+
+try:
+    from sqlalchemy import select
+    from app.connectors.telegram.mtproto_transport import _history_entry_from_message, _input_peer_from_reference, validate_provider_peer_reference
+    from app.connectors.google.encryption import CredentialEncryption
+    from app.core.config import settings
+    from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+    from app.db.session import SessionLocal
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+except Exception as exc:
+    emit_failure("STAGE_1_IMPORTS", exc)
+    raise SystemExit(0)
 
 async def run_probe():
-    with SessionLocal() as session:
-        accounts = list(session.scalars(select(TelegramMtprotoAccount)))
-        selections = list(session.scalars(select(TelegramMtprotoChatSelection).where(TelegramMtprotoChatSelection.manual_selected.is_(True))))
+    try:
+        with SessionLocal() as session:
+            accounts = list(session.scalars(select(TelegramMtprotoAccount)))
+            selections = list(session.scalars(select(TelegramMtprotoChatSelection).where(TelegramMtprotoChatSelection.manual_selected.is_(True))))
+    except Exception as exc:
+        emit_failure("STAGE_1_DB_SESSION", exc)
+        return
+
+    async def run_after_db_session():
         print("STAGE_0_ACCOUNT_EXACTLY_ONE=" + ("true" if len(accounts) == 1 else "false"))
         print("STAGE_0_MANUAL_SELECTED_GROUP_EXACTLY_ONE=" + ("true" if len(selections) == 1 else "false"))
         if len(accounts) != 1:
@@ -394,8 +427,9 @@ async def run_probe():
         print("ITER_MESSAGES_CALL_COUNT=" + str(iterator_calls))
         print("TELEGRAM_NETWORK_CALLS=" + str(connect_calls + authorized_calls + iterator_calls))
 
+    await run_after_db_session()
+
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(run_probe())
 """
     result = run(COMPOSE + ["exec", "-T", "api", "python3", "-"], input=probe)

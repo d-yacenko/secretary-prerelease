@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -99,7 +100,7 @@ def test_exact_history_conversion_and_no_application_fetch_or_materialization() 
     [
         ("FAILURE_STAGE=STAGE_3_ITERATION\nRAW_EXCEPTION_CLASS=ServerError\nMESSAGE_ORDINAL=0\n", "STAGE_3_ITERATION"),
         ("FAILURE_STAGE=STAGE_3_CONVERSION\nRAW_EXCEPTION_CLASS=ValueError\nMESSAGE_ORDINAL=100\n", "STAGE_3_CONVERSION"),
-        ("FIRST_PAGE_PASS=true\nMESSAGES_SEEN=100\nENTRIES_CONVERTED=99\nENTRIES_NONE=1\n", "FIRST_PAGE_PASS"),
+        ("FIRST_PAGE_PASS=true\nMESSAGES_SEEN=100\nENTRIES_CONVERTED=100\nENTRIES_NONE=0\n", "FIRST_PAGE_PASS"),
     ],
 )
 def test_page_output_accepts_only_aggregate_failure_or_success_fields(payload: str, expected: str) -> None:
@@ -192,6 +193,108 @@ def test_success_protocol_has_zero_none_entries_and_aggregate_counts() -> None:
     )
     assert parsed["ENTRIES_NONE"] == "0"
     assert "RAW_EXCEPTION_CLASS" not in parsed
+
+
+def test_success_protocol_rejects_nonzero_none_missing_counts_and_mismatch() -> None:
+    payloads = (
+        "FIRST_PAGE_PASS=true\nMESSAGES_SEEN=4\nENTRIES_CONVERTED=4\nENTRIES_NONE=1\n",
+        "FIRST_PAGE_PASS=true\nENTRIES_NONE=0\n",
+        "FIRST_PAGE_PASS=true\nMESSAGES_SEEN=4\nENTRIES_CONVERTED=3\nENTRIES_NONE=0\n",
+    )
+    for payload in payloads:
+        with pytest.raises(diagnostic.HistoryPageError):
+            diagnostic.parse_page_output(payload, "", 0)
+
+
+def _child_source() -> str:
+    match = re.search(r'probe = r"""(.*?)\n"""', diagnostic.REMOTE_HELPER, re.DOTALL)
+    assert match is not None
+    return match.group(1)
+
+
+def test_embedded_child_compiles_and_owns_page_size() -> None:
+    source = _child_source()
+    compile(source, "<m4ah-child>", "exec")
+    assert "PAGE_SIZE = 100" in source
+    assert "limit=PAGE_SIZE, reverse=False" in source
+
+
+@pytest.mark.parametrize(
+    ("stage", "exception"),
+    [("STAGE_1_IMPORTS", "ImportError"), ("STAGE_1_DB_SESSION", "OperationalError")],
+)
+def test_child_bootstrap_failures_use_sanitized_protocol(stage: str, exception: str) -> None:
+    parsed = diagnostic.parse_page_output(
+        f"FAILURE_STAGE={stage}\nRAW_EXCEPTION_CLASS={exception}\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\n",
+        "",
+        0,
+    )
+    assert parsed["FAILURE_STAGE"] == stage
+    assert parsed["MESSAGE_ORDINAL"] == "0"
+    assert parsed["TELEGRAM_NETWORK_CALLS"] == "0"
+    assert "raise SystemExit(0)" in _child_source()
+
+
+def test_child_import_failure_is_executable_and_sanitized() -> None:
+    hook = (
+        "import builtins\n"
+        "_real_import = builtins.__import__\n"
+        "def _blocked(name, *args, **kwargs):\n"
+        "    if name == 'sqlalchemy':\n"
+        "        raise ImportError('hidden')\n"
+        "    return _real_import(name, *args, **kwargs)\n"
+        "builtins.__import__ = _blocked\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", hook + _child_source()],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    parsed = diagnostic.parse_page_output(result.stdout, result.stderr, result.returncode)
+    assert parsed == {
+        "FAILURE_STAGE": "STAGE_1_IMPORTS",
+        "RAW_EXCEPTION_CLASS": "ImportError",
+        "MESSAGE_ORDINAL": "0",
+        "TELEGRAM_NETWORK_CALLS": "0",
+    }
+
+
+def test_child_runtime_scope_and_parent_fail_closed_handling() -> None:
+    source = _child_source()
+    assert "except Exception as exc:" in source
+    assert 'emit_failure("STAGE_1_IMPORTS", exc)' in source
+    assert 'emit_failure("STAGE_1_DB_SESSION", exc)' in source
+    for payload, stderr, returncode in (
+        ("SECRET=raw", "", 0),
+        ("FAILURE_STAGE=STAGE_1_IMPORTS\nRAW_EXCEPTION_CLASS=ImportError\n", "", 1),
+        ("", "raw traceback secret", 0),
+    ):
+        with pytest.raises(diagnostic.HistoryPageError):
+            diagnostic.parse_page_output(payload, stderr, returncode)
+
+
+def test_parent_never_preserves_nonzero_child_output(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    _verified(monkeypatch)
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            f"{diagnostic.REMOTE_BEGIN}=true\nraw-secret\n",
+            "traceback secret",
+        )
+
+    monkeypatch.setattr(diagnostic.subprocess, "run", fake_run)
+    assert diagnostic._run_once() == 2
+    output = capsys.readouterr().out
+    assert "raw-secret" not in output
+    assert "traceback secret" not in output
+    assert "FAILURE_STAGE=OUTPUT_ALLOWLIST" in output
+    assert "MESSAGE_ORDINAL=0" in output
 
 
 def test_stage_transitions_are_narrow_and_not_counter_inferred() -> None:
