@@ -1,170 +1,141 @@
-# Current task — Telegram MTProto M4AI1: fix read-path error taxonomy
+# Current task — Telegram MTProto M4AI2: integrate accepted taxonomy fix and verify release candidate
 
 ## Status
 
-M4AH3 live first-page probe: PASS.
+M4AI1 is ARCHITECT ACCEPTED.
 
-Confirmed on exact diagnostic SHA:
-`2b9b8d3d7f19f2174808ecdadfd4bddc148aa5e9`
+Accepted review branch:
+`review/telegram-mtproto-m4ai`
 
-Evidence:
-- strict pinned SSH PASS;
-- exactly one MTProto account/manual-selected group;
-- session decrypt/StringSession parse/reference decrypt/reference parse/peer-match/client construct all PASS;
-- one connect PASS;
-- one live authorization check returned true;
-- one `iter_messages(input_peer, limit=100, reverse=False)`;
-- 100 messages seen;
-- 100 exact `_history_entry_from_message()` conversions succeeded;
-- ENTRIES_NONE=0;
-- no login/write/discovery/materialization/production mutation.
+Accepted exact implementation SHA:
+`0cc9353e9263f97b461b4e0c0b3186dcc9f3d88b`
 
-Therefore the earlier manual group Sync HTTP 409 surfaced as
-`Telegram MTProto authorization is no longer valid`
-is NOT evidence of a currently invalid stored session.
+Parent at implementation time:
+`1720f646312a95b49651814140909e52998d9f00`
 
-Exact release defect:
-`TelethonMtprotoTransport.fetch_history()` and discovery code broadly map
-`ValueError` / `TypeError` to `TelegramMtprotoAuthorizationInvalidError`.
+Reviewed changes:
+- `fetch_history()`: non-auth `ValueError/TypeError` -> provider-unavailable, genuine auth/session exceptions -> authorization-invalid;
+- `AuthKeyError` included consistently with existing mutation/read semantics;
+- `discover_groups()` equivalent correction;
+- `discover_folders()` / `fetch_dialog_universe()` explicitly classify `AuthKeyError` as auth-invalid while other unexpected read errors remain provider-unavailable;
+- shared API provider 503 detail changed to `Telegram provider is temporarily unavailable`;
+- no schema/migration/login/write/scope/AI/Bot API changes.
 
-This task authorizes only implementation + tests + review branch push.
+Reported verification:
+- M4AI focused: 10 passed;
+- existing A2/A3/A4 transport regressions: 8 passed;
+- A1 transport/migration checks: 3 passed;
+- Ruff PASS;
+- git diff --check PASS;
+- Alembic head 0046.
+- broader DB-dependent local tests were blocked only by unavailable local PostgreSQL host; production was not used.
 
-NO production deploy/run is authorized.
+This task authorizes integration + local/repository verification only.
+
+NO production deploy or production runtime mutation is authorized.
 
 ## Goal
 
-Make MTProto read-path error taxonomy truthful:
+Integrate the accepted M4AI implementation into current main without altering its code, then identify one exact deployable candidate SHA and verify it locally as far as the available environment permits.
 
-- only real auth-key/session invalidation errors become authorization-invalid;
-- non-auth `ValueError` / `TypeError` from read/discovery/history paths become provider-unavailable or a more specific existing non-auth error;
-- API 503 wording must be provider-neutral, not "authorization provider", because the same response helper is used for history/discovery.
+## Integration
 
-## Branch / base
+1. `git fetch origin`.
+2. Verify:
+   - `origin/review/telegram-mtproto-m4ai == 0cc9353e9263f97b461b4e0c0b3186dcc9f3d88b`;
+   - accepted implementation commit has no unexpected files beyond the reviewed diff.
+3. Start from current `origin/main`.
+4. Integrate the accepted implementation using the repository's normal non-destructive workflow.
+5. Do not modify the accepted transport/API/test code during integration.
+6. If integration is not clean, STOP and report conflict; do not resolve creatively.
 
-Create a new review branch from current main.
+## Candidate requirements
 
-Preferred:
-`review/telegram-mtproto-m4ai`
+The resulting candidate must include exactly the accepted M4AI code plus current main documentation/state/task history.
 
-Do not modify production.
+No:
+- migration 0047;
+- schema changes;
+- dependency changes;
+- Telegram login changes;
+- sync limit/page-size changes;
+- scope changes;
+- AI enablement;
+- Bot API retirement;
+- diagnostic review-branch harnesses unless they were already present on current main.
 
-## Required code changes
+Report exact candidate SHA.
 
-### 1. fetch_history()
+## Required verification
 
-In:
-`backend/app/connectors/telegram/mtproto_transport.py`
+Run from integrated candidate:
 
-Preserve auth-invalid mapping ONLY for genuine auth/session exceptions already explicitly enumerated, such as:
-- `AuthKeyNotFound`
-- `AuthKeyUnregisteredError`
-- `SessionRevokedError`
-- `UnauthorizedError`
-- `UserDeactivatedBanError`
-- `UserDeactivatedError`
+### Static / focused
+- M4AI focused tests;
+- relevant non-DB MTProto transport tests from A1/A2/A3/A4;
+- Ruff on changed Python files;
+- `git diff --check`;
+- Alembic heads check => exactly `0046`.
 
-Review whether `AuthKeyError` itself should also be explicitly included for read paths, based on existing Telethon usage in the repo and exception hierarchy. Do not guess silently: add a test-backed choice.
+### Broader backend
 
-Remove broad:
-`except (ValueError, TypeError) -> TelegramMtprotoAuthorizationInvalidError`
+Run the broadest practical Telegram MTProto test selection available locally.
 
-For non-auth `ValueError` / `TypeError` in `fetch_history()`, map to:
-`TelegramMtprotoProviderUnavailableError("Telegram history provider is temporarily unavailable")`
+If PostgreSQL is available through the repository's normal test setup, run DB-dependent suites too.
 
-Preserve:
-- provider-reference invalid application errors;
-- group unavailable mapping;
-- FloodWait mapping;
-- existing TelegramMtprotoError passthrough.
+If DB-dependent tests fail only because no local PostgreSQL/test DB is reachable:
+- classify as environment-only;
+- include the exact test selection and failure category;
+- do not use production DB as a substitute;
+- do not start/change production.
 
-### 2. discovery read paths
+### Candidate diff audit
 
-Audit `discover_groups()`, `discover_folders()`, and any other provider-backed read/discovery method in the same transport for the same broad `ValueError/TypeError -> authorization-invalid` pattern.
+Compare candidate against production release:
+`8091736337689b68b4510126e74d9e409397f696`
 
-Where present:
-- genuine auth/session exceptions remain authorization-invalid;
-- non-auth ValueError/TypeError become provider-unavailable;
-- do not change login/code/password semantics.
+Confirm functional runtime delta relevant to this phase is limited to:
+- MTProto read-path taxonomy correction;
+- provider-neutral 503 wording;
+plus previously accepted main-only documentation/state metadata.
 
-### 3. API provider error wording
+Explicitly report whether any other backend/client/infra functional files differ from production candidate. Do not assume none.
 
-In:
-`backend/app/api/telegram_mtproto.py`
-
-Current shared provider 503 detail is:
-`Telegram authorization provider is temporarily unavailable`
-
-Change it to provider-neutral wording suitable for auth, discovery, and history, e.g.:
-`Telegram provider is temporarily unavailable`
-
-Preserve:
-- status 503;
-- Retry-After behavior.
-
-### 4. No behavior expansion
+## Forbidden
 
 Do NOT:
-- change DB schema;
-- add migration;
-- change sync limits/page sizes;
-- change scope behavior;
-- change AI quarantine;
-- change Bot API;
-- change mutation/write error semantics unless a failing regression proves necessary;
-- alter login flow;
-- alter session persistence;
-- add retries;
-- deploy.
+- deploy;
+- SSH to production for mutation;
+- change origin/production;
+- restart/recreate services;
+- run production migrations;
+- use production DB for tests;
+- retry Telegram Sync;
+- login/re-login;
+- change Telegram scope;
+- change target.json or SSH trust;
+- enable MTProto AI;
+- retire/change Bot API.
 
-## Required tests
+## Handoff
 
-Add focused regression tests proving at least:
+Commit/push integration to main using the repository's normal workflow.
 
-1. fetch_history genuine auth exception -> TelegramMtprotoAuthorizationInvalidError;
-2. fetch_history ValueError -> TelegramMtprotoProviderUnavailableError;
-3. fetch_history TypeError -> TelegramMtprotoProviderUnavailableError;
-4. fetch_history provider-reference invalid remains provider-reference invalid;
-5. fetch_history group/private peer errors remain group-unavailable;
-6. fetch_history FloodWait remains provider-unavailable with retry semantics;
-7. discover_groups genuine auth exception -> auth-invalid;
-8. discover_groups ValueError/TypeError -> provider-unavailable;
-9. discover_folders equivalent coverage if it contains the same broad mapping;
-10. API provider response remains HTTP 503;
-11. API provider detail is provider-neutral;
-12. Retry-After preserved;
-13. no change to auth start/code/password invalid-code/password behavior;
-14. no schema/migration changes;
-15. existing Telegram MTProto focused suites remain passing.
-
-If practical, add a regression directly matching the original symptom:
-- a ValueError arising after authorization in history path must NOT produce HTTP 409 auth-invalid;
-- it should surface through provider-unavailable/503 path.
-
-## Verification
-
-Run:
-- focused pytest covering modified MTProto transport/API tests;
-- existing Telegram MTProto suites relevant to A1/A2/A3/C2;
-- Ruff on changed Python files;
-- `git diff --check`.
-
-## Review handoff
-
-After implementation:
-- commit on `review/telegram-mtproto-m4ai`;
-- push only that review branch;
-- do NOT deploy;
-- report:
-  - full SHA;
-  - tests count/pass;
-  - Ruff;
-  - diff-check;
-  - exact exception-taxonomy changes;
-  - whether AuthKeyError was included and why;
-  - remaining gaps.
+Report:
+- integration/full candidate SHA;
+- exact parent(s);
+- origin/main SHA after push;
+- test selections + pass/fail counts;
+- any environment-only failures;
+- Ruff;
+- diff-check;
+- Alembic head;
+- candidate-vs-production functional diff summary;
+- worktree clean;
+- confirmation production untouched.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AI1_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AI2_CANDIDATE_READY`
 
 Then STOP.
 
