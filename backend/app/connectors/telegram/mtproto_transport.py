@@ -512,8 +512,8 @@ class TelethonMtprotoTransport:
             async for message in client.iter_messages(
                 input_peer,
                 limit=page_limit,
-                min_id=min_message_id,
-                max_id=max_message_id,
+                min_id=0 if min_message_id is None else min_message_id,
+                max_id=0 if max_message_id is None else max_message_id,
                 reverse=reverse,
             ):
                 entry = _history_entry_from_message(message)
