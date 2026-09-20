@@ -56,7 +56,7 @@ Verify:
 - `origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 - canonical target.json unchanged;
 - pinned production host-key contract intact;
-- actual pinned read-only `BatchMode=yes` SSH no-op to the canonical target succeeds. Do not use ssh-agent/key inventory as a gating condition.
+- actual pinned read-only public-key-only SSH no-op to the canonical target succeeds. For this BREAK-GLASS diagnostic, require `PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, and `PreferredAuthentications=publickey`; `BatchMode=yes` is non-gating.
 
 If bootstrap cannot be established before remote execution:
 
@@ -81,12 +81,16 @@ BREAK-GLASS READ-ONLY SSH is explicitly authorized for this task.
 Use only the canonical target from:
 `ops/production/target.json`
 
-Use strict pinned SSH:
-- BatchMode=yes
+Use strict pinned SSH with public-key-only auth:
 - StrictHostKeyChecking=yes
 - temporary verified UserKnownHostsFile
 - GlobalKnownHostsFile=/dev/null
 - HostKeyAlgorithms=ssh-ed25519
+- PasswordAuthentication=no
+- KbdInteractiveAuthentication=no
+- PreferredAuthentications=publickey
+
+For this read-only diagnostic path, do not require `BatchMode=yes`.
 
 No alternative host/alias/directory/credential probing.
 
@@ -247,7 +251,7 @@ If PASS, only:
 - authorized refs/SHAs: PASS
 - clean/exact checkout: PASS
 - target/pin: PASS
-- pinned BatchMode SSH no-op: PASS
+- pinned public-key-only SSH no-op: PASS
 
 ### Remote guards
 - production HEAD/ref/worktree: PASS/FAIL
