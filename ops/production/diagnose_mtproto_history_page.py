@@ -433,7 +433,7 @@ if __name__ == "__main__":
     asyncio.run(run_probe())
 """
     result = run(COMPOSE + ["exec", "-T", "api", "python3", "-"], input=probe)
-    if result.returncode != 0:
+    if result.returncode != 0 or result.stderr:
         stop("STAGE_1_RUNTIME", RuntimeError())
     print(result.stdout, end="")
     emit("HISTORY_PAGE_REMOTE_END", "true")

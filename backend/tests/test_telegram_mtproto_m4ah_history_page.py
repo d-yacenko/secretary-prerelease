@@ -297,6 +297,40 @@ def test_parent_never_preserves_nonzero_child_output(monkeypatch: pytest.MonkeyP
     assert "MESSAGE_ORDINAL=0" in output
 
 
+def test_nested_child_stderr_is_fail_closed_without_forwarding() -> None:
+    helper = diagnostic.REMOTE_HELPER
+    nested = helper[helper.index('result = run(COMPOSE + ["exec"') :]
+    assert "if result.returncode != 0 or result.stderr:" in nested
+    assert nested.index("if result.returncode != 0 or result.stderr:") < nested.index(
+        "print(result.stdout, end=\"\")"
+    )
+    assert 'stop("STAGE_1_RUNTIME", RuntimeError())' in nested
+    assert 'emit("HISTORY_PAGE_REMOTE_END", "true")' in nested
+
+    with pytest.raises(diagnostic.HistoryPageError):
+        diagnostic.parse_page_output(
+            "FIRST_PAGE_PASS=true\nMESSAGES_SEEN=0\nENTRIES_CONVERTED=0\nENTRIES_NONE=0\n",
+            "child stderr secret",
+            0,
+        )
+
+
+def test_nested_runtime_failure_protocol_contains_only_safe_fields() -> None:
+    parsed = diagnostic.parse_page_output(
+        "FAILURE_STAGE=STAGE_1_RUNTIME\n"
+        "RAW_EXCEPTION_CLASS=RuntimeError\n"
+        "MESSAGE_ORDINAL=0\nTELEGRAM_NETWORK_CALLS=0\n",
+        "",
+        0,
+    )
+    assert set(parsed) == {
+        "FAILURE_STAGE",
+        "RAW_EXCEPTION_CLASS",
+        "MESSAGE_ORDINAL",
+        "TELEGRAM_NETWORK_CALLS",
+    }
+
+
 def test_stage_transitions_are_narrow_and_not_counter_inferred() -> None:
     helper = diagnostic.REMOTE_HELPER
     assert 'failure_stage = "STAGE_2_CONNECT"' in helper
