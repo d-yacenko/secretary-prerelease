@@ -568,7 +568,7 @@ def test_scoped_http_signed_peer_boundaries(auth_client, monkeypatch):
         (
             TelegramMtprotoProviderUnavailableError("secret provider text", 37),
             503,
-            "Telegram authorization provider is temporarily unavailable",
+            "Telegram provider is temporarily unavailable",
             {"retry-after": "37"},
         ),
     ],

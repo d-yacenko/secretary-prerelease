@@ -611,6 +611,6 @@ def _provider_response(exc: TelegramMtprotoProviderUnavailableError) -> HTTPExce
         headers["Retry-After"] = str(exc.retry_after_seconds)
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Telegram authorization provider is temporarily unavailable",
+        detail="Telegram provider is temporarily unavailable",
         headers=headers,
     )

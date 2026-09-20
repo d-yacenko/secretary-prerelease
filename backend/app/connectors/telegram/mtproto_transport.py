@@ -368,6 +368,7 @@ class TelethonMtprotoTransport:
                 truncated=seen >= scan_limit,
             )
         except (
+            AuthKeyError,
             AuthKeyNotFound,
             AuthKeyUnregisteredError,
             SessionRevokedError,
@@ -383,12 +384,12 @@ class TelethonMtprotoTransport:
         except TelegramMtprotoError:
             raise
         except (ValueError, TypeError):
-            raise TelegramMtprotoAuthorizationInvalidError(
-                "Telegram MTProto authorization is no longer valid"
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
             ) from None
         except Exception as exc:
             raise TelegramMtprotoProviderUnavailableError(
-                "Telegram authorization provider is temporarily unavailable"
+                "Telegram provider is temporarily unavailable"
             ) from exc
         finally:
             await _disconnect(client)
@@ -417,6 +418,7 @@ class TelethonMtprotoTransport:
                         break
             return TelegramMtprotoFolderDiscoveryResult(tuple(folders), len(folders) >= scan_limit)
         except (
+            AuthKeyError,
             AuthKeyNotFound,
             AuthKeyUnregisteredError,
             SessionRevokedError,
@@ -464,6 +466,7 @@ class TelethonMtprotoTransport:
                     dialogs.append(descriptor)
             return TelegramMtprotoFolderDialogsResult(tuple(dialogs), seen >= scan_limit, skipped)
         except (
+            AuthKeyError,
             AuthKeyNotFound,
             AuthKeyUnregisteredError,
             SessionRevokedError,
@@ -523,6 +526,7 @@ class TelethonMtprotoTransport:
                 entries=tuple(entries), has_more=len(entries) >= page_limit
             )
         except (
+            AuthKeyError,
             AuthKeyNotFound,
             AuthKeyUnregisteredError,
             SessionRevokedError,
@@ -542,8 +546,8 @@ class TelethonMtprotoTransport:
         except TelegramMtprotoError:
             raise
         except (ValueError, TypeError):
-            raise TelegramMtprotoAuthorizationInvalidError(
-                "Telegram MTProto authorization is no longer valid"
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram history provider is temporarily unavailable"
             ) from None
         except Exception as exc:
             raise TelegramMtprotoProviderUnavailableError(
