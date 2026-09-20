@@ -1,10 +1,12 @@
 # Project state
 
 - Active development repository: `d-yacenko/secretary-prerelease`.
+- Canonical Executor bootstrap is mandatory and documented in `docs/executor_bootstrap.md`. Wrong-origin/dirty/stale local checkouts are never repaired in place; use a fresh temporary clone of `https://github.com/d-yacenko/secretary-prerelease.git`. Git/SSH readiness is plumbing, not a product phase. A bootstrap/pre-SSH stop must be reported once as a sanitized Executor blocker and is not evidence about Secretary/Telegram/production.
+- Production/runtime work relies on the pre-existing Executor/workstation SSH credential integration plus the pinned target contract. Do not create/copy/request new production private-key material as a workaround.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `8091736337689b68b4510126e74d9e409397f696`.
-- Production branch/ref: `8091736337689b68b4510126e74d9e409397f696`.
+- Production application/runtime: `23fa07df213d5a70a6dc1d3c8b32af39228107eb`.
+- Production branch/ref: `23fa07df213d5a70a6dc1d3c8b32af39228107eb`.
 - Production Alembic: `0046 / 0046`.
 - Production health: PASS.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
@@ -44,6 +46,7 @@
 - M4AM2R2 live probe: EXECUTED exactly once from fresh canonical clone at approved diagnostic SHA `48816aedd639268770b2fb67caa22e048ce03493`. Canonical refs/target/clean detached checkout PASS. Probe stopped before session/reference/client/provider work at sanitized `STAGE_1_DB_SESSION / RuntimeError / MESSAGE_ORDINAL=0 / TELEGRAM_NETWORK_CALLS=0`; no page/provider calls, DB writes, materialization, login/discovery/write RPC, or production mutation occurred. This result is structural-only and gives no Telegram auth/history conclusion. The current diagnostic's STAGE_1_DB_SESSION is too broad: it covers compose/service/DB/Alembic checks, child container execution, DB query/cardinality, and generic child stderr/nonzero collapse. Do not rerun the provider probe; next step is a zero-provider read-only structural localization.
 - M4AN1 zero-provider structural localization: BLOCKED before remote helper start. Canonical target/pin and strict host-key verification passed, but SSH authentication/remote execution failed. No production guards, structural child, TelegramClient, provider calls, DB writes, or production mutations occurred. No SSH retry was performed. This differs from the earlier M4AM2R2 run, which authenticated and reached remote code, so the immediate next step is local-only SSH credential-readiness inspection with no production network connection.
 - M4AN1R local SSH credential-readiness: current Executor environment has no usable ambient SSH credential path. SSH client exists; SSH_AUTH_SOCK is set and points to a socket, but agent query did not yield usable identities and key count is 0; no readable identity-file candidates were found; M4AM/M4AN do not configure an explicit IdentityFile/IdentityAgent and rely on ambient/default SSH authentication. Production network connections remained 0. Therefore further production SSH diagnostics are blocked until SSH credential availability is restored in the Executor environment; do not retry SSH/Telegram diagnostics before that.
+- Executor-bootstrap process correction: do not continue turning wrong repo/origin, dirty checkout, missing refs, SSH-agent forwarding, or ambient credential availability into separate M4 product phases. These are now handled by the canonical bootstrap runbook before the authorized task. Once a suitable Executor environment is available, resume the actual zero-provider structural localization of M4AM's broad STAGE_1_DB_SESSION under a new explicit runtime authorization.
 - Telegram Bot API retirement is NOT AUTHORIZED.
 - Telegram API Terms clarification remains pending through external support channels.
 - Product direction while clarification is pending: complete MTProto as a full ordinary messenger while keeping MTProto-derived objects outside ML/LLM by default.
