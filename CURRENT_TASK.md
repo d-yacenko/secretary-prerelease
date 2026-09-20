@@ -1,197 +1,170 @@
-# Current task — Telegram MTProto M4AH3: one approved live first-page probe retry
+# Current task — Telegram MTProto M4AI1: fix read-path error taxonomy
 
 ## Status
 
-M4AH2R2 corrective probe is REVIEW ACCEPTED for exactly one live diagnostic execution.
+M4AH3 live first-page probe: PASS.
 
-Approved branch:
-`review/telegram-mtproto-m4ah`
-
-Approved exact SHA:
+Confirmed on exact diagnostic SHA:
 `2b9b8d3d7f19f2174808ecdadfd4bddc148aa5e9`
 
-Parent:
-`162eb4cc7cd677bf8d9ef97df194ec0f514d60f0`
+Evidence:
+- strict pinned SSH PASS;
+- exactly one MTProto account/manual-selected group;
+- session decrypt/StringSession parse/reference decrypt/reference parse/peer-match/client construct all PASS;
+- one connect PASS;
+- one live authorization check returned true;
+- one `iter_messages(input_peer, limit=100, reverse=False)`;
+- 100 messages seen;
+- 100 exact `_history_entry_from_message()` conversions succeeded;
+- ENTRIES_NONE=0;
+- no login/write/discovery/materialization/production mutation.
 
-Reported verification:
-- focused pytest: 32 passed;
-- Ruff: PASS;
-- git diff --check: PASS.
+Therefore the earlier manual group Sync HTTP 409 surfaced as
+`Telegram MTProto authorization is no longer valid`
+is NOT evidence of a currently invalid stored session.
 
-Architect review confirmed:
-- origin review branch resolves exactly to approved SHA;
-- nested API-container child now fails closed when returncode != 0 OR stderr is non-empty;
-- child stdout/stderr are not forwarded on that failure path;
-- only sanitized STAGE_1_RUNTIME / RuntimeError / ordinal 0 / network calls 0 are emitted;
-- normal remote end marker is preserved;
-- no SSH retry occurs after remote start;
-- child owns PAGE_SIZE=100;
-- import failures sanitize to STAGE_1_IMPORTS;
-- DB session/query failures sanitize to STAGE_1_DB_SESSION;
-- success protocol requires ENTRIES_NONE=0 and MESSAGES_SEEN == ENTRIES_CONVERTED;
-- previous strict SSH/output/provider safety properties remain intact.
+Exact release defect:
+`TelethonMtprotoTransport.fetch_history()` and discovery code broadly map
+`ValueError` / `TypeError` to `TelegramMtprotoAuthorizationInvalidError`.
 
-This acceptance authorizes only one diagnostic run. It is not approval to merge/deploy the harness.
+This task authorizes only implementation + tests + review branch push.
 
-## Context
+NO production deploy/run is authorized.
 
-Previous M4AH2:
-- strict SSH transport PASS;
-- remote helper started;
-- inner API-container runtime failed before any provider calls;
-- sanitized result STAGE_1_RUNTIME / RuntimeError;
-- TELEGRAM_NETWORK_CALLS=0.
+## Goal
 
-M4AG2 previously proved:
-- stored session decrypt/StringSession/reference/peer match PASS;
-- connect PASS;
-- is_user_authorized == true;
-- one raw iter_messages(limit=1, reverse=False) PASS.
+Make MTProto read-path error taxonomy truthful:
 
-M4AH3 must now determine whether the complete first production-like page (up to 100 messages + exact _history_entry_from_message conversion) passes or exposes a raw iteration/conversion exception.
+- only real auth-key/session invalidation errors become authorization-invalid;
+- non-auth `ValueError` / `TypeError` from read/discovery/history paths become provider-unavailable or a more specific existing non-auth error;
+- API 503 wording must be provider-neutral, not "authorization provider", because the same response helper is used for history/discovery.
 
-## Authorization
+## Branch / base
 
-Execute exactly once:
+Create a new review branch from current main.
 
-`ops/production/diagnose_mtproto_history_page.py`
+Preferred:
+`review/telegram-mtproto-m4ai`
 
-from exact SHA:
-`2b9b8d3d7f19f2174808ecdadfd4bddc148aa5e9`.
+Do not modify production.
 
-Built-in maximum 3 SSH attempts are allowed only for pre-remote transport establishment failures.
+## Required code changes
 
-No manual second run.
+### 1. fetch_history()
 
-## Preparation
+In:
+`backend/app/connectors/telegram/mtproto_transport.py`
 
-1. `git fetch origin`.
-2. Use exact SHA `2b9b8d3d7f19f2174808ecdadfd4bddc148aa5e9`.
-3. Require clean local worktree.
-4. Verify `origin/review/telegram-mtproto-m4ah` == exact SHA.
-5. Verify `target.json` unchanged.
-6. Do not edit/amend/rebase/cherry-pick before run.
+Preserve auth-invalid mapping ONLY for genuine auth/session exceptions already explicitly enumerated, such as:
+- `AuthKeyNotFound`
+- `AuthKeyUnregisteredError`
+- `SessionRevokedError`
+- `UnauthorizedError`
+- `UserDeactivatedBanError`
+- `UserDeactivatedError`
 
-Run with Python explicitly if executable bit is absent:
+Review whether `AuthKeyError` itself should also be explicitly included for read paths, based on existing Telethon usage in the repo and exception hierarchy. Do not guess silently: add a test-backed choice.
 
-`python3 ops/production/diagnose_mtproto_history_page.py`
+Remove broad:
+`except (ValueError, TypeError) -> TelegramMtprotoAuthorizationInvalidError`
 
-This is the single authorized execution.
+For non-auth `ValueError` / `TypeError` in `fetch_history()`, map to:
+`TelegramMtprotoProviderUnavailableError("Telegram history provider is temporarily unavailable")`
 
-## Provider-call budget
+Preserve:
+- provider-reference invalid application errors;
+- group unavailable mapping;
+- FloodWait mapping;
+- existing TelegramMtprotoError passthrough.
 
-Only after all guards pass:
+### 2. discovery read paths
 
-- client.connect() <= 1;
-- client.is_user_authorized() <= 1;
-- one iter_messages(input_peer, limit=100, reverse=False);
-- consume <= 100 yielded messages;
-- exact _history_entry_from_message() once per yielded item until first failure.
+Audit `discover_groups()`, `discover_folders()`, and any other provider-backed read/discovery method in the same transport for the same broad `ValueError/TypeError -> authorization-invalid` pattern.
 
-No provider retry.
+Where present:
+- genuine auth/session exceptions remain authorization-invalid;
+- non-auth ValueError/TypeError become provider-unavailable;
+- do not change login/code/password semantics.
 
-Always disconnect.
+### 3. API provider error wording
 
-## Forbidden
+In:
+`backend/app/api/telegram_mtproto.py`
+
+Current shared provider 503 detail is:
+`Telegram authorization provider is temporarily unavailable`
+
+Change it to provider-neutral wording suitable for auth, discovery, and history, e.g.:
+`Telegram provider is temporarily unavailable`
+
+Preserve:
+- status 503;
+- Retry-After behavior.
+
+### 4. No behavior expansion
 
 Do NOT:
-- run the probe a second time;
-- login/re-login;
-- submit code/password;
-- discover folders/groups;
-- retry Secretary Sync;
-- Apply Scope;
-- send/edit/delete/mark-read;
-- call application fetch_history();
-- materialize messages;
-- inspect/emit message IDs/text/body/sender/timestamps/titles/metadata;
-- print session/reference or credentials;
-- write DB;
-- mutate production;
-- restart/recreate;
-- edit production files/env;
-- run Alembic writes;
-- change main/production refs;
-- change target.json / SSH trust;
-- change Bot API or MTProto AI flags.
+- change DB schema;
+- add migration;
+- change sync limits/page sizes;
+- change scope behavior;
+- change AI quarantine;
+- change Bot API;
+- change mutation/write error semantics unless a failing regression proves necessary;
+- alter login flow;
+- alter session persistence;
+- add retries;
+- deploy.
 
-## Required report
+## Required tests
 
-Return only sanitized harness output.
+Add focused regression tests proving at least:
 
-### Transport
-- attempts;
-- pin;
-- host-key;
-- SSH auth;
-- remote execution.
+1. fetch_history genuine auth exception -> TelegramMtprotoAuthorizationInvalidError;
+2. fetch_history ValueError -> TelegramMtprotoProviderUnavailableError;
+3. fetch_history TypeError -> TelegramMtprotoProviderUnavailableError;
+4. fetch_history provider-reference invalid remains provider-reference invalid;
+5. fetch_history group/private peer errors remain group-unavailable;
+6. fetch_history FloodWait remains provider-unavailable with retry semantics;
+7. discover_groups genuine auth exception -> auth-invalid;
+8. discover_groups ValueError/TypeError -> provider-unavailable;
+9. discover_folders equivalent coverage if it contains the same broad mapping;
+10. API provider response remains HTTP 503;
+11. API provider detail is provider-neutral;
+12. Retry-After preserved;
+13. no change to auth start/code/password invalid-code/password behavior;
+14. no schema/migration changes;
+15. existing Telegram MTProto focused suites remain passing.
 
-### If runtime/bootstrap failure
-- FAILURE_STAGE;
-- RAW_EXCEPTION_CLASS;
-- MESSAGE_ORDINAL;
-- TELEGRAM_NETWORK_CALLS.
+If practical, add a regression directly matching the original symptom:
+- a ValueError arising after authorization in history path must NOT produce HTTP 409 auth-invalid;
+- it should surface through provider-unavailable/503 path.
 
-### If structural/live progress
-- account cardinality;
-- manual group cardinality;
-- SESSION_DECRYPT_PASS;
-- STRING_SESSION_PARSE_PASS;
-- REFERENCE_DECRYPT_PASS;
-- REFERENCE_PARSE_PASS;
-- REFERENCE_PEER_MATCH_PASS;
-- TELEGRAM_CLIENT_CONSTRUCT_PASS;
-- CONNECT_PASS;
-- IS_USER_AUTHORIZED;
-- call counts if emitted.
+## Verification
 
-### First page success
-- FIRST_PAGE_PASS;
-- MESSAGES_SEEN;
-- ENTRIES_CONVERTED;
-- ENTRIES_NONE;
-- call counts.
+Run:
+- focused pytest covering modified MTProto transport/API tests;
+- existing Telegram MTProto suites relevant to A1/A2/A3/C2;
+- Ruff on changed Python files;
+- `git diff --check`.
 
-### First page failure
-- FAILURE_STAGE;
-- RAW_EXCEPTION_CLASS;
-- MESSAGE_ORDINAL;
-- call counts.
+## Review handoff
 
-Also confirm:
-- no login/write/discovery;
-- no message data emitted;
-- no session/reference printed;
-- no production mutation;
-- SSH trust/target unchanged.
-
-## Interpretation
-
-A. STAGE_1_IMPORTS / STAGE_1_DB_SESSION
-=> harness/runtime bootstrap issue; no Telegram conclusion.
-
-B. STAGE_2_CONNECT / STAGE_2_AUTHORIZED
-=> classify exact live session failure.
-
-C. STAGE_3_ITERATION + ValueError/TypeError
-=> direct evidence that release fetch_history() can falsely remap raw history iteration failure to authorization-invalid.
-
-D. STAGE_3_CONVERSION + ValueError/TypeError
-=> direct evidence that release fetch_history() can falsely remap conversion failure to authorization-invalid.
-
-E. STAGE_3_CONVERSION + InvalidHistoryEntry
-=> production path would classify provider-unavailable, not auth-invalid.
-
-F. FIRST_PAGE_PASS=true
-=> current session/reference/auth/full first page/conversion all work. Original 409 was transient or outside this first-page path. Next step is to fix broad auth-invalid error taxonomy and then perform a controlled application Sync retry after review/deploy.
-
-G. STAGE_1_RUNTIME / OUTPUT_ALLOWLIST
-=> harness problem; no provider conclusion unless call counters prove otherwise.
-
-Do not repair/retry during M4AH3.
+After implementation:
+- commit on `review/telegram-mtproto-m4ai`;
+- push only that review branch;
+- do NOT deploy;
+- report:
+  - full SHA;
+  - tests count/pass;
+  - Ruff;
+  - diff-check;
+  - exact exception-taxonomy changes;
+  - whether AuthKeyError was included and why;
+  - remaining gaps.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AH3_LIVE_READY`
+`TELEGRAM_MTPROTO_M4AI1_REVIEW_READY`
 
 Then STOP.
 
