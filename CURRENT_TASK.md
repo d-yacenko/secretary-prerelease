@@ -1,207 +1,103 @@
-# Current task — Telegram MTProto M4AQ1: deploy bound-normalization release
+# Current task — Telegram MTProto M4AR1: one human manual Sync after bound-normalization deploy
 
 ## Status
 
-User explicitly authorized production deployment.
+Production deploy M4AQ1 is complete and PASS.
 
-GitHub production ref promotion is complete.
-
-Authorized release SHA:
+Production runtime/ref:
 `b7fbdc71584cfde042a998fbfefb06015175a205`
 
-Authorized rollback/runtime-before-deploy SHA:
-`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
-
-Expected Alembic:
+Alembic:
 `0046`
 
-Verified GitHub refs:
-- `origin/production == b7fbdc71584cfde042a998fbfefb06015175a205`
-- canonical main contains the same release and later task/state documentation only as applicable.
-
-The release is schema-neutral: no Alembic migration change is authorized.
-
-This task authorizes ONLY the normal production deploy harness and post-deploy verification described below.
-
-## Executor workspace
-
-Work only from:
-
-`~/work/secretary-executor`
-
-Canonical origin:
-
-`https://github.com/d-yacenko/secretary-prerelease.git`
-
-Do not use:
-- `~/work/secretary`
-- `~/work/secretary-prerelease`
-
-for Executor work.
-
-## Preparation
-
-1. `git fetch --prune origin`
-2. `git switch main`
-3. `git pull --ff-only`
-4. Verify:
-   - exact canonical origin;
-   - clean worktree;
-   - local `main == origin/main`;
-   - `origin/production == b7fbdc71584cfde042a998fbfefb06015175a205`;
-   - release SHA exists locally;
-   - rollback SHA exists locally.
-5. Read:
-   - `CURRENT_TASK.md`
-   - `PROJECT_STATE.md`
-   - `AGENTS.md`
-   - `docs/executor_bootstrap.md`
-   - `docs/deploy.md`
-   - `ops/production/deploy.py`
-   - `ops/production/remote_deploy.py`
-   - `ops/production/target.json`
-
-If any precondition fails, STOP with one sanitized blocker.
-
-Do not move any Git ref during this task.
-
-## Authorized deploy command
-
-Run exactly:
-
-```bash
-RELEASE_SHA=b7fbdc71584cfde042a998fbfefb06015175a205
-ROLLBACK_SHA=23fa07df213d5a70a6dc1d3c8b32af39228107eb
-EXPECTED_ALEMBIC=0046
-
-python3 ops/production/deploy.py \
-  --release-sha "$RELEASE_SHA" \
-  --rollback-sha "$ROLLBACK_SHA" \
-  --expected-alembic "$EXPECTED_ALEMBIC"
-```
-
-Use the committed deploy harness unchanged.
-
-Do NOT edit `deploy.py` or `remote_deploy.py`.
-
-Do NOT bypass the harness with manual SSH or manual Compose.
-
-## Authorized runtime mutation
-
-Only the existing harness may:
-
-- switch production checkout from rollback SHA to release SHA;
-- build `api` and `worker`;
-- recreate only `api` and `worker`.
-
-Must preserve:
-- DB container;
-- DB volume/data;
-- `.env`;
-- credential-encryption key;
-- stored Telegram MTProto session;
-- Telegram selection state;
-- AI flag;
-- Bot API state;
-- Alembic `0046`.
-
-No migration is authorized.
-
-## Required post-deploy verification
-
-After `DEPLOYMENT=PASS`, report only sanitized facts already exposed by the harness and safe read-only checks allowed by the runbook.
-
-Require final:
-- production HEAD == `b7fbdc71584cfde042a998fbfefb06015175a205`;
-- `origin/production` == same;
-- production worktree clean;
-- API running/healthy;
-- worker running;
-- DB running/healthy;
+Runtime invariants:
+- API/worker recreated and healthy;
 - DB container unchanged;
 - DB volume unchanged;
 - `.env` unchanged;
-- Alembic == `0046`;
 - `TELEGRAM_MTPROTO_AI_ENABLED=false`;
 - Bot API untouched;
-- Telegram login/history/provider actions during deploy = none.
+- stored Telegram MTProto session and selection state preserved by deploy.
 
-Do not perform the human Sync in this task.
+The deployed fix normalizes absent Telethon history bounds:
+- `min_message_id=None -> min_id=0`
+- `max_message_id=None -> max_id=0`
 
-## Rollback
+M4AO2 previously proved the old runtime failed before the first message at:
+- `STAGE_3_PAGE1_ITERATION`
+- `RAW_EXCEPTION_CLASS=TypeError`
+- seen/converted = 0/0
+after connect and authorization PASS.
 
-If the harness fails after mutation, allow only its built-in rollback to:
+## Goal
 
-`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
+Perform exactly ONE human-controlled manual Sync of the already-selected Telegram group through the existing Secretary UI.
 
-If rollback occurs:
-- STOP;
-- report sanitized failure;
-- report rollback PASS/FAIL;
-- report final runtime SHA and health;
-- do not move `origin/production` back in this task.
+This task is HUMAN UI ONLY.
 
-A GitHub ref change after rollback would require a separate authorization.
+No Executor production SSH or provider probe is authorized.
+
+## Human procedure
+
+Use the existing fresh/persistent Secretary client already connected to the production backend.
+
+1. Open Account / Telegram MTProto controls.
+2. Confirm the existing account still appears connected.
+3. Confirm the previously manually-selected group is still selected.
+4. Do NOT Apply Scope.
+5. Press Sync exactly once for that already-selected group.
+6. Wait for the UI result.
+7. Capture the exact sanitized outcome:
+   - success indication / imported-count summary if shown; or
+   - exact user-facing error text/status.
+8. Then STOP.
+
+## One-shot rule
+
+Exactly one Sync click is authorized.
+
+If it errors:
+- do not retry;
+- do not log out/re-login;
+- do not re-enter code/password;
+- do not Apply Scope;
+- do not change selection;
+- do not refresh/discover folders/groups as a workaround.
+
+If the UI itself refreshes status automatically as part of normal rendering, that is acceptable; do not manually trigger unrelated discovery actions.
 
 ## Strictly forbidden
 
 Do NOT:
-- run migration 0047;
-- change schema;
-- recreate/delete DB container or volume;
-- edit `.env`;
-- rotate/change credential key;
-- login/re-login Telegram;
-- submit Telegram code/password;
-- run Telegram Sync/history import;
-- Apply Scope;
-- discover groups/folders/dialogs;
+- run the human-shell provider probe again;
+- run application/provider diagnostics before seeing the Sync result;
+- use Executor SSH;
+- use manual production SSH/Compose;
+- mutate production;
+- run migrations;
 - enable MTProto AI;
-- change/retire Bot API;
-- change target.json or SSH trust;
-- manually SSH around the deploy harness;
-- perform unrelated cleanup.
+- change Bot API;
+- change Telegram scope/selections;
+- perform a second Sync.
 
 ## Required report
 
-### Preflight
-- canonical repo/main clean/exact;
-- origin/production exact release;
-- target/pin PASS;
-- SSH PASS;
-- production old HEAD;
-- production worktree clean;
-- API/worker/DB pre-state;
-- DB health;
-- API health;
-- Alembic.
+Return only the human-observed sanitized result:
+- account connected status: yes/no;
+- selected group still present: yes/no;
+- Sync clicked: exactly once;
+- final UI success/error text;
+- any visible aggregate count/status that contains no IDs/content/secrets.
 
-### Rollout
-- release HEAD selected;
-- API recreated;
-- worker recreated;
-- DB container unchanged;
-- DB volume unchanged;
-- env file unchanged;
-- migration action: none.
+Do not include:
+- message contents;
+- account/group/peer IDs;
+- session/reference values;
+- Telegram credentials.
 
-### Final
-- production runtime SHA;
-- origin/production SHA;
-- health;
-- API/worker/DB status;
-- Alembic;
-- DB/env/key preservation;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API untouched;
-- Telegram login/history/provider actions: none.
-
-Final marker:
-
-`TELEGRAM_MTPROTO_M4AQ1_DEPLOY_READY`
+Final marker after reporting:
+`TELEGRAM_MTPROTO_M4AR1_HUMAN_SYNC_COMPLETE`
 
 Then STOP.
-
-After successful deploy, the next phase will be a separate human-controlled single manual Sync of the already-selected Telegram group.
 
 `CURRENT_TASK.md` is the source of active authorization.
