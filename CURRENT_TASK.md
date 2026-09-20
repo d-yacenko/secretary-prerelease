@@ -1,141 +1,182 @@
-# Current task — Telegram MTProto M4AI2: integrate accepted taxonomy fix and verify release candidate
+# Current task — Telegram MTProto M4AJ: deploy accepted M4AI candidate
 
 ## Status
 
-M4AI1 is ARCHITECT ACCEPTED.
+M4AI2 candidate is ARCHITECT ACCEPTED for production deployment.
 
-Accepted review branch:
-`review/telegram-mtproto-m4ai`
+Exact candidate SHA:
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Accepted exact implementation SHA:
-`0cc9353e9263f97b461b4e0c0b3186dcc9f3d88b`
+Current production runtime/ref:
+`8091736337689b68b4510126e74d9e409397f696`
 
-Parent at implementation time:
-`1720f646312a95b49651814140909e52998d9f00`
+Rollback SHA:
+`8091736337689b68b4510126e74d9e409397f696`
 
-Reviewed changes:
-- `fetch_history()`: non-auth `ValueError/TypeError` -> provider-unavailable, genuine auth/session exceptions -> authorization-invalid;
-- `AuthKeyError` included consistently with existing mutation/read semantics;
-- `discover_groups()` equivalent correction;
-- `discover_folders()` / `fetch_dialog_universe()` explicitly classify `AuthKeyError` as auth-invalid while other unexpected read errors remain provider-unavailable;
-- shared API provider 503 detail changed to `Telegram provider is temporarily unavailable`;
-- no schema/migration/login/write/scope/AI/Bot API changes.
-
-Reported verification:
+Candidate review:
+- origin/main == exact candidate SHA;
+- compared against production, runtime functional changes are limited to:
+  - `backend/app/api/telegram_mtproto.py`
+  - `backend/app/connectors/telegram/mtproto_transport.py`
+- other candidate differences are tests/docs/recovery context only;
+- no client/infra/schema/dependency changes;
+- Alembic remains `0046`;
+- no migration `0047`;
 - M4AI focused: 10 passed;
-- existing A2/A3/A4 transport regressions: 8 passed;
-- A1 transport/migration checks: 3 passed;
+- A1-A4.4 Telegram suite: 137 passed;
 - Ruff PASS;
-- git diff --check PASS;
-- Alembic head 0046.
-- broader DB-dependent local tests were blocked only by unavailable local PostgreSQL host; production was not used.
-
-This task authorizes integration + local/repository verification only.
-
-NO production deploy or production runtime mutation is authorized.
+- git diff --check PASS.
 
 ## Goal
 
-Integrate the accepted M4AI implementation into current main without altering its code, then identify one exact deployable candidate SHA and verify it locally as far as the available environment permits.
+Deploy exact candidate `23fa07df213d5a70a6dc1d3c8b32af39228107eb` to production with no unrelated changes.
 
-## Integration
+Do NOT run Telegram manual Sync during deployment. Controlled Sync is a separate post-deploy human step after verification.
 
-1. `git fetch origin`.
-2. Verify:
-   - `origin/review/telegram-mtproto-m4ai == 0cc9353e9263f97b461b4e0c0b3186dcc9f3d88b`;
-   - accepted implementation commit has no unexpected files beyond the reviewed diff.
-3. Start from current `origin/main`.
-4. Integrate the accepted implementation using the repository's normal non-destructive workflow.
-5. Do not modify the accepted transport/API/test code during integration.
-6. If integration is not clean, STOP and report conflict; do not resolve creatively.
+## Preflight
 
-## Candidate requirements
+Before mutation, verify read-only:
 
-The resulting candidate must include exactly the accepted M4AI code plus current main documentation/state/task history.
+- canonical target from `ops/production/target.json`;
+- strict pinned host key matches configured ED25519 fingerprint;
+- production repo HEAD/ref is exactly `8091736337689b68b4510126e74d9e409397f696`;
+- production worktree clean;
+- API/worker/DB running;
+- DB healthy;
+- Alembic exact `0046`;
+- `.env` unchanged;
+- DB container/volume present;
+- current MTProto flags remain:
+  - `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- Bot API configuration untouched.
 
-No:
-- migration 0047;
-- schema changes;
-- dependency changes;
-- Telegram login changes;
-- sync limit/page-size changes;
-- scope changes;
-- AI enablement;
-- Bot API retirement;
-- diagnostic review-branch harnesses unless they were already present on current main.
+If any preflight guard fails:
+STOP. Do not deploy.
 
-Report exact candidate SHA.
+## Deployment authorization
 
-## Required verification
+Authorized production changes:
 
-Run from integrated candidate:
+1. move production application/ref from:
+   `8091736337689b68b4510126e74d9e409397f696`
+   to:
+   `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
 
-### Static / focused
-- M4AI focused tests;
-- relevant non-DB MTProto transport tests from A1/A2/A3/A4;
-- Ruff on changed Python files;
-- `git diff --check`;
-- Alembic heads check => exactly `0046`.
+2. rebuild/recreate only services required by the normal production deploy workflow for application code:
+   - API;
+   - worker if normal deploy workflow requires it;
 
-### Broader backend
+3. preserve:
+   - DB container;
+   - DB volume;
+   - DB data;
+   - `.env`;
+   - credential encryption key;
+   - Telegram stored session;
+   - Telegram selections/scope;
+   - Bot API state;
+   - AI flag;
+   - SSH trust data.
 
-Run the broadest practical Telegram MTProto test selection available locally.
+No migration is needed beyond confirming Alembic stays `0046`.
 
-If PostgreSQL is available through the repository's normal test setup, run DB-dependent suites too.
-
-If DB-dependent tests fail only because no local PostgreSQL/test DB is reachable:
-- classify as environment-only;
-- include the exact test selection and failure category;
-- do not use production DB as a substitute;
-- do not start/change production.
-
-### Candidate diff audit
-
-Compare candidate against production release:
-`8091736337689b68b4510126e74d9e409397f696`
-
-Confirm functional runtime delta relevant to this phase is limited to:
-- MTProto read-path taxonomy correction;
-- provider-neutral 503 wording;
-plus previously accepted main-only documentation/state metadata.
-
-Explicitly report whether any other backend/client/infra functional files differ from production candidate. Do not assume none.
-
-## Forbidden
+## Strictly forbidden
 
 Do NOT:
-- deploy;
-- SSH to production for mutation;
-- change origin/production;
-- restart/recreate services;
-- run production migrations;
-- use production DB for tests;
-- retry Telegram Sync;
-- login/re-login;
-- change Telegram scope;
-- change target.json or SSH trust;
+
+- run migration 0047;
+- create any schema migration;
+- recreate/delete DB container or volume;
+- alter `.env`;
+- alter credential key;
+- login/re-login Telegram;
+- submit Telegram code/password;
+- run Telegram history import/manual Sync;
+- Apply Scope;
+- change selected groups/folders;
 - enable MTProto AI;
-- retire/change Bot API.
+- retire/change Bot API;
+- change target.json;
+- change SSH trust/pin;
+- deploy any SHA other than exact candidate;
+- include diagnostic review-branch harnesses not present in candidate;
+- perform unrelated cleanup.
 
-## Handoff
+## Post-deploy verification
 
-Commit/push integration to main using the repository's normal workflow.
+Verify:
 
-Report:
-- integration/full candidate SHA;
-- exact parent(s);
-- origin/main SHA after push;
-- test selections + pass/fail counts;
-- any environment-only failures;
-- Ruff;
-- diff-check;
-- Alembic head;
-- candidate-vs-production functional diff summary;
+- production repo HEAD/ref == exact candidate SHA;
+- runtime application identity == exact candidate SHA;
+- production worktree clean;
+- API running;
+- worker running;
+- DB running and healthy;
+- DB container/volume unchanged;
+- Alembic still `0046`;
+- health endpoint PASS;
+- `.env` unchanged;
+- credential key unchanged;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- Bot API untouched.
+
+Read-only MTProto checks allowed after deploy:
+- status endpoint;
+- folders/groups discovery through existing session if needed for health verification;
+- no history Sync.
+
+## Rollback
+
+If deployment or post-deploy verification fails:
+
+Rollback application/ref to:
+`8091736337689b68b4510126e74d9e409397f696`
+
+Use normal deploy rollback workflow.
+
+Do not rollback DB because no schema change is authorized.
+
+After rollback verify:
+- runtime/ref exact rollback SHA;
+- API/worker/DB healthy;
+- Alembic `0046`;
+- DB container/volume unchanged.
+
+## Required report
+
+Return:
+
+### Preflight
+- target/pin PASS;
+- old production SHA;
 - worktree clean;
-- confirmation production untouched.
+- services/DB health;
+- Alembic;
+- env/DB preservation guards.
+
+### Deployment
+- exact deployed SHA;
+- services recreated;
+- DB untouched;
+- migration action: none;
+- Telegram login/history actions: none.
+
+### Post-deploy
+- production ref/runtime exact match;
+- health;
+- API/worker/DB status;
+- Alembic;
+- env/key/DB preservation;
+- AI flag;
+- Bot API untouched.
+
+If rollback occurred:
+- reason;
+- rollback SHA;
+- final runtime/health.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AI2_CANDIDATE_READY`
+`TELEGRAM_MTPROTO_M4AJ_DEPLOY_READY`
 
 Then STOP.
 
