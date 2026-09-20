@@ -1,182 +1,189 @@
-# Current task — Telegram MTProto M4AJ: deploy accepted M4AI candidate
+# Current task — Telegram MTProto M4AJR: promote production ref then deploy exact candidate
 
 ## Status
 
-M4AI2 candidate is ARCHITECT ACCEPTED for production deployment.
+Initial M4AJ deployment attempt was correctly BLOCKED before production mutation.
 
-Exact candidate SHA:
+Observed:
+- `origin/production` is still:
+  `8091736337689b68b4510126e74d9e409397f696`
+- accepted release candidate is:
+  `23fa07df213d5a70a6dc1d3c8b32af39228107eb`
+
+Exact deploy contract in `ops/production/remote_deploy.py` requires:
+`origin/production == --release-sha`
+before any production checkout/build/recreate is allowed.
+
+Therefore the correct workflow is:
+
+1. explicitly promote `origin/production` to the exact accepted candidate;
+2. run the normal pinned deploy harness unchanged.
+
+No deploy harness bypass or manual remote checkout is authorized.
+
+## Accepted release
+
+Release SHA:
 `23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Current production runtime/ref:
+Current/rollback production SHA:
 `8091736337689b68b4510126e74d9e409397f696`
 
-Rollback SHA:
+Expected Alembic:
+`0046`
+
+## Phase 1 — production ref promotion
+
+This task explicitly authorizes one GitHub ref update:
+
+`origin/production`:
+from
 `8091736337689b68b4510126e74d9e409397f696`
+to
+`23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-Candidate review:
-- origin/main == exact candidate SHA;
-- compared against production, runtime functional changes are limited to:
-  - `backend/app/api/telegram_mtproto.py`
-  - `backend/app/connectors/telegram/mtproto_transport.py`
-- other candidate differences are tests/docs/recovery context only;
-- no client/infra/schema/dependency changes;
-- Alembic remains `0046`;
-- no migration `0047`;
-- M4AI focused: 10 passed;
-- A1-A4.4 Telegram suite: 137 passed;
-- Ruff PASS;
-- git diff --check PASS.
+Requirements:
 
-## Goal
+- verify current `origin/production` is exactly rollback SHA before update;
+- verify release SHA exists and is an ancestor/reachable accepted candidate;
+- update ONLY branch `production`;
+- exact target SHA only;
+- no force to any other SHA;
+- do not move `main`;
+- no tags;
+- no file edits for the promotion itself.
 
-Deploy exact candidate `23fa07df213d5a70a6dc1d3c8b32af39228107eb` to production with no unrelated changes.
+If current production ref is not exactly expected rollback SHA:
+STOP.
 
-Do NOT run Telegram manual Sync during deployment. Controlled Sync is a separate post-deploy human step after verification.
+After update verify:
+`origin/production == 23fa07df213d5a70a6dc1d3c8b32af39228107eb`
 
-## Preflight
-
-Before mutation, verify read-only:
-
-- canonical target from `ops/production/target.json`;
-- strict pinned host key matches configured ED25519 fingerprint;
-- production repo HEAD/ref is exactly `8091736337689b68b4510126e74d9e409397f696`;
-- production worktree clean;
-- API/worker/DB running;
-- DB healthy;
-- Alembic exact `0046`;
-- `.env` unchanged;
-- DB container/volume present;
-- current MTProto flags remain:
-  - `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API configuration untouched.
-
-If any preflight guard fails:
+If promotion fails:
 STOP. Do not deploy.
 
-## Deployment authorization
+## Phase 2 — normal deploy harness
 
-Authorized production changes:
+Only after exact production-ref promotion PASS, run the existing normal deployment harness unchanged:
 
-1. move production application/ref from:
-   `8091736337689b68b4510126e74d9e409397f696`
-   to:
-   `23fa07df213d5a70a6dc1d3c8b32af39228107eb`;
+`python3 ops/production/deploy.py --release-sha 23fa07df213d5a70a6dc1d3c8b32af39228107eb --rollback-sha 8091736337689b68b4510126e74d9e409397f696 --expected-alembic 0046`
 
-2. rebuild/recreate only services required by the normal production deploy workflow for application code:
-   - API;
-   - worker if normal deploy workflow requires it;
+Do not edit deploy.py or remote_deploy.py.
 
-3. preserve:
-   - DB container;
-   - DB volume;
-   - DB data;
-   - `.env`;
-   - credential encryption key;
-   - Telegram stored session;
-   - Telegram selections/scope;
-   - Bot API state;
-   - AI flag;
-   - SSH trust data.
+## Preflight expected by harness
 
-No migration is needed beyond confirming Alembic stays `0046`.
+The harness must verify:
+
+- canonical local checkout;
+- clean local main;
+- local main == origin/main;
+- canonical target.json;
+- pinned production SSH host key;
+- schema-neutral release;
+- production repo clean;
+- production origin correct;
+- origin/production == exact release;
+- current production HEAD is rollback or release SHA;
+- db/api/worker present and healthy/running;
+- production health PASS;
+- DB volume identity captured;
+- .env hash captured;
+- API/worker required env and credential key consistent;
+- DB TCP auth PASS;
+- Alembic 0046.
+
+If harness blocks:
+STOP and report exact sanitized reason.
+
+## Authorized production mutations
+
+Only the existing deploy harness may:
+
+- switch production checkout to exact release SHA;
+- build api + worker;
+- recreate api + worker;
+- leave DB container/volume untouched.
+
+No migration action beyond verifying 0046.
 
 ## Strictly forbidden
 
 Do NOT:
 
+- manually SSH and bypass deploy.py;
+- manually git switch production outside harness;
+- deploy any SHA other than accepted release;
+- change DB/schema;
 - run migration 0047;
-- create any schema migration;
-- recreate/delete DB container or volume;
-- alter `.env`;
-- alter credential key;
+- recreate/delete DB/volume;
+- edit .env;
+- change credential key;
 - login/re-login Telegram;
 - submit Telegram code/password;
-- run Telegram history import/manual Sync;
+- run Telegram manual Sync/history import;
 - Apply Scope;
-- change selected groups/folders;
+- change groups/folders;
 - enable MTProto AI;
-- retire/change Bot API;
-- change target.json;
-- change SSH trust/pin;
-- deploy any SHA other than exact candidate;
-- include diagnostic review-branch harnesses not present in candidate;
+- change/retire Bot API;
+- change target.json or SSH trust;
+- change deploy.py/remote_deploy.py during this task;
 - perform unrelated cleanup.
 
-## Post-deploy verification
+## Rollback semantics
 
-Verify:
-
-- production repo HEAD/ref == exact candidate SHA;
-- runtime application identity == exact candidate SHA;
-- production worktree clean;
-- API running;
-- worker running;
-- DB running and healthy;
-- DB container/volume unchanged;
-- Alembic still `0046`;
-- health endpoint PASS;
-- `.env` unchanged;
-- credential key unchanged;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- Bot API untouched.
-
-Read-only MTProto checks allowed after deploy:
-- status endpoint;
-- folders/groups discovery through existing session if needed for health verification;
-- no history Sync.
-
-## Rollback
-
-If deployment or post-deploy verification fails:
-
-Rollback application/ref to:
+If rollout fails after service recreation, use the harness's built-in rollback to:
 `8091736337689b68b4510126e74d9e409397f696`
 
-Use normal deploy rollback workflow.
+Additionally, if runtime rollback occurs, restore GitHub `origin/production` back to rollback SHA only after confirming runtime rollback succeeded.
 
-Do not rollback DB because no schema change is authorized.
+If rollout fails before production mutation but after production-ref promotion:
+- restore `origin/production` to rollback SHA;
+- report no runtime mutation.
 
-After rollback verify:
-- runtime/ref exact rollback SHA;
-- API/worker/DB healthy;
-- Alembic `0046`;
-- DB container/volume unchanged.
+Do not leave GitHub production ref pointing at release when runtime is confirmed rolled back.
 
 ## Required report
 
-Return:
+### Promotion
+- old origin/production SHA;
+- new origin/production SHA;
+- exact promotion PASS/FAIL.
 
-### Preflight
-- target/pin PASS;
-- old production SHA;
-- worktree clean;
-- services/DB health;
-- Alembic;
-- env/DB preservation guards.
-
-### Deployment
-- exact deployed SHA;
-- services recreated;
-- DB untouched;
-- migration action: none;
-- Telegram login/history actions: none.
-
-### Post-deploy
-- production ref/runtime exact match;
+### Deploy transport/preflight
+- target/pin;
+- SSH;
+- production old HEAD;
+- worktree;
+- services/DB;
 - health;
-- API/worker/DB status;
-- Alembic;
-- env/key/DB preservation;
-- AI flag;
-- Bot API untouched.
+- Alembic.
 
-If rollback occurred:
-- reason;
-- rollback SHA;
-- final runtime/health.
+### Rollout
+- exact release HEAD;
+- API recreated;
+- worker recreated;
+- DB container unchanged;
+- DB volume unchanged;
+- env unchanged;
+- migration action none.
+
+### Final consistency
+- origin/production SHA;
+- production runtime/ref SHA;
+- health;
+- Alembic;
+- AI flag preserved;
+- Bot API untouched;
+- Telegram login/history actions none.
+
+If rollback:
+- failure reason;
+- runtime rollback PASS/FAIL;
+- production ref restored PASS/FAIL;
+- final SHA.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AJ_DEPLOY_READY`
+`TELEGRAM_MTPROTO_M4AJR_DEPLOY_READY`
 
 Then STOP.
 
