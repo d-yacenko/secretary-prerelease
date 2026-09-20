@@ -1,133 +1,136 @@
-# Current task — Telegram MTProto M4AM1R: correct two-page probe failure protocol
+# Current task — Telegram MTProto M4AM1R2: accept structural/preflight failure protocol
 
 ## Status
 
-M4AM1 implementation:
-`122daf0a0c8e361919415dc478174d8c1f5f390e`
+M4AM1R implementation:
+`ee04da7c88dc2fec1e838a92d07ab841beb25892`
 
 Branch:
 `review/telegram-mtproto-m4am`
 
 Architect review: NOT yet accepted for live execution.
 
-Confirmed good:
-- origin review branch points exactly to implementation SHA;
-- only diagnostic script + focused test file added;
-- page size 100 / max 200;
-- production-like initial vs established history ordering;
-- optional page2 backfill;
-- fresh client construction inside per-page helper;
-- exact conversion helper and production backfill helper imported;
-- no application fetch_history/materializer/DB writes;
-- strict pinned SSH and fail-closed raw-output handling;
-- production not touched.
+Confirmed fixed:
+- realistic PAGE1 PASS + PAGE2 REQUIRED + PAGE2 failure is accepted;
+- PAGE2 success/failure contradictions are rejected;
+- PAGE1 success/failure contradictions are rejected;
+- success totals are checked against page sums;
+- `_history_entry_from_message(...) is None` now emits safe `InvalidHistoryEntry`;
+- inner structural `fail(...)` is terminal via exit 0;
+- provider budget/fresh-client/no-write/no-materialization behavior remains intact.
 
-Three corrective issues remain.
+One protocol blocker remains.
 
-## Blocker 1 — realistic page2 failure is rejected by parent parser
+## Blocker — parser rejects structural/preflight failures
 
-Current parser contains logic equivalent to:
+Current `parse_output()` treats every `FAILURE_STAGE` as if it must be PAGE1 or PAGE2.
 
-if PAGE1_PASS=true and PAGE2_REQUIRED=true and PAGE2_PASS != true:
-    reject
+Therefore valid sanitized failures such as:
 
-This also runs when a valid page2 failure is present.
+- `STAGE_1_IMPORTS`
+- `STAGE_1_DB_SESSION`
+- `STAGE_1_SESSION_DECRYPT`
+- `STAGE_1_REFERENCE_DECRYPT`
+- `STAGE_1_REFERENCE_PARSE`
+- `STAGE_1_REFERENCE_PEER_MATCH`
 
-Therefore the exact desired protocol:
+are rejected with:
+`failure stage is not page-specific`.
 
-- PAGE1_PASS=true
-- PAGE2_REQUIRED=true
-- FAILURE_STAGE=STAGE_5_PAGE2_ITERATION or STAGE_5_PAGE2_CONVERSION
-- RAW_EXCEPTION_CLASS=...
-- MESSAGE_ORDINAL=...
-- no PAGE2_PASS
+Additionally the outer remote helper emits:
 
-is incorrectly rejected.
+- `STAGE_0_RELEASE_REF`
+- `STAGE_0_PRODUCTION_REF`
+- `STAGE_0_WORKTREE`
 
-Required fix:
+but these are not currently present in `FAILURE_STAGES`, so those guard failures are also rejected by the parent parser.
 
-- a page2 failure must be accepted when:
-  - PAGE1_PASS=true;
-  - PAGE2_REQUIRED=true;
-  - FAILURE_STAGE is one of the PAGE2 stages;
-  - PAGE2_PASS is absent;
-  - failure fields are complete;
-  - bounded call counts are valid.
+This violates the diagnostic contract: valid sanitized pre-provider failures must survive intact.
 
-- PAGE2_PASS must be required only for overall success / absence of FAILURE_STAGE.
+## Required fix
 
-- reject impossible combinations, including:
-  - page2 failure when PAGE2_REQUIRED=false;
-  - PAGE2_PASS=true together with PAGE2 FAILURE_STAGE;
-  - page1 failure together with PAGE1_PASS=true;
-  - success totals when an incompatible failure is present.
+### 1. Add explicit preflight/structural stages
 
-Add an executable regression using the realistic output shape produced after page1 succeeds and page2 fails.
+Add to the accepted failure-stage set:
 
-## Blocker 2 — conversion None classification must be deterministic
+- `STAGE_0_RELEASE_REF`
+- `STAGE_0_PRODUCTION_REF`
+- `STAGE_0_WORKTREE`
 
-Current child uses:
+Keep existing STAGE_1 and page stages.
 
-`ValueError("InvalidHistoryEntry")`
+### 2. Classify failure stage families
 
-when `_history_entry_from_message(message)` returns None.
+Parser must distinguish three families:
 
-Because only class name is emitted, this becomes:
+#### Preflight / structural failures
 
-`RAW_EXCEPTION_CLASS=ValueError`
+Includes:
+- STAGE_0_RELEASE_REF
+- STAGE_0_PRODUCTION_REF
+- STAGE_0_WORKTREE
+- STAGE_1_IMPORTS
+- STAGE_1_DB_SESSION
+- STAGE_1_SESSION_DECRYPT
+- STAGE_1_REFERENCE_DECRYPT
+- STAGE_1_REFERENCE_PARSE
+- STAGE_1_REFERENCE_PEER_MATCH
 
-and cannot be distinguished from an actual conversion ValueError.
+For these:
+- require `RAW_EXCEPTION_CLASS`;
+- require `MESSAGE_ORDINAL`;
+- require `TELEGRAM_NETWORK_CALLS`;
+- reject PAGE1_PASS/PAGE2_PASS;
+- reject page success totals;
+- provider network calls must be 0 for STAGE_0/STAGE_1 structural failures;
+- preserve any already-emitted safe structural booleans;
+- accept sanitized result.
 
-Required fix:
+#### PAGE1 failures
 
-- use a local safe exception class such as:
-  `InvalidHistoryEntry`
-- emit:
-  `RAW_EXCEPTION_CLASS=InvalidHistoryEntry`
-- keep stage page-specific:
-  - STAGE_3_PAGE1_CONVERSION
-  - STAGE_5_PAGE2_CONVERSION
+Keep current page1 consistency rules.
 
-No exception message output.
+#### PAGE2 failures
 
-## Corrective 3 — sanitized structural failures must terminate cleanly
+Keep current page2 consistency rules:
+- PAGE1_PASS=true;
+- PAGE2_REQUIRED=true;
+- no PAGE2_PASS;
+- no overall success totals.
 
-Several child paths currently call `fail(...)` but then continue execution.
+### 3. Network-call field required on all failures
 
-Examples include cardinality/decrypt/reference failures.
+Require:
+`TELEGRAM_NETWORK_CALLS`
 
-That can turn a valid sanitized failure into a later Python exception/stderr, which the outer layer then collapses.
+for every failure result.
 
-Required fix:
+For structural/preflight failures:
+- must equal 0.
 
-- after any terminal structural `fail(...)`, execution must return/exit immediately;
-- no later access to potentially unset variables;
-- child must finish with exit 0 and no stderr after emitting the valid sanitized protocol.
+For page failures:
+- must remain within existing bound and coherent enough for the attempted stage.
 
-Do not weaken parent fail-closed behavior for genuine child nonzero/stderr.
+No need to overfit exact Telethon packet counts; use the probe's own bounded operation counter.
 
-## Additional protocol tightening
+### 4. Preserve fail-closed behavior
 
-Review and test:
+Still reject:
+- unknown stages;
+- duplicate keys;
+- malformed booleans/counts;
+- stderr;
+- child nonzero;
+- raw/unknown output;
+- impossible success/failure combinations.
 
-- PAGE1 failure cannot coexist with PAGE1_PASS=true;
-- PAGE2 failure requires PAGE2_REQUIRED=true and PAGE1_PASS=true;
-- PAGE2 success requires PAGE2_REQUIRED=true;
-- overall no-failure success requires PAGE1_PASS=true and, if page2 required, PAGE2_PASS=true;
-- totals, when emitted on success, equal sums of page counts;
-- MESSAGES_SEEN_TOTAL == ENTRIES_CONVERTED_TOTAL;
-- per-page seen == converted;
-- ENTRIES_NONE=0;
-- each page <=100, total <=200;
-- call counts are coherent with pages actually attempted where practical.
-
-Keep raw exception class identifier-only.
+Do not loosen raw-output filtering.
 
 ## Authorization
 
 This task authorizes only:
-- minimal corrective implementation;
-- focused local tests;
+- minimal parser/protocol corrective;
+- focused tests;
 - Ruff;
 - git diff --check;
 - commit + push on same review branch.
@@ -142,31 +145,39 @@ Continue:
 `review/telegram-mtproto-m4am`
 
 Base:
-`122daf0a0c8e361919415dc478174d8c1f5f390e`
+`ee04da7c88dc2fec1e838a92d07ab841beb25892`
 
-Do not modify main or production runtime/ref.
+Do not modify main or production.
 
-## Required tests
+## Required executable tests
 
-At minimum add/adjust tests proving:
+At minimum:
 
-1. realistic PAGE1 PASS + PAGE2 REQUIRED + PAGE2 iteration failure is accepted;
-2. same for PAGE2 conversion failure;
-3. PAGE2 failure with PAGE2_REQUIRED=false is rejected;
-4. PAGE2_PASS + PAGE2 failure together rejected;
-5. PAGE1_PASS + PAGE1 failure together rejected;
-6. overall success still requires PAGE2_PASS when page2 required;
-7. conversion None emits InvalidHistoryEntry, not ValueError;
-8. structural cardinality/decrypt/reference failures terminate sanitized with exit 0/no stderr;
-9. success totals equal per-page sums;
-10. total seen == total converted;
-11. previous 30 focused tests remain passing;
-12. provider-call maximums/fresh-client/no-write/no-materialization restrictions unchanged.
+1. `STAGE_1_IMPORTS` sanitized failure is accepted;
+2. `STAGE_1_DB_SESSION` sanitized failure is accepted;
+3. each decrypt/reference STAGE_1 failure is accepted;
+4. `STAGE_0_RELEASE_REF` accepted;
+5. `STAGE_0_PRODUCTION_REF` accepted;
+6. `STAGE_0_WORKTREE` accepted;
+7. structural failure + PAGE1_PASS rejected;
+8. structural failure + PAGE2_PASS rejected;
+9. structural failure + success totals rejected;
+10. structural/preflight failure with TELEGRAM_NETWORK_CALLS != 0 rejected;
+11. any failure missing TELEGRAM_NETWORK_CALLS rejected;
+12. page1/page2 failure tests from M4AM1R remain PASS;
+13. realistic page2 failure remains accepted;
+14. success protocol remains unchanged;
+15. stderr/nonzero/malformed remain fail-closed;
+16. provider-call maximum/fresh-client/no-write/no-materialization tests remain PASS.
+
+Prefer tests that call `parse_output()` with the exact shapes emitted by the real outer/inner helpers, not only string-search assertions.
+
+## Verification
 
 Run:
 - focused pytest;
 - Ruff changed Python;
-- git diff --check.
+- `git diff --check`.
 
 ## Handoff
 
@@ -178,15 +189,14 @@ Report:
 - focused tests count/pass;
 - Ruff;
 - diff-check;
-- exact parser failure fix;
-- InvalidHistoryEntry behavior;
-- terminal failure behavior;
+- exact stage-family parser changes;
+- proof structural/preflight failures preserve sanitized protocol;
 - remaining gaps.
 
 Do NOT execute production probe.
 
 Final marker:
-`TELEGRAM_MTPROTO_M4AM1R_REVIEW_READY`
+`TELEGRAM_MTPROTO_M4AM1R2_REVIEW_READY`
 
 Then STOP.
 
