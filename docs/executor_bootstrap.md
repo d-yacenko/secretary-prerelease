@@ -57,9 +57,9 @@ For production/runtime tasks:
 
 1. Use only `ops/production/target.json`.
 2. Verify the pinned SSH host key according to the production runbook.
-3. The authoritative SSH-readiness test is an actual **read-only, pinned, BatchMode SSH no-op** to the canonical target, for example a remote `true`/fixed marker command. If that succeeds, SSH authentication is READY.
-4. Do **not** gate readiness on `ssh-add -l`, `SSH_AUTH_SOCK`, `ssh -G`, identity-file counts, or agent-key enumeration. Those are implementation details and can produce false negatives even when the actual sandbox SSH path works.
-5. If a simple user/sandbox SSH session demonstrably succeeds but a harness SSH command fails, treat that as an invocation/harness mismatch to compare directly, not as proof that credentials are unavailable.
+3. The authoritative SSH-readiness property is an actual read-only SSH no-op to the canonical target with the pinned host key and **public-key-only authentication**. For BREAK-GLASS read-only diagnostics, require `PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, and `PreferredAuthentications=publickey` in addition to strict pinned host-key checking.
+4. `BatchMode=yes` is NOT a credential-availability oracle. If ordinary sandbox SSH succeeds but `BatchMode=yes` fails, do not classify credentials as unavailable and do not stop merely because of BatchMode. Normal deployment continues to use its committed harness unchanged; this exception applies only to explicitly authorized read-only diagnostics.
+5. Do **not** gate readiness on `ssh-add -l`, `SSH_AUTH_SOCK`, `ssh -G`, identity-file counts, or agent-key enumeration. Those are implementation details and can produce false negatives even when the actual sandbox SSH path works.
 6. Authentication must use the pre-existing workstation/Executor credential integration already used for prior successful production work.
 7. Do not create a new production key as a workaround.
 8. Do not copy private keys into the repository.
@@ -74,8 +74,7 @@ Do not create separate architecture/product phases for:
 - wrong local origin;
 - stale/missing local remote refs caused by the wrong checkout;
 - dirty unrelated worktree;
-- missing SSH-agent forwarding;
-- unavailable ambient SSH credential path.
+- SSH invocation differences when the actual public-key path is already proven.
 
 If bootstrap cannot be established, report one concise sanitized blocker and stop, for example:
 
