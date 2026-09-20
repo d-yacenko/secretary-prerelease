@@ -14,6 +14,25 @@ Read `DECISIONS.md` only when the current implementation needs an already accept
 
 The explicit current task message from the user/Architect is the authorization to work. `CURRENT_TASK.md` is the repository task ledger and must be consistent with that authorization. If they conflict, are stale, or leave scope ambiguous, stop and report the conflict instead of choosing a broader interpretation.
 
+## Mandatory executor bootstrap
+
+Before every work cycle, establish a deterministic Executor environment. This is plumbing, not product work.
+
+1. The canonical repository is exactly `https://github.com/d-yacenko/secretary-prerelease.git`.
+2. If the current checkout has a different origin, belongs to another project, is on unrelated local state, or contains unknown dirty/untracked files, **do not repair, repoint, clean, reset, stash, or reuse it**. Leave it untouched and create a fresh temporary clone of the canonical repository.
+3. From the canonical checkout, fetch `origin/main` and only refs required by the active task. Then read:
+   - `origin/main:CURRENT_TASK.md`
+   - `origin/main:PROJECT_STATE.md`
+   - `origin/main:AGENTS.md`
+   - `origin/main:docs/executor_bootstrap.md`
+4. Verify every task-authorized SHA/ref exactly before implementation or runtime work.
+5. For production/runtime tasks, bootstrap and the actual authorized task happen in the **same work cycle**. Do not turn Git, worktree, SSH-agent, or credential-forwarding readiness into a new product phase.
+6. Production SSH must use the canonical target/pinned-host-key contract. Authentication uses the pre-existing Executor/workstation credential integration; never create a new production credential, copy a private key into the repository, or ask the user to paste key/password/passphrase/token material.
+7. If canonical Git/bootstrap or SSH authentication is unavailable, emit one concise sanitized blocker such as `EXECUTOR_BOOTSTRAP_BLOCKED=<reason>` and STOP. Do not perform credential archaeology or invent follow-up phases unless the Architect explicitly authorizes that investigation.
+8. A one-shot live/provider authorization is consumed only when the task's defined remote/provider start marker is reached. A local/bootstrap/pre-SSH stop is not a product/provider result and must not be reported as one.
+
+The detailed reusable procedure is in `docs/executor_bootstrap.md`.
+
 ## Scope boundary
 
 - Do only the currently authorized task, corrective, review-fix, or deploy work.
