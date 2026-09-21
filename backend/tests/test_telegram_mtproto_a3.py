@@ -36,6 +36,7 @@ from app.services.telegram_mtproto_history_service import (
     TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN,
     TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES,
     TelegramMtprotoHistoryService,
+    _normalization_cutoff,
 )
 
 KEY = Fernet.generate_key().decode()
@@ -145,6 +146,15 @@ def _service(db_session, transport):
         transport_factory=lambda: transport,
         encryption=CredentialEncryption(KEY),
     )
+
+
+def test_scope_mode_cutoff_is_non_time_limiting_without_database():
+    selection = SimpleNamespace(history_cutoff_at=None)
+
+    cutoff = _normalization_cutoff(selection, scope_mode=True)
+
+    assert cutoff == datetime.min.replace(tzinfo=UTC)
+    assert _entry(1, days_ago=365).occurred_at > cutoff
 
 
 @pytest.fixture(autouse=True)

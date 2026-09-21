@@ -431,10 +431,7 @@ class TelegramMtprotoHistoryService:
         except GoogleConfigurationError as exc:
             raise TelegramMtprotoConfigurationError("Telegram MTProto is not configured") from exc
 
-        original_cutoff = selection.history_cutoff_at
-        cutoff = original_cutoff or _utcnow() - timedelta(
-            days=TELEGRAM_MTPROTO_HISTORY_DAYS
-        )
+        cutoff = _normalization_cutoff(selection, scope_mode=scope_mode)
         latest_message_id = selection.history_latest_message_id
         backfill_before_message_id = selection.history_backfill_before_message_id
         history_complete = selection.history_complete
@@ -668,6 +665,14 @@ def _next_backfill_state(
     if not page.has_more:
         return None, True
     return oldest.message_id, False
+
+
+def _normalization_cutoff(selection, *, scope_mode: bool) -> datetime:
+    if scope_mode:
+        return datetime.min.replace(tzinfo=UTC)
+    return selection.history_cutoff_at or _utcnow() - timedelta(
+        days=TELEGRAM_MTPROTO_HISTORY_DAYS
+    )
 
 
 def _bound_body(text: str) -> str:
