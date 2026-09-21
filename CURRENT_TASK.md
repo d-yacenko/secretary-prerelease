@@ -1,173 +1,267 @@
-# Current task — Telegram MTProto M4BB1: remove 500-dialog scope-preview truncation blocker
+# Current task — Telegram MTProto M4BB2: build/review read-only 2000+1 scope preview probe
 
 ## Status
 
-Production runtime/ref:
+M4BB1 code is accepted at:
+`c69d2353c19c4958e1fb60aac69466fcf6ac1482`
+
+Production remains:
 `cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
 
-M4BA1 human preview was intentionally stopped before Apply Scope.
+Alembic:
+`0046`
 
-Observed UI:
-- selected folder: `Личное`;
-- configured folders: 1;
-- previewed scope: 28 dialogs;
-- skipped: `broadcast=12, bot=19, unsupported=19`;
-- preview: TRUNCATED.
+Production currently has exactly one saved folder configuration from the human UI:
+`Личное`
 
-No Apply Scope and no Sync occurred.
+The previous UI preview reported:
+- scope count 28;
+- configured folders 1;
+- skipped broadcast 12 / bot 19 / unsupported 19;
+- truncated=true.
 
-## Root cause
+No Apply Scope and no manual Sync followed.
 
-Current folder-scope preview uses:
+## Important pre-deploy safety finding
 
-`fetch_dialog_universe(session, DISCOVERY_DIALOG_LIMIT)`
+Existing recurring MTProto behavior calls `reconcile_scope()` before each recurring history pass.
 
-with:
+Therefore, once the wider M4BB1 scan is deployed, the already-saved folder could be reconciled automatically by the recurring worker before the human has time to run another UI preview or press `Apply Scope`.
 
-`DISCOVERY_DIALOG_LIMIT = 500`.
+Do NOT deploy M4BB1 yet.
 
-The Telethon implementation calls `iter_dialogs(limit=scan_limit)` and sets:
-
-`truncated = seen >= scan_limit`.
-
-So reaching the 500-dialog boundary is treated as incomplete and `reconcile_scope` correctly fails closed.
-
-This makes accounts with a larger dialog universe unable to activate even a small selected folder.
+We need a complete read-only preview against the current production session while production still has the old 500-dialog fail-closed behavior.
 
 ## Goal
 
 BUILD / REVIEW ONLY.
 
-Create a safe, bounded folder-scope dialog scan that supports a substantially larger account universe while keeping:
-- manual group discovery bounded as today;
-- scope activation fail-closed if the new bound is genuinely exceeded;
-- no live provider call in this task.
+Create a one-shot HUMAN-SHELL production probe that computes the configured folder scope with the accepted M4BB1 semantics:
 
-Do NOT deploy.
+- scan at most 2001 provider dialogs;
+- retain/process only first 2000;
+- `truncated=false` when total dialogs <= 2000;
+- `truncated=true` only if a 2001st dialog is actually observed;
+- use the same canonical folder filter matching and dialog conversion rules;
+- exclude muted dialogs exactly as scope service does;
+- aggregate skipped reasons only for retained first 2000;
+- report only safe aggregate output.
 
-## Product decision
+Do NOT run the live probe in this task.
 
-Introduce a folder-scope-specific bound:
+## Executor workspace
 
-`TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT = 2000`
+Work only from:
+`~/work/secretary-executor`
 
-Do NOT change `DISCOVERY_DIALOG_LIMIT=500` for manual group discovery.
+Canonical origin:
+`https://github.com/d-yacenko/secretary-prerelease.git`
 
-For folder scope:
-- scan up to 2000 dialogs;
-- determine truncation with one-item lookahead, not `seen >= limit`;
-- exactly 2000 total dialogs is complete/not-truncated;
-- 2001+ dialogs is truncated/fail-closed;
-- return/retain at most the first 2000 scanned dialog results;
-- no unbounded provider iteration.
+Bootstrap:
+```bash
+git fetch origin
+git switch main
+git pull --ff-only
+git remote get-url origin
+git rev-parse HEAD
+git status --short
+```
 
-The selected small folder still must not be activated in this task.
+Require canonical origin, current `origin/main`, clean worktree.
 
-## Required implementation
+Read:
+- `CURRENT_TASK.md`
+- `PROJECT_STATE.md`
+- `AGENTS.md`
+- `docs/executor_bootstrap.md`
+- `docs/deploy.md`
+- `ops/production/target.json`
+- existing manual MTProto production probes for trust/output protocol patterns
+- `backend/app/connectors/telegram/mtproto_transport.py`
+- `backend/app/services/telegram_mtproto_scope_service.py`
+- `backend/app/connectors/telegram/mtproto_account_store.py`
 
-Prefer the smallest transport/service change.
+## New artifact
 
-### Transport
+Create:
+`ops/production/manual_mtproto_scope_preview_2000_probe.sh`
 
-For `fetch_dialog_universe(session, limit)`:
-- clamp requested limit to the folder-scope-specific maximum;
-- request/iterate at most `scan_limit + 1` provider dialogs for lookahead;
-- only process/return the first `scan_limit`;
-- set `truncated=true` only when an extra provider dialog beyond the limit is actually observed;
-- preserve current skipped-count classification for the retained scan window;
-- do not leak content/IDs through errors.
+A bundled Python helper and focused tests are allowed/preferred.
 
-Do not change history fetching, auth taxonomy, writes, or manual group discovery.
+The helper may execute inside the running API container from stdin, but it must remain read-only.
 
-### Scope service
+## Production pin for future live run
 
-Use `TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT` for the dialog-universe scan.
+The probe must require exact current production runtime/ref:
+`cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
 
-Folder definition discovery may continue using `DISCOVERY_DIALOG_LIMIT`.
+Expected Alembic:
+`0046`
 
-### Safety
+Require the normal pinned target/host-key/repo/worktree/container/DB-health guards.
 
-`reconcile_scope` must continue to refuse mutation whenever preview is genuinely truncated.
+Use the accepted production DB credential/host Alembic check with isolated stdin.
 
-No partial activation.
+## Provider behavior
 
-## Required tests
+This is a read-only provider probe only.
 
-Add/adjust focused DB-independent transport/service tests proving:
+Allowed provider operations:
+1. decrypt the already-stored MTProto session in memory;
+2. connect;
+3. verify authorization;
+4. read folder definitions;
+5. iterate at most 2001 dialogs.
 
-1. 499 dialogs -> not truncated.
-2. exactly 500 dialogs -> not truncated (regression against current boundary behavior).
-3. exactly 2000 dialogs -> not truncated.
-4. 2001 dialogs -> truncated.
-5. provider iteration stops after at most 2001 items.
-6. returned descriptors never exceed 2000.
-7. skipped counts only cover retained first 2000 rows.
-8. scope service requests the new 2000 bound for universe.
-9. folder discovery still uses existing 500 bound.
-10. manual group discovery remains at existing bound/behavior.
-11. genuinely truncated scope still fails closed before `store.reconcile_scope`.
-12. non-truncated scope reconciliation behavior remains unchanged.
-13. provider/auth error taxonomy unchanged.
-14. no schema/Alembic change.
-15. shallow bootstrap/history semantics unchanged.
-16. recurring remains scope-only.
-17. Q1 AI quarantine unchanged.
+No history fetch.
 
-Prefer fake async dialog iterators; no live Telegram.
+No message fetch.
 
-If DB-backed tests cannot initialize locally, report them blocked honestly and ensure the truncation boundary behavior itself has DB-independent executable tests.
+No mutation.
 
-## Validation
+Prefer reusing canonical conversion/filter helpers from the production code:
+- folder-name/definition handling;
+- `_dialog_from_dialog`;
+- `dialog_matches_filter`;
+- canonical muted handling.
 
-Run:
-- focused M4BB1 DB-independent tests;
-- relevant A4.2 scope tests as available;
-- relevant A4.4 recurring tests as available;
-- Q1 as available;
-- Python compile;
-- Ruff;
-- `git diff --check`.
+Because current production does not yet contain M4BB1, the probe may implement the 2000+1 loop explicitly while reusing canonical conversion/filter helpers.
+
+## Database behavior
+
+Read-only only:
+- use `SessionLocal(autoflush=False)`;
+- require exactly one MTProto account;
+- require exactly one configured sync folder;
+- do not flush/commit;
+- do not change selection rows;
+- do not call `reconcile_scope`.
+
+## Safe output
+
+Allowed fields:
+
+```text
+MANUAL_M4BB2_BEGIN=true
+CANONICAL_REPO_PASS=true
+TARGET_PIN_PASS=true
+REMOTE_REPO_PASS=true
+REMOTE_HEAD_PASS=true
+REMOTE_PRODUCTION_REF_PASS=true
+REMOTE_WORKTREE_CLEAN=true
+COMPOSE_CONFIG_PASS=true
+DB_RUNNING_PASS=true
+API_RUNNING_PASS=true
+WORKER_RUNNING_PASS=true
+DB_HEALTH_PASS=true
+ALEMBIC_0046_PASS=true
+ACCOUNT_EXACTLY_ONE=true
+CONFIGURED_FOLDER_EXACTLY_ONE=true
+IGNORE_MUTED=true
+DIALOGS_SCANNED_RETAINED=<0..2000>
+SCOPE_MATCH_COUNT=<aggregate>
+SKIPPED_BROADCAST=<aggregate>
+SKIPPED_BOT=<aggregate>
+SKIPPED_UNSUPPORTED=<aggregate>
+SKIPPED_OTHER=<aggregate>
+TRUNCATED=true|false
+TELEGRAM_NETWORK_CALLS=<bounded count>
+M4BB2_TERMINAL=success
+MANUAL_M4BB2_END=true
+```
+
+Do NOT print:
+- folder name;
+- peer IDs;
+- account IDs;
+- user IDs;
+- dialog titles/usernames;
+- message IDs/content;
+- session/reference/access hashes;
+- DB credentials;
+- raw provider objects;
+- traceback/raw stderr.
+
+Folder name is already known to the human, but the production probe should still stay aggregate-only.
+
+## Failure handling
+
+Fail closed on:
+- wrong repo/ref/runtime;
+- wrong Alembic;
+- account/folder cardinality mismatch;
+- auth invalid;
+- unknown/unsafe output;
+- provider exception;
+- premature EOF.
+
+Use allowlisted stage/class output only.
+
+No retries after provider execution starts.
 
 ## Strictly forbidden
 
 Do NOT:
 - deploy;
 - move production ref;
-- use production SSH;
-- call Telegram/provider live;
-- click Apply Scope;
-- run live Sync;
-- change selected folders live;
+- call `reconcile_scope`;
+- Apply Scope;
+- history sync/fetch;
+- message fetch;
+- write/flush/commit DB;
+- change folder config;
 - login/re-login;
-- mutate production;
-- add migration / `0047`;
-- enable MTProto AI;
+- restart/recreate containers;
+- migrate;
+- enable AI;
 - change Bot API.
+
+## Required local tests
+
+At minimum:
+1. 499 dialogs -> not truncated.
+2. exactly 500 -> not truncated.
+3. exactly 2000 -> not truncated.
+4. 2001 -> truncated.
+5. provider iteration stops at 2001.
+6. matched scope dedupes by peer.
+7. muted dialogs excluded.
+8. skipped counts cover retained 2000 only.
+9. account cardinality fail closed.
+10. configured-folder cardinality fail closed.
+11. no history method call.
+12. no reconcile call.
+13. no DB flush/commit.
+14. auth invalid sanitized.
+15. provider failure sanitized.
+16. premature EOF.
+17. unsafe output fail closed.
+18. Alembic host/credential + stdin isolation regression.
+19. `bash -n`.
+20. helper compile.
+21. Ruff.
+22. `git diff --check`.
 
 ## Deliverable
 
 If PASS:
 - commit/push canonical main;
 - update `PROJECT_STATE.md`;
-- do NOT deploy.
+- DO NOT run live probe;
+- DO NOT deploy M4BB1.
 
 Report:
 - commit SHA;
-- exact files changed;
-- exact scan/lookahead/truncation semantics;
+- files changed;
 - focused test results;
-- DB-backed status;
-- confirmation manual group discovery unchanged;
-- confirmation shallow bootstrap unchanged;
-- recurring/Q1 unchanged;
-- Ruff/diff-check;
+- lint/diff-check;
 - production SSH=0;
 - Telegram/provider calls=0;
 - production mutation=0.
 
 Final marker:
 
-`TELEGRAM_MTPROTO_M4BB1_SCOPE_SCAN_READY`
+`TELEGRAM_MTPROTO_M4BB2_SCOPE_PREVIEW_PROBE_READY`
 
 Then STOP.
 
