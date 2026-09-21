@@ -14,6 +14,7 @@ from app.connectors.telegram.mtproto_errors import (
 )
 from app.connectors.telegram.mtproto_transport import (
     DISCOVERY_DIALOG_LIMIT,
+    TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT,
     TelegramMtprotoDialogDescriptor,
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoTransport,
@@ -125,7 +126,7 @@ class TelegramMtprotoScopeService:
         skipped: dict[str, int] = {}
         truncated = discovery.truncated
         universe = await self._transport_factory().fetch_dialog_universe(
-            session, DISCOVERY_DIALOG_LIMIT
+            session, TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT
         )
         truncated = truncated or universe.truncated
         for key, value in universe.skipped_counts.items():

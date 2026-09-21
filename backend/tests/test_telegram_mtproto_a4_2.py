@@ -1,8 +1,10 @@
 """Telegram Depth A4.2 — durable dynamic scope and explicit peer sync."""
 
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import ClassVar
 from uuid import uuid4
 
 import pytest
@@ -14,6 +16,7 @@ from telethon.tl import types
 
 from app.api import telegram_mtproto as telegram_api
 from app.connectors.google.encryption import CredentialEncryption
+from app.connectors.telegram import mtproto_transport
 from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoAuthorizationInvalidError,
@@ -25,6 +28,8 @@ from app.connectors.telegram.mtproto_errors import (
     TelegramMtprotoScopeUnavailableError,
 )
 from app.connectors.telegram.mtproto_transport import (
+    DISCOVERY_DIALOG_LIMIT,
+    TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT,
     TelegramMtprotoDialogDescriptor,
     TelegramMtprotoFolderDescriptor,
     TelegramMtprotoFolderDialogsResult,
@@ -78,14 +83,18 @@ class _Transport:
         self.discovery_truncated = discovery_truncated
         self.dialogs = tuple(dialogs or (_dialog(1),))
         self.history_called = False
+        self.discovery_limits = []
+        self.universe_limits = []
 
     async def discover_folders(self, session, limit):
+        self.discovery_limits.append(limit)
         return TelegramMtprotoFolderDiscoveryResult(
             (TelegramMtprotoFolderDescriptor(7, "Configured", _filter()),),
             self.discovery_truncated,
         )
 
     async def fetch_dialog_universe(self, session, limit):
+        self.universe_limits.append(limit)
         return TelegramMtprotoFolderDialogsResult(self.dialogs, self.truncated, {})
 
     async def fetch_history(self, *args, **kwargs):
@@ -115,6 +124,107 @@ class _Store:
     def reconcile_scope(self, account_id, descriptors):
         self.reconciled = descriptors
         return (len(descriptors), len(descriptors), 0, 0)
+
+
+class _DialogIteratorClient:
+    dialogs: ClassVar[list] = []
+    requested_limits: ClassVar[list] = []
+    yielded = 0
+
+    def __init__(self, *args):
+        pass
+
+    async def connect(self):
+        return None
+
+    async def is_user_authorized(self):
+        return True
+
+    def iter_dialogs(self, *, limit):
+        type(self).requested_limits.append(limit)
+
+        async def iterator():
+            for dialog in type(self).dialogs:
+                type(self).yielded += 1
+                yield dialog
+
+        return iterator()
+
+    async def disconnect(self):
+        return None
+
+
+async def _fetch_universe_for_count(monkeypatch, count, *, classify=None):
+    dialogs = [SimpleNamespace(index=index) for index in range(count)]
+    _DialogIteratorClient.dialogs = dialogs
+    _DialogIteratorClient.requested_limits = []
+    _DialogIteratorClient.yielded = 0
+
+    def convert(dialog):
+        if classify is not None:
+            return classify(dialog)
+        return _dialog(dialog.index + 1), None
+
+    monkeypatch.setattr(mtproto_transport, "TelegramClient", _DialogIteratorClient)
+    monkeypatch.setattr(mtproto_transport, "StringSession", lambda value: value)
+    monkeypatch.setattr(mtproto_transport, "_dialog_from_dialog", convert)
+    result = await mtproto_transport.TelethonMtprotoTransport(1, "hash").fetch_dialog_universe(
+        "session", TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT
+    )
+    return result, _DialogIteratorClient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [499, 500, 2000])
+async def test_scope_universe_boundary_is_complete(monkeypatch, count):
+    result, client = await _fetch_universe_for_count(monkeypatch, count)
+    assert result.truncated is False
+    assert len(result.dialogs) == count
+    assert client.requested_limits == [TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT + 1]
+    assert client.yielded == count
+
+
+@pytest.mark.asyncio
+async def test_scope_universe_lookahead_marks_only_2001st_as_truncated(monkeypatch):
+    result, client = await _fetch_universe_for_count(monkeypatch, 2001)
+    assert result.truncated is True
+    assert len(result.dialogs) == TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT
+    assert client.yielded == TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT + 1
+
+
+@pytest.mark.asyncio
+async def test_scope_universe_skipped_counts_cover_retained_window_only(monkeypatch):
+    def classify(dialog):
+        if dialog.index % 2 == 0:
+            return None, "bot"
+        return _dialog(dialog.index + 1), None
+
+    result, client = await _fetch_universe_for_count(monkeypatch, 2001, classify=classify)
+    assert result.truncated is True
+    assert len(result.dialogs) == 1000
+    assert result.skipped_counts == {"bot": 1000}
+    assert client.yielded == TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT + 1
+
+
+@pytest.mark.asyncio
+async def test_scope_service_uses_2000_universe_and_folders_keep_500(monkeypatch):
+    store = _Store()
+    service = TelegramMtprotoScopeService.__new__(TelegramMtprotoScopeService)
+    service._session = object()
+    service._encryption = object()
+    service._transport_factory = lambda: store.transport
+    monkeypatch.setattr(service, "_account_context", lambda user_id: (store.account, store, "session"))
+
+    await service.preview_scope(uuid4())
+
+    assert store.transport.universe_limits == [TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT]
+    assert store.transport.discovery_limits == [DISCOVERY_DIALOG_LIMIT]
+
+
+def test_manual_group_discovery_still_uses_500_bound():
+    source = inspect.getsource(mtproto_transport.TelethonMtprotoTransport.discover_groups)
+    assert DISCOVERY_DIALOG_LIMIT == 500
+    assert "min(limit, DISCOVERY_DIALOG_LIMIT)" in source
 
 
 @pytest.mark.asyncio

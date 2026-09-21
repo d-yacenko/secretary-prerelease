@@ -47,6 +47,7 @@ from app.connectors.telegram.mtproto_errors import (
 )
 
 DISCOVERY_DIALOG_LIMIT = 500
+TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT = 2000
 TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE = 100
 
 
@@ -444,7 +445,7 @@ class TelethonMtprotoTransport:
         self, session: str, limit: int
     ) -> TelegramMtprotoFolderDialogsResult:
         client: TelegramClient | None = None
-        scan_limit = max(1, min(limit, DISCOVERY_DIALOG_LIMIT))
+        scan_limit = max(1, min(limit, TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT))
         try:
             client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
             await client.connect()
@@ -455,8 +456,10 @@ class TelethonMtprotoTransport:
             dialogs: list[TelegramMtprotoDialogDescriptor] = []
             skipped: dict[str, int] = {}
             seen = 0
-            async for dialog in client.iter_dialogs(limit=scan_limit):
+            truncated = False
+            async for dialog in client.iter_dialogs(limit=scan_limit + 1):
                 if seen >= scan_limit:
+                    truncated = True
                     break
                 seen += 1
                 descriptor, reason = _dialog_from_dialog(dialog)
@@ -464,7 +467,7 @@ class TelethonMtprotoTransport:
                     skipped[reason or "unsupported"] = skipped.get(reason or "unsupported", 0) + 1
                 else:
                     dialogs.append(descriptor)
-            return TelegramMtprotoFolderDialogsResult(tuple(dialogs), seen >= scan_limit, skipped)
+            return TelegramMtprotoFolderDialogsResult(tuple(dialogs), truncated, skipped)
         except (
             AuthKeyError,
             AuthKeyNotFound,
