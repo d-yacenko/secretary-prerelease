@@ -1,140 +1,129 @@
-# Current task — Telegram MTProto M4AY1R: remove legacy time cutoff from shallow scope bootstrap
+# Current task — Telegram MTProto M4AY1R2: never persist scope normalization cutoff
 
 ## Status
 
-M4AY1 implementation commit:
+M4AY1 base:
 `443dc8c91bd7e66f5c24fdf8ab0f2bd270402673`
 
-is integrated to canonical main but is NOT yet accepted for deploy.
+M4AY1R corrective:
+`e0f89a30bb204b904bb49e47974dc4dbba5bbb48`
 
-The one-page scope flow is correct:
-- one newest-first fetch;
-- limit 20;
-- no second historical page;
-- incremental-only after latest cursor exists.
+M4AY1R fixed the runtime normalization cutoff for scope mode, but review found one remaining blocker.
 
-Review found one semantic blocker.
+Do NOT deploy either commit yet.
 
-## Blocker
+## Remaining blocker
 
-`_sync_selection(..., scope_mode=True)` still computes:
+Current persistence logic is effectively:
 
-`now - TELEGRAM_MTPROTO_HISTORY_DAYS`
+```python
+if not (scope_mode and previous_latest_message_id is not None):
+    selection.history_cutoff_at = cutoff
+```
 
-and passes that cutoff into `_apply_page -> _normalize_entry`.
+For a FRESH scope peer:
+- `scope_mode=true`
+- `previous_latest_message_id=None`
 
-Therefore a quiet folder chat whose latest 20 provider entries are older than 14 days can:
-- fetch the intended latest 20 entries;
-- then discard all of them because of the old manual-history cutoff.
+so the condition is true and the row persists:
 
-That violates the selected product rule:
+`history_cutoff_at = datetime.min(UTC)`
 
-**folder scope bootstrap is count-bounded, not time-bounded.**
+This violates the product contract that folder-scope bootstrap is count-bounded and must not create a synthetic time cutoff.
 
-The current code also persists a synthetic 14-day `history_cutoff_at` for a fresh scope row, which misrepresents the scope bootstrap semantics.
+It also creates a cross-mode bug:
+if the same retained row is later `manual_selected=true`, manual `sync_group` sees the stored `datetime.min` as an existing cutoff and can deep-backfill arbitrarily old history instead of establishing the normal 14-day manual cutoff.
 
 ## Goal
 
 BUILD / REVIEW ONLY.
 
-Correct M4AY1 so scope-mode history sync has no legacy time-window filter.
+Make scope mode NEVER write `history_cutoff_at`.
 
-Do NOT deploy.
+Scope sync may use `datetime.min(UTC)` internally for normalization, but that value is transient only and must never be persisted.
 
-## Required semantics
+## Exact persistence semantics
 
-### Scope mode — fresh peer
+### Scope mode
 
-Given:
-- `scope_active=true`;
-- `history_latest_message_id=None`.
+For BOTH fresh and existing scope peers:
+- preserve `selection.history_cutoff_at` byte-for-byte/value-for-value;
+- if it starts `None`, it stays `None`;
+- if it starts as a legacy/manual datetime, preserve it exactly;
+- do not replace it with `datetime.min`;
+- do not replace it with now-14-days.
 
-Then:
-- fetch exactly one newest-first page, limit 20;
-- no min/max history bound;
-- materialize canonical eligible entries from those latest 20 regardless of age;
-- service/textless/malformed entries may still be skipped by normal canonical rules;
-- do not fetch another page even when fewer than 20 entries materialize;
-- latest message ID still advances from provider entries;
-- backfill cursor becomes/remains None;
-- history complete becomes true;
-- do NOT create a 14-day `history_cutoff_at`;
-- if `history_cutoff_at` was already set for some retained legacy state, preserve it rather than overwriting it.
+### Manual mode
 
-### Scope mode — existing peer
+For `sync_group`:
+- keep current behavior unchanged;
+- if cutoff is absent, establish the existing 14-day cutoff;
+- if cutoff already exists, retain/use it per current manual semantics.
 
-Given positive `history_latest_message_id`:
-- incremental min-id only;
-- no historical page;
-- do not apply the legacy 14-day cutoff as a reason to discard newer-id provider entries;
-- preserve pre-existing `history_backfill_before_message_id`;
-- preserve pre-existing `history_complete`;
-- preserve pre-existing `history_cutoff_at` exactly.
+## Preferred smallest fix
 
-### Manual path
+The persistence condition should be equivalent to:
 
-`sync_group` remains unchanged:
-- existing 14-day cutoff semantics;
-- existing bounded backfill;
-- existing cursor behavior.
+```python
+if not scope_mode:
+    selection.history_cutoff_at = cutoff
+```
 
-## Suggested implementation shape
+or an equally clear helper.
 
-Keep the change small.
-
-For scope mode, use a non-time-limiting normalization cutoff, e.g. UTC-aware `datetime.min`, or an equivalent explicit code path that preserves the existing non-time validation while disabling the 14-day filter.
-
-Persist `history_cutoff_at` only according to the manual path; scope mode should preserve its prior value.
-
-Do not change `_normalize_entry` globally in a way that weakens manual history semantics.
+Do not change the scope normalization decision introduced in M4AY1R.
 
 ## Required regressions
 
-Add tests proving:
+Because local PostgreSQL is unavailable, add DB-independent executable coverage for the persistence policy, not only the normalization policy.
 
-1. Fresh scope peer with latest provider entries older than 14 days still materializes those eligible entries.
-2. Fresh scope peer with 20 old entries and `has_more=true` still makes exactly one provider fetch.
-3. Fresh scope peer leaves `history_cutoff_at=None` when it started None.
-4. Fresh scope peer preserves a pre-existing cutoff if one exists.
-5. Existing scope peer preserves cutoff/backfill/history-complete state exactly.
-6. Existing scope peer does not discard an incremental newer-id entry solely because its timestamp is older than 14 days.
-7. Manual initial sync still filters entries older than the 14-day cutoff as before.
-8. Manual backfill behavior remains unchanged.
-9. Existing M4AY1 exact limit/direction/bounds/call-count tests remain.
-10. Recurring remains `scope_active=true` only.
-11. Q1 AI quarantine remains unchanged.
-12. No schema/Alembic change.
-13. Provider taxonomy unchanged.
+At minimum prove without DB:
 
-Because the executor DB host is currently unavailable, add at least one **DB-independent focused unit test** that proves the scope-mode cutoff decision itself is non-time-limiting, so the core regression can actually execute in the local environment. Do not claim DB-backed PASS if PostgreSQL still cannot initialize.
+1. scope-mode normalization cutoff is aware `datetime.min`;
+2. scope-mode cutoff persistence decision is NEVER write;
+3. manual-mode cutoff persistence decision is write;
+4. fresh scope starting cutoff=None remains conceptually None;
+5. existing scope with a legacy cutoff preserves the exact original value;
+6. manual-mode absent cutoff still resolves to now-14-days behavior.
+
+Also retain/collect DB-backed tests for:
+- fresh scope old messages materialize;
+- fresh scope one fetch limit=20;
+- fresh scope cutoff remains None;
+- pre-existing scope cutoff preserved;
+- existing scope cursor/backfill/completion preserved;
+- manual path cutoff/backfill unchanged;
+- scope deactivate/reactivate no re-bootstrap;
+- recurring scope_active-only;
+- Q1 quarantine;
+- no schema/Alembic change;
+- provider taxonomy unchanged.
+
+Do not claim DB-backed PASS if PostgreSQL cannot initialize.
 
 ## Validation
 
 Run:
-- DB-independent focused M4AY1R unit test(s);
-- collect/run the DB-backed A3/A4.2/A4.4/Q1 matrix as available;
+- DB-independent M4AY1R/M4AY1R2 tests;
+- DB-backed A3/A4.2/A4.4/Q1 as available;
 - Python compile;
 - Ruff;
 - `git diff --check`.
-
-If PostgreSQL remains unavailable:
-- report exact number of DB-backed tests collected/blocked;
-- do not use production DB.
 
 ## Strictly forbidden
 
 Do NOT:
 - deploy;
 - move production ref;
-- production SSH;
-- live Telegram/provider calls;
-- live Sync;
-- folder save/preview/Apply Scope;
+- use production SSH;
+- call Telegram/provider live;
+- run live Sync;
+- save/preview/apply folders live;
 - login/re-login;
-- production mutation;
-- migration / `0047`;
-- AI enable;
-- Bot API changes.
+- mutate production;
+- add migration / `0047`;
+- enable MTProto AI;
+- change Bot API.
 
 ## Deliverable
 
@@ -146,11 +135,12 @@ If corrected:
 Report:
 - corrective commit SHA;
 - exact files changed;
-- exact scope cutoff semantics;
-- DB-independent test result;
-- DB-backed test status;
+- exact normalization semantics;
+- exact persistence semantics;
+- DB-independent test results;
+- DB-backed blocked/pass status;
 - manual path unchanged;
-- recurring scope-only unchanged;
+- recurring unchanged;
 - Q1 unchanged;
 - Ruff/diff-check;
 - production SSH=0;
@@ -159,7 +149,7 @@ Report:
 
 Final marker:
 
-`TELEGRAM_MTPROTO_M4AY1R_SCOPE_COUNT_BOUND_READY`
+`TELEGRAM_MTPROTO_M4AY1R2_SCOPE_CUTOFF_TRANSIENT_READY`
 
 Then STOP.
 
