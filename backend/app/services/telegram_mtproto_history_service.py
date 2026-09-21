@@ -514,8 +514,7 @@ class TelegramMtprotoHistoryService:
 
         selection.history_latest_message_id = latest_message_id
         selection.history_backfill_before_message_id = backfill_before_message_id
-        if not (scope_mode and previous_latest_message_id is not None):
-            selection.history_cutoff_at = cutoff
+        _persist_history_cutoff(selection, cutoff, scope_mode=scope_mode)
         selection.history_complete = history_complete
         selection.history_last_synced_at = _utcnow()
         self._session.flush()
@@ -673,6 +672,11 @@ def _normalization_cutoff(selection, *, scope_mode: bool) -> datetime:
     return selection.history_cutoff_at or _utcnow() - timedelta(
         days=TELEGRAM_MTPROTO_HISTORY_DAYS
     )
+
+
+def _persist_history_cutoff(selection, cutoff: datetime, *, scope_mode: bool) -> None:
+    if not scope_mode:
+        selection.history_cutoff_at = cutoff
 
 
 def _bound_body(text: str) -> str:

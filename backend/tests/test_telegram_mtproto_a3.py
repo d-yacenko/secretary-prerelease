@@ -37,6 +37,7 @@ from app.services.telegram_mtproto_history_service import (
     TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES,
     TelegramMtprotoHistoryService,
     _normalization_cutoff,
+    _persist_history_cutoff,
 )
 
 KEY = Fernet.generate_key().decode()
@@ -155,6 +156,35 @@ def test_scope_mode_cutoff_is_non_time_limiting_without_database():
 
     assert cutoff == datetime.min.replace(tzinfo=UTC)
     assert _entry(1, days_ago=365).occurred_at > cutoff
+
+
+def test_scope_cutoff_persistence_is_never_write_without_database():
+    selection = SimpleNamespace(history_cutoff_at=None)
+    _persist_history_cutoff(selection, datetime.min.replace(tzinfo=UTC), scope_mode=True)
+    assert selection.history_cutoff_at is None
+
+
+def test_manual_cutoff_persistence_writes_without_database():
+    selection = SimpleNamespace(history_cutoff_at=None)
+    cutoff = datetime.now(UTC)
+    _persist_history_cutoff(selection, cutoff, scope_mode=False)
+    assert selection.history_cutoff_at == cutoff
+
+
+def test_scope_cutoff_persistence_preserves_legacy_value_without_database():
+    legacy = datetime.now(UTC) - timedelta(days=2)
+    selection = SimpleNamespace(history_cutoff_at=legacy)
+    _persist_history_cutoff(selection, datetime.min.replace(tzinfo=UTC), scope_mode=True)
+    assert selection.history_cutoff_at == legacy
+
+
+def test_manual_absent_cutoff_uses_fourteen_day_window_without_database():
+    before = datetime.now(UTC)
+    cutoff = _normalization_cutoff(SimpleNamespace(history_cutoff_at=None), scope_mode=False)
+    after = datetime.now(UTC)
+    expected_before = before - timedelta(days=14)
+    expected_after = after - timedelta(days=14)
+    assert expected_before <= cutoff <= expected_after
 
 
 @pytest.fixture(autouse=True)
