@@ -1,164 +1,161 @@
-# Current task — Telegram MTProto M4BC1: schema-neutral production deploy of M4BB1
+# Current task — Telegram MTProto M4BD1: build read-only post-deploy acceptance probe
 
 ## Status
 
-M4BB3 wide read-only scope preview is complete and PASS.
+M4BC1 schema-neutral production deploy is COMPLETE / PASS.
 
-Human explicitly authorized production deployment of M4BB1.
-
-Current production runtime/ref before this deployment:
-`cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
-
-Authorized release:
+Production runtime/ref:
 `c69d2353c19c4958e1fb60aac69466fcf6ac1482`
 
-Authorized rollback:
-`cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
-
-Expected Alembic:
+Alembic:
 `0046`
 
-The release is schema-neutral. The exact rollback -> release comparison is a fast-forward and contains no Alembic/migration file changes.
+Deployment evidence:
+- `HEALTH=PASS`
+- `DB_CONTAINER_UNCHANGED=true`
+- `DB_VOLUME_UNCHANGED=true`
+- `ENV_FILE_UNCHANGED=true`
+- `API_RECREATED=true`
+- `WORKER_RECREATED=true`
+- `DEPLOYMENT=PASS`
 
-## Accepted M4BB1 semantics
+No manual Telegram/provider action was part of the deploy.
 
-- folder-derived scope dialog-universe scan uses a 2000-dialog retained bound with one-item lookahead;
-- exactly 2000 dialogs can be proven complete when no 2001st dialog is observed;
-- 2001+ dialogs remain fail-closed as truncated;
-- folder discovery and manual-group discovery remain on their existing 500-dialog bound;
-- truncated scope reconciliation remains fail-closed;
-- shallow folder-scope bootstrap behavior from production `cbd5e7d...` remains unchanged;
-- manual group history behavior remains unchanged;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false` quarantine remains unchanged;
-- no schema change / no `0047`;
-- Bot API remains untouched.
+## Goal
 
-M4BB3 already proved the current production account has a complete dialog universe of 649 dialogs and the configured folder derives exactly 28 eligible peers with `TRUNCATED=false`.
+Build, test, and commit a production-compatible read-only acceptance probe for the post-M4BB1 state.
+
+The probe is for a later separately-authorized human-shell live run. DO NOT run it against production in this task.
+
+The probe must establish, without Telegram/provider calls and without DB writes:
+
+1. exact production runtime/ref and Alembic;
+2. exactly one MTProto account and exactly one configured sync folder;
+3. current count of `scope_active=true` chat selections;
+4. count of active selections that were manually selected vs folder-only;
+5. aggregate shallow-bootstrap state across active selections:
+   - count with `history_latest_message_id IS NOT NULL`;
+   - count with `history_complete=true`;
+   - count with `history_backfill_before_message_id IS NULL`;
+   - count with `history_cutoff_at IS NULL`;
+6. per-peer canonical MTProto object counts only as sanitized aggregate distribution, sufficient to detect any peer exceeding the shallow-bootstrap bound of 20 without printing peer IDs/titles/messages/account IDs;
+7. total MTProto object count for current account and total inbound/outbound counts;
+8. whether any MTProto object has an embedding or current embedding provenance / whether any pending/running embed job targets MTProto objects, reported only as aggregate counts;
+9. no Inbox mutation, no reconciliation, no history fetch, no provider access.
+
+## Acceptance-oriented output
+
+Output only sanitized aggregate facts. Do not print:
+- account IDs;
+- peer IDs;
+- usernames/titles;
+- message IDs;
+- bodies;
+- external IDs;
+- provider references;
+- encrypted session material;
+- credentials or hashes.
+
+At minimum include fields equivalent to:
+
+```text
+PRODUCTION_RELEASE=...
+ALEMBIC=0046
+ACCOUNT_COUNT=1
+CONFIGURED_FOLDER_COUNT=1
+ACTIVE_SCOPE_COUNT=...
+MANUAL_ACTIVE_COUNT=...
+FOLDER_ONLY_ACTIVE_COUNT=...
+LATEST_CURSOR_PRESENT_COUNT=...
+HISTORY_COMPLETE_COUNT=...
+BACKFILL_CURSOR_PRESENT_COUNT=...
+HISTORY_CUTOFF_PRESENT_COUNT=...
+ACTIVE_PEERS_WITH_OBJECTS_GT_20=...
+ACTIVE_PEER_OBJECT_COUNT_MAX=...
+MTPROTO_OBJECT_COUNT=...
+MTPROTO_INBOUND_COUNT=...
+MTPROTO_OUTBOUND_COUNT=...
+MTPROTO_OBJECTS_WITH_EMBEDDING=...
+MTPROTO_PENDING_RUNNING_EMBED_JOBS=...
+TELEGRAM_NETWORK_CALLS=0
+DB_WRITES=0
+```
+
+If a safe aggregate cannot be proven without exposing identifiers or mutating state, omit it and document that limitation in `PROJECT_STATE.md`.
+
+## Important interpretation boundary
+
+This probe may run after one or more natural recurring worker cycles. Therefore:
+- it must not assume all 28 active peers have already been visited by history sync;
+- it must distinguish scope activation from bootstrap completion;
+- it must not treat fewer-than-28 bootstrapped peers as failure by itself;
+- it must detect any evidence of deep backfill (for example active folder-only peers with object count >20 attributable to the new scope path) without overclaiming where pre-existing manual history makes attribution ambiguous.
+
+The one legacy manually-selected peer may legitimately have more than 20 historical objects. Do not count that peer as evidence of deep folder bootstrap. The critical deep-backfill check applies to folder-only active peers.
+
+## Implementation constraints
+
+Prefer the established production probe pattern under `ops/production/`:
+- committed target/pinned host-key contract;
+- bundled Python child helper;
+- exact production-release guard;
+- exact Alembic 0046 guard;
+- read-only SQL/service inspection;
+- strict sanitized protocol parsing;
+- no direct ad-hoc SSH outside the probe wrapper;
+- no Telegram imports that initiate provider activity;
+- no network/provider SDK calls;
+- no writes/flush/commit that can mutate DB state.
+
+Add focused protocol/static/unit tests under `ops/production/tests/`.
+
+## Required local validation
+
+Run:
+- focused probe tests;
+- helper Python compile;
+- bundled helper compile if applicable;
+- Bash syntax if shell wrapper added/changed;
+- Ruff on changed Python;
+- `git diff --check`.
+
+DB-backed local tests are optional only if unavailable due the known local DB hostname limitation; report that fact rather than broadening scope.
 
 ## Authorization
 
-Authorize exactly ONE normal schema-neutral production deploy through:
+AUTHORIZED:
+- local code changes needed only for this read-only probe;
+- local tests;
+- update `PROJECT_STATE.md`;
+- commit and push to canonical `main`.
 
-`ops/production/deploy.py`
-
-Do NOT use direct SSH or direct Compose.
-
-The production Git ref must be exact authorized release `c69d2353c19c4958e1fb60aac69466fcf6ac1482` before the deploy harness is run.
-
-## Mandatory bootstrap
-
-Follow `AGENTS.md` and `docs/executor_bootstrap.md`.
-
-Use only the canonical repository:
-
-`https://github.com/d-yacenko/secretary-prerelease.git`
-
-Verify:
-- canonical origin;
-- clean canonical checkout;
-- current `origin/main`;
-- authorized release and rollback SHAs resolve exactly;
-- `origin/production == c69d2353c19c4958e1fb60aac69466fcf6ac1482`.
-
-Read before execution:
-- `CURRENT_TASK.md`
-- `PROJECT_STATE.md`
-- `AGENTS.md`
-- `docs/executor_bootstrap.md`
-- `docs/deploy.md`
-- `ops/production/deploy.py`
-- `ops/production/target.json`
-- helpers directly named by the deploy harness.
-
-## Exact deploy command
-
-```bash
-RELEASE_SHA=c69d2353c19c4958e1fb60aac69466fcf6ac1482
-ROLLBACK_SHA=cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa
-EXPECTED_ALEMBIC=0046
-
-python3 ops/production/deploy.py \
-  --release-sha "$RELEASE_SHA" \
-  --rollback-sha "$ROLLBACK_SHA" \
-  --expected-alembic "$EXPECTED_ALEMBIC"
-```
-
-Run the deploy harness exactly once.
-
-## Required deployment invariants
-
-The canonical harness must prove:
-- committed target / pinned SSH host-key PASS;
-- current production checkout is rollback SHA or already release SHA;
-- `origin/production` exact release SHA;
-- production tracked worktree clean;
-- DB/API/worker preflight PASS;
-- DB healthy and current API health PASS;
-- DB credentials and `SECRETARY_CREDENTIAL_KEY` presence/equality checks PASS without printing values;
-- schema-neutral release check PASS;
-- only API + worker rebuilt/recreated;
-- DB container identity unchanged;
-- DB volume identity unchanged;
-- production `.env` checksum unchanged;
-- post-deploy health PASS;
-- Alembic exact `0046`.
-
-## Telegram-specific boundary
-
-This task is DEPLOY ONLY.
-
-Do NOT intentionally:
-- click or call Apply Scope;
-- click or call Sync;
-- run a Telegram/provider probe;
-- change folder configuration;
-- login/re-login Telegram;
-- enable MTProto AI;
-- alter recurring semantics;
-- alter Bot API;
-- perform post-deploy Inbox/scope/bootstrap acceptance.
-
-The worker may naturally execute already-existing recurring jobs after restart. Do not suppress, accelerate, manufacture, or manually trigger that behavior in this deploy task. Acceptance of resulting scope/bootstrap behavior is a separate Architect task after the deploy report is reviewed.
-
-## Failure handling
-
-If bootstrap or deploy harness blocks before mutation:
-- do not bypass;
-- do not use direct SSH;
-- report one sanitized blocker and STOP.
-
-If mutation occurs and the harness fails:
-- allow only the harness's automatic rollback to exact rollback SHA;
-- report rollback result;
-- do not manually repair or retry.
-
-Do not run the deploy harness a second time without new Architect authorization.
+NOT AUTHORIZED:
+- production SSH;
+- live probe execution;
+- Telegram/provider calls;
+- Apply Scope;
+- Sync;
+- reconciliation;
+- DB mutation;
+- folder/account/login changes;
+- production ref change/deploy/rollback;
+- enabling MTProto AI;
+- Bot API changes.
 
 ## Required report
 
 Return:
-- release SHA;
-- rollback SHA;
-- `origin/production` ref;
-- previous production runtime;
-- resulting production runtime;
-- target/pin result;
-- schema-neutral check;
-- DB/API/worker preflight;
-- API/worker recreation;
-- DB container unchanged;
-- DB volume unchanged;
-- `.env` unchanged;
-- health;
-- Alembic;
-- rollback attempted yes/no and result;
-- migration: none;
-- confirmation that only the canonical deploy harness was used;
-- confirmation that no manual Telegram/provider action or acceptance probe was performed.
+- commit SHA;
+- files changed;
+- exact probe protocol/output fields;
+- test/compile/Ruff/diff-check results;
+- confirmation production SSH=0;
+- Telegram/provider calls=0;
+- production mutation=0.
 
-Final marker on success:
+Final marker:
 
-`TELEGRAM_MTPROTO_M4BC1_DEPLOY_SUCCESS`
+`TELEGRAM_MTPROTO_M4BD1_ACCEPTANCE_PROBE_READY`
 
 Then STOP.
 
