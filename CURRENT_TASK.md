@@ -1,73 +1,52 @@
-# Current task — Telegram MTProto M4BF1: human Inbox acceptance for folder-derived scope
+# Current task — Telegram MTProto folder-derived scope complete: await next product authorization
 
 ## Status
 
-M4BE2 post-deploy backend/runtime acceptance is PASS.
+Telegram MTProto folder-derived scope onboarding with shallow bootstrap is COMPLETE / PRODUCTION ACCEPTED.
 
-Production runtime/ref:
+Current production runtime/ref:
 `c69d2353c19c4958e1fb60aac69466fcf6ac1482`
 
 Alembic:
 `0046`
 
-Confirmed production state:
-- exactly one MTProto account;
-- exactly one configured folder;
-- active scope = 28 peers;
-- all 28 are folder-only active peers;
-- all 28 have a latest history cursor;
-- all 28 have `history_complete=true`;
+Accepted production evidence:
+- complete configured-folder scope = 28 peers;
+- active scope = 28;
+- manual-active = 0;
+- folder-only active = 28;
+- latest cursor present = 28;
+- history complete = 28;
 - backfill cursor present = 0;
 - persisted history cutoff present = 0;
-- folder-only active peers with >20 objects = 0;
-- max active-peer object count = 20;
-- MTProto embeddings/current provenance/pending-running embedding jobs = 0;
-- Telegram network calls from the acceptance probe = 0;
-- DB writes from the acceptance probe = 0.
+- active folder-only peers with >20 stored objects = 0;
+- maximum active-peer object count = 20;
+- MTProto embeddings = 0;
+- current MTProto embedding provenance = 0;
+- pending/running MTProto embed jobs = 0;
+- folder-derived Telegram items are visible in the normal Inbox UI.
 
-## Goal
+## Transport coexistence
 
-Human-confirm that folder-derived Telegram messages are visible through the normal Inbox UI.
+Bot API remains enabled and is a separate transport from MTProto.
 
-This is the final UI acceptance step for the folder-derived shallow-bootstrap phase.
+Current architecture intentionally does not treat Bot API and MTProto as interchangeable transports. Their canonical external-id schemes are distinct, so cross-transport duplicate representation is possible while both are active.
 
-## Human action
+No Bot API retirement, cross-transport deduplication change, or transport migration is authorized by this task.
 
-Using the normal Secretary client:
+## Authorization state
 
-1. Open the normal Inbox.
-2. Do not enter Telegram account settings.
-3. Do not press Sync.
-4. Do not press Apply Scope.
-5. Do not change folders or Telegram selection.
-6. Scroll/load older Inbox pages if necessary, because Inbox is ordered together with all other sources.
-7. Confirm whether Telegram items from the folder-derived scope are visible.
+No production mutation is currently authorized.
 
-No specific Telegram chat/title/message content needs to be reported. A simple visible / not visible result is enough.
+Do NOT:
+- disable Bot API;
+- change Telegram Bot API configuration;
+- enable MTProto AI;
+- change folder configuration;
+- trigger manual Sync/Apply Scope;
+- deploy/rollback/move production refs;
+- alter cross-transport deduplication semantics.
 
-## Stop conditions
-
-If Telegram items are visible:
-- report PASS and STOP.
-
-If no Telegram items are visible after reasonable Inbox pagination:
-- report NOT VISIBLE and STOP;
-- do not Sync, Apply Scope, re-login, alter folder config, or run any probe.
-
-## Authorization
-
-AUTHORIZED:
-- normal read-only Inbox browsing/pagination in the client.
-
-NOT AUTHORIZED:
-- Sync;
-- Apply Scope;
-- Telegram account/folder changes;
-- login/re-login;
-- production SSH/probes;
-- production mutation;
-- deploy/rollback/ref changes;
-- enabling MTProto AI;
-- Bot API changes.
+Await explicit human product authorization for the next phase.
 
 `CURRENT_TASK.md` is the source of active authorization.
