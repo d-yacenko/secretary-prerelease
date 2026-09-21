@@ -1,156 +1,85 @@
-# Current task — Telegram MTProto M4AY1R2: never persist scope normalization cutoff
+# Current task — Telegram MTProto shallow folder bootstrap accepted: await deploy authorization
 
 ## Status
 
-M4AY1 base:
-`443dc8c91bd7e66f5c24fdf8ab0f2bd270402673`
+M4AY1 + M4AY1R + M4AY1R2 are accepted as the folder-scope shallow-bootstrap deploy candidate.
 
-M4AY1R corrective:
-`e0f89a30bb204b904bb49e47974dc4dbba5bbb48`
+Candidate release:
+`cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
 
-M4AY1R fixed the runtime normalization cutoff for scope mode, but review found one remaining blocker.
+Current production runtime/ref remains:
+`2db36510fe884eadc40d63fed8661ed3627f1cbb`
 
-Do NOT deploy either commit yet.
+Expected Alembic remains:
+`0046`
 
-## Remaining blocker
+No migration / no `0047`.
 
-Current persistence logic is effectively:
+## Accepted semantics
 
-```python
-if not (scope_mode and previous_latest_message_id is not None):
-    selection.history_cutoff_at = cutoff
-```
+Fresh folder-scope peer:
+- `scope_active=true`;
+- no `history_latest_message_id`;
+- one newest-first provider fetch;
+- limit exactly 20;
+- no min/max history bounds;
+- no historical second page, even with `has_more=true`;
+- eligible entries materialize regardless of age;
+- latest message ID advances from the provider page;
+- no backfill cursor;
+- history complete for backfill purposes;
+- `history_cutoff_at` is not created or rewritten.
 
-For a FRESH scope peer:
-- `scope_mode=true`
-- `previous_latest_message_id=None`
+Existing folder-scope peer:
+- incremental min-id only;
+- no historical page;
+- existing cutoff/backfill/completion state preserved.
 
-so the condition is true and the row persists:
+Manual `sync_group`:
+- existing 14-day bounded backfill unchanged.
 
-`history_cutoff_at = datetime.min(UTC)`
+Recurring:
+- remains `scope_active=true` only.
 
-This violates the product contract that folder-scope bootstrap is count-bounded and must not create a synthetic time cutoff.
+AI:
+- `TELEGRAM_MTPROTO_AI_ENABLED=false` remains the intended production quarantine;
+- no Q1 policy change.
 
-It also creates a cross-mode bug:
-if the same retained row is later `manual_selected=true`, manual `sync_group` sees the stored `datetime.min` as an existing cutoff and can deep-backfill arbitrarily old history instead of establishing the normal 14-day manual cutoff.
+## Validation note
 
-## Goal
+- 5 DB-independent policy tests PASS;
+- 81 DB-backed tests collected but could not initialize because local executor `db` hostname is unavailable;
+- Python compile PASS;
+- Ruff PASS;
+- `git diff --check` PASS.
 
-BUILD / REVIEW ONLY.
+The missing local PostgreSQL is recorded and does not authorize use of production DB for testing.
 
-Make scope mode NEVER write `history_cutoff_at`.
+## Authorization state
 
-Scope sync may use `datetime.min(UTC)` internally for normalization, but that value is transient only and must never be persisted.
-
-## Exact persistence semantics
-
-### Scope mode
-
-For BOTH fresh and existing scope peers:
-- preserve `selection.history_cutoff_at` byte-for-byte/value-for-value;
-- if it starts `None`, it stays `None`;
-- if it starts as a legacy/manual datetime, preserve it exactly;
-- do not replace it with `datetime.min`;
-- do not replace it with now-14-days.
-
-### Manual mode
-
-For `sync_group`:
-- keep current behavior unchanged;
-- if cutoff is absent, establish the existing 14-day cutoff;
-- if cutoff already exists, retain/use it per current manual semantics.
-
-## Preferred smallest fix
-
-The persistence condition should be equivalent to:
-
-```python
-if not scope_mode:
-    selection.history_cutoff_at = cutoff
-```
-
-or an equally clear helper.
-
-Do not change the scope normalization decision introduced in M4AY1R.
-
-## Required regressions
-
-Because local PostgreSQL is unavailable, add DB-independent executable coverage for the persistence policy, not only the normalization policy.
-
-At minimum prove without DB:
-
-1. scope-mode normalization cutoff is aware `datetime.min`;
-2. scope-mode cutoff persistence decision is NEVER write;
-3. manual-mode cutoff persistence decision is write;
-4. fresh scope starting cutoff=None remains conceptually None;
-5. existing scope with a legacy cutoff preserves the exact original value;
-6. manual-mode absent cutoff still resolves to now-14-days behavior.
-
-Also retain/collect DB-backed tests for:
-- fresh scope old messages materialize;
-- fresh scope one fetch limit=20;
-- fresh scope cutoff remains None;
-- pre-existing scope cutoff preserved;
-- existing scope cursor/backfill/completion preserved;
-- manual path cutoff/backfill unchanged;
-- scope deactivate/reactivate no re-bootstrap;
-- recurring scope_active-only;
-- Q1 quarantine;
-- no schema/Alembic change;
-- provider taxonomy unchanged.
-
-Do not claim DB-backed PASS if PostgreSQL cannot initialize.
-
-## Validation
-
-Run:
-- DB-independent M4AY1R/M4AY1R2 tests;
-- DB-backed A3/A4.2/A4.4/Q1 as available;
-- Python compile;
-- Ruff;
-- `git diff --check`.
-
-## Strictly forbidden
+NO production deploy is currently authorized.
 
 Do NOT:
-- deploy;
-- move production ref;
+- move `production` ref;
+- run `ops/production/deploy.py`;
 - use production SSH;
-- call Telegram/provider live;
-- run live Sync;
-- save/preview/apply folders live;
+- save/select Telegram folders live;
+- preview scope live;
+- Apply Scope live;
+- run live Telegram Sync;
 - login/re-login;
-- mutate production;
-- add migration / `0047`;
 - enable MTProto AI;
-- change Bot API.
+- change Bot API;
+- mutate production.
 
-## Deliverable
+Await explicit human deployment authorization.
 
-If corrected:
-- commit/push canonical main;
-- update `PROJECT_STATE.md`;
-- do NOT deploy.
-
-Report:
-- corrective commit SHA;
-- exact files changed;
-- exact normalization semantics;
-- exact persistence semantics;
-- DB-independent test results;
-- DB-backed blocked/pass status;
-- manual path unchanged;
-- recurring unchanged;
-- Q1 unchanged;
-- Ruff/diff-check;
-- production SSH=0;
-- Telegram/provider calls=0;
-- production mutation=0.
-
-Final marker:
-
-`TELEGRAM_MTPROTO_M4AY1R2_SCOPE_CUTOFF_TRANSIENT_READY`
-
-Then STOP.
+After a successful deploy, the intended acceptance sequence is separately authorized:
+1. select one small Telegram folder;
+2. save folder configuration;
+3. preview scope and inspect breadth;
+4. Apply Scope once;
+5. allow bounded recurring/scope sync to bootstrap peers;
+6. verify aggregate counts and Inbox visibility without deep history loading.
 
 `CURRENT_TASK.md` is the source of active authorization.
