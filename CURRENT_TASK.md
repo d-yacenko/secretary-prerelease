@@ -1,238 +1,157 @@
-# Current task — Telegram MTProto M4AY1: shallow folder-scope bootstrap
+# Current task — Telegram MTProto M4AY1R: remove legacy time cutoff from shallow scope bootstrap
 
 ## Status
 
-The ordinary MTProto transport path is production-proven end-to-end for a manually selected group.
+M4AY1 implementation commit:
+`443dc8c91bd7e66f5c24fdf8ab0f2bd270402673`
 
-Production runtime/ref remains:
-`2db36510fe884eadc40d63fed8661ed3627f1cbb`
+is integrated to canonical main but is NOT yet accepted for deploy.
 
-Next selected product phase:
-folder-derived Telegram scope with a shallow initial bootstrap instead of deep/time-window backfill.
+The one-page scope flow is correct:
+- one newest-first fetch;
+- limit 20;
+- no second historical page;
+- incremental-only after latest cursor exists.
 
-This is the final major MTProto transport feature phase. Deploy, folder selection, Apply Scope, and live acceptance are later separately authorized steps.
+Review found one semantic blocker.
 
-## Product decision
+## Blocker
 
-For a peer that enters the folder-derived active scope with no history cursor yet:
+`_sync_selection(..., scope_mode=True)` still computes:
 
-- fetch at most the latest **20 provider history entries**;
-- materialize only entries accepted by the existing canonical normalization/materializer;
-- do **not** paginate backward for historical backfill;
-- do **not** use the 14-day cutoff to request/fill older pages;
-- establish `history_latest_message_id` from the fetched page;
-- leave `history_backfill_before_message_id=None`;
-- mark the scope bootstrap history as complete for backfill purposes;
-- subsequent scope syncs fetch only messages newer than `history_latest_message_id`.
+`now - TELEGRAM_MTPROTO_HISTORY_DAYS`
 
-This intentionally means a scope-bootstrapped peer does not later surprise the user with automatic deep history loading.
+and passes that cutoff into `_apply_page -> _normalize_entry`.
 
-The count of 20 is a fixed product constant for this phase, not a new environment/config surface.
+Therefore a quiet folder chat whose latest 20 provider entries are older than 14 days can:
+- fetch the intended latest 20 entries;
+- then discard all of them because of the old manual-history cutoff.
 
-## Important separation
+That violates the selected product rule:
 
-### Manual-selected path
+**folder scope bootstrap is count-bounded, not time-bounded.**
 
-Keep the existing manual `sync_group` history behavior unchanged in M4AY1.
+The current code also persists a synthetic 14-day `history_cutoff_at` for a fresh scope row, which misrepresents the scope bootstrap semantics.
 
-Do not regress the already production-proven manual-selected group behavior.
+## Goal
 
-### Folder-scope path
+BUILD / REVIEW ONLY.
 
-`sync_scope_peer` gets the new shallow-bootstrap semantics.
+Correct M4AY1 so scope-mode history sync has no legacy time-window filter.
 
-After a scope peer has a `history_latest_message_id`, scope sync is incremental-only.
+Do NOT deploy.
 
-If an existing row already has a legacy/manual backfill cursor:
-- scope sync must NOT consume the backfill cursor;
-- scope sync must NOT perform historical backfill;
-- preserve the existing backfill cursor/completion state so a separate manual path is not silently rewritten.
+## Required semantics
 
-### Recurring sync
-
-Keep recurring selection semantics unchanged:
-- only `scope_active=true` peers;
-- max peers per run remains bounded as today;
-- newly activated scope peers naturally receive the shallow bootstrap when recurring sync reaches them;
-- later runs are incremental-only.
-
-Do not make `manual_selected=true` peers recurring unless they are also `scope_active=true`.
-
-## AI / compliance invariants
-
-Production canonical flag remains:
-`TELEGRAM_MTPROTO_AI_ENABLED=false`
-
-No scope-bootstrap message may enter:
-- embedding;
-- LLM context;
-- semantic assistant retrieval;
-- summarization/classification;
-- proactive AI processing.
-
-Preserve Q1 quarantine and all existing AI-gate tests.
-
-## Executor workspace
-
-Work only from:
-
-`~/work/secretary-executor`
-
-Canonical origin:
-
-`https://github.com/d-yacenko/secretary-prerelease.git`
-
-Do not use:
-- `~/work/secretary`
-- `~/work/secretary-prerelease`
-
-for Executor implementation work.
-
-## Required bootstrap
-
-```bash
-git fetch origin
-git switch main
-git pull --ff-only
-git remote get-url origin
-git rev-parse HEAD
-git status --short
-```
-
-Require canonical origin, current `origin/main`, and clean worktree.
-
-Read at minimum:
-- `CURRENT_TASK.md`
-- `PROJECT_STATE.md`
-- `AGENTS.md`
-- `DECISIONS.md`
-- `backend/app/services/telegram_mtproto_history_service.py`
-- `backend/app/services/telegram_mtproto_scope_service.py`
-- `backend/app/services/telegram_mtproto_recurring_sync_service.py`
-- `backend/app/connectors/telegram/mtproto_transport.py`
-- `backend/app/connectors/telegram/mtproto_account_store.py`
-- `backend/tests/test_telegram_mtproto_a3.py`
-- `backend/tests/test_telegram_mtproto_a4_2.py`
-- `backend/tests/test_telegram_mtproto_q1.py`
-
-## Implementation shape
-
-Prefer the smallest service-level change.
-
-Introduce an explicit constant, e.g.:
-
-`TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES = 20`
-
-Do not add a migration or new DB column.
-
-Do not change provider auth/discovery/scope reconciliation semantics.
-
-Do not make `Apply Scope` fetch history directly. Scope reconciliation remains scope reconciliation; history arrives through the existing scope-sync/recurring path.
-
-Keep provider retry/taxonomy behavior unchanged.
-
-## Required behavior
-
-### Fresh folder-scope peer
+### Scope mode — fresh peer
 
 Given:
 - `scope_active=true`;
 - `history_latest_message_id=None`.
 
-One `sync_scope_peer` call must:
-- issue one newest-first history fetch with limit 20;
-- use no min-message bound;
-- use no max-message/backfill bound;
-- materialize the eligible subset;
-- set latest message id from the page when entries exist;
-- set backfill cursor to None;
-- mark history complete;
-- make no second historical page request even if provider says `has_more=true`.
+Then:
+- fetch exactly one newest-first page, limit 20;
+- no min/max history bound;
+- materialize canonical eligible entries from those latest 20 regardless of age;
+- service/textless/malformed entries may still be skipped by normal canonical rules;
+- do not fetch another page even when fewer than 20 entries materialize;
+- latest message ID still advances from provider entries;
+- backfill cursor becomes/remains None;
+- history complete becomes true;
+- do NOT create a 14-day `history_cutoff_at`;
+- if `history_cutoff_at` was already set for some retained legacy state, preserve it rather than overwriting it.
 
-If the page is empty:
-- remain bounded;
-- mark bootstrap complete;
-- do not fetch another page.
+### Scope mode — existing peer
 
-### Existing scope peer
+Given positive `history_latest_message_id`:
+- incremental min-id only;
+- no historical page;
+- do not apply the legacy 14-day cutoff as a reason to discard newer-id provider entries;
+- preserve pre-existing `history_backfill_before_message_id`;
+- preserve pre-existing `history_complete`;
+- preserve pre-existing `history_cutoff_at` exactly.
 
-Given a positive `history_latest_message_id`:
-- request only newer messages using the existing incremental semantics;
-- do not fetch historical/backfill pages;
-- preserve any pre-existing manual/legacy backfill cursor and `history_complete` state.
+### Manual path
 
-### Manual sync
+`sync_group` remains unchanged:
+- existing 14-day cutoff semantics;
+- existing bounded backfill;
+- existing cursor behavior.
 
-`sync_group` retains the existing 14-day / bounded backfill behavior.
+## Suggested implementation shape
 
-## Regression matrix
+Keep the change small.
 
-Add focused tests proving at minimum:
+For scope mode, use a non-time-limiting normalization cutoff, e.g. UTC-aware `datetime.min`, or an equivalent explicit code path that preserves the existing non-time validation while disabling the 14-day filter.
 
-1. Fresh scope peer requests newest-first limit exactly 20.
-2. Fresh scope peer with provider `has_more=true` still performs exactly one history fetch.
-3. Fresh scope peer stores latest id, clears/no backfill cursor, marks complete.
-4. Empty fresh scope page performs one fetch and marks complete.
-5. Eligible text subset can be less than 20 without causing a second page.
-6. Existing scope peer uses incremental min-id semantics only.
-7. Existing scope peer with legacy backfill cursor does not consume/advance it.
-8. Manual `sync_group` initial behavior still uses the existing manual history constants/backfill contract.
-9. Scope deactivation/reactivation preserves latest cursor and does not re-bootstrap when latest id already exists.
-10. Recurring sync still selects only `scope_active=true`.
-11. Recurring fresh peers call the scope path, not manual path.
-12. Q1 AI quarantine remains intact with flag false.
-13. No schema/Alembic change.
-14. Existing provider error taxonomy remains unchanged.
+Persist `history_cutoff_at` only according to the manual path; scope mode should preserve its prior value.
 
-Use exact transport call assertions: direction, bounds, limit, and call count.
+Do not change `_normalize_entry` globally in a way that weakens manual history semantics.
+
+## Required regressions
+
+Add tests proving:
+
+1. Fresh scope peer with latest provider entries older than 14 days still materializes those eligible entries.
+2. Fresh scope peer with 20 old entries and `has_more=true` still makes exactly one provider fetch.
+3. Fresh scope peer leaves `history_cutoff_at=None` when it started None.
+4. Fresh scope peer preserves a pre-existing cutoff if one exists.
+5. Existing scope peer preserves cutoff/backfill/history-complete state exactly.
+6. Existing scope peer does not discard an incremental newer-id entry solely because its timestamp is older than 14 days.
+7. Manual initial sync still filters entries older than the 14-day cutoff as before.
+8. Manual backfill behavior remains unchanged.
+9. Existing M4AY1 exact limit/direction/bounds/call-count tests remain.
+10. Recurring remains `scope_active=true` only.
+11. Q1 AI quarantine remains unchanged.
+12. No schema/Alembic change.
+13. Provider taxonomy unchanged.
+
+Because the executor DB host is currently unavailable, add at least one **DB-independent focused unit test** that proves the scope-mode cutoff decision itself is non-time-limiting, so the core regression can actually execute in the local environment. Do not claim DB-backed PASS if PostgreSQL still cannot initialize.
 
 ## Validation
 
 Run:
-- focused M4AY1 tests;
-- relevant A3 history tests;
-- relevant A4.2 scope/recurring tests;
-- Q1 tests;
+- DB-independent focused M4AY1R unit test(s);
+- collect/run the DB-backed A3/A4.2/A4.4/Q1 matrix as available;
+- Python compile;
 - Ruff;
 - `git diff --check`.
 
-If local PostgreSQL is unavailable:
-- report exactly which DB-backed tests cannot initialize;
-- do not fabricate PASS;
-- do not use production DB to compensate.
+If PostgreSQL remains unavailable:
+- report exact number of DB-backed tests collected/blocked;
+- do not use production DB.
 
 ## Strictly forbidden
 
 Do NOT:
 - deploy;
-- move `production` ref;
-- use production SSH;
-- connect to Telegram/provider in live mode;
+- move production ref;
+- production SSH;
+- live Telegram/provider calls;
+- live Sync;
+- folder save/preview/Apply Scope;
 - login/re-login;
-- Sync live;
-- select/save folders live;
-- preview scope live;
-- Apply Scope live;
-- mutate production;
-- add migration / `0047`;
-- enable MTProto AI;
-- change Bot API.
+- production mutation;
+- migration / `0047`;
+- AI enable;
+- Bot API changes.
 
 ## Deliverable
 
-If implementation/review passes:
+If corrected:
 - commit/push canonical main;
 - update `PROJECT_STATE.md`;
 - do NOT deploy.
 
 Report:
-- commit SHA;
+- corrective commit SHA;
 - exact files changed;
-- exact fresh-scope transport call semantics;
-- test counts/results;
-- confirmation manual path unchanged;
-- confirmation recurring remains scope-only;
-- Q1 result;
+- exact scope cutoff semantics;
+- DB-independent test result;
+- DB-backed test status;
+- manual path unchanged;
+- recurring scope-only unchanged;
+- Q1 unchanged;
 - Ruff/diff-check;
 - production SSH=0;
 - Telegram/provider calls=0;
@@ -240,7 +159,7 @@ Report:
 
 Final marker:
 
-`TELEGRAM_MTPROTO_M4AY1_SHALLOW_SCOPE_BOOTSTRAP_READY`
+`TELEGRAM_MTPROTO_M4AY1R_SCOPE_COUNT_BOUND_READY`
 
 Then STOP.
 
