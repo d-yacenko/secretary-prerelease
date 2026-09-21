@@ -151,6 +151,21 @@ class Report:
         self.emit(TERMINAL, "failure")
 
 
+def alembic_command(compose: list[str]) -> list[str]:
+    return compose + [
+        "exec",
+        "-T",
+        "db",
+        "sh",
+        "-lc",
+        (
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 '
+            '-U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" '
+            '-At -c "SELECT version_num FROM alembic_version"'
+        ),
+    ]
+
+
 def child_source() -> str:
     return r"""from sqlalchemy import func, select
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
@@ -291,18 +306,7 @@ def remote_main() -> None:
         if not value:
             report.failure("STAGE_0_DB_HEALTH", RuntimeError())
             return
-        revision = run(
-            compose
-            + [
-                "exec",
-                "-T",
-                "db",
-                "sh",
-                "-lc",
-                "psql -At -c 'SELECT version_num FROM alembic_version'",
-            ],
-            stdin="",
-        )
+        revision = run(alembic_command(compose), stdin="")
         value = revision.returncode == 0 and revision.stdout.strip() == "0046"
         report.emit("ALEMBIC_0046_PASS", value)
         if not value:

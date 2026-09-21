@@ -75,6 +75,22 @@ class VisibilityProbeTests(unittest.TestCase):
         ]
         self.assertEqual(visibility.parse_output("\n".join(lines) + "\n"), "failure")
 
+    def test_alembic_exact_revision_success_transcript(self):
+        self.assertEqual(visibility.parse_output(valid()), "success")
+
+    def test_alembic_wrong_revision_fails_at_stage_zero(self):
+        lines = [
+            f"{key}={'false' if key == 'ALEMBIC_0046_PASS' else 'true'}"
+            for key, _ in visibility.GUARDS
+        ]
+        lines += [
+            "FAILURE_STAGE=STAGE_0_ALEMBIC",
+            "RAW_EXCEPTION_CLASS=RuntimeError",
+            "TELEGRAM_NETWORK_CALLS=0",
+            "M4AT1_TERMINAL=failure",
+        ]
+        self.assertEqual(visibility.parse_output("\n".join(lines) + "\n"), "failure")
+
     def test_partial_child_failure_is_terminal(self):
         lines = [f"{key}=true" for key, _ in visibility.GUARDS]
         lines += [
@@ -120,6 +136,23 @@ class VisibilityProbeTests(unittest.TestCase):
             self.assertNotIn(forbidden, source)
         self.assertIn("autoflush=False", source)
         self.assertIn("telegram_mtproto_active_object_predicate", source)
+
+    def test_alembic_uses_credential_host_contract_and_isolated_stdin(self):
+        command = visibility.alembic_command(["docker", "compose"])
+        shell_command = command[-1]
+        for fragment in (
+            'PGPASSWORD="$POSTGRES_PASSWORD"',
+            "-h 127.0.0.1",
+            '-U "${POSTGRES_USER:-secretary}"',
+            '-d "${POSTGRES_DB:-secretary}"',
+            "-At",
+            '-c "SELECT version_num FROM alembic_version"',
+        ):
+            self.assertIn(fragment, shell_command)
+        self.assertEqual(command[1:4], ["compose", "exec", "-T"])
+        remote = (OPS / "manual_mtproto_visibility_state.py").read_text()
+        self.assertIn('run(alembic_command(compose), stdin="")', remote)
+        self.assertNotIn("stdout", shell_command)
 
     def test_wrapper_syntax_and_pinned_public_key_transport(self):
         wrapper = OPS / "manual_mtproto_visibility_state_probe.sh"
