@@ -14,12 +14,6 @@ from app.connectors.mattermost.credentials import MattermostAccountStore
 from app.connectors.teams.account_store import TeamsAccountStore
 from app.connectors.teams.config import teams_is_configured
 from app.connectors.teams.constants import AUTH_STATUS_RECONNECT_REQUIRED
-from app.connectors.telegram.account_store import TelegramAccountStore
-from app.connectors.telegram.webhook_service import (
-    bot_username,
-    can_reply_from_rights,
-    telegram_is_configured,
-)
 from app.connectors.yandex.calendar_credentials import YandexCalendarAccountStore
 from app.connectors.yandex.credentials import YandexMailAccountStore
 from app.core.config import settings
@@ -164,24 +158,9 @@ class ConnectionStatusService:
         ]
 
     def _telegram_status(self) -> TelegramConnectionStatus:
-        configured = telegram_is_configured()
-        bot = bot_username() if configured else None
-        account = TelegramAccountStore(self._session).get_by_user_id(self._user_id)
-        if account is None:
-            return TelegramConnectionStatus(
-                configured=configured,
-                bot_username=bot,
-            )
-        business_connected = bool(account.business_connection_enabled)
-        return TelegramConnectionStatus(
-            configured=configured,
-            identity_linked=True,
-            business_connected=business_connected,
-            can_reply=business_connected and can_reply_from_rights(account.business_rights),
-            telegram_username=account.telegram_username,
-            display_name=account.display_name,
-            bot_username=bot,
-        )
+        # Bot API is retired; preserve the response shape while keeping the
+        # legacy transport inactive and independent of Bot credentials/rows.
+        return TelegramConnectionStatus()
 
     def _teams_status(self) -> TeamsConnectionStatus:
         configured = teams_is_configured()

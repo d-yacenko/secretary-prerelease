@@ -230,11 +230,6 @@ class SecretaryApiClient {
     }
   }
 
-  Future<TelegramLinkResult> linkTelegram() async {
-    final body = await _request('POST', '/telegram/link');
-    return TelegramLinkResult.fromJson(body);
-  }
-
   Future<TelegramMtprotoStatus> getTelegramMtprotoStatus() async {
     final body = await _request('GET', '/telegram/mtproto/status');
     return TelegramMtprotoStatus.fromJson(body);

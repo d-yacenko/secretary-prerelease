@@ -1,19 +1,14 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:personal_secretary/account/account_screen.dart';
 import 'package:personal_secretary/api/api_models.dart';
 import 'package:personal_secretary/auth/auth_controller.dart';
 import 'package:personal_secretary/auth/server_url_store.dart';
 import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/api/secretary_api_client.dart';
+import 'package:personal_secretary/account/telegram_mtproto_account_section.dart';
 import 'package:personal_secretary/ui/object_presentation.dart';
 import 'package:personal_secretary/ui/provider_icon.dart';
-import 'package:url_launcher_platform_interface/link.dart';
-import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import 'account_test_helpers.dart';
 
@@ -35,19 +30,6 @@ Map<String, dynamic> _telegramJson({
     'display_name': displayName,
     'bot_username': botUsername,
   };
-}
-
-class _RecordingUrlLauncher extends UrlLauncherPlatform {
-  String? lastUrl;
-
-  @override
-  LinkDelegate? get linkDelegate => null;
-
-  @override
-  Future<bool> launchUrl(String url, LaunchOptions options) async {
-    lastUrl = url;
-    return true;
-  }
 }
 
 AuthController _buildAuth(SecretaryApiClient apiClient) {
@@ -101,56 +83,13 @@ void main() {
     expect(connections.telegram.configured, isFalse);
   });
 
-  test('telegram connection labels distinguish states', () {
-    expect(
-      telegramConnectionLabel(TelegramConnection.unavailable()),
-      contains('не настроен'),
-    );
-    expect(
-      telegramConnectionLabel(
-        TelegramConnection.fromJson(_telegramJson()),
-      ),
-      contains('не связан'),
-    );
-    expect(
-      telegramConnectionLabel(
-        TelegramConnection.fromJson(_telegramJson(identityLinked: true)),
-      ),
-      contains('Secretary Mode'),
-    );
-    expect(
-      telegramConnectionLabel(
-        TelegramConnection.fromJson(
-          _telegramJson(identityLinked: true, businessConnected: true),
-        ),
-      ),
-      contains('без права ответа'),
-    );
-    expect(
-      telegramConnectionLabel(
-        TelegramConnection.fromJson(
-          _telegramJson(
-            identityLinked: true,
-            businessConnected: true,
-            canReply: true,
-          ),
-        ),
-      ),
-      contains('можно отвечать'),
-    );
-    expect(
-      telegramSetupHelpText(TelegramConnection.unavailable()),
-      contains('mute'),
-    );
-  });
-
   test('telegram provider presentation uses local icon', () {
     expect(providerLabel('telegram'), 'Telegram');
     expect(providerCompactGlyph('telegram'), 'T');
     expect(providerSourceMark('telegram'), ProviderSourceMark.telegram);
   });
 
-  testWidgets('unconfigured telegram hides link button', (tester) async {
+  testWidgets('legacy telegram has no generic connection workflow', (tester) async {
     await pumpAccountReady(
       tester,
       buildAccountScreen(
@@ -158,72 +97,23 @@ void main() {
         authController: _buildAuth(buildAccountApiClient()),
       ),
     );
-    expect(find.textContaining('Telegram не настроен'), findsWidgets);
     expect(find.byKey(const Key('telegram_connect_button')), findsNothing);
+    expect(find.textContaining('Подключить Telegram'), findsNothing);
+    expect(find.byType(TelegramMtprotoAccountSection), findsOneWidget);
   });
 
-  testWidgets('configured telegram starts deep link on resume refresh',
+  testWidgets('configured legacy telegram has no actionable Bot workflow',
       (tester) async {
-    final launcher = _RecordingUrlLauncher();
-    UrlLauncherPlatform.instance = launcher;
-    var connectionsCalls = 0;
-    final client = SecretaryApiClient(
-      httpClient: MockClient((request) async {
-        if (request.url.path.endsWith('/connections')) {
-          connectionsCalls += 1;
-          return http.Response(
-            jsonEncode(accountConnectionsJson(telegram: _telegramJson())),
-            200,
-          );
-        }
-        if (request.url.path.endsWith('/telegram/link')) {
-          expect(request.method, 'POST');
-          return http.Response(
-            jsonEncode({
-              'telegram_url': 'https://t.me/secretary_bot?start=abc_state',
-              'expires_at': '2026-09-13T12:00:00Z',
-            }),
-            200,
-          );
-        }
-        if (request.url.path.endsWith('/me/settings')) {
-          return http.Response(jsonEncode(accountSettingsJson()), 200);
-        }
-        if (request.url.path.endsWith('/me/source-preferences')) {
-          return http.Response(jsonEncode(accountSourcePreferencesJson()), 200);
-        }
-        if (request.url.path.endsWith('/me/identity')) {
-          return http.Response(jsonEncode(accountIdentityJson()), 200);
-        }
-        if (request.url.path.endsWith('/me/semantic-context')) {
-          return http.Response(jsonEncode(accountSemanticContextJson()), 200);
-        }
-        if (request.url.path.endsWith('/labels')) {
-          return http.Response(jsonEncode({'labels': []}), 200);
-        }
-        return http.Response('{}', 404);
-      }),
-    );
-    client.configure(baseUrl: 'https://secretary.example', token: 'tok');
-    final auth = _buildAuth(client);
     await pumpAccountReady(
       tester,
-      AccountScreen(apiClient: client, authController: auth),
+      buildAccountScreen(
+        apiClient: buildAccountApiClient(),
+        authController: _buildAuth(buildAccountApiClient()),
+      ),
     );
-    expect(find.byKey(const Key('telegram_connect_button')), findsOneWidget);
-    expect(find.textContaining('Секретарь получает только чаты'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('telegram_connect_button')));
-    await tester.pumpAndSettle();
-    expect(launcher.lastUrl, 'https://t.me/secretary_bot?start=abc_state');
-
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(connectionsCalls, greaterThan(1));
+    expect(find.byKey(const Key('telegram_connect_button')), findsNothing);
+    expect(find.textContaining('Секретарь получает только чаты'), findsNothing);
+    expect(find.byType(TelegramMtprotoAccountSection), findsOneWidget);
   });
 
   test('send_message approval label shows telegram compose identity', () {

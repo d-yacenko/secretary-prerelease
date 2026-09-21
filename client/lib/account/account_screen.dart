@@ -67,7 +67,6 @@ class _AccountScreenState extends State<AccountScreen>
   bool _loading = false;
   bool _sourcePreferencesLoading = false;
   bool _googleOAuthPending = false;
-  bool _telegramLinkPending = false;
   bool _teamsOAuthPending = false;
   bool _teamsDisconnectPending = false;
   bool _profileSaving = false;
@@ -727,37 +726,6 @@ class _AccountScreenState extends State<AccountScreen>
     );
   }
 
-  Future<void> _startTelegramLink() async {
-    if (_telegramLinkPending) {
-      return;
-    }
-    setState(() => _telegramLinkPending = true);
-    try {
-      final result = await widget.apiClient.linkTelegram();
-      final uri = Uri.tryParse(result.telegramUrl);
-      if (uri == null) {
-        throw ServerException('Не удалось открыть ссылку Telegram');
-      }
-      final launched = await url_launcher.launchUrl(
-        uri,
-        mode: url_launcher.LaunchMode.externalApplication,
-      );
-      if (!launched && mounted) {
-        setState(() => _error = 'Не удалось открыть Telegram');
-      }
-    } on AuthenticationException {
-      widget.authController.handleAuthenticationFailure();
-    } on ApiException catch (e) {
-      if (mounted) {
-        setState(() => _error = e.message);
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _telegramLinkPending = false);
-      }
-    }
-  }
-
   Future<void> _showConnectYandexDialog() async {
     await showDialog<void>(
       context: context,
@@ -1184,13 +1152,11 @@ class _AccountScreenState extends State<AccountScreen>
                     _ConnectionsList(
                       connections: _connections!,
                       googleOAuthPending: _googleOAuthPending,
-                      telegramLinkPending: _telegramLinkPending,
                       teamsOAuthPending: _teamsOAuthPending,
                       teamsDisconnectPending: _teamsDisconnectPending,
                       onConnectGoogle: _startGoogleOAuth,
                       onConnectYandex: _showConnectYandexDialog,
                       onConnectMattermost: _showConnectMattermostDialog,
-                      onConnectTelegram: _startTelegramLink,
                       onConnectTeams: _startTeamsOAuth,
                       onDisconnectTeams: _disconnectTeams,
                     ),
@@ -1312,26 +1278,22 @@ class _ConnectionsList extends StatelessWidget {
   const _ConnectionsList({
     required this.connections,
     required this.googleOAuthPending,
-    required this.telegramLinkPending,
     required this.teamsOAuthPending,
     required this.teamsDisconnectPending,
     required this.onConnectGoogle,
     required this.onConnectYandex,
     required this.onConnectMattermost,
-    required this.onConnectTelegram,
     required this.onConnectTeams,
     required this.onDisconnectTeams,
   });
 
   final Connections connections;
   final bool googleOAuthPending;
-  final bool telegramLinkPending;
   final bool teamsOAuthPending;
   final bool teamsDisconnectPending;
   final VoidCallback onConnectGoogle;
   final VoidCallback onConnectYandex;
   final VoidCallback onConnectMattermost;
-  final VoidCallback onConnectTelegram;
   final VoidCallback onConnectTeams;
   final VoidCallback onDisconnectTeams;
 
@@ -1405,34 +1367,6 @@ class _ConnectionsList extends StatelessWidget {
           child: const Text('Подключить Mattermost'),
         ),
         const Divider(height: 24),
-        Text('Telegram', style: sectionTitle),
-        const SizedBox(height: 4),
-        _ConnectionRow(
-          label: telegramConnectionLabel(connections.telegram),
-          connected:
-              connections.telegram.configured &&
-              connections.telegram.identityLinked &&
-              connections.telegram.businessConnected,
-          detail: telegramConnectionDetail(connections.telegram),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          telegramSetupHelpText(connections.telegram),
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        if (connections.telegram.configured)
-          OutlinedButton(
-            key: const Key('telegram_connect_button'),
-            onPressed: telegramLinkPending ? null : onConnectTelegram,
-            child: const Text('Подключить Telegram'),
-          )
-        else
-          Text(
-            'Telegram не настроен на сервере.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        const Divider(height: 24),
         Text('Microsoft Teams', style: sectionTitle),
         const SizedBox(height: 4),
         _ConnectionRow(
@@ -1491,42 +1425,6 @@ String mattermostConnectionLabel(MattermostConnection account) {
       : account.username;
   final host = account.serverUrl.replaceFirst(RegExp(r'^https?://'), '');
   return 'Mattermost: $name @ $host';
-}
-
-String telegramConnectionLabel(TelegramConnection telegram) {
-  if (!telegram.configured) {
-    return 'Telegram не настроен на сервере';
-  }
-  if (!telegram.identityLinked) {
-    return 'Telegram: аккаунт не связан';
-  }
-  if (!telegram.businessConnected) {
-    return 'Telegram: связан, Secretary Mode не подключён';
-  }
-  if (!telegram.canReply) {
-    return 'Telegram: подключён, без права ответа';
-  }
-  return 'Telegram: подключён, можно отвечать';
-}
-
-String? telegramConnectionDetail(TelegramConnection telegram) {
-  final displayName = telegram.displayName?.trim();
-  if (displayName != null && displayName.isNotEmpty) {
-    return displayName;
-  }
-  final username = telegram.telegramUsername?.trim();
-  if (username != null && username.isNotEmpty) {
-    return '@$username';
-  }
-  return telegram.botUsername;
-}
-
-String telegramSetupHelpText(TelegramConnection telegram) {
-  return 'Сначала нажмите «Подключить Telegram» и Start в боте. '
-      'Затем подключите этого бота к аккаунту в режиме Секретаря/Business Bot. '
-      'Разрешите только нужные личные чаты и право ответа, если нужно отправлять сообщения. '
-      'Секретарь получает только чаты, разрешённые ему в Telegram. '
-      'Обычный mute Telegram сам по себе не является фильтром.';
 }
 
 String teamsConnectionLabel(TeamsConnection teams) {

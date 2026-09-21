@@ -559,32 +559,8 @@ class CommunicationExternalActionService:
         obj: Object,
         mode: str,
     ) -> SendMessageCanonicalInput:
-        if len(payload.body) > MAX_TELEGRAM_MESSAGE_BODY_CHARS:
-            raise ToolError("body exceeds Telegram maximum length")
-        route = self._validated_telegram_route(obj)
-        self._require_recent_inbound(
-            account_id=route["account_id"],
-            business_connection_id=route["business_connection_id"],
-            chat_id=route["chat_id"],
-        )
-        reply_to_message_id = route["source_message_id"] if mode == "reply" else None
-        return SendMessageCanonicalInput(
-            provider="telegram",
-            mode=mode,
-            anchor_object_id=obj.id,
-            body=payload.body,
-            operation_id=generate_operation_id(),
-            route=TelegramSendRoute(
-                account_id=route["account_id"],
-                business_connection_id=route["business_connection_id"],
-                business_user_id=route["business_user_id"],
-                chat_id=route["chat_id"],
-                source_message_id=route["source_message_id"],
-                reply_to_message_id=reply_to_message_id,
-                chat_display_name=route["chat_display_name"],
-                chat_username=route["chat_username"],
-            ),
-        )
+        del payload, obj, mode
+        raise ToolError("Telegram Bot API transport is retired; use Telegram MTProto")
 
     def _validated_telegram_route(self, obj: Object) -> dict[str, Any]:
         meta = dict(obj.metadata_ or {})
@@ -682,23 +658,9 @@ class CommunicationExternalActionService:
     def _send_telegram(self, payload: SendMessageCanonicalInput) -> SendMessageOutput:
         if payload.provider != _PROVIDER_TELEGRAM:
             raise ToolError("unsupported send_message provider")
-        if isinstance(payload.route, TelegramMtprotoSendRoute):
-            return self._send_telegram_mtproto(payload)
-        attempt, claimed = self._claim_started(payload.operation_id)
-        if not claimed:
-            return self._resume_existing_attempt(payload, attempt)
-        try:
-            route = payload.telegram_route
-            account = self._require_telegram_account(route.account_id)
-            self._assert_frozen_telegram_account(account, route)
-            self._require_recent_inbound(
-                account_id=route.account_id,
-                business_connection_id=route.business_connection_id,
-                chat_id=route.chat_id,
-            )
-        except ToolError as exc:
-            return self._definite_failure(payload, exc.message)
-        return self._write_telegram_once(payload, account)
+        if not isinstance(payload.route, TelegramMtprotoSendRoute):
+            raise ToolError("Telegram Bot API transport is retired; use Telegram MTProto")
+        return self._send_telegram_mtproto(payload)
 
     def _send_telegram_mtproto(
         self, payload: SendMessageCanonicalInput
