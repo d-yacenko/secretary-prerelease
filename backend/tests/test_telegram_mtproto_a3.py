@@ -34,6 +34,7 @@ from app.core.config import settings
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection, User
 from app.services.telegram_mtproto_history_service import (
     TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN,
+    TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES,
     TelegramMtprotoHistoryService,
 )
 
@@ -232,6 +233,81 @@ async def test_initial_sync_is_bounded_chronological_and_sets_cursors(db_session
         )
     )
     assert [obj.metadata_["message_id"] for obj in objects] == [1, 2, 3]
+
+
+async def test_fresh_scope_bootstrap_is_one_newest_first_page(db_session):
+    user = _user(db_session)
+    account = _account(db_session, user.id)
+    selection = _selection(db_session, account)
+    entries = [_entry(message_id) for message_id in range(1, 21)]
+    transport = FakeHistoryTransport([_page(entries, has_more=True), _page([_entry(0)])])
+
+    result = await _service(db_session, transport).sync_scope_peer(user.id, selection.peer_id)
+
+    assert result.scanned == TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES
+    assert len(transport.calls) == 1
+    call = transport.calls[0]
+    assert call["limit"] == TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES
+    assert call["reverse"] is False
+    assert call["min_message_id"] is None
+    assert call["max_message_id"] is None
+    assert selection.history_latest_message_id == 20
+    assert selection.history_backfill_before_message_id is None
+    assert selection.history_complete is True
+
+
+async def test_fresh_scope_empty_page_is_complete_without_second_fetch(db_session):
+    user = _user(db_session)
+    account = _account(db_session, user.id)
+    selection = _selection(db_session, account)
+    transport = FakeHistoryTransport([_page([], has_more=True), _page([_entry(2)])])
+
+    result = await _service(db_session, transport).sync_scope_peer(user.id, selection.peer_id)
+
+    assert result.scanned == 0
+    assert len(transport.calls) == 1
+    assert selection.history_latest_message_id is None
+    assert selection.history_backfill_before_message_id is None
+    assert selection.history_complete is True
+
+
+async def test_fresh_scope_skipped_entries_do_not_trigger_backfill(db_session):
+    user = _user(db_session)
+    account = _account(db_session, user.id)
+    selection = _selection(db_session, account)
+    entries = [_entry(message_id, None if message_id < 20 else "kept") for message_id in range(1, 21)]
+    transport = FakeHistoryTransport([_page(entries, has_more=True), _page([_entry(30)])])
+
+    result = await _service(db_session, transport).sync_scope_peer(user.id, selection.peer_id)
+
+    assert result.materialized == 1
+    assert len(transport.calls) == 1
+    assert selection.history_latest_message_id == 20
+    assert selection.history_backfill_before_message_id is None
+    assert selection.history_complete is True
+
+
+async def test_existing_scope_is_incremental_and_preserves_legacy_backfill_state(db_session):
+    user = _user(db_session)
+    account = _account(db_session, user.id)
+    selection = _selection(db_session, account)
+    selection.history_latest_message_id = 10
+    selection.history_backfill_before_message_id = 5
+    selection.history_complete = False
+    selection.history_cutoff_at = datetime.now(UTC) - timedelta(days=14)
+    db_session.flush()
+    transport = FakeHistoryTransport([_page([_entry(11)], has_more=True), _page([_entry(4)])])
+
+    await _service(db_session, transport).sync_scope_peer(user.id, selection.peer_id)
+
+    assert len(transport.calls) == 1
+    call = transport.calls[0]
+    assert call["reverse"] is True
+    assert call["min_message_id"] == 10
+    assert call["max_message_id"] is None
+    assert selection.history_latest_message_id == 11
+    assert selection.history_backfill_before_message_id == 5
+    assert selection.history_complete is False
 
 
 async def test_incremental_reads_oldest_unseen_page_without_skipping(db_session):

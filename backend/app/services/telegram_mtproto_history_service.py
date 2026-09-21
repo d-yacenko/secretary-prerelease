@@ -47,6 +47,7 @@ from app.services.telegram_mtproto_notification_service import (
 
 TELEGRAM_MTPROTO_HISTORY_DAYS = 14
 TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN = 200
+TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES = 20
 TELEGRAM_MTPROTO_RECONCILE_MAX_LOOKUPS = 20
 TELEGRAM_MTPROTO_RECONCILE_MAX_PER_PEER = 5
 TELEGRAM_MTPROTO_RECONCILE_SCAN_LIMIT = 100
@@ -127,7 +128,7 @@ class TelegramMtprotoHistoryService:
             raise TelegramMtprotoPeerNotInActiveScopeError(
                 "Telegram peer is not in active Telegram sync scope"
             )
-        return await self._sync_selection(account, selection)
+        return await self._sync_selection(account, selection, scope_mode=True)
 
     async def reconcile_recent_messages(self, user_id: UUID, account_id: UUID, payload: dict) -> int:
         """Reconcile bounded known messages through the canonical A3 materializer."""
@@ -418,7 +419,8 @@ class TelegramMtprotoHistoryService:
         return provider_calls
 
     async def _sync_selection(
-        self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection
+        self, account: TelegramMtprotoAccount, selection: TelegramMtprotoChatSelection,
+        *, scope_mode: bool = False
     ) -> TelegramMtprotoHistorySummary:
         store = self._store()
         try:
@@ -429,7 +431,8 @@ class TelegramMtprotoHistoryService:
         except GoogleConfigurationError as exc:
             raise TelegramMtprotoConfigurationError("Telegram MTProto is not configured") from exc
 
-        cutoff = selection.history_cutoff_at or _utcnow() - timedelta(
+        original_cutoff = selection.history_cutoff_at
+        cutoff = original_cutoff or _utcnow() - timedelta(
             days=TELEGRAM_MTPROTO_HISTORY_DAYS
         )
         latest_message_id = selection.history_latest_message_id
@@ -445,7 +448,11 @@ class TelegramMtprotoHistoryService:
                 session,
                 provider_peer_reference,
                 reverse=False,
-                limit=TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE,
+                limit=(
+                    TELEGRAM_MTPROTO_SCOPE_BOOTSTRAP_MESSAGES
+                    if scope_mode
+                    else TELEGRAM_MTPROTO_HISTORY_PAGE_SIZE
+                ),
             )
             materialized_in_page = self._apply_page(
                 materializer,
@@ -461,7 +468,10 @@ class TelegramMtprotoHistoryService:
             remaining -= len(page.entries)
             if page.entries:
                 latest_message_id = max(entry.message_id for entry in page.entries)
-            backfill_before_message_id, history_complete = _next_backfill_state(page, cutoff)
+            if scope_mode:
+                backfill_before_message_id, history_complete = None, True
+            else:
+                backfill_before_message_id, history_complete = _next_backfill_state(page, cutoff)
         else:
             page = await self._fetch_page(
                 session,
@@ -486,7 +496,8 @@ class TelegramMtprotoHistoryService:
                 latest_message_id = max(latest_message_id, max(entry.message_id for entry in page.entries))
 
         if (
-            remaining > 0
+            not scope_mode
+            and remaining > 0
             and not history_complete
             and backfill_before_message_id is not None
         ):
@@ -506,7 +517,8 @@ class TelegramMtprotoHistoryService:
 
         selection.history_latest_message_id = latest_message_id
         selection.history_backfill_before_message_id = backfill_before_message_id
-        selection.history_cutoff_at = cutoff
+        if not (scope_mode and previous_latest_message_id is not None):
+            selection.history_cutoff_at = cutoff
         selection.history_complete = history_complete
         selection.history_last_synced_at = _utcnow()
         self._session.flush()

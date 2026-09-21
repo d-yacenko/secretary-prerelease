@@ -243,6 +243,22 @@ async def test_reconcile_scope_churn_is_applied_before_peer_selection(db_session
 
 
 @pytest.mark.asyncio
+async def test_recurring_uses_scope_path_for_fresh_scope_only(db_session):
+    user = User(id=uuid4(), display_name="A4.4 fresh scope user")
+    db_session.add(user)
+    db_session.flush()
+    account = _account(db_session, user.id)
+    _selection(db_session, account.id, 21, active=True, manual=False)
+    _selection(db_session, account.id, 22, active=False, manual=True)
+    events = []
+    service, history = _service(db_session, events)
+
+    await service.run(user.id, account.id, {})
+
+    assert history.calls == [21]
+
+
+@pytest.mark.asyncio
 async def test_fail_closed_reconcile_makes_zero_history_calls(db_session):
     user = User(id=uuid4(), display_name="A4.4 fail closed user")
     db_session.add(user)
