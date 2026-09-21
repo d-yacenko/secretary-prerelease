@@ -1,216 +1,136 @@
-# Current task — Telegram MTProto M4AT1: build/review read-only visibility-state probe
+# Current task — Telegram MTProto M4AT2: one human-shell visibility-state probe
 
 ## Status
 
-Production runtime/ref:
+M4AT1 probe build/review is complete at canonical main commit:
+
+`bee127cef18297e512dd94e5d2f4a5f8f1e164ea`
+
+Reviewed artifacts:
+- `ops/production/manual_mtproto_visibility_state_probe.sh`
+- `ops/production/manual_mtproto_visibility_state.py`
+- `ops/production/tests/test_manual_mtproto_visibility_state.py`
+
+Local evidence:
+- 9 focused tests PASS;
+- inactive/active scope transcripts PASS;
+- zero imported objects PASS;
+- premature EOF / unsafe output fail-closed PASS;
+- no provider-call path PASS;
+- no DB write/flush/commit path PASS;
+- `bash -n` PASS;
+- bundled helper compile PASS;
+- Ruff PASS;
+- diff-check PASS;
+- production SSH=0;
+- Telegram/provider calls=0;
+- production mutation=0.
+
+Production runtime/ref remains exact:
+
 `b7fbdc71584cfde042a998fbfefb06015175a205`
 
-Telegram MTProto bounded initial history import for the one manually selected group is complete.
+## Authorization
 
-Last human Sync aggregate:
-- scanned=100
-- materialized=49
-- created=49
-- updated=0
-- unchanged=0
-- skipped=51
-- history_complete=true
+Authorize exactly ONE manual live execution of the reviewed visibility-state probe from the proven human sandbox shell.
 
-No further initial backfill Sync is required.
+BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for this one run.
 
-Important product invariant:
-- MTProto objects are visible through normal read paths only when the matching `TelegramMtprotoChatSelection.scope_active=true`;
-- `manual_selected=true` alone does not grant normal Inbox/search/retrieval visibility.
+This authorization is HUMAN-SHELL ONLY.
 
-Apply Scope has not been used in this diagnostic line, so do not assume imported objects should already be visible in Inbox.
+The Executor subprocess must NOT execute production SSH.
 
-## Goal
+## Exact human command
 
-BUILD / REVIEW ONLY.
-
-Create a human-shell, read-only production probe that determines whether the imported selected-group objects are currently eligible for normal product visibility.
-
-Do NOT run it live in this task.
-
-## Executor workspace
-
-Work only from:
-
-`~/work/secretary-executor`
-
-Canonical origin:
-
-`https://github.com/d-yacenko/secretary-prerelease.git`
-
-Do not use:
-- `~/work/secretary`
-- `~/work/secretary-prerelease`
-
-for Executor implementation work.
-
-## Required bootstrap
-
-Before implementation:
+From the canonical human-shell checkout:
 
 ```bash
+cd ~/work/secretary-prerelease
 git fetch origin
-git switch main
-git pull --ff-only
-git remote get-url origin
+git checkout --detach origin/main
 git rev-parse HEAD
-git status --short
+bash ops/production/manual_mtproto_visibility_state_probe.sh
 ```
 
-Require exact canonical origin, current `origin/main`, and clean worktree.
+Important: the probe takes NO arguments.
 
-Read:
-- `CURRENT_TASK.md`
-- `PROJECT_STATE.md`
-- `AGENTS.md`
-- `docs/executor_bootstrap.md`
-- `docs/deploy.md`
-- `backend/app/domain/telegram_mtproto_visibility.py`
-- `backend/app/services/recent_source_service.py`
-- `backend/app/db/models.py`
-- existing manual human-shell probe wrappers for trust/protocol patterns.
+Before running:
+- `git rev-parse HEAD` must equal current `origin/main`;
+- the probe itself pins production release `b7fbdc71584cfde042a998fbfefb06015175a205`.
 
-## New artifact
+## One-shot semantics
 
-Create a new read-only human-shell probe under `ops/production/`, for example:
+Run exactly once.
 
-`manual_mtproto_visibility_state_probe.sh`
+A local pre-SSH failure does not consume the live read-only run.
 
-A small Python helper/parser plus focused local tests are allowed.
+If remote execution starts and any stage fails:
+- do not retry;
+- paste the sanitized output;
+- STOP.
 
-## Future live semantics
+## Allowed read-only work
 
-The future human-shell run must be strictly read-only and zero-provider.
+The probe may:
+- verify production target/pin/ref/worktree/services/DB/Alembic;
+- read exactly one MTProto account;
+- read exactly one `manual_selected=true` selection;
+- read manual/scope/history booleans;
+- count exact persisted MTProto objects for that account+peer;
+- count exact objects passing canonical active visibility predicate.
 
-### Production guards
+## Required safe fields
 
-Verify:
-- canonical target.json;
-- exact pinned ED25519 host key;
-- production HEAD exact `b7fbdc71584cfde042a998fbfefb06015175a205`;
-- remote `origin/production` exact same SHA;
-- production worktree clean;
-- Compose/db/api/worker running;
-- DB healthy;
-- Alembic `0046`.
-
-### Read-only state
-
-Inside the API container using `SessionLocal(autoflush=False)` and no commit/flush:
-
-1. Require exactly one MTProto account.
-2. Require exactly one `manual_selected=true` Telegram selection.
-3. Read only safe booleans:
-   - `MANUAL_SELECTED=true`
-   - `SCOPE_ACTIVE=true|false`
-   - `HISTORY_COMPLETE=true|false`
-   - `BACKFILL_CURSOR_PRESENT=true|false`
-4. Count persisted Telegram MTProto objects for that exact account+peer:
-   - provider=telegram
-   - kind=chat_message
-   - metadata transport=mtproto
-   - matching account_id + peer_id
-5. Count how many of those exact objects pass `telegram_mtproto_active_object_predicate()`.
-6. Optionally, if it can be done safely without content/IDs, report how many of those exact objects are present in the current recent-source read surface.
-
-## Safe output
-
-Allowed aggregate output only:
-
-- production guard booleans;
-- `ACCOUNT_EXACTLY_ONE=true|false`
-- `MANUAL_SELECTED_EXACTLY_ONE=true|false`
-- `MANUAL_SELECTED=true|false`
-- `SCOPE_ACTIVE=true|false`
-- `HISTORY_COMPLETE=true|false`
-- `BACKFILL_CURSOR_PRESENT=true|false`
-- `IMPORTED_OBJECT_COUNT=<bounded nonnegative integer>`
-- `ACTIVE_VISIBLE_OBJECT_COUNT=<bounded nonnegative integer>`
-- optional `RECENT_SOURCE_VISIBLE_COUNT=<bounded nonnegative integer>`
+Expected diagnostic fields include:
+- `ACCOUNT_EXACTLY_ONE`
+- `MANUAL_SELECTED_EXACTLY_ONE`
+- `MANUAL_SELECTED`
+- `SCOPE_ACTIVE`
+- `HISTORY_COMPLETE`
+- `BACKFILL_CURSOR_PRESENT`
+- `IMPORTED_OBJECT_COUNT`
+- `ACTIVE_VISIBLE_OBJECT_COUNT`
 - `TELEGRAM_NETWORK_CALLS=0`
-- allowlisted failure stage/class
+- failure stage/class if any;
 - explicit terminal marker.
-
-Never print:
-- Telegram/account/group/peer/message IDs;
-- message text/title/sender/timestamps;
-- session/reference/access hash;
-- DB credentials;
-- raw SQL rows;
-- traceback/raw stderr.
 
 ## Strictly forbidden
 
 Do NOT:
 - construct TelegramClient;
 - connect to Telegram;
-- call any provider API;
-- Sync;
+- make provider calls;
+- click Sync;
 - login/re-login;
 - Apply Scope;
-- change folder/group selections;
+- change selections/folders;
 - write/flush/commit DB;
 - materialize/upsert;
 - restart/recreate services;
-- edit production files/env/refs;
 - run migrations;
+- change production files/env/refs;
 - enable MTProto AI;
-- change Bot API.
+- change Bot API;
+- print IDs/content/session/reference/credentials/raw stderr/tracebacks.
 
-## Interpretation contract
+## Interpretation
 
-The later human run will be interpreted as:
+- `IMPORTED_OBJECT_COUNT > 0` + `SCOPE_ACTIVE=false`:
+  import is present and Inbox invisibility is expected because scope is inactive.
 
-- `IMPORTED_OBJECT_COUNT > 0` and `SCOPE_ACTIVE=false`:
-  import succeeded; missing Inbox visibility is expected due to active-scope gate. Do not call it an import defect.
-
-- `IMPORTED_OBJECT_COUNT > 0` and `SCOPE_ACTIVE=true` and `ACTIVE_VISIBLE_OBJECT_COUNT > 0`:
-  proceed to human UI verification in Inbox.
+- `IMPORTED_OBJECT_COUNT > 0` + `SCOPE_ACTIVE=true` + `ACTIVE_VISIBLE_OBJECT_COUNT > 0`:
+  proceed to human Inbox verification in a later task.
 
 - `IMPORTED_OBJECT_COUNT == 0`:
   STOP for read-only diagnosis; do not Sync again.
 
-- any structural/protocol uncertainty:
-  fail closed and STOP.
+## Required report
 
-## Local tests/review
-
-Run local-only checks. No production connection.
-
-At minimum:
-- `bash -n`;
-- valid inactive-scope transcript;
-- valid active-scope transcript;
-- zero imported objects;
-- premature EOF;
-- unsafe/unknown output fails closed;
-- static proof of no provider calls and no DB write/commit/flush path;
-- Ruff/diff-check as applicable.
-
-## Deliverable
-
-If review passes:
-- commit/push canonical main;
-- update `PROJECT_STATE.md`;
-- do NOT run live probe.
-
-Report:
-- commit SHA;
-- changed files;
-- test counts;
-- lint/diff-check;
-- production SSH=0;
-- Telegram/provider calls=0;
-- production mutation=0.
-
-Final marker:
-
-`TELEGRAM_MTPROTO_M4AT1_VISIBILITY_PROBE_READY`
+Paste the complete sanitized probe output back to the Architect.
 
 Then STOP.
+
+Final marker after reporting:
+`TELEGRAM_MTPROTO_M4AT2_VISIBILITY_PROBE_COMPLETE`
 
 `CURRENT_TASK.md` is the source of active authorization.
