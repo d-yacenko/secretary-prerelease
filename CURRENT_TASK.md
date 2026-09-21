@@ -1,73 +1,51 @@
-# Current task — Telegram MTProto M4AX1: human paginated Inbox verification
+# Current task — Telegram MTProto M4AX1 complete: await next product authorization
 
 ## Status
 
-M4AW3 read-only probe is complete and PASS.
+M4AX1 human paginated Inbox verification is PASS.
 
 Production runtime/ref:
 `2db36510fe884eadc40d63fed8661ed3627f1cbb`
 
-Observed:
-- `IMPORTED_OBJECT_COUNT=228`
-- `TRANSPORT_VISIBLE_COUNT=228`
-- `INBOUND_COUNT=219`
-- `OUTBOUND_COUNT=9`
-- `INBOX_ELIGIBLE_COUNT=219`
-- `FIRST_PAGE_TOTAL_COUNT=30`
-- `FIRST_PAGE_TELEGRAM_COUNT=0`
-- `FIRST_50_TELEGRAM_COUNT=0`
-- `TELEGRAM_NETWORK_CALLS=0`
+Verified end-to-end:
+- Telegram MTProto history import persisted successfully;
+- 228 imported objects exist for the selected group;
+- 219 inbound objects are canonical Inbox-eligible;
+- manual-selected objects are ordinarily visible without `Apply Scope`;
+- older Telegram items appear through normal Inbox cursor pagination;
+- client presentation is working.
 
-Conclusion:
-- import is good;
-- manual-only transport visibility is good;
-- 219 Telegram messages are canonical Inbox-eligible;
-- 9 outbound Telegram messages are intentionally suppressed from Inbox;
-- Telegram items are simply older/lower in the global Inbox ordering than the first 50 items.
+No additional Sync or Apply Scope was required.
 
-The persistent preview client implements cursor-based infinite loading and automatically calls `_loadMore()` near the bottom of the Inbox list.
+## Remaining product follow-up
 
-## Goal
+Previously recorded preference for future folder-derived onboarding:
+- do not deep-backfill months/history for every newly activated chat;
+- bootstrap only a shallow recent window, roughly 10–20 latest messages per chat;
+- after bootstrap, continue incremental new-message sync.
 
-HUMAN UI ONLY.
+This follow-up is NOT currently authorized for implementation.
 
-Confirm that Telegram items appear after loading older Inbox pages.
+Also unchanged:
+- recurring MTProto sync still follows `scope_active=true` only;
+- manual-only visibility does not itself enable recurring sync;
+- production `TELEGRAM_MTPROTO_AI_ENABLED=false` policy remains the intended quarantine;
+- no migration / no `0047`;
+- Bot API untouched.
 
-## Procedure
+## Authorization state
 
-1. Keep/open the normal Inbox in the persistent preview client.
-2. Scroll downward through `Последние входящие`.
-3. Continue approaching the bottom so the client can auto-load older pages.
-4. Wait briefly whenever a loading spinner appears.
-5. Continue until either:
-   - Telegram items from the selected group appear; or
-   - at least several additional pages have loaded and Telegram still does not appear.
-6. If a Telegram item appears, open at most one if needed to verify ordinary presentation.
-
-## Report
-
-Return only:
-- Telegram appeared: yes/no;
-- approximate number of additional feed items/pages loaded before first Telegram item;
-- whether one Telegram item opens normally, if opened;
-- screenshot optional.
-
-## Strictly forbidden
+No additional Telegram/provider or production action is currently authorized.
 
 Do NOT:
 - Sync;
 - Apply Scope;
+- change folders/selections;
 - login/re-login;
-- change Telegram selections/folders;
-- run provider probes;
-- use production SSH;
-- mutate production;
-- enable AI;
+- deploy or mutate production;
+- change AI flag;
 - change Bot API.
 
-If Telegram still does not appear after several older pages load, STOP. Do not Sync.
-
-Final marker on success:
-`TELEGRAM_MTPROTO_M4AX1_PAGINATED_INBOX_PASS`
+Await explicit human selection of the next product task.
 
 `CURRENT_TASK.md` is the source of active authorization.
