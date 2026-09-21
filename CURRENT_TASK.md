@@ -1,210 +1,99 @@
-# Current task — Telegram MTProto M4BB2R: make wide preview probe compatible with current production
+# Current task — Telegram MTProto M4BB3: one human-shell 2000+1 scope preview
 
 ## Status
 
-M4BB1 code is accepted but NOT deployed:
-`c69d2353c19c4958e1fb60aac69466fcf6ac1482`
+M4BB2R probe is accepted at:
+`d923db98f77fb1e389455b13b5c3bc84f83173ba`
 
-Current production remains:
+Production runtime/ref remains:
 `cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
 
-M4BB2 probe commit:
-`a41d3e11902f55858c4960b9f6b5ddc1383e0579`
-
-is NOT authorized for live execution.
-
-## Blockers
-
-### 1. Probe depends on code not present in pinned production
-
-The remote child currently imports:
-
-`TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT`
-
-and calls:
-
-`TelethonMtprotoTransport.fetch_dialog_universe(...)`
-
-But pinned production `cbd5e7d...` predates M4BB1:
-- it does not contain the new 2000 scope constant;
-- its `fetch_dialog_universe` still clamps to `DISCOVERY_DIALOG_LIMIT=500`;
-- it still reports boundary truncation with the old semantics.
-
-So the current probe cannot test the intended 2000+1 preview against current production.
-
-### 2. Runtime failure reporting is not truthful
-
-The remote child catches all exceptions in one broad handler and always reports:
-- `FAILURE_STAGE=STAGE_1_DB_SESSION`;
-- `TELEGRAM_NETWORK_CALLS=0`.
-
-That is false for failures after Telegram connection/auth/folder discovery/dialog iteration starts.
-
-The live one-shot protocol must truthfully distinguish pre-provider vs provider-started failures.
-
-## Goal
-
-BUILD / REVIEW ONLY.
-
-Correct the probe so it can execute the M4BB1 2000+1 preview semantics against the OLD current production runtime without deploying M4BB1.
-
-Do NOT run live.
-
-## Required implementation shape
-
-Keep the existing production pin:
-`cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
-
-Expected Alembic:
+Alembic:
 `0046`
 
-Inside the API-container child:
+Exactly one configured Telegram folder is already saved from the UI. The old runtime remains fail-closed on the 500-dialog preview boundary.
 
-### Reuse only helpers that already exist on current production
+## Authorization
 
-Allowed imports from pinned production:
-- `TelethonMtprotoTransport` for folder discovery if desired;
-- `TelegramClient` / `StringSession` from the transport module or Telethon;
-- canonical `_dialog_from_dialog`;
-- canonical `dialog_matches_filter`;
-- account store/encryption/session helpers.
+Authorize exactly ONE live run from the proven HUMAN sandbox shell:
 
-Do NOT import M4BB1-only constants.
+`ops/production/manual_mtproto_scope_preview_2000_probe.sh`
 
-Do NOT call production `fetch_dialog_universe` for the wide scan.
+BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for this one run.
 
-### Explicit wide scan
+Executor subprocess SSH is NOT authorized.
 
-Define the probe-local constant:
+This run is allowed to perform only the read-only provider operations embedded in the accepted probe:
+- folder definition read;
+- authorization checks;
+- bounded dialog iteration up to 2001.
 
-`SCOPE_DIALOG_SCAN_LIMIT = 2000`
+No scope reconciliation and no history/message fetch.
 
-Then:
-1. discover the one configured folder definition using current production-compatible code;
-2. create/read-only Telegram client with the stored session;
-3. connect;
-4. verify `is_user_authorized()`;
-5. iterate `client.iter_dialogs(limit=2001)`;
-6. retain/process only first 2000;
-7. if an actual 2001st dialog is yielded, set `TRUNCATED=true` and stop;
-8. convert retained rows using canonical `_dialog_from_dialog`;
-9. aggregate skipped reasons only across retained 2000;
-10. exclude muted;
-11. apply canonical `dialog_matches_filter`;
-12. dedupe scope by peer.
+## Exact human command
 
-Always disconnect in `finally`.
+```bash
+cd ~/work/secretary-prerelease
+git fetch origin
+git checkout --detach origin/main
+git rev-parse HEAD
+bash ops/production/manual_mtproto_scope_preview_2000_probe.sh
+```
 
-No history/message fetch.
+The script takes no arguments.
 
-## Truthful stage/accounting protocol
+## One-shot rule
 
-Track provider progress explicitly.
+Run exactly once.
 
-Recommended high-level Telegram network-call accounting:
-- folder discovery: connect + authorization check + folder request = 3;
-- wide dialog scan: connect + authorization check + dialog iteration = 3;
-- successful run => `TELEGRAM_NETWORK_CALLS=6`.
-
-For failure:
-- before any provider operation: 0;
-- after folder discovery starts: report the actual completed/attempted high-level count according to a deterministic counter;
-- after wide scan starts: likewise non-zero.
-
-At minimum distinguish stages:
-- `STAGE_1_DB_SESSION`
-- `STAGE_1_ACCOUNT_CARDINALITY`
-- `STAGE_1_FOLDER_CARDINALITY`
-- `STAGE_2_FOLDER_DISCOVERY`
-- `STAGE_2_AUTHORIZED`
-- `STAGE_2_FOLDER_DEFINITIONS`
-- `STAGE_3_DIALOG_CONNECT`
-- `STAGE_3_DIALOG_AUTHORIZED`
-- `STAGE_3_DIALOG_ITERATION`
-- `STAGE_3_DIALOG_CONVERSION`
-
-Do not collapse provider failures into DB stage.
-
-No raw exception text/traceback.
-
-## Required tests
-
-Tests must exercise the CHILD LOGIC, not only the transcript parser.
-
-At minimum:
-
-1. Current-production compatibility: child source contains no import/reference to `TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT`.
-2. Current-production compatibility: child source does not call `fetch_dialog_universe`.
-3. Explicit local bound is exactly 2000.
-4. 499 dialogs -> not truncated.
-5. exactly 500 -> not truncated.
-6. exactly 2000 -> not truncated.
-7. 2001 -> truncated.
-8. iterator requested limit exactly 2001.
-9. no more than 2001 yielded/consumed.
-10. retained descriptors <=2000.
-11. skipped counts only retained window.
-12. muted excluded.
-13. scope dedupe by peer.
-14. account cardinality fail -> stage/cardinality and network calls 0.
-15. folder cardinality fail -> stage/cardinality and network calls 0.
-16. folder discovery provider failure -> correct provider stage and nonzero truthful call count.
-17. auth-invalid during wide scan -> correct auth stage and nonzero truthful call count.
-18. dialog iteration provider failure -> correct iteration stage and nonzero truthful call count.
-19. dialog conversion failure -> correct conversion stage and nonzero truthful call count.
-20. client disconnect attempted in success/failure.
-21. no history/message fetch.
-22. no reconcile.
-23. no DB flush/commit/write.
-24. premature EOF fail closed.
-25. unsafe output fail closed.
-26. Alembic host/credential + stdin isolation.
-27. bash -n.
-28. helper compile.
-29. Ruff.
-30. git diff --check.
-
-Use fake clients/transports; no live Telegram.
+If remote/provider execution starts and any stage fails:
+- do not retry;
+- paste the complete sanitized output;
+- STOP.
 
 ## Strictly forbidden
 
 Do NOT:
-- run live probe;
+- click Apply Scope;
+- click Sync;
+- change folder configuration;
+- login/re-login;
+- call reconcile_scope manually;
+- fetch history/messages;
 - deploy M4BB1;
 - move production ref;
-- production SSH;
-- live Telegram/provider calls;
-- Apply Scope;
-- Sync;
-- change folders;
-- login/re-login;
-- DB writes;
-- restart/recreate;
-- migration / `0047`;
-- AI enable;
-- Bot API change.
+- mutate production;
+- restart/recreate containers;
+- migrate;
+- enable MTProto AI;
+- change Bot API.
 
-## Deliverable
+## Required output
 
-If corrected:
-- commit/push canonical main;
-- update `PROJECT_STATE.md`;
-- do NOT run live probe.
+Paste the complete sanitized output.
 
-Report:
-- corrective commit SHA;
-- files changed;
-- proof of current-production compatibility;
-- child-logic test results;
-- protocol tests;
-- lint/diff-check;
-- production SSH=0;
-- Telegram/provider calls=0;
-- production mutation=0.
+Important fields:
+- `ACCOUNT_EXACTLY_ONE`
+- `CONFIGURED_FOLDER_EXACTLY_ONE`
+- `IGNORE_MUTED`
+- `DIALOGS_SCANNED_RETAINED`
+- `SCOPE_MATCH_COUNT`
+- `SKIPPED_BROADCAST`
+- `SKIPPED_BOT`
+- `SKIPPED_UNSUPPORTED`
+- `SKIPPED_OTHER`
+- `TRUNCATED`
+- `TELEGRAM_NETWORK_CALLS`
+- terminal marker.
 
-Final marker:
+## Interpretation
 
-`TELEGRAM_MTPROTO_M4BB2R_SCOPE_PREVIEW_PROBE_READY`
+- `TRUNCATED=false` and a reasonable scope count -> complete safe preview; next phase may deploy M4BB1.
+- `TRUNCATED=true` -> even the 2000-dialog bound is incomplete; do not deploy/activate yet.
+- provider/auth failure -> stop; do not relogin or retry without new authorization.
+
+Final marker after report:
+`TELEGRAM_MTPROTO_M4BB3_SCOPE_PREVIEW_COMPLETE`
 
 Then STOP.
 
