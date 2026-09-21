@@ -6,6 +6,10 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from app.db.models import Object
+from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
+
 OPS = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("acceptance", OPS / "manual_mtproto_postdeploy_acceptance.py")
 probe = importlib.util.module_from_spec(spec)
@@ -70,6 +74,15 @@ class AcceptanceProbeTests(unittest.TestCase):
         self.assertIn("JOB_STATUS_RUNNING", source)
         self.assertIn("JOB_TYPE_EMBED_OBJECT", source)
         self.assertIn("object_ids", source)
+
+    def test_peer_count_query_reuses_one_postgresql_json_path_bind(self):
+        peer_expr = Object.metadata_["peer_id"].as_string()
+        statement = select(peer_expr, func.count()).group_by(peer_expr)
+        compiled = statement.compile(dialect=postgresql.dialect())
+        peer_params = [name for name in compiled.params if "metadata" in name]
+        self.assertEqual(len(peer_params), 1)
+        self.assertIn("peer_expr, func.count()", probe.child_source())
+        self.assertIn("group_by(peer_expr)", probe.child_source())
 
     def test_alembic_contract_and_stdin_isolation(self):
         command = probe.alembic_command(["docker", "compose"])

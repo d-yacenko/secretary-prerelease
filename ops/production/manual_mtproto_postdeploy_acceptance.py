@@ -177,9 +177,10 @@ try:
             Object.metadata_["transport"].as_string() == "mtproto",
             Object.metadata_["account_id"].as_string() == str(account.id),
         )
+        peer_expr = Object.metadata_["peer_id"].as_string()
         peer_counts = dict(db.execute(select(
-            Object.metadata_["peer_id"].as_string(), func.count()
-        ).where(*exact).group_by(Object.metadata_["peer_id"].as_string())).all())
+            peer_expr, func.count()
+        ).where(*exact).group_by(peer_expr)).all())
         active_ids = {str(row.peer_id) for row in active}
         active_counts = [count for peer, count in peer_counts.items() if peer in active_ids]
         emit("ACTIVE_PEERS_WITH_OBJECTS_GT_20", sum(count > 20 and peer in {str(row.peer_id) for row in active if not row.manual_selected} for peer, count in peer_counts.items()))
