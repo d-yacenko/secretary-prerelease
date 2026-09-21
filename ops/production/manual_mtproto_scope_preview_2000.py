@@ -35,8 +35,11 @@ FAILURE_STAGES = {stage for _, stage in GUARDS} | {
     "STAGE_1_DB_SESSION",
     "STAGE_1_ACCOUNT_CARDINALITY",
     "STAGE_1_FOLDER_CARDINALITY",
+    "STAGE_2_FOLDER_DISCOVERY",
     "STAGE_2_AUTHORIZED",
     "STAGE_2_FOLDER_DEFINITIONS",
+    "STAGE_3_DIALOG_CONNECT",
+    "STAGE_3_DIALOG_AUTHORIZED",
     "STAGE_3_DIALOG_ITERATION",
     "STAGE_3_DIALOG_CONVERSION",
     "STAGE_3_OUTPUT",
@@ -155,24 +158,74 @@ def alembic_command(compose: list[str]) -> list[str]:
 
 def child_source() -> str:
     return r'''import asyncio
+from contextlib import suppress
 from sqlalchemy import select
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.tl.functions.messages import GetDialogFiltersRequest
 from app.connectors.google.encryption import CredentialEncryption
+from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.connectors.telegram.mtproto_transport import (
-    TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT,
-    TelethonMtprotoTransport,
+    DISCOVERY_DIALOG_LIMIT,
+    _custom_filter_definitions,
+    _dialog_from_dialog,
     dialog_matches_filter,
 )
-from app.connectors.telegram.mtproto_account_store import TelegramMtprotoAccountStore
 from app.core.config import settings
 from app.db.models import TelegramMtprotoAccount
 from app.db.session import SessionLocal
 
+SCOPE_DIALOG_SCAN_LIMIT = 2000
+NETWORK_CALLS = 0
+
+class DialogConversionError(Exception):
+    pass
+
 def emit(key, value):
     print(f"{key}={str(value).lower() if isinstance(value, bool) else value}", flush=True)
 
+def failure(stage, exc):
+    allowed = {"RuntimeError", "ValueError", "TypeError", "ImportError", "ModuleNotFoundError", "OperationalError", "ProgrammingError", "AttributeError", "OSError"}
+    emit("FAILURE_STAGE", stage)
+    emit("RAW_EXCEPTION_CLASS", type(exc).__name__ if type(exc).__name__ in allowed else "OTHER")
+    emit("TELEGRAM_NETWORK_CALLS", NETWORK_CALLS)
+    emit("M4BB2_TERMINAL", "failure")
+
+def auth_failure(exc):
+    return type(exc).__name__ in {
+        "AuthKeyError", "AuthKeyNotFound", "AuthKeyUnregisteredError", "SessionRevokedError",
+        "UnauthorizedError", "UserDeactivatedBanError", "UserDeactivatedError",
+    }
+
+async def disconnect(client):
+    if client is not None:
+        with suppress(Exception):
+            await client.disconnect()
+
+async def scan_dialogs(client, filter_definition):
+    retained = []
+    skipped = {}
+    seen = 0
+    truncated = False
+    async for raw_dialog in client.iter_dialogs(limit=SCOPE_DIALOG_SCAN_LIMIT + 1):
+        if seen >= SCOPE_DIALOG_SCAN_LIMIT:
+            truncated = True
+            break
+        seen += 1
+        try:
+            descriptor, reason = _dialog_from_dialog(raw_dialog)
+        except Exception as exc:
+            raise DialogConversionError() from exc
+        if descriptor is None:
+            key = reason or "other"
+            skipped[key] = skipped.get(key, 0) + 1
+        else:
+            retained.append(descriptor)
+    matched = {dialog.peer_id for dialog in retained if not dialog.is_muted and dialog_matches_filter(filter_definition, dialog)}
+    return retained, matched, skipped, truncated
+
 async def run():
-    accounts = []
-    folders = []
+    global NETWORK_CALLS
     try:
         with SessionLocal(autoflush=False) as db:
             accounts = list(db.scalars(select(TelegramMtprotoAccount)))
@@ -180,7 +233,8 @@ async def run():
             emit("ACCOUNT_EXACTLY_ONE", account_ok)
             if not account_ok:
                 emit("CONFIGURED_FOLDER_EXACTLY_ONE", False)
-                raise RuntimeError("account cardinality")
+                failure("STAGE_1_ACCOUNT_CARDINALITY", RuntimeError())
+                return
             account = accounts[0]
             encryption = CredentialEncryption(settings.secretary_credential_key)
             store = TelegramMtprotoAccountStore(db, encryption)
@@ -188,39 +242,67 @@ async def run():
             folder_ok = len(folders) == 1
             emit("CONFIGURED_FOLDER_EXACTLY_ONE", folder_ok)
             if not folder_ok:
-                raise RuntimeError("folder cardinality")
+                failure("STAGE_1_FOLDER_CARDINALITY", RuntimeError())
+                return
             session = store.decrypt_session(account)
-            folder = folders[0]
+            folder_id = folders[0].folder_id
         emit("IGNORE_MUTED", True)
-        transport = TelethonMtprotoTransport(settings.telegram_api_id, settings.telegram_api_hash.strip())
-        discovered = await transport.discover_folders(session, 500)
-        matching = [item for item in discovered.folders if item.folder_id == folder.folder_id]
-        if len(matching) != 1:
-            raise RuntimeError("folder definitions")
-        universe = await transport.fetch_dialog_universe(
-            session, TELEGRAM_MTPROTO_SCOPE_DIALOG_SCAN_LIMIT
-        )
-        matched = {
-            dialog.peer_id
-            for dialog in universe.dialogs
-            if not dialog.is_muted and dialog_matches_filter(matching[0].definition, dialog)
-        }
-        skipped = universe.skipped_counts
-        emit("DIALOGS_SCANNED_RETAINED", len(universe.dialogs))
-        emit("SCOPE_MATCH_COUNT", len(matched))
-        emit("SKIPPED_BROADCAST", skipped.get("broadcast", 0))
-        emit("SKIPPED_BOT", skipped.get("bot", 0))
-        emit("SKIPPED_UNSUPPORTED", skipped.get("unsupported", 0))
-        emit("SKIPPED_OTHER", sum(value for key, value in skipped.items() if key not in {"broadcast", "bot", "unsupported"}))
-        emit("TRUNCATED", universe.truncated)
-        emit("TELEGRAM_NETWORK_CALLS", 6)
-        emit("M4BB2_TERMINAL", "success")
-    except Exception as exc:  # noqa: BLE001 - sanitize all remote failures
-        emit("FAILURE_STAGE", "STAGE_1_DB_SESSION")
-        allowed = {"RuntimeError", "ValueError", "TypeError", "ImportError", "ModuleNotFoundError", "OperationalError", "ProgrammingError", "AttributeError", "OSError"}
-        emit("RAW_EXCEPTION_CLASS", type(exc).__name__ if type(exc).__name__ in allowed else "OTHER")
-        emit("TELEGRAM_NETWORK_CALLS", 0)
-        emit("M4BB2_TERMINAL", "failure")
+
+        # Existing production-compatible folder-definition request.
+        folder_client = None
+        try:
+            NETWORK_CALLS += 1
+            folder_client = TelegramClient(StringSession(session), settings.telegram_api_id, settings.telegram_api_hash.strip())
+            await folder_client.connect()
+            NETWORK_CALLS += 1
+            if not await folder_client.is_user_authorized():
+                failure("STAGE_2_AUTHORIZED", RuntimeError())
+                return
+            NETWORK_CALLS += 1
+            response = await folder_client(GetDialogFiltersRequest())
+            definitions = _custom_filter_definitions(response)
+            matching = [item for item in definitions if getattr(item, "id", None) == folder_id]
+            if len(matching) != 1:
+                failure("STAGE_2_FOLDER_DEFINITIONS", RuntimeError())
+                return
+        except Exception as exc:
+            failure("STAGE_2_AUTHORIZED" if auth_failure(exc) else "STAGE_2_FOLDER_DISCOVERY", exc)
+            return
+        finally:
+            await disconnect(folder_client)
+
+        # Explicit wide scan keeps this child compatible with the pinned release.
+        dialog_client = None
+        try:
+            NETWORK_CALLS += 1
+            dialog_client = TelegramClient(StringSession(session), settings.telegram_api_id, settings.telegram_api_hash.strip())
+            await dialog_client.connect()
+            NETWORK_CALLS += 1
+            if not await dialog_client.is_user_authorized():
+                failure("STAGE_3_DIALOG_AUTHORIZED", RuntimeError())
+                return
+            NETWORK_CALLS += 1
+            try:
+                retained, matched, skipped, truncated = await scan_dialogs(dialog_client, matching[0])
+            except Exception as exc:
+                failure("STAGE_3_DIALOG_CONVERSION" if isinstance(exc, DialogConversionError) else "STAGE_3_DIALOG_ITERATION", exc)
+                return
+            emit("DIALOGS_SCANNED_RETAINED", len(retained))
+            emit("SCOPE_MATCH_COUNT", len(matched))
+            emit("SKIPPED_BROADCAST", skipped.get("broadcast", 0))
+            emit("SKIPPED_BOT", skipped.get("bot", 0))
+            emit("SKIPPED_UNSUPPORTED", skipped.get("unsupported", 0))
+            emit("SKIPPED_OTHER", sum(value for key, value in skipped.items() if key not in {"broadcast", "bot", "unsupported"}))
+            emit("TRUNCATED", truncated)
+            emit("TELEGRAM_NETWORK_CALLS", NETWORK_CALLS)
+            emit("M4BB2_TERMINAL", "success")
+        except Exception as exc:
+            failure("STAGE_3_DIALOG_AUTHORIZED" if auth_failure(exc) else "STAGE_3_DIALOG_CONNECT", exc)
+        finally:
+            await disconnect(dialog_client)
+
+    except Exception as exc:  # noqa: BLE001 - sanitize all child failures
+        failure("STAGE_1_DB_SESSION", exc)
 
 asyncio.run(run())
 '''
