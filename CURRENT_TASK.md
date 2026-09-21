@@ -1,136 +1,143 @@
-# Current task — Telegram MTProto M4AT2: one human-shell visibility-state probe
+# Current task — Telegram MTProto M4AT1R: fix/review visibility probe Alembic guard
 
 ## Status
 
-M4AT1 probe build/review is complete at canonical main commit:
+M4AT2 one-shot human live visibility probe was consumed and stopped before any application-state query.
 
-`bee127cef18297e512dd94e5d2f4a5f8f1e164ea`
+Observed:
+- production repo/ref/worktree guards PASS;
+- Compose/db/api/worker/DB health PASS;
+- `ALEMBIC_0046_PASS=false`;
+- `FAILURE_STAGE=STAGE_0_ALEMBIC`;
+- `RAW_EXCEPTION_CLASS=RuntimeError`;
+- `TELEGRAM_NETWORK_CALLS=0`.
 
-Reviewed artifacts:
+This is a probe defect, not evidence of a production schema regression.
+
+Root cause in:
+`ops/production/manual_mtproto_visibility_state.py`
+
+The current Alembic check runs:
+
+`psql -At -c 'SELECT version_num FROM alembic_version'`
+
+inside the DB container without the production DB credential/host contract.
+
+The already accepted structural human-shell probe uses the correct read-only production pattern:
+
+`PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" -At -c "SELECT version_num FROM alembic_version"`
+
+with stdin isolated from the streamed helper.
+
+Production runtime/ref remains:
+`b7fbdc71584cfde042a998fbfefb06015175a205`
+
+Expected Alembic remains:
+`0046`
+
+## Goal
+
+BUILD / REVIEW ONLY.
+
+Correct the visibility-state probe's Alembic guard to use the same accepted production DB credential/host semantics as `manual_mtproto_structural_probe.sh`.
+
+Do NOT run the live probe in this task.
+
+## Executor workspace
+
+Work only from:
+
+`~/work/secretary-executor`
+
+Canonical origin:
+`https://github.com/d-yacenko/secretary-prerelease.git`
+
+Do not use:
+- `~/work/secretary`
+- `~/work/secretary-prerelease`
+
+for Executor implementation work.
+
+## Required bootstrap
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only
+git remote get-url origin
+git rev-parse HEAD
+git status --short
+```
+
+Require exact canonical origin, current `origin/main`, clean worktree.
+
+Read:
+- `CURRENT_TASK.md`
+- `PROJECT_STATE.md`
+- `AGENTS.md`
+- `docs/executor_bootstrap.md`
+- `docs/deploy.md`
 - `ops/production/manual_mtproto_visibility_state_probe.sh`
 - `ops/production/manual_mtproto_visibility_state.py`
 - `ops/production/tests/test_manual_mtproto_visibility_state.py`
+- accepted Alembic check in `ops/production/manual_mtproto_structural_probe.sh`.
 
-Local evidence:
-- 9 focused tests PASS;
-- inactive/active scope transcripts PASS;
-- zero imported objects PASS;
-- premature EOF / unsafe output fail-closed PASS;
-- no provider-call path PASS;
-- no DB write/flush/commit path PASS;
-- `bash -n` PASS;
-- bundled helper compile PASS;
-- Ruff PASS;
-- diff-check PASS;
+## Required fix
+
+Use the accepted production DB Alembic query semantics:
+- inside the existing DB container;
+- `PGPASSWORD="$POSTGRES_PASSWORD"`;
+- host `127.0.0.1`;
+- user `${POSTGRES_USER:-secretary}`;
+- database `${POSTGRES_DB:-secretary}`;
+- `SELECT version_num FROM alembic_version`;
+- require exact stdout `0046`;
+- stdin isolated so the command cannot consume streamed helper input;
+- do not print credentials, command stderr, or connection strings.
+
+Do not alter the actual visibility-state query semantics.
+
+## Required regressions
+
+Add/update local-only tests proving:
+
+1. Alembic success transcript with exact `0046`.
+2. Alembic wrong revision fails closed at `STAGE_0_ALEMBIC`.
+3. Alembic command uses the production credential/host contract without exposing values.
+4. Alembic exec stdin is isolated / cannot consume helper input.
+5. Existing inactive-scope, active-scope, zero-object, EOF, unsafe-output, no-provider, and no-DB-write tests remain PASS.
+
+Run:
+- focused probe tests;
+- `bash -n`;
+- bundled helper compile;
+- Ruff;
+- diff-check.
+
+No production SSH.
+No Telegram/provider calls.
+No production mutation.
+
+## Deliverable
+
+If PASS:
+- commit/push canonical main;
+- update `PROJECT_STATE.md`;
+- do NOT run live probe.
+
+Report:
+- commit SHA;
+- changed files;
+- test counts/results;
+- lint/diff-check;
 - production SSH=0;
 - Telegram/provider calls=0;
 - production mutation=0.
 
-Production runtime/ref remains exact:
+Final marker:
 
-`b7fbdc71584cfde042a998fbfefb06015175a205`
-
-## Authorization
-
-Authorize exactly ONE manual live execution of the reviewed visibility-state probe from the proven human sandbox shell.
-
-BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for this one run.
-
-This authorization is HUMAN-SHELL ONLY.
-
-The Executor subprocess must NOT execute production SSH.
-
-## Exact human command
-
-From the canonical human-shell checkout:
-
-```bash
-cd ~/work/secretary-prerelease
-git fetch origin
-git checkout --detach origin/main
-git rev-parse HEAD
-bash ops/production/manual_mtproto_visibility_state_probe.sh
-```
-
-Important: the probe takes NO arguments.
-
-Before running:
-- `git rev-parse HEAD` must equal current `origin/main`;
-- the probe itself pins production release `b7fbdc71584cfde042a998fbfefb06015175a205`.
-
-## One-shot semantics
-
-Run exactly once.
-
-A local pre-SSH failure does not consume the live read-only run.
-
-If remote execution starts and any stage fails:
-- do not retry;
-- paste the sanitized output;
-- STOP.
-
-## Allowed read-only work
-
-The probe may:
-- verify production target/pin/ref/worktree/services/DB/Alembic;
-- read exactly one MTProto account;
-- read exactly one `manual_selected=true` selection;
-- read manual/scope/history booleans;
-- count exact persisted MTProto objects for that account+peer;
-- count exact objects passing canonical active visibility predicate.
-
-## Required safe fields
-
-Expected diagnostic fields include:
-- `ACCOUNT_EXACTLY_ONE`
-- `MANUAL_SELECTED_EXACTLY_ONE`
-- `MANUAL_SELECTED`
-- `SCOPE_ACTIVE`
-- `HISTORY_COMPLETE`
-- `BACKFILL_CURSOR_PRESENT`
-- `IMPORTED_OBJECT_COUNT`
-- `ACTIVE_VISIBLE_OBJECT_COUNT`
-- `TELEGRAM_NETWORK_CALLS=0`
-- failure stage/class if any;
-- explicit terminal marker.
-
-## Strictly forbidden
-
-Do NOT:
-- construct TelegramClient;
-- connect to Telegram;
-- make provider calls;
-- click Sync;
-- login/re-login;
-- Apply Scope;
-- change selections/folders;
-- write/flush/commit DB;
-- materialize/upsert;
-- restart/recreate services;
-- run migrations;
-- change production files/env/refs;
-- enable MTProto AI;
-- change Bot API;
-- print IDs/content/session/reference/credentials/raw stderr/tracebacks.
-
-## Interpretation
-
-- `IMPORTED_OBJECT_COUNT > 0` + `SCOPE_ACTIVE=false`:
-  import is present and Inbox invisibility is expected because scope is inactive.
-
-- `IMPORTED_OBJECT_COUNT > 0` + `SCOPE_ACTIVE=true` + `ACTIVE_VISIBLE_OBJECT_COUNT > 0`:
-  proceed to human Inbox verification in a later task.
-
-- `IMPORTED_OBJECT_COUNT == 0`:
-  STOP for read-only diagnosis; do not Sync again.
-
-## Required report
-
-Paste the complete sanitized probe output back to the Architect.
+`TELEGRAM_MTPROTO_M4AT1R_VISIBILITY_PROBE_FIX_READY`
 
 Then STOP.
-
-Final marker after reporting:
-`TELEGRAM_MTPROTO_M4AT2_VISIBILITY_PROBE_COMPLETE`
 
 `CURRENT_TASK.md` is the source of active authorization.
