@@ -1,93 +1,73 @@
-# Current task — Telegram MTProto M4BE2: repeat one-shot read-only post-deploy acceptance
+# Current task — Telegram MTProto M4BF1: human Inbox acceptance for folder-derived scope
 
 ## Status
 
-M4BE1R corrective probe fix is architect-reviewed and ACCEPTED.
+M4BE2 post-deploy backend/runtime acceptance is PASS.
 
-Approved corrective commit:
-`1e29b64687e517e60aa8971be53ce1adb553285f`
-
-Current production runtime/ref:
+Production runtime/ref:
 `c69d2353c19c4958e1fb60aac69466fcf6ac1482`
 
-Expected Alembic:
+Alembic:
 `0046`
 
-Previous M4BE1 run already confirmed:
-- account count 1;
-- configured folder count 1;
-- active scope 28;
-- manual-active 0;
-- folder-only active 28;
-- latest cursor present 28;
-- history complete 28;
-- backfill cursor present 0;
-- history cutoff present 0;
-- Telegram network calls 0;
-- DB writes 0.
+Confirmed production state:
+- exactly one MTProto account;
+- exactly one configured folder;
+- active scope = 28 peers;
+- all 28 are folder-only active peers;
+- all 28 have a latest history cursor;
+- all 28 have `history_complete=true`;
+- backfill cursor present = 0;
+- persisted history cutoff present = 0;
+- folder-only active peers with >20 objects = 0;
+- max active-peer object count = 20;
+- MTProto embeddings/current provenance/pending-running embedding jobs = 0;
+- Telegram network calls from the acceptance probe = 0;
+- DB writes from the acceptance probe = 0.
 
-The prior run failed only in the read-only peer-object aggregate due a probe SQL grouping defect, now corrected in M4BE1R.
+## Goal
+
+Human-confirm that folder-derived Telegram messages are visible through the normal Inbox UI.
+
+This is the final UI acceptance step for the folder-derived shallow-bootstrap phase.
+
+## Human action
+
+Using the normal Secretary client:
+
+1. Open the normal Inbox.
+2. Do not enter Telegram account settings.
+3. Do not press Sync.
+4. Do not press Apply Scope.
+5. Do not change folders or Telegram selection.
+6. Scroll/load older Inbox pages if necessary, because Inbox is ordered together with all other sources.
+7. Confirm whether Telegram items from the folder-derived scope are visible.
+
+No specific Telegram chat/title/message content needs to be reported. A simple visible / not visible result is enough.
+
+## Stop conditions
+
+If Telegram items are visible:
+- report PASS and STOP.
+
+If no Telegram items are visible after reasonable Inbox pagination:
+- report NOT VISIBLE and STOP;
+- do not Sync, Apply Scope, re-login, alter folder config, or run any probe.
 
 ## Authorization
 
-Authorize exactly ONE repeated human-shell execution of:
+AUTHORIZED:
+- normal read-only Inbox browsing/pagination in the client.
 
-`ops/production/manual_mtproto_postdeploy_acceptance_probe.sh`
-
-Purpose: collect the object-count and AI-quarantine aggregates that were not reached in M4BE1.
-
-This remains a read-only production acceptance probe.
-
-Do NOT:
-- click or call Apply Scope;
-- click or call Sync;
-- change folder configuration;
+NOT AUTHORIZED:
+- Sync;
+- Apply Scope;
+- Telegram account/folder changes;
 - login/re-login;
-- run any Telegram/provider probe;
-- run direct ad-hoc SSH outside the committed wrapper;
-- mutate production DB or files;
-- deploy/rollback/move refs;
-- enable MTProto AI;
-- alter Bot API.
-
-## Interpretation
-
-Expected scope remains 28 peers.
-
-For acceptance:
-- `ACTIVE_SCOPE_COUNT=28`;
-- `MANUAL_ACTIVE_COUNT=0`;
-- `FOLDER_ONLY_ACTIVE_COUNT=28`;
-- `BACKFILL_CURSOR_PRESENT_COUNT=0`;
-- `HISTORY_CUTOFF_PRESENT_COUNT=0`;
-- `MTPROTO_OBJECTS_WITH_EMBEDDING=0`;
-- `MTPROTO_OBJECTS_WITH_CURRENT_EMBEDDING_PROVENANCE=0`;
-- `MTPROTO_PENDING_RUNNING_EMBED_JOBS=0`.
-
-`ACTIVE_PEERS_WITH_OBJECTS_GT_20` is diagnostic only. A nonzero value requires interpretation because normal incremental sync after bootstrap may legitimately push a folder-only peer above 20; it is not by itself proof of deep backfill.
-
-## Required run
-
-From a clean canonical checkout containing the accepted correction:
-
-```bash
-bash ops/production/manual_mtproto_postdeploy_acceptance_probe.sh
-```
-
-Run exactly once.
-
-## Failure handling
-
-If wrapper/probe returns blocked or failure:
-- do not retry;
-- do not bypass;
-- do not use direct SSH;
-- return the complete sanitized output and STOP.
-
-## Required report
-
-Return the complete sanitized output including the terminal marker.
-
-No further action after the probe.
+- production SSH/probes;
+- production mutation;
+- deploy/rollback/ref changes;
+- enabling MTProto AI;
+- Bot API changes.
 
 `CURRENT_TASK.md` is the source of active authorization.
