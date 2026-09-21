@@ -6,8 +6,8 @@ from app.connectors.telegram.constants import TELEGRAM_KIND, TELEGRAM_PROVIDER
 from app.core.config import settings
 from app.db.models import Object
 from app.domain.telegram_mtproto_visibility import (
-    telegram_mtproto_active_object_predicate,
-    telegram_mtproto_active_sql_fragment,
+    telegram_mtproto_scope_object_predicate,
+    telegram_mtproto_scope_sql_fragment,
 )
 
 
@@ -33,13 +33,13 @@ def telegram_mtproto_ai_predicate(model=Object):
     )
     if not settings.telegram_mtproto_ai_enabled:
         return not_(canonical)
-    return telegram_mtproto_active_object_predicate(model)
+    return telegram_mtproto_scope_object_predicate(model)
 
 
 def telegram_mtproto_ai_sql_fragment(alias: str = "o") -> str:
     """Return the raw-SQL equivalent used by retrieval candidate queries."""
     if settings.telegram_mtproto_ai_enabled:
-        return telegram_mtproto_active_sql_fragment(alias)
+        return telegram_mtproto_scope_sql_fragment(alias)
     return f"""
     AND (
         {alias}.provider IS DISTINCT FROM 'telegram'
@@ -55,10 +55,13 @@ def telegram_mtproto_ai_eligible(session, obj: Object) -> bool:
         return True
     if not settings.telegram_mtproto_ai_enabled:
         return False
-    return session.scalar(
-        select(Object.id).where(
-            Object.id == obj.id,
-            Object.user_id == obj.user_id,
-            telegram_mtproto_ai_predicate(),
+    return (
+        session.scalar(
+            select(Object.id).where(
+                Object.id == obj.id,
+                Object.user_id == obj.user_id,
+                telegram_mtproto_ai_predicate(),
+            )
         )
-    ) is not None
+        is not None
+    )

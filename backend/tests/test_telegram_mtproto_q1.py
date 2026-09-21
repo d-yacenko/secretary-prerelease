@@ -196,6 +196,38 @@ def test_ordinary_visibility_is_independent_from_ai_quarantine(db_session, monke
     )
 
 
+def test_manual_only_visibility_does_not_expand_ai_eligibility(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=uuid4().int % 2_000_000_000,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=123,
+            peer_kind="group",
+            provider_peer_reference_encrypted="encrypted",
+            title="manual only",
+            manual_selected=True,
+            scope_active=False,
+        )
+    )
+    obj = _mtproto_object(db_session, user.id, account_id=account.id, peer_id=123)
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+
+    assert obj in ObjectQueryService(db_session, user.id).query(
+        kinds=[TELEGRAM_KIND], providers=[TELEGRAM_PROVIDER]
+    )
+    assert obj not in ObjectQueryService(db_session, user.id, ai_only=True).query(
+        kinds=[TELEGRAM_KIND], providers=[TELEGRAM_PROVIDER]
+    )
+    assert not telegram_mtproto_ai_eligible(db_session, obj)
+
+
 def test_catchup_scans_past_pending_rows_and_advances_cursor(db_session, monkeypatch) -> None:
     user = _user(db_session)
     account = TelegramMtprotoAccount(

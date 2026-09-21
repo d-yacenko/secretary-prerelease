@@ -99,7 +99,7 @@ def test_active_predicate_hides_inactive_and_reactivates_same_object(db_session)
     db_session.flush()
     assert db_session.scalar(
         select(Object).where(Object.id == obj.id, telegram_mtproto_active_object_predicate())
-    ) is None
+    ) is obj
     selection.scope_active = True
     db_session.flush()
     assert db_session.scalar(
@@ -116,6 +116,7 @@ def test_active_predicate_hides_inactive_and_reactivates_same_object(db_session)
         ).hits
     }
     selection.scope_active = False
+    selection.manual_selected = False
     db_session.flush()
     assert obj.id not in {
         hit.object_id
@@ -221,6 +222,19 @@ def test_neighbors_and_context_expansion_exclude_inactive_but_exact_target_remai
         graph.get_neighbors(inactive.id)
 
 
+def test_manual_only_object_is_visible_to_ordinary_graph_reads(db_session):
+    user, _, selection, manual_only = _scope_fixture(db_session, active=False)
+    graph = GraphService(db_session, user.id)
+    anchor = graph.create_object(ObjectCreate(kind="note", title="anchor", origin="user"))
+    graph.create_edge(EdgeCreate(
+        source_id=anchor.id, target_id=manual_only.id, type="related_to",
+        origin="system", state="observed"
+    ))
+    selection.manual_selected = True
+    db_session.flush()
+    assert [item.id for item in graph.get_neighbors(anchor.id)] == [manual_only.id]
+
+
 @pytest.mark.parametrize(
     ("peer_kind", "peer_id"),
     [("private", 42), ("group", -42), ("supergroup", -1000000000042)],
@@ -236,10 +250,29 @@ def test_all_supported_peer_kinds_toggle_active_visibility(db_session, peer_kind
     selection.scope_active = False
     selection.manual_selected = True
     db_session.flush()
+    assert obj in query.query(kinds=["chat_message"], providers=["telegram"])
+    selection.manual_selected = False
+    db_session.flush()
     assert obj not in query.query(kinds=["chat_message"], providers=["telegram"])
     selection.scope_active = True
     db_session.flush()
     assert obj in query.query(kinds=["chat_message"], providers=["telegram"])
+
+
+@pytest.mark.parametrize(
+    ("manual_selected", "scope_active", "visible"),
+    [(True, False, True), (False, True, True), (True, True, True), (False, False, False)],
+)
+def test_manual_or_scope_truth_table_reaches_ordinary_query_and_recent(
+    db_session, manual_selected, scope_active, visible
+):
+    user, _, selection, obj = _scope_fixture(db_session, active=scope_active)
+    selection.manual_selected = manual_selected
+    db_session.flush()
+    query = ObjectQueryService(db_session, user.id)
+    recent = RecentSourceService(db_session, user.id)
+    assert (obj in query.query(kinds=["chat_message"], providers=["telegram"])) is visible
+    assert (obj in recent.list_recent(limit=50)) is visible
 
 
 def test_scope_metadata_and_ownership_matrix_fails_closed(db_session):
