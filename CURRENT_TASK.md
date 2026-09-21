@@ -1,100 +1,73 @@
-# Current task — Telegram MTProto M4AW3: one human-shell Inbox eligibility probe
+# Current task — Telegram MTProto M4AX1: human paginated Inbox verification
 
 ## Status
 
-M4AW2 build/review is accepted at:
-`1d25e033376b9a9215b02a9ef9b02946c9e82ae9`
+M4AW3 read-only probe is complete and PASS.
 
-Production runtime/ref remains:
+Production runtime/ref:
 `2db36510fe884eadc40d63fed8661ed3627f1cbb`
 
-The normal Inbox UI showed no Telegram items after the manual-only visibility deploy.
+Observed:
+- `IMPORTED_OBJECT_COUNT=228`
+- `TRANSPORT_VISIBLE_COUNT=228`
+- `INBOUND_COUNT=219`
+- `OUTBOUND_COUNT=9`
+- `INBOX_ELIGIBLE_COUNT=219`
+- `FIRST_PAGE_TOTAL_COUNT=30`
+- `FIRST_PAGE_TELEGRAM_COUNT=0`
+- `FIRST_50_TELEGRAM_COUNT=0`
+- `TELEGRAM_NETWORK_CALLS=0`
 
-The accepted read-only probe reports:
-- imported MTProto objects;
-- transport-visible objects;
-- inbound/outbound split;
-- canonical RecentSourceService Inbox-eligible count;
-- first-page and first-50 Telegram counts.
+Conclusion:
+- import is good;
+- manual-only transport visibility is good;
+- 219 Telegram messages are canonical Inbox-eligible;
+- 9 outbound Telegram messages are intentionally suppressed from Inbox;
+- Telegram items are simply older/lower in the global Inbox ordering than the first 50 items.
 
-## Authorization
+The persistent preview client implements cursor-based infinite loading and automatically calls `_loadMore()` near the bottom of the Inbox list.
 
-Authorize exactly ONE live run from the proven HUMAN sandbox shell:
+## Goal
 
-`ops/production/manual_mtproto_inbox_eligibility_probe.sh`
+HUMAN UI ONLY.
 
-BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for this one run.
+Confirm that Telegram items appear after loading older Inbox pages.
 
-Executor subprocess SSH is NOT authorized.
+## Procedure
 
-## Exact human command
+1. Keep/open the normal Inbox in the persistent preview client.
+2. Scroll downward through `Последние входящие`.
+3. Continue approaching the bottom so the client can auto-load older pages.
+4. Wait briefly whenever a loading spinner appears.
+5. Continue until either:
+   - Telegram items from the selected group appear; or
+   - at least several additional pages have loaded and Telegram still does not appear.
+6. If a Telegram item appears, open at most one if needed to verify ordinary presentation.
 
-```bash
-cd ~/work/secretary-prerelease
-git fetch origin
-git checkout --detach origin/main
-git rev-parse HEAD
-bash ops/production/manual_mtproto_inbox_eligibility_probe.sh
-```
+## Report
 
-The script takes NO arguments.
-
-The local checkout may be current `origin/main`; the probe itself requires production runtime/ref exact:
-`2db36510fe884eadc40d63fed8661ed3627f1cbb`
-
-## One-shot rule
-
-Run exactly once.
-
-If remote execution starts and any stage fails:
-- do not retry;
-- paste the complete sanitized output;
-- STOP.
+Return only:
+- Telegram appeared: yes/no;
+- approximate number of additional feed items/pages loaded before first Telegram item;
+- whether one Telegram item opens normally, if opened;
+- screenshot optional.
 
 ## Strictly forbidden
 
 Do NOT:
-- construct TelegramClient;
-- connect to Telegram/provider;
-- click Sync;
+- Sync;
 - Apply Scope;
-- change selections/folders;
 - login/re-login;
-- write/flush/commit DB;
-- enqueue summaries/jobs;
-- materialize/upsert;
-- restart/recreate services;
-- run migrations;
-- edit production;
-- enable MTProto AI;
+- change Telegram selections/folders;
+- run provider probes;
+- use production SSH;
+- mutate production;
+- enable AI;
 - change Bot API.
 
-## Required output
+If Telegram still does not appear after several older pages load, STOP. Do not Sync.
 
-Paste the complete sanitized probe output.
-
-Important fields:
-- `IMPORTED_OBJECT_COUNT`
-- `TRANSPORT_VISIBLE_COUNT`
-- `INBOUND_COUNT`
-- `OUTBOUND_COUNT`
-- `INBOX_ELIGIBLE_COUNT`
-- `FIRST_PAGE_TOTAL_COUNT`
-- `FIRST_PAGE_TELEGRAM_COUNT`
-- `FIRST_50_TELEGRAM_COUNT`
-- `TELEGRAM_NETWORK_CALLS=0`
-- terminal marker.
-
-## Interpretation
-
-- imported > 0, transport-visible = 0 => deployed transport visibility is not effective; STOP.
-- transport-visible > 0, Inbox-eligible = 0 => Inbox filtering is removing the objects; diagnose from aggregate breakdown, no Sync.
-- Inbox-eligible > 0, first-page Telegram = 0, first-50 > 0 => ordering/pagination, not transport visibility.
-- first-page Telegram > 0 but UI still shows none => backend feed contains them; next task is client presentation/merge diagnosis.
-
-Final marker after report:
-`TELEGRAM_MTPROTO_M4AW3_INBOX_PROBE_COMPLETE`
-
-Then STOP.
+Final marker on success:
+`TELEGRAM_MTPROTO_M4AX1_PAGINATED_INBOX_PASS`
 
 `CURRENT_TASK.md` is the source of active authorization.
