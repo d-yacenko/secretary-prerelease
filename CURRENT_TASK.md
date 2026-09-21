@@ -1,100 +1,76 @@
-# Current task — Telegram MTProto M4BB3: one human-shell 2000+1 scope preview
+# Current task — Telegram MTProto M4BB3 complete: await M4BB1 deploy authorization
 
 ## Status
 
-M4BB2R probe is accepted at:
-`d923db98f77fb1e389455b13b5c3bc84f83173ba`
+M4BB3 read-only wide preview is complete and PASS.
 
-Production runtime/ref remains:
+Current production runtime/ref:
 `cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
 
 Alembic:
 `0046`
 
-Exactly one configured Telegram folder is already saved from the UI. The old runtime remains fail-closed on the 500-dialog preview boundary.
+M4BB1 accepted deploy candidate:
+`c69d2353c19c4958e1fb60aac69466fcf6ac1482`
 
-## Authorization
+## Complete preview evidence
 
-Authorize exactly ONE live run from the proven HUMAN sandbox shell:
+One configured folder, muted exclusion enabled:
 
-`ops/production/manual_mtproto_scope_preview_2000_probe.sh`
+- `DIALOGS_SCANNED_RETAINED=649`
+- `SCOPE_MATCH_COUNT=28`
+- `SKIPPED_BROADCAST=15`
+- `SKIPPED_BOT=21`
+- `SKIPPED_UNSUPPORTED=67`
+- `SKIPPED_OTHER=0`
+- `TRUNCATED=false`
+- `TELEGRAM_NETWORK_CALLS=6`
 
-BREAK-GLASS READ-ONLY human-shell SSH is explicitly authorized for this one run.
+Interpretation:
+- the current account dialog universe is complete below the new 2000 bound;
+- the selected folder's complete derived scope is 28 peers;
+- the earlier 500-dialog truncation was a boundary artifact;
+- the complete 649-dialog scan still yields exactly the same 28 scope peers seen in the old partial preview.
 
-Executor subprocess SSH is NOT authorized.
+No Apply Scope, no Sync, no reconciliation, no history/message fetch, and no DB mutation occurred in M4BB3.
 
-This run is allowed to perform only the read-only provider operations embedded in the accepted probe:
-- folder definition read;
-- authorization checks;
-- bounded dialog iteration up to 2001.
+## Important recurring behavior
 
-No scope reconciliation and no history/message fetch.
+Existing recurring MTProto sync calls `reconcile_scope()` before each recurring history pass.
 
-## Exact human command
+Therefore after M4BB1 is deployed, the already-saved one-folder configuration may become active automatically on the next recurring run; pressing "Применить область" is not required for eventual activation under the current recurring design.
 
-```bash
-cd ~/work/secretary-prerelease
-git fetch origin
-git checkout --detach origin/main
-git rev-parse HEAD
-bash ops/production/manual_mtproto_scope_preview_2000_probe.sh
-```
+Because the full preview has already proven the exact complete scope breadth (28 peers), this activation is now bounded/known rather than surprising.
 
-The script takes no arguments.
+## Authorization state
 
-## One-shot rule
-
-Run exactly once.
-
-If remote/provider execution starts and any stage fails:
-- do not retry;
-- paste the complete sanitized output;
-- STOP.
-
-## Strictly forbidden
+NO deploy is currently authorized.
 
 Do NOT:
+- move `production` ref;
+- deploy M4BB1;
 - click Apply Scope;
 - click Sync;
 - change folder configuration;
 - login/re-login;
-- call reconcile_scope manually;
-- fetch history/messages;
-- deploy M4BB1;
-- move production ref;
+- use production SSH;
 - mutate production;
-- restart/recreate containers;
-- migrate;
 - enable MTProto AI;
 - change Bot API.
 
-## Required output
+Await explicit human deployment authorization.
 
-Paste the complete sanitized output.
+If authorized, deploy schema-neutral candidate:
+- release `c69d2353c19c4958e1fb60aac69466fcf6ac1482`
+- rollback `cbd5e7dbe5b8030a1ad100f97bcd2d12f9dccfaa`
+- expected Alembic `0046`
+- canonical `ops/production/deploy.py` only.
 
-Important fields:
-- `ACCOUNT_EXACTLY_ONE`
-- `CONFIGURED_FOLDER_EXACTLY_ONE`
-- `IGNORE_MUTED`
-- `DIALOGS_SCANNED_RETAINED`
-- `SCOPE_MATCH_COUNT`
-- `SKIPPED_BROADCAST`
-- `SKIPPED_BOT`
-- `SKIPPED_UNSUPPORTED`
-- `SKIPPED_OTHER`
-- `TRUNCATED`
-- `TELEGRAM_NETWORK_CALLS`
-- terminal marker.
-
-## Interpretation
-
-- `TRUNCATED=false` and a reasonable scope count -> complete safe preview; next phase may deploy M4BB1.
-- `TRUNCATED=true` -> even the 2000-dialog bound is incomplete; do not deploy/activate yet.
-- provider/auth failure -> stop; do not relogin or retry without new authorization.
-
-Final marker after report:
-`TELEGRAM_MTPROTO_M4BB3_SCOPE_PREVIEW_COMPLETE`
-
-Then STOP.
+After successful deploy, acceptance should verify:
+1. scope becomes active for the expected 28 peers (whether via recurring reconciliation or one explicit Apply Scope, depending on observed timing);
+2. fresh peers receive shallow bootstrap only (one newest-first page, max 20 provider entries each);
+3. no deep historical backfill is introduced;
+4. Inbox begins showing folder-derived Telegram items;
+5. no AI/embedding activity from MTProto while the production flag remains disabled.
 
 `CURRENT_TASK.md` is the source of active authorization.
