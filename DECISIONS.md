@@ -43,3 +43,17 @@
 - Inbox unresolved/attention presentation must exclude historical MTProto `transport_event/message_created` notifications so existing rows do not continue to clutter `Требует внимания`.
 - MTProto `message_edited` and `message_deleted` transport notifications remain unchanged unless separately revised.
 - This decision supersedes the earlier C2B/C3B requirement that `message_created` produce an unresolved transport notification; deterministic source-object materialization remains unchanged.
+
+
+## Telegram MTProto AI activation completion criteria
+
+- Production remains `TELEGRAM_MTPROTO_AI_ENABLED=false` until the applicable Telegram permission/consent question is resolved.
+- The future activation direction is `false -> true`.
+- Development must be completed and locally proven while the production flag remains false, so no product-code deploy should be required merely to enable the already-built Telegram AI path later.
+- Enabling the flag only removes the Telegram-specific AI quarantine. Existing user/global feature switches (for example auto-label and temporal-signal enablement) still apply normally; the Telegram flag does not override them.
+- Canonical MTProto objects must use their native `peer_id/peer_title/sender_peer_id/topic_id/reply_to_message_id` metadata directly in conversation projection. Do not require destructive metadata rewrites or legacy Bot-key aliases merely to participate in conversation stacks.
+- Presentation grouping is non-AI and may operate while the AI flag is false; semantic stack summarization remains AI-gated.
+- Telegram MTProto `chat_message` objects must be able to initiate the same bounded task/object correlation path required by the product without unintentionally enabling correlation for unrelated chat providers as a side effect.
+- The existing recurring-sync embedding catch-up is the canonical false->true backlog mechanism: bounded, idempotent, Postgres-queue based, and limited to active-scope canonical MTProto objects.
+- Assistant semantic retrieval/context must continue to exclude MTProto while the flag is false and include eligible active-scope MTProto objects when true. Voice uses the same Assistant path and therefore inherits the same gate.
+- A production flag change requires the running API/worker environments to be reloaded/recreated; editing a file without applying the environment to running services is not sufficient.
