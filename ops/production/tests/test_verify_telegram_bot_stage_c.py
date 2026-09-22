@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
+import types
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -280,11 +284,13 @@ def test_alembic_requires_exact_head(monkeypatch) -> None:
 
 
 def test_child_output_is_strict(monkeypatch) -> None:
-    monkeypatch.setattr(verifier, "_run", lambda _: "MTPROTO_ACCOUNT_COUNT=1\nACTIVE_SCOPE_COUNT=28\nLEGACY_BOT_OBJECT_COUNT=2\nLEGACY_BOT_INBOX_READABLE=true")
+    ok = "CHILD_STATUS=ok\nMTPROTO_ACCOUNT_COUNT=1\nACTIVE_SCOPE_COUNT=28\nLEGACY_BOT_OBJECT_COUNT=2\nLEGACY_BOT_INBOX_READABLE=true"
+    monkeypatch.setattr(verifier, "_run", lambda _: ok)
     assert verifier._child(["docker", "compose"])["ACTIVE_SCOPE_COUNT"] == "28"
-    monkeypatch.setattr(verifier, "_run", lambda _: "MTPROTO_ACCOUNT_COUNT=1\nSECRET=x")
-    with pytest.raises(ValueError):
+    monkeypatch.setattr(verifier, "_run", lambda _: "MTPROTO_ACCOUNT_COUNT=1\nSECRET=leak-id")
+    with pytest.raises(verifier.VerifyError) as caught:
         verifier._child(["docker", "compose"])
+    assert caught.value.stage == "STAGE_2_CHILD_PROTOCOL"
 
 
 def test_cli_authoritative_requires_explicit_canonical_url(monkeypatch, capsys) -> None:
@@ -343,6 +349,8 @@ case "${2:-}" in
   target)
     printf '%s\\n' 'git@host' '22' 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' '/opt/secretary' "$CANONICAL_ORIGIN" ;;
   release) printf '%s\\n' "$RELEASE" ;;
+  bundle) printf '%s\\n' '# bundle' ;;
+  validate) "$REAL_PYTHON" "$1" validate "$3" ;;
   authoritative)
     [ "${4:-}" = "$CANONICAL_ORIGIN" ] || exit 2
     if [ "${3:-}" = main ]; then printf '%s\\n' "$MAIN_SHA"
@@ -351,14 +359,26 @@ case "${2:-}" in
   *) exit 2 ;;
 esac
 """)
-    for name in ("ssh", "ssh-keyscan", "ssh-keygen"):
-        _install(bindir / name, f"""#!/bin/bash
-printf '{name} %s\\n' "$*" >> "$WRAPPER_LOG"
+    _install(bindir / "ssh-keyscan", """#!/bin/bash
+printf 'ssh-keyscan %s\n' "$*" >> "$WRAPPER_LOG"
+if [ "${KEYSCAN_OK:-0}" = 1 ]; then printf '%s\n' 'host ssh-ed25519 AAAA'; exit 0; fi
 exit 1
+""")
+    _install(bindir / "ssh-keygen", """#!/bin/bash
+printf 'ssh-keygen %s\n' "$*" >> "$WRAPPER_LOG"
+if [ "${KEYSCAN_OK:-0}" = 1 ]; then printf '%s\n' '256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA dummy'; exit 0; fi
+exit 1
+""")
+    _install(bindir / "ssh", """#!/bin/bash
+printf 'ssh %s\n' "$*" >> "$WRAPPER_LOG"
+printf '%s\n' 'STDERR_SECRET_SHOULD_NOT_APPEAR' >&2
+if [ -n "${SSH_STDOUT_FILE:-}" ]; then cat "$SSH_STDOUT_FILE"; fi
+exit "${SSH_RC:-1}"
 """)
     env = os.environ.copy()
     env.update({
         "PATH": f"{bindir}:{env.get('PATH', '')}",
+        "REAL_PYTHON": shutil.which("python3") or "python3",
         "WRAPPER_LOG": str(log),
         "CANONICAL_ORIGIN": verifier.CANONICAL_ORIGIN,
         "RELEASE": verifier.RELEASE,
@@ -429,6 +449,7 @@ RUNTIME_ENV = {
     "TELEGRAM_MTPROTO_AI_ENABLED": "false",
 }
 CHILD_SUCCESS = (
+    "CHILD_STATUS=ok\n"
     "MTPROTO_ACCOUNT_COUNT=1\n"
     "ACTIVE_SCOPE_COUNT=28\n"
     "LEGACY_BOT_OBJECT_COUNT=3\n"
@@ -442,7 +463,7 @@ def _dotenv(*, empty_bot: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None = None, service_envs: dict | None = None, container_env: dict, health_error: bool = False, child: str = CHILD_SUCCESS):
+def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None = None, service_envs: dict | None = None, container_env: dict, health_error: bool = False, child: str = CHILD_SUCCESS, child_crash: bool = False):
     if service_envs is None:
         service_envs = {"api": service_env, "worker": service_env}
     config = {"services": {name: {"environment": values} for name, values in service_envs.items()}}
@@ -469,6 +490,8 @@ def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None 
         if command[-2:] == ["alembic", "current"]:
             return "0046 (head)"
         if len(command) >= 2 and command[-2] == "-c":
+            if child_crash:
+                raise RuntimeError("container died secret traceback")
             return child
         raise AssertionError(command)
 
@@ -542,9 +565,11 @@ def test_remote_child_failure_after_environment_markers_is_valid(monkeypatch, ca
     )
     assert code == 2
     assert verifier.parse_output(stdout) == "failure"
-    assert "FAILURE_STAGE=STAGE_2_READ_ONLY_STATE" in stdout
+    assert "FAILURE_STAGE=STAGE_2_ACCOUNT" in stdout
     assert "TELEGRAM_MTPROTO_AI_DISABLED_PASS=true" in stdout
     assert "LEGACY_BOT_ROUTES_ABSENT_PASS" not in stdout
+    assert "MTPROTO_ACCOUNT_COUNT" not in stdout
+    assert "=2" not in stdout
 
 
 @pytest.mark.parametrize("service", ["api", "worker"])
@@ -588,3 +613,239 @@ def test_bot_env_helpers_distinguish_legacy_file_from_runtime_absence() -> None:
     )
     with pytest.raises(ValueError, match="present"):
         verifier._bot_keys_absent(listed)
+
+
+def _install_child_modules(**options: object) -> list[str]:
+    names = [
+        "sqlalchemy", "app", "app.core", "app.core.config", "app.db", "app.db.models",
+        "app.db.session", "app.main", "app.services", "app.services.recent_source_service",
+    ]
+
+    class Col:
+        def __eq__(self, _other): return self
+        def __ne__(self, _other): return self
+        def is_(self, _other): return self
+        def as_string(self): return self
+        def __getitem__(self, _key): return self
+        def asc(self): return self
+
+    class Query:
+        def select_from(self, *_args, **_kwargs): return self
+        def where(self, *_args, **_kwargs): return self
+        def order_by(self, *_args, **_kwargs): return self
+        def limit(self, *_args, **_kwargs): return self
+
+    class Func:
+        def count(self): return "count"
+
+    def pkg(name: str) -> types.ModuleType:
+        module = types.ModuleType(name)
+        module.__path__ = []  # type: ignore[attr-defined]
+        module.__package__ = name.rpartition(".")[0]
+        sys.modules[name] = module
+        if "." in name:
+            parent, _, child = name.rpartition(".")
+            setattr(sys.modules[parent], child, module)
+        return module
+
+    sa = pkg("sqlalchemy")
+    sa.func = Func()
+    sa.or_ = lambda *_args: "or"  # type: ignore[attr-defined]
+    sa.select = lambda *_args, **_kwargs: Query()  # type: ignore[attr-defined]
+    pkg("app")
+    pkg("app.core")
+    config = pkg("app.core.config")
+
+    class Settings:
+        model_fields = {"telegram_bot_token": object()} if options.get("bot_field") else {"telegram_api_id": object()}
+
+    config.Settings = Settings
+    pkg("app.db")
+    models = pkg("app.db.models")
+    for model_name in ("Object", "TelegramMtprotoAccount", "TelegramMtprotoChatSelection"):
+        model = type(model_name, (), {})
+        for attr in ("provider", "kind", "metadata_", "created_at", "id", "scope_active"):
+            setattr(model, attr, Col())
+        setattr(models, model_name, model)
+    session_mod = pkg("app.db.session")
+    values = list(options.get("scalar_values", [1, 28, 3]))
+
+    class Session:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def scalar(self, _statement):
+            self.calls += 1
+            if options.get("scalar_raise_at") == self.calls:
+                raise RuntimeError("sql secret id=99")
+            return values[self.calls - 1]
+
+        def scalars(self, _statement):
+            if options.get("scalars_raise"):
+                raise RuntimeError("candidate sql secret")
+            return options.get("rows", [types.SimpleNamespace(user_id="user-secret", id="object-secret")])
+
+        def close(self) -> None:
+            return None
+
+    def session_local():
+        if options.get("session_raise"):
+            raise RuntimeError("session secret")
+        return Session()
+
+    session_mod.SessionLocal = session_local
+    main = pkg("app.main")
+    paths = options.get("routes", ["/telegram/mtproto/status"])
+    main.app = types.SimpleNamespace(routes=[types.SimpleNamespace(path=path) for path in paths])
+    pkg("app.services")
+    service = pkg("app.services.recent_source_service")
+
+    class RecentSourceService:
+        def __init__(self, _session, user_id) -> None:
+            self.user_id = user_id
+
+        def get_inbox_eligible(self, object_id):
+            if options.get("inbox_raise"):
+                raise RuntimeError(f"inbox secret {object_id}")
+            return object() if options.get("readable", True) else None
+
+    service.RecentSourceService = RecentSourceService
+    return names
+
+
+def _run_child_script(**options: object) -> str:
+    names = [
+        "sqlalchemy", "app", "app.core", "app.core.config", "app.db", "app.db.models",
+        "app.db.session", "app.main", "app.services", "app.services.recent_source_service",
+    ]
+    saved = {name: sys.modules.get(name) for name in names}
+    for name in names:
+        sys.modules.pop(name, None)
+    try:
+        if not options.get("missing_import"):
+            _install_child_modules(**options)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            exec(compile(verifier.CHILD, "<child>", "exec"), {"__name__": "child"})  # noqa: S102
+        return buffer.getvalue()
+    finally:
+        for name in names:
+            sys.modules.pop(name, None)
+            if saved[name] is not None:
+                sys.modules[name] = saved[name]
+
+
+@pytest.mark.parametrize(("options", "stage", "leaks"), [
+    ({"missing_import": True}, "STAGE_2_BOOTSTRAP", []),
+    ({"routes": ["/telegram/link"]}, "STAGE_2_LEGACY_ROUTES", []),
+    ({"routes": ["/integrations/telegram/webhook"]}, "STAGE_2_LEGACY_ROUTES", []),
+    ({"routes": []}, "STAGE_2_MTPROTO_ROUTE", []),
+    ({"bot_field": True}, "STAGE_2_BOT_SETTINGS", []),
+    ({"session_raise": True}, "STAGE_2_DB_SESSION", ["session secret"]),
+    ({"scalar_raise_at": 1}, "STAGE_2_ACCOUNT", ["sql secret", "id=99"]),
+    ({"scalar_values": [2]}, "STAGE_2_ACCOUNT", ["object-secret"]),
+    ({"scalar_raise_at": 2}, "STAGE_2_SCOPE", ["sql secret"]),
+    ({"scalar_values": [1, 27]}, "STAGE_2_SCOPE", []),
+    ({"scalar_raise_at": 3}, "STAGE_2_LEGACY_AGGREGATE", ["sql secret"]),
+    ({"scalar_values": [1, 28, 0]}, "STAGE_2_LEGACY_AGGREGATE", []),
+    ({"scalars_raise": True}, "STAGE_2_LEGACY_CANDIDATES", ["candidate sql secret"]),
+    ({"inbox_raise": True}, "STAGE_2_INBOX_READ", ["inbox secret", "object-secret"]),
+    ({"readable": False, "scalar_values": [1, 28, 2]}, "STAGE_2_INBOX_READ", ["object-secret", "user-secret"]),
+    ({"readable": False, "scalar_values": [1, 28, 1001], "rows": []}, "STAGE_2_CANDIDATE_BOUND", []),
+])
+def test_each_stage2_failure_reaches_remote_transcript(monkeypatch, capsys, options, stage, leaks) -> None:
+    child_out = _run_child_script(**options)
+    assert child_out == f"CHILD_STATUS=fail\nCHILD_STAGE={stage}\n"
+    for leak in leaks:
+        assert leak not in child_out
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True), child=child_out,
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert f"FAILURE_STAGE={stage}\n" in stdout
+    assert "TELEGRAM_MTPROTO_AI_DISABLED_PASS=true" in stdout
+    assert "LEGACY_BOT_ROUTES_ABSENT_PASS" not in stdout
+    for leak in (*leaks, "CHILD_STAGE", "MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT"):
+        assert leak not in stdout
+
+
+def test_child_success_protocol_has_no_identifiers() -> None:
+    text = _run_child_script()
+    assert text == (
+        "CHILD_STATUS=ok\nMTPROTO_ACCOUNT_COUNT=1\nACTIVE_SCOPE_COUNT=28\n"
+        "LEGACY_BOT_OBJECT_COUNT=3\nLEGACY_BOT_INBOX_READABLE=true\n"
+    )
+    assert "object-secret" not in text
+    assert "user-secret" not in text
+
+
+def test_malformed_child_output_and_crash_are_fixed_stage2_codes(monkeypatch, capsys) -> None:
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True),
+        child="SELECT secret-id FROM objects\n",
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_2_CHILD_PROTOCOL" in stdout
+    assert "secret-id" not in stdout
+    assert "SELECT" not in stdout
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True), child_crash=True,
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_2_CHILD_EXECUTION" in stdout
+    assert "secret traceback" not in stdout
+    assert "container died" not in stdout
+
+
+def _remote_failure_transcript(stage: str = "STAGE_2_ACCOUNT") -> str:
+    prefix = []
+    for key in verifier.SUCCESS_FIELDS:
+        if key == "LEGACY_BOT_ROUTES_ABSENT_PASS":
+            break
+        prefix.append(f"{key}=true")
+    tail = [
+        f"FAILURE_STAGE={stage}", "RAW_EXCEPTION_CLASS=RuntimeError", "TELEGRAM_NETWORK_CALLS=0",
+        "DB_WRITES=0", "ENV_WRITES=0", "SERVICE_RECREATIONS=0", "M4BR1_TERMINAL=failure",
+    ]
+    return "\n".join([*prefix, *tail]) + "\n"
+
+
+def test_wrapper_prints_remote_verifier_failure_without_ssh_failed(tmp_path) -> None:
+    transcript = _remote_failure_transcript()
+    assert verifier.parse_output(transcript) == "failure"
+    remote_out = tmp_path / "remote_out"
+    remote_out.write_text(transcript, encoding="utf-8")
+    result = _run_wrapper(tmp_path, KEYSCAN_OK="1", SSH_RC="2", SSH_STDOUT_FILE=str(remote_out))
+    assert result.returncode == 2
+    assert result.stdout == transcript
+    assert "M4BR1_BLOCKED=ssh_failed" not in result.stdout
+    assert "M4BR1_BLOCKED=" not in result.stdout
+    assert "STDERR_SECRET_SHOULD_NOT_APPEAR" not in result.stdout
+    assert result.stdout.count("M4BR1_BEGIN=true") == 1
+
+
+def test_wrapper_ssh_transport_failure_stays_sanitized(tmp_path) -> None:
+    result = _run_wrapper(tmp_path, KEYSCAN_OK="1", SSH_RC="255", SSH_STDOUT_FILE="")
+    assert result.returncode == 2
+    assert result.stdout.strip() == "M4BR1_BLOCKED=ssh_failed"
+    assert "STDERR_SECRET_SHOULD_NOT_APPEAR" not in result.stdout
+    garbage = tmp_path / "garbage"
+    garbage.write_text("ssh debug secret-token\n", encoding="utf-8")
+    result = _run_wrapper(tmp_path, KEYSCAN_OK="1", SSH_RC="255", SSH_STDOUT_FILE=str(garbage))
+    assert result.returncode == 2
+    assert result.stdout.strip() == "M4BR1_BLOCKED=ssh_failed"
+    assert "secret-token" not in result.stdout
+    quiet = tmp_path / "quiet"
+    quiet.write_text("not a protocol\n", encoding="utf-8")
+    result = _run_wrapper(tmp_path, KEYSCAN_OK="1", SSH_RC="0", SSH_STDOUT_FILE=str(quiet))
+    assert result.returncode == 2
+    assert result.stdout.strip() == "M4BR1_BLOCKED=remote_protocol"
+    assert "not a protocol" not in result.stdout

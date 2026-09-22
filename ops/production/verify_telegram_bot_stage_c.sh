@@ -28,9 +28,17 @@ python3 "$HELPER" bundle >"$TMP/remote.py" 2>/dev/null || fail bundle
 set +e
 ssh -T -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$TMP/known" -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519 -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey "$SSH_TARGET" "cd $REMOTE_PATH && python3 - remote" <"$TMP/remote.py" >"$TMP/stdout" 2>"$TMP/stderr"
 ssh_rc=$?
-python3 "$HELPER" validate "$TMP/stdout" >/dev/null 2>&1
+kind="$(python3 "$HELPER" validate "$TMP/stdout" 2>/dev/null)"
 protocol_rc=$?
 set -e
-[ "$protocol_rc" -eq 0 ] || fail remote_protocol
-cat "$TMP/stdout"
+if [ "$protocol_rc" -eq 0 ] && [ "$kind" = failure ]; then
+  cat "$TMP/stdout"
+  exit 2
+fi
+if [ "$protocol_rc" -eq 0 ] && [ "$kind" = success ]; then
+  cat "$TMP/stdout"
+  [ "$ssh_rc" -eq 0 ] || fail ssh_failed
+  exit 0
+fi
 [ "$ssh_rc" -eq 0 ] || fail ssh_failed
+fail remote_protocol

@@ -170,60 +170,146 @@ def _has_eligible_candidate(candidates, is_eligible) -> bool:
     return any(is_eligible(candidate) for candidate in candidates)
 
 
+CHILD_FAIL_STAGES = frozenset({
+    "STAGE_2_BOOTSTRAP",
+    "STAGE_2_LEGACY_ROUTES",
+    "STAGE_2_MTPROTO_ROUTE",
+    "STAGE_2_BOT_SETTINGS",
+    "STAGE_2_DB_SESSION",
+    "STAGE_2_ACCOUNT",
+    "STAGE_2_SCOPE",
+    "STAGE_2_LEGACY_AGGREGATE",
+    "STAGE_2_LEGACY_CANDIDATES",
+    "STAGE_2_INBOX_READ",
+    "STAGE_2_CANDIDATE_BOUND",
+})
 CHILD = r"""
-from sqlalchemy import func, or_, select
-from app.core.config import Settings
-from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
-from app.db.session import SessionLocal
-from app.main import app
-from app.services.recent_source_service import RecentSourceService
+def _run():
+    try:
+        from sqlalchemy import func, or_, select
+        from app.core.config import Settings
+        from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+        from app.db.session import SessionLocal
+        from app.main import app
+        from app.services.recent_source_service import RecentSourceService
+    except Exception:
+        return "STAGE_2_BOOTSTRAP"
+    try:
+        routes = {route.path for route in app.routes}
+    except Exception:
+        return "STAGE_2_BOOTSTRAP"
+    if "/telegram/link" in routes or "/integrations/telegram/webhook" in routes:
+        return "STAGE_2_LEGACY_ROUTES"
+    if "/telegram/mtproto/status" not in routes:
+        return "STAGE_2_MTPROTO_ROUTE"
+    try:
+        fields = set(Settings.model_fields)
+    except Exception:
+        return "STAGE_2_BOT_SETTINGS"
+    if {"telegram_bot_token", "telegram_bot_username", "telegram_webhook_secret", "telegram_webhook_url"} & fields:
+        return "STAGE_2_BOT_SETTINGS"
+    session = None
+    try:
+        session = SessionLocal()
+    except Exception:
+        return "STAGE_2_DB_SESSION"
+    try:
+        try:
+            account_count = int(session.scalar(select(func.count()).select_from(TelegramMtprotoAccount)) or 0)
+        except Exception:
+            return "STAGE_2_ACCOUNT"
+        if account_count != 1:
+            return "STAGE_2_ACCOUNT"
+        try:
+            scope_count = int(session.scalar(select(func.count()).select_from(TelegramMtprotoChatSelection).where(TelegramMtprotoChatSelection.scope_active.is_(True))) or 0)
+        except Exception:
+            return "STAGE_2_SCOPE"
+        if scope_count != 28:
+            return "STAGE_2_SCOPE"
+        legacy_filter = (Object.provider == "telegram", Object.kind == "chat_message", or_(Object.metadata_["transport"].as_string().is_(None), Object.metadata_["transport"].as_string() != "mtproto"))
+        try:
+            legacy_count = int(session.scalar(select(func.count()).select_from(Object).where(*legacy_filter)) or 0)
+        except Exception:
+            return "STAGE_2_LEGACY_AGGREGATE"
+        if legacy_count < 1:
+            return "STAGE_2_LEGACY_AGGREGATE"
+        try:
+            candidates = session.scalars(select(Object).where(*legacy_filter).order_by(Object.created_at.asc(), Object.id.asc()).limit(1000))
+            candidate_rows = list(candidates)
+        except Exception:
+            return "STAGE_2_LEGACY_CANDIDATES"
+        try:
+            readable = any(RecentSourceService(session, candidate.user_id).get_inbox_eligible(candidate.id) is not None for candidate in candidate_rows)
+        except Exception:
+            return "STAGE_2_INBOX_READ"
+        if not readable and legacy_count > 1000:
+            return "STAGE_2_CANDIDATE_BOUND"
+        if not readable:
+            return "STAGE_2_INBOX_READ"
+        print("CHILD_STATUS=ok")
+        print(f"MTPROTO_ACCOUNT_COUNT={account_count}")
+        print(f"ACTIVE_SCOPE_COUNT={scope_count}")
+        print(f"LEGACY_BOT_OBJECT_COUNT={legacy_count}")
+        print("LEGACY_BOT_INBOX_READABLE=true")
+        return ""
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
 
-routes = {route.path for route in app.routes}
-if "/telegram/link" in routes or "/integrations/telegram/webhook" in routes:
-    raise RuntimeError("legacy route present")
-if "/telegram/mtproto/status" not in routes:
-    raise RuntimeError("MTProto route absent")
-if {"telegram_bot_token", "telegram_bot_username", "telegram_webhook_secret", "telegram_webhook_url"} & set(Settings.model_fields):
-    raise RuntimeError("Bot setting present")
-session = SessionLocal()
 try:
-    account_count = int(session.scalar(select(func.count()).select_from(TelegramMtprotoAccount)) or 0)
-    scope_count = int(session.scalar(select(func.count()).select_from(TelegramMtprotoChatSelection).where(TelegramMtprotoChatSelection.scope_active.is_(True))) or 0)
-    legacy_filter = (Object.provider == "telegram", Object.kind == "chat_message", or_(Object.metadata_["transport"].as_string().is_(None), Object.metadata_["transport"].as_string() != "mtproto"))
-    legacy_count = int(session.scalar(select(func.count()).select_from(Object).where(*legacy_filter)) or 0)
-    candidates = session.scalars(
-        select(Object)
-        .where(*legacy_filter)
-        .order_by(Object.created_at.asc(), Object.id.asc())
-        .limit(1000)
-    )
-    candidate_rows = list(candidates)
-    readable = any(
-        RecentSourceService(session, candidate.user_id).get_inbox_eligible(candidate.id) is not None
-        for candidate in candidate_rows
-    )
-    if not readable and legacy_count > 1000:
-        raise RuntimeError("legacy read candidate bound exhausted")
-    print(f"MTPROTO_ACCOUNT_COUNT={account_count}")
-    print(f"ACTIVE_SCOPE_COUNT={scope_count}")
-    print(f"LEGACY_BOT_OBJECT_COUNT={legacy_count}")
-    print(f"LEGACY_BOT_INBOX_READABLE={'true' if readable else 'false'}")
-finally:
-    session.close()
+    _stage = _run()
+except Exception:
+    _stage = "STAGE_2_BOOTSTRAP"
+if _stage:
+    print("CHILD_STATUS=fail")
+    print("CHILD_STAGE=" + _stage)
 """
+_CHILD_COUNT_KEYS = ("MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT")
 
-def _child(compose: list[str]) -> dict[str, str]:
-    lines = _run([*compose, "exec", "-T", "api", "python", "-c", CHILD]).splitlines()
-    allowed = {"MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT", "LEGACY_BOT_INBOX_READABLE"}
-    values = {}
+
+def _parse_child(output: str) -> dict[str, str]:
+    lines = output.splitlines()
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for line in lines:
         key, sep, value = line.partition("=")
-        if not sep or key not in allowed or key in values or not value:
-            raise ValueError("unsafe child output")
-        values[key] = value
-    if set(values) != allowed:
-        raise ValueError("incomplete child output")
-    return values
+        if not sep or not key or not value or key in seen:
+            raise VerifyError("STAGE_2_CHILD_PROTOCOL", ValueError())
+        seen.add(key)
+        pairs.append((key, value))
+    keys = [key for key, _value in pairs]
+    values = dict(pairs)
+    if keys == ["CHILD_STATUS", "CHILD_STAGE"] and values["CHILD_STATUS"] == "fail":
+        stage = values["CHILD_STAGE"]
+        if stage in CHILD_FAIL_STAGES:
+            raise VerifyError(stage, RuntimeError())
+        raise VerifyError("STAGE_2_CHILD_PROTOCOL", ValueError())
+    if keys != ["CHILD_STATUS", *_CHILD_COUNT_KEYS, "LEGACY_BOT_INBOX_READABLE"] or values["CHILD_STATUS"] != "ok":
+        raise VerifyError("STAGE_2_CHILD_PROTOCOL", ValueError())
+    if any(re.fullmatch(r"[0-9]+", values[key]) is None for key in _CHILD_COUNT_KEYS):
+        raise VerifyError("STAGE_2_CHILD_PROTOCOL", ValueError())
+    if values["LEGACY_BOT_INBOX_READABLE"] not in {"true", "false"}:
+        raise VerifyError("STAGE_2_CHILD_PROTOCOL", ValueError())
+    if values["MTPROTO_ACCOUNT_COUNT"] != "1":
+        raise VerifyError("STAGE_2_ACCOUNT", RuntimeError())
+    if values["ACTIVE_SCOPE_COUNT"] != "28":
+        raise VerifyError("STAGE_2_SCOPE", RuntimeError())
+    if int(values["LEGACY_BOT_OBJECT_COUNT"]) < 1:
+        raise VerifyError("STAGE_2_LEGACY_AGGREGATE", RuntimeError())
+    if values["LEGACY_BOT_INBOX_READABLE"] != "true":
+        raise VerifyError("STAGE_2_INBOX_READ", RuntimeError())
+    return {key: values[key] for key in (*_CHILD_COUNT_KEYS, "LEGACY_BOT_INBOX_READABLE")}
+
+
+def _child(compose: list[str]) -> dict[str, str]:
+    try:
+        output = _run([*compose, "exec", "-T", "api", "python", "-c", CHILD])
+    except Exception as exc:
+        raise VerifyError("STAGE_2_CHILD_EXECUTION", RuntimeError()) from exc
+    return _parse_child(output)
 
 def remote_main() -> int:
     try:
@@ -306,12 +392,10 @@ def remote_main() -> int:
         emit("TELEGRAM_MTPROTO_AI_DISABLED_PASS", "true")
         try:
             values = _child(compose)
-            if values["MTPROTO_ACCOUNT_COUNT"] != "1" or values["ACTIVE_SCOPE_COUNT"] != "28":
-                raise ValueError("unexpected MTProto state")
-            if values["LEGACY_BOT_INBOX_READABLE"] != "true" or int(values["LEGACY_BOT_OBJECT_COUNT"]) < 1:
-                raise ValueError("legacy object is not readable")
+        except VerifyError:
+            raise
         except Exception as exc:
-            raise VerifyError("STAGE_2_READ_ONLY_STATE", exc) from exc
+            raise VerifyError("STAGE_2_CHILD_PROTOCOL", exc) from exc
         emit("LEGACY_BOT_ROUTES_ABSENT_PASS", "true")
         emit("MTPROTO_ROUTE_PRESENT_PASS", "true")
         emit("BOT_SETTINGS_MODEL_ABSENT_PASS", "true")
@@ -389,8 +473,11 @@ def main() -> int:
         target = load_target(Path(args.path) if args.path else TARGET_FILE)
         for key in ("ssh_target", "ssh_port", "host_key_sha256", "repository_path", "origin_url"): print(target[key])
         return 0
-    try: return 0 if parse_output(Path(args.path).read_text(encoding="utf-8")) else 2
-    except (OSError, ValueError): return 2
+    try:
+        print(parse_output(Path(args.path).read_text(encoding="utf-8")))
+        return 0
+    except (OSError, ValueError):
+        return 2
 
 if __name__ == "__main__":
     raise SystemExit(main())
