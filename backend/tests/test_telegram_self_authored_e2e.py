@@ -432,9 +432,10 @@ def test_oneshot_does_not_enable_global_ai_or_synthetic_helper() -> None:
     assert remote.ONESHOT_HELPER_DEST == "/app/telegram_self_authored_e2e.py"
     assert command[command.index("python3") :] == [
         "python3",
-        "/app/telegram_self_authored_e2e.py",
-        "--live",
+        "/app/telegram_self_authored_e2e_bootstrap.py",
     ]
+    assert f"{remote.ONESHOT_HELPER_DEST}:ro" in joined
+    assert f"{remote.ONESHOT_BOOTSTRAP_DEST}:ro" in joined
     assert ":ro" in joined
     assert "TELEGRAM_MTPROTO_AI_ENABLED=true" not in command
     assert "telegram_production_rehearsal.py" not in joined
@@ -842,6 +843,13 @@ def fake_run(cmd, **_kwargs):
     if "run" in cmd:
         if MODE == "oneshot":
             return Proc(1, "Traceback sk-secret ModuleNotFoundError")
+        if MODE == "compile":
+            return Proc(
+                1,
+                "SELF_E2E_STARTUP=bootstrap\\nSELF_E2E_REMOTE_BLOCKED=compile_failed\\n",
+            )
+        if MODE == "harness":
+            return Proc(2, "SELF_E2E_STARTUP=imported\\nSELF_E2E_BLOCKED=review_required\\n")
         return Proc(0, "EMBEDDING=PASS\\n")
     raise AssertionError(cmd)
 
@@ -879,21 +887,169 @@ def _run_generated(program: str, *, mode: str):
         )
 
 
+def _run_bootstrap(helper_source: str):
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        helper = root / "helper.py"
+        helper.write_text(helper_source, encoding="utf-8")
+        script = root / "bootstrap.py"
+        script.write_text(remote.oneshot_bootstrap_source(str(helper)), encoding="utf-8")
+        return __import__("subprocess").run(
+            [sys.executable, str(script)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+
+def test_bootstrap_marker_precedes_helper_load() -> None:
+    source = remote.oneshot_bootstrap_source()
+    assert "import app" not in source
+    assert "from app" not in source
+    result = _run_bootstrap(
+        "import sys\n"
+        "sys.stdout.write('HELPER_IMPORT\\n')\n"
+        "def main(argv):\n"
+        "    sys.stdout.write('HELPER_MAIN %s\\n' % (argv,))\n"
+        "    return 0\n"
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        remote.STARTUP_BOOTSTRAP,
+        remote.STARTUP_COMPILED,
+        "HELPER_IMPORT",
+        remote.STARTUP_IMPORTED,
+        "HELPER_MAIN ['--live']",
+    ]
+    assert "Traceback" not in result.stderr
+
+
+def test_bootstrap_compile_failure_does_not_enter_main() -> None:
+    result = _run_bootstrap("def main(argv)\n    return 0\n")
+    assert result.returncode == 1
+    assert (
+        result.stdout
+        == f"{remote.STARTUP_BOOTSTRAP}\nSELF_E2E_REMOTE_BLOCKED={remote.COMPILE_FAILED}\n"
+    )
+    assert remote.STARTUP_COMPILED not in result.stdout
+    assert remote.STARTUP_IMPORTED not in result.stdout
+    assert "Traceback" not in result.stdout
+    assert "Traceback" not in result.stderr
+    assert "SyntaxError" not in result.stdout
+    assert "SyntaxError" not in result.stderr
+
+
+def test_bootstrap_import_failure_does_not_enter_main() -> None:
+    result = _run_bootstrap(
+        'raise RuntimeError("sk-secret traceback payload")\n'
+        "def main(argv):\n"
+        "    raise AssertionError('main entered')\n"
+    )
+    assert result.returncode == 1
+    assert result.stdout == (
+        f"{remote.STARTUP_BOOTSTRAP}\n"
+        f"{remote.STARTUP_COMPILED}\n"
+        f"SELF_E2E_REMOTE_BLOCKED={remote.IMPORT_FAILED}\n"
+    )
+    assert remote.STARTUP_IMPORTED not in result.stdout
+    assert "sk-secret" not in result.stdout
+    assert "sk-secret" not in result.stderr
+    assert "Traceback" not in result.stdout
+    assert "Traceback" not in result.stderr
+    assert "main entered" not in result.stdout
+
+
+def test_bootstrap_propagates_harness_stdout_and_exit_code() -> None:
+    result = _run_bootstrap(
+        "import sys\n"
+        "CALLS = 0\n"
+        "def main(argv):\n"
+        "    global CALLS\n"
+        "    CALLS += 1\n"
+        "    sys.stdout.write('SELF_E2E_BLOCKED=review_required\\n')\n"
+        "    sys.stdout.write('CALLS=%s\\n' % CALLS)\n"
+        "    return 2\n"
+    )
+    assert result.returncode == 2
+    assert result.stdout.endswith("SELF_E2E_BLOCKED=review_required\nCALLS=1\n")
+    assert result.stdout.startswith(f"{remote.STARTUP_BOOTSTRAP}\n")
+    assert remote.STARTUP_IMPORTED in result.stdout
+    assert "SELF_E2E_REMOTE_BLOCKED=oneshot_failed" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_checkout_ref_host_key_and_long_running_guards_remain() -> None:
+    release = remote.PRODUCTION_RELEASE
+    assert remote.assess_remote_state("other", "", "false", "false", release) == "production_ref"
+    assert remote.assess_remote_state(release, " M file", "false", "false", release) == "worktree"
+    assert remote.assess_remote_state(release, "", "true", "false", release) == "long_running_ai"
+    assert remote.assess_remote_state(release, "", "false", "on", release) == "long_running_ai"
+    assert remote.assess_remote_state(release, "", "false", "false", release) is None
+    with pytest.raises(remote.RemoteBlocked, match="host_key"):
+        remote.select_host_keys("host ssh-ed25519 AAAA\n", "SHA256:expected", lambda _line: "nope")
+    selected = remote.select_host_keys(
+        "host ssh-ed25519 AAAA comment\n",
+        "SHA256:expected",
+        lambda _line: "SHA256:expected",
+    )
+    assert selected == "host ssh-ed25519 AAAA comment\n"
+
+    def git(args, *, production=release, head="abc", origin_main="abc"):
+        if args == ["fetch", "--prune", "origin", "main", "production"]:
+            return ""
+        answers = {
+            ("rev-parse", "--show-toplevel"): str(remote.REPOSITORY_ROOT),
+            ("remote", "get-url", "origin"): remote.CANONICAL_ORIGIN,
+            ("status", "--porcelain"): "",
+            ("branch", "--show-current"): "main",
+            ("rev-parse", "HEAD"): head,
+            ("rev-parse", "origin/main"): origin_main,
+            ("rev-parse", "origin/production"): production,
+        }
+        return answers[tuple(args)]
+
+    remote.require_local_checkout(lambda args: git(args))
+    with pytest.raises(remote.RemoteBlocked, match="production_ref"):
+        remote.require_local_checkout(lambda args: git(args, production="other"))
+    with pytest.raises(remote.RemoteBlocked, match="stale_main"):
+        remote.require_local_checkout(lambda args: git(args, head="local", origin_main="remote"))
+    program = remote.build_remote_program("def main(argv):\n    return 0\n")
+    assert 'service_flag("api")' in program
+    assert 'service_flag("worker")' in program
+    assert "SELF_E2E_REMOTE_BLOCKED=long_running_probe" in program
+    assert "TELEGRAM_MTPROTO_AI_ENABLED=true" not in program
+    assert remote.PRODUCTION_RELEASE in program
+
+
 def test_generated_remote_program_reaches_oneshot_and_sanitizes_failure() -> None:
     written = Path("/tmp/telegram_self_authored_e2e.py")
+    bootstrap = Path("/tmp/telegram_self_authored_e2e_bootstrap.py")
     program = remote.build_remote_program("print('helper')\n")
     try:
         ok = _run_generated(program, mode="ok")
         failed = _run_generated(program, mode="oneshot")
         raised = _run_generated(program, mode="raise")
+        compiled = _run_generated(program, mode="compile")
+        harness_owned = _run_generated(program, mode="harness")
     finally:
         written.unlink(missing_ok=True)
+        bootstrap.unlink(missing_ok=True)
     assert ok.returncode == 0
     assert ok.stdout == "EMBEDDING=PASS\n"
     assert "NameError" not in ok.stderr
     assert failed.returncode == 1
     assert failed.stdout == "SELF_E2E_REMOTE_BLOCKED=oneshot_failed\n"
     assert "sk-secret" not in failed.stdout
+    assert compiled.returncode == 1
+    assert compiled.stdout == (
+        f"{remote.STARTUP_BOOTSTRAP}\nSELF_E2E_REMOTE_BLOCKED={remote.COMPILE_FAILED}\n"
+    )
+    assert harness_owned.returncode == 2
+    assert harness_owned.stdout == (
+        f"{remote.STARTUP_IMPORTED}\nSELF_E2E_BLOCKED=review_required\n"
+    )
     assert raised.returncode == 1
     assert raised.stdout == "SELF_E2E_REMOTE_BLOCKED=remote_program\n"
     assert "sk-secret" not in raised.stdout

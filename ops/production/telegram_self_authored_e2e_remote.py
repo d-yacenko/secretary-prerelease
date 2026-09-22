@@ -31,6 +31,14 @@ TRUE_FLAGS = {"1", "true", "yes", "on"}
 ONESHOT_HELPER_NAME = "telegram_self_authored_e2e.py"
 ONESHOT_HELPER_DEST = f"/app/{ONESHOT_HELPER_NAME}"
 HOST_HELPER_PATH = f"/tmp/{ONESHOT_HELPER_NAME}"
+ONESHOT_BOOTSTRAP_NAME = "telegram_self_authored_e2e_bootstrap.py"
+ONESHOT_BOOTSTRAP_DEST = f"/app/{ONESHOT_BOOTSTRAP_NAME}"
+HOST_BOOTSTRAP_PATH = f"/tmp/{ONESHOT_BOOTSTRAP_NAME}"
+STARTUP_BOOTSTRAP = "SELF_E2E_STARTUP=bootstrap"
+STARTUP_COMPILED = "SELF_E2E_STARTUP=compiled"
+STARTUP_IMPORTED = "SELF_E2E_STARTUP=imported"
+COMPILE_FAILED = "compile_failed"
+IMPORT_FAILED = "import_failed"
 GitRunner = Callable[[list[str]], str]
 
 
@@ -138,7 +146,56 @@ def ssh_command(target: str, port: int, known_hosts: Path) -> list[str]:
     ]
 
 
-def oneshot_compose_command(helper_path: str = HOST_HELPER_PATH) -> list[str]:
+def oneshot_bootstrap_source(helper_path: str = ONESHOT_HELPER_DEST) -> str:
+    """Stdlib-only child entrypoint. It does not import application code itself."""
+    return f"""import importlib.util
+import sys
+from pathlib import Path
+
+HELPER = {helper_path!r}
+
+
+def _emit(line):
+    sys.stdout.write(line + "\\n")
+    sys.stdout.flush()
+
+
+def _blocked(stage):
+    _emit("SELF_E2E_REMOTE_BLOCKED=" + stage)
+    raise SystemExit(1)
+
+
+_emit({STARTUP_BOOTSTRAP!r})
+try:
+    compiled = compile(Path(HELPER).read_text(encoding="utf-8"), "<helper>", "exec")
+except Exception:
+    _blocked({COMPILE_FAILED!r})
+del compiled
+_emit({STARTUP_COMPILED!r})
+imported = False
+try:
+    spec = importlib.util.spec_from_file_location("telegram_self_authored_e2e_helper", HELPER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    if not callable(getattr(module, "main", None)):
+        raise RuntimeError
+    imported = True
+except BaseException:
+    imported = False
+if not imported:
+    _blocked({IMPORT_FAILED!r})
+_emit({STARTUP_IMPORTED!r})
+raise SystemExit(module.main(["--live"]))
+"""
+
+
+def oneshot_compose_command(
+    helper_path: str = HOST_HELPER_PATH,
+    bootstrap_path: str = HOST_BOOTSTRAP_PATH,
+) -> list[str]:
     return [
         "docker",
         "compose",
@@ -160,16 +217,18 @@ def oneshot_compose_command(helper_path: str = HOST_HELPER_PATH) -> list[str]:
         "REHEARSAL_LONG_RUNNING_WORKER_AI=false",
         "-v",
         f"{helper_path}:{ONESHOT_HELPER_DEST}:ro",
+        "-v",
+        f"{bootstrap_path}:{ONESHOT_BOOTSTRAP_DEST}:ro",
         "api",
         "python3",
-        ONESHOT_HELPER_DEST,
-        "--live",
+        ONESHOT_BOOTSTRAP_DEST,
     ]
 
 
 def build_remote_program(helper_source: str) -> str:
     encoded = base64.b64encode(helper_source.encode("utf-8")).decode("ascii")
-    command = oneshot_compose_command(HOST_HELPER_PATH)
+    command = oneshot_compose_command()
+    bootstrap = oneshot_bootstrap_source()
     logic = (
         f"TRUE_FLAGS = {tuple(sorted(TRUE_FLAGS))!r}\n"
         + inspect.getsource(_flag_enabled)
@@ -184,6 +243,8 @@ from pathlib import Path
 {logic}
 RELEASE = {PRODUCTION_RELEASE!r}
 HELPER_PATH = {HOST_HELPER_PATH!r}
+BOOTSTRAP_PATH = {HOST_BOOTSTRAP_PATH!r}
+BOOTSTRAP_TEXT = {bootstrap!r}
 ONESHOT = {command!r}
 HELPER_B64 = {encoded!r}
 CANONICAL_ORIGIN = {CANONICAL_ORIGIN!r}
@@ -233,6 +294,7 @@ try:
         sys.stdout.write(f"SELF_E2E_REMOTE_BLOCKED={{reason}}\\n")
         raise SystemExit(2)
     Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
+    Path(BOOTSTRAP_PATH).write_text(BOOTSTRAP_TEXT, encoding="utf-8")
     proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
     output = proc.stdout
     if proc.returncode != 0 and "SELF_AUTHORED=PASS" not in output and "SELF_E2E_" not in output:
