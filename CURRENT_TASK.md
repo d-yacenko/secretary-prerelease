@@ -1,91 +1,42 @@
-# Current task — Execute one production synthetic Telegram ML rehearsal
+# Current task — Capture exit status of completed Telegram rehearsal attempt
 
 ## Status
 
-Production downstream code is deployed and healthy at:
+The single authorized invocation:
 
-`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
+`python3 ops/production/telegram_production_rehearsal_remote.py --run-id tgprod0922a`
 
-Production Alembic:
-`0046`
+has already been attempted.
 
-Long-running production API/worker Telegram AI must remain:
-`false`
+Observed stdout was completely empty.
 
-Reviewed live rehearsal wrapper/helper:
-`23d2521bcd5a2e774be657cc47dd5625d840822f`
+This is NOT a PASS and the rehearsal must NOT be repeated.
 
-Human authorization for exactly one production synthetic ML rehearsal is already granted.
+## Authorized next action
 
-## Exact authorized run
-
-Run id:
-
-`tgprod0922a`
-
-Execute exactly once:
+Capture only the exit status of the immediately preceding shell command, with no network/process retry:
 
 ```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin
-python3 ops/production/telegram_production_rehearsal_remote.py --run-id tgprod0922a
+printf 'REHEARSAL_WRAPPER_EXIT=%s\n' "$?"
 ```
 
-The full fetch immediately before the wrapper is intentional: it refreshes local remote-tracking refs so the wrapper cannot repeat the historical stale-`origin/production` false blocker.
+This must be run before any other shell command, otherwise `$?` no longer refers to the rehearsal wrapper.
 
-## Expected success
+## Interpretation
 
-Sanitized success must include:
+- exit 0 with empty stdout would violate the reviewed wrapper protocol and require local code diagnosis before any further runtime action;
+- exit nonzero with empty stdout strongly indicates the outer SSH/remote-command subprocess failed before remote stdout, because local/remote fail-closed branches otherwise emit sanitized public markers.
 
-- `INBOX_ELIGIBLE=PASS`
-- `STACK_GROUPED=PASS`
-- `EMBEDDING=PASS`
-- `AUTO_LABEL=PASS`
-- `TEMPORAL=PASS`
-- `TEMPORAL_PARTICIPATION=expected`
-- `CORRELATION=PASS`
-- `SUMMARY=PASS`
-- `CONTEXT_VISIBLE=PASS`
-- `IDEMPOTENT=PASS`
-- `ENV_UNCHANGED=PASS`
-- `PROCESS_LOCAL_AI=true`
-- `LONG_RUNNING_API_AI=false`
-- `LONG_RUNNING_WORKER_AI=false`
-- `TELEGRAM_TRANSPORT_CALLS=0`
-- `DANGLING_JOBS=0`
-- `PROVIDERS=live`
-- `LIVE_REHEARSAL_EXECUTED=1`
+## Hard prohibition
 
-Synthetic artifacts are intentionally retained for audit.
+Do NOT:
+- rerun the rehearsal;
+- run ad-hoc SSH;
+- inspect hidden SSH stderr by bypassing the wrapper;
+- deploy/restart/recreate services;
+- change AI flags/env;
+- clean synthetic rows.
 
-## Hard constraints
+Return only the captured exit-status line.
 
-- no real Telegram message/content;
-- no Telegram transport call;
-- no session decrypt;
-- no production .env mutation;
-- no global/service-level Telegram AI enablement;
-- no API/worker restart/recreate;
-- no deploy/ref movement;
-- no migration;
-- no cleanup.
-
-## Failure handling
-
-On ANY block/refusal/failure:
-- do not retry;
-- do not bypass;
-- do not run ad-hoc SSH;
-- return complete sanitized stdout and STOP.
-
-Only the single run id above is authorized.
-
-## Required human report
-
-Return complete sanitized stdout exactly as produced.
-
-Then STOP.
-
-`CURRENT_TASK.md` is the source of active authorization.
+`CURRENT_TASK.md` remains the source of active authorization.
