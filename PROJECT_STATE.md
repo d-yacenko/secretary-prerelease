@@ -5,8 +5,8 @@
 - Production/runtime work relies on the pre-existing Executor/workstation SSH credential integration plus the pinned target contract. Do not create/copy/request new production private-key material as a workaround.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `fe151f12f64886505253e765b82458710a949e34`.
-- Production branch/ref: `fe151f12f64886505253e765b82458710a949e34`.
+- Production application/runtime: `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
+- Production branch/ref: `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
 - Production Alembic: `0046 / 0046`.
 - Production health: PASS.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
@@ -283,3 +283,6 @@
 
 
 - Telegram Bot API M4BQ1 Stage C production deploy: EXPLICITLY HUMAN AUTHORIZED for exact release `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`, rollback `fe151f12f64886505253e765b82458710a949e34`, expected Alembic `0046`. Exact rollback->release relation is fast-forward with no migration files. Deploy is canonical schema-neutral API+worker rollout only; production `.env`, DB container/volume, historical Bot-derived objects, legacy Bot schema, and MTProto behavior must remain unchanged.
+
+
+- Telegram Bot API M4BQ1 Stage C schema-neutral production deploy: PASS. Canonical deploy harness reported exact release `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`, health PASS, Alembic `0046`, DB container unchanged, DB volume unchanged, production `.env` unchanged, API recreated, worker recreated, deployment PASS. GitHub `production` ref is exact release. No migration / no `0047`. Stage C server cleanup is therefore live: retired Bot routes/runtime/config execution surfaces are removed while historical Bot-derived objects/schema remain preserved and MTProto remains the sole live Telegram transport. Final Stage C acceptance should now be read-only and prove route/config absence, historical-row readability, and MTProto invariants without provider calls or mutations.
