@@ -30,6 +30,9 @@ PRODUCTION_RELEASE = "8ad52f0653f9f90e1932c49532dc4f993ea1a9cc"
 RUN_ID_RE = re.compile(r"^[a-z0-9]{8,32}$")
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 TRUE_FLAGS = {"1", "true", "yes", "on"}
+ONESHOT_HELPER_NAME = "telegram_production_rehearsal.py"
+ONESHOT_HELPER_DEST = f"/app/{ONESHOT_HELPER_NAME}"
+HOST_HELPER_PATH = f"/tmp/{ONESHOT_HELPER_NAME}"
 GitRunner = Callable[[list[str]], str]
 
 
@@ -162,10 +165,10 @@ def oneshot_compose_command(run_id: str, helper_path: str) -> list[str]:
         "-e",
         "REHEARSAL_LONG_RUNNING_WORKER_AI=false",
         "-v",
-        f"{helper_path}:/opt/rehearsal/telegram_production_rehearsal.py:ro",
+        f"{helper_path}:{ONESHOT_HELPER_DEST}:ro",
         "api",
         "python3",
-        "/opt/rehearsal/telegram_production_rehearsal.py",
+        ONESHOT_HELPER_DEST,
         "--live",
         "--run-id",
         run_id,
@@ -176,7 +179,7 @@ def build_remote_program(run_id: str, helper_source: str) -> str:
     if RUN_ID_RE.fullmatch(run_id) is None:
         raise RemoteBlocked("run_id")
     encoded = base64.b64encode(helper_source.encode("utf-8")).decode("ascii")
-    command = oneshot_compose_command(run_id, "/tmp/telegram_production_rehearsal.py")
+    command = oneshot_compose_command(run_id, HOST_HELPER_PATH)
     logic = (
         f"TRUE_FLAGS = {tuple(sorted(TRUE_FLAGS))!r}\n"
         + inspect.getsource(_flag_enabled)
@@ -191,7 +194,7 @@ from pathlib import Path
 {logic}
 RELEASE = {PRODUCTION_RELEASE!r}
 RUN_ID = {run_id!r}
-HELPER_PATH = "/tmp/telegram_production_rehearsal.py"
+HELPER_PATH = {HOST_HELPER_PATH!r}
 ONESHOT = {command!r}
 HELPER_B64 = {encoded!r}
 CANONICAL_ORIGIN = {CANONICAL_ORIGIN!r}
@@ -242,9 +245,10 @@ try:
         raise SystemExit(2)
     Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
     proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
-    sys.stdout.write(proc.stdout)
-    if proc.returncode != 0 and not proc.stdout.strip():
-        sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=oneshot_failed\\n")
+    output = proc.stdout
+    if proc.returncode != 0 and "REHEARSAL_STARTUP=PASS" not in output and "REHEARSAL_" not in output:
+        output = "REHEARSAL_REMOTE_BLOCKED=oneshot_failed\\n"
+    sys.stdout.write(output)
     raise SystemExit(proc.returncode)
 except SystemExit:
     raise

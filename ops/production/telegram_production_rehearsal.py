@@ -468,6 +468,8 @@ def run_rehearsal(
         raise RehearsalRefused("long_running_ai")
     if providers not in {"fake", "live"}:
         raise RehearsalRefused("providers")
+    if providers == "live":
+        require_live_startup()
     if _run_exists(session, run_id):
         raise RehearsalRefused("duplicate_run_id")
     env_before = os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED")
@@ -663,6 +665,29 @@ def _compose_ai_flag(service: str) -> bool:
 REHEARSAL_ABORTED = "rehearsal_aborted"
 
 
+def deployment_openai_fallback_present() -> bool:
+    """Boolean only. The key value, length, hash, and prefix stay unreported."""
+    value = os.environ.get("OPENAI_API_KEY")
+    return isinstance(value, str) and bool(value.strip())
+
+
+def require_live_startup() -> None:
+    """Emit the startup marker only after import, confirm, and false AI probes."""
+    if os.environ.get("REHEARSAL_LIVE_CONFIRM") != "reviewed":
+        raise RehearsalRefused("live_confirm")
+    api = os.environ.get("REHEARSAL_LONG_RUNNING_API_AI")
+    worker = os.environ.get("REHEARSAL_LONG_RUNNING_WORKER_AI")
+    if api is None or worker is None:
+        raise RehearsalRefused("long_running_probe")
+    if long_running_ai_from_env([f"TELEGRAM_MTPROTO_AI_ENABLED={api}"]) or long_running_ai_from_env(
+        [f"TELEGRAM_MTPROTO_AI_ENABLED={worker}"]
+    ):
+        raise RehearsalRefused("long_running_ai")
+    sys.stdout.write("REHEARSAL_STARTUP=PASS\n")
+    if not deployment_openai_fallback_present():
+        raise RehearsalRefused("provider_config")
+
+
 def live_long_running_probe() -> tuple[bool, bool]:
     api = os.environ.get("REHEARSAL_LONG_RUNNING_API_AI")
     worker = os.environ.get("REHEARSAL_LONG_RUNNING_WORKER_AI")
@@ -718,8 +743,11 @@ def execute_live(run_id: str, *, session_factory=None) -> int:
             probe=live_long_running_probe,
             providers="live",
         )
-    except RehearsalRefused:
+    except RehearsalRefused as exc:
         _cleanup_failed_rehearsal(session, run_id)
+        if str(exc) == "provider_config":
+            sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=provider_config\n")
+            return 2
         sys.stdout.write("REHEARSAL_REFUSED=rehearsal_refused\n")
         return 2
     except Exception:  # noqa: BLE001

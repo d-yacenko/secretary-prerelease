@@ -243,7 +243,11 @@ def test_execute_live_refusal_returns_nonzero(db_session, monkeypatch, capsys) -
     assert "sk-secret" not in captured
 
 
-def test_live_path_does_not_enter_fake_providers(db_session, monkeypatch) -> None:
+def test_live_path_does_not_enter_fake_providers(db_session, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("REHEARSAL_LIVE_CONFIRM", "reviewed")
+    monkeypatch.setenv("REHEARSAL_LONG_RUNNING_API_AI", "false")
+    monkeypatch.setenv("REHEARSAL_LONG_RUNNING_WORKER_AI", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "present-not-a-real-call")
     calls = []
     seen = {}
 
@@ -268,3 +272,26 @@ def test_live_path_does_not_enter_fake_providers(db_session, monkeypatch) -> Non
     assert calls == []
     assert seen["embedding"] is None
     assert settings.telegram_mtproto_ai_enabled is False
+    captured = capsys.readouterr().out
+    assert captured == "REHEARSAL_STARTUP=PASS\n"
+    assert "present-not-a-real-call" not in captured
+
+
+def test_missing_openai_fallback_blocks_before_fixture(db_session, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("REHEARSAL_LIVE_CONFIRM", "reviewed")
+    monkeypatch.setenv("REHEARSAL_LONG_RUNNING_API_AI", "false")
+    monkeypatch.setenv("REHEARSAL_LONG_RUNNING_WORKER_AI", "false")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    code = helper.execute_live("noprovkey", session_factory=lambda: _SessionProxy(db_session))
+    captured = capsys.readouterr().out
+    assert code == 2
+    assert captured == "REHEARSAL_STARTUP=PASS\nREHEARSAL_REMOTE_BLOCKED=provider_config\n"
+    assert "sk-" not in captured
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.display_name == "TG_REHEARSAL_noprovkey")
+        )
+        == 0
+    )
