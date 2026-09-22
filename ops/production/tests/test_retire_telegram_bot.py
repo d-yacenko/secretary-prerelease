@@ -167,6 +167,22 @@ def test_target_loader_is_single_identity_source():
     assert "origin main production" in wrapper
 
 
+def test_alembic_current_contract_requires_exact_head_marker(monkeypatch):
+    command = harness._compose() + ["exec", "-T", "api", "alembic", "current"]
+    seen: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        seen.append(args)
+        return "0046 (head)\n"
+
+    monkeypatch.setattr(harness, "_run", fake_run)
+    harness._require_alembic(harness._compose(), "0046")
+    assert seen == [command]
+    monkeypatch.setattr(harness, "_run", lambda *_args, **_kwargs: "0045 (head)")
+    with pytest.raises(RuntimeError):
+        harness._require_alembic(harness._compose(), "0046")
+
+
 def _remote_main_context(monkeypatch, tmp_path: Path):
     path = tmp_path / ".env"
     path.write_text(env_text(), encoding="utf-8")
@@ -200,10 +216,16 @@ def _remote_main_context(monkeypatch, tmp_path: Path):
         return ""
 
     monkeypatch.setattr(harness, "_run", fake_run)
+    monkeypatch.setattr(harness, "_require_running_container", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(harness, "_container_environment", lambda _container: {
+        **{key: "" for key in harness.BOT_KEYS},
+        **{key: values[key] for key in (*harness.MT_PROTO_KEYS, *harness.INVARIANT_KEYS)},
+        "TELEGRAM_MTPROTO_AI_ENABLED": "false",
+    })
     monkeypatch.setattr(
         harness,
         "_remote_env_and_snapshot",
-        lambda: (path, values, env_text(), "db-container", "db-volume"),
+        lambda: (path, values, env_text(), "db-container", "db-volume", "api-old", "worker-old"),
     )
     monkeypatch.setattr(harness, "_require_alembic", lambda *_args: None)
 
@@ -248,18 +270,23 @@ def test_remote_success_proves_destructive_order_and_two_provider_calls(monkeypa
     path, events = _remote_main_context(monkeypatch, tmp_path)
     monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: events.append("delete"))
     monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: events.append("readback"))
-    real_clear = harness.clear_bot_environment
+    real_write = harness.write_planned_bot_environment
 
-    def clear(path_arg):
+    def write(path_arg, expected, planned, mode):
         events.append("env")
-        return real_clear(path_arg)
+        return real_write(path_arg, expected, planned, mode)
 
-    monkeypatch.setattr(harness, "clear_bot_environment", clear)
+    monkeypatch.setattr(harness, "write_planned_bot_environment", write)
     assert harness.remote_main() == 0
     output = capsys.readouterr().out
     assert harness.parse_output(output) == "success"
     assert "TELEGRAM_NETWORK_CALLS=2" in output
-    assert events[-4:] == ["delete", "readback", "env", "recreate"]
+    assert [event for event in events if event != "fetch"] == [
+        "delete",
+        "readback",
+        "env",
+        "recreate",
+    ]
     assert "db" not in events
     assert path.read_text(encoding="utf-8").count("TELEGRAM_BOT_TOKEN=\n") == 1
 
@@ -301,5 +328,57 @@ def test_remote_production_ref_mismatch_is_before_provider(monkeypatch, tmp_path
     output = capsys.readouterr().out
     assert harness.parse_output(output) == "failure"
     assert "STAGE_0_PRODUCTION_REF" in output
+    assert "TELEGRAM_NETWORK_CALLS=0" in output
+    assert calls == []
+
+
+def test_remote_db_unhealthy_is_before_provider(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness,
+        "_remote_env_and_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError("database unhealthy")),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_0_DB_HEALTH" in output
+    assert "TELEGRAM_NETWORK_CALLS=0" in output
+    assert calls == []
+
+
+def test_env_change_after_provider_readback_stops_before_recreate(monkeypatch, tmp_path, capsys):
+    _, events = _remote_main_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: events.append("delete"))
+    monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: events.append("readback"))
+    real_write = harness.write_planned_bot_environment
+
+    def changed(path_arg, expected, planned, mode):
+        path_arg.write_text(expected + "RACE=changed\n", encoding="utf-8")
+        return real_write(path_arg, expected, planned, mode)
+
+    monkeypatch.setattr(harness, "write_planned_bot_environment", changed)
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_4_ENV_MUTATION" in output
+    assert events == ["fetch", "delete", "readback"]
+
+
+def test_invalid_resolved_mtproto_environment_stops_before_provider(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness,
+        "_validate_resolved_environment",
+        lambda *_args: (_ for _ in ()).throw(ValueError("invalid API ID")),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_1_ENV_PREFLIGHT" in output
     assert "TELEGRAM_NETWORK_CALLS=0" in output
     assert calls == []

@@ -57,6 +57,7 @@ SUCCESS_FIELDS = (
     "API_RUNNING_PASS",
     "WORKER_RUNNING_PASS",
     "DB_HEALTH_PASS",
+    "APP_HEALTH_PASS",
     "ALEMBIC_0046_PASS",
     "BOT_CREDENTIALS_AVAILABLE_PASS",
     "MTPROTO_CREDENTIALS_AVAILABLE_PASS",
@@ -141,6 +142,24 @@ def neutralized_equal(before: str, after: str) -> bool:
     return neutralize_bot_env(before) == neutralize_bot_env(after)
 
 
+def validate_planned_transform(before: str, planned: str) -> None:
+    before_lines = before.splitlines(keepends=True)
+    planned_lines = planned.splitlines(keepends=True)
+    if len(before_lines) != len(planned_lines):
+        raise ValueError("environment transform changed line count")
+    changed = 0
+    for old, new in zip(before_lines, planned_lines):
+        if old == new:
+            continue
+        old_key = old.split("=", 1)[0]
+        ending = "\r\n" if old.endswith("\r\n") else "\n" if old.endswith("\n") else ""
+        if old_key not in BOT_KEYS or new != f"{old_key}={ending}":
+            raise ValueError("environment transform changed a non-Bot value")
+        changed += 1
+    if changed != len(BOT_KEYS):
+        raise ValueError("environment transform did not clear exactly four Bot values")
+
+
 def _env_assignments(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in text.splitlines():
@@ -185,6 +204,22 @@ def clear_bot_environment(path: Path) -> tuple[str, str]:
     after = neutralize_bot_env(before)
     _atomic_write(path, after, mode)
     return before, after
+
+
+def plan_bot_environment(path: Path) -> tuple[str, str, int]:
+    before = _read_preserving_newlines(path)
+    mode = path.stat().st_mode & 0o7777
+    planned = neutralize_bot_env(before)
+    validate_planned_transform(before, planned)
+    return before, planned, mode
+
+
+def write_planned_bot_environment(
+    path: Path, expected_before: str, planned: str, mode: int
+) -> None:
+    if _read_preserving_newlines(path) != expected_before:
+        raise RuntimeError("environment changed after provider verification")
+    _atomic_write(path, planned, mode)
 
 
 def _provider_json(token: str, method: str, query: dict[str, str] | None = None) -> dict:
@@ -258,7 +293,44 @@ def _service_environment(config: dict, service: str) -> dict[str, str]:
     raise ValueError("unexpected Compose environment format")
 
 
-def _remote_env_and_snapshot() -> tuple[Path, dict[str, str], str, str, str]:
+def _container_environment(container_id: str) -> dict[str, str]:
+    raw = json.loads(_run(["docker", "inspect", "-f", "{{json .Config.Env}}", container_id]))
+    if not isinstance(raw, list):
+        raise TypeError("container environment unavailable")
+    values: dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, str) or "=" not in item:
+            raise ValueError("container environment malformed")
+        key, value = item.split("=", 1)
+        values[key] = value
+    return values
+
+
+def _require_running_container(container_id: str, *, health_required: bool = False) -> None:
+    raw = json.loads(_run(["docker", "inspect", "-f", "{{json .State}}", container_id]))
+    if not isinstance(raw, dict) or raw.get("Status") != "running":
+        raise RuntimeError("container is not running")
+    health = raw.get("Health")
+    if health_required and isinstance(health, dict) and health.get("Status") != "healthy":
+        raise RuntimeError("database container is not healthy")
+
+
+def _validate_resolved_environment(
+    snapshot: dict[str, str], api: dict[str, str], worker: dict[str, str]
+) -> None:
+    _require_exact_env(snapshot, BOT_KEYS + MT_PROTO_KEYS + INVARIANT_KEYS, nonempty=True)
+    if int(snapshot["TELEGRAM_API_ID"]) <= 0:
+        raise ValueError("Telegram API ID is not positive")
+    if snapshot.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+        raise ValueError("MTProto AI flag is not disabled")
+    for key in BOT_KEYS + MT_PROTO_KEYS + INVARIANT_KEYS:
+        if not api.get(key) or api.get(key) != snapshot.get(key) or worker.get(key) != api.get(key):
+            raise ValueError("resolved service environment invariant failed")
+    if api.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+        raise ValueError("resolved MTProto AI flag is not disabled")
+
+
+def _remote_env_and_snapshot() -> tuple[Path, dict[str, str], str, str, str, str, str]:
     env_path = Path(".env")
     raw = _read_preserving_newlines(env_path)
     values = _env_assignments(raw)
@@ -272,20 +344,20 @@ def _remote_env_and_snapshot() -> tuple[Path, dict[str, str], str, str, str]:
     if not db_id:
         raise RuntimeError("database is not running")
     volume = _run(["docker", "inspect", "-f", "{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}", db_id])
+    _require_running_container(db_id, health_required=True)
     for service in ("api", "worker"):
         if not _run([*compose, "ps", "-q", service]):
             raise RuntimeError(f"{service} is not running")
-    return env_path, values, raw, db_id, volume
+    api_id = _run([*compose, "ps", "-q", "api"])
+    worker_id = _run([*compose, "ps", "-q", "worker"])
+    _require_running_container(api_id)
+    _require_running_container(worker_id)
+    return env_path, values, raw, db_id, volume, api_id, worker_id
 
 
 def _require_alembic(compose: list[str], expected: str) -> None:
-    command = (
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 '
-        '-U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" '
-        '-At -c "SELECT version_num FROM alembic_version"'
-    )
-    output = _run([*compose, "exec", "-T", "api", "sh", "-c", command])
-    if output.strip() != expected:
+    output = _run([*compose, "exec", "-T", "api", "alembic", "current"])
+    if f"{expected} (head)" not in output.splitlines():
         raise RuntimeError("unexpected Alembic revision")
 
 
@@ -310,17 +382,34 @@ def remote_main() -> int:
         if _run(["git", "status", "--porcelain"]):
             raise HarnessError("STAGE_0_WORKTREE", ValueError("dirty worktree"))
         emit("REMOTE_WORKTREE_CLEAN", "true")
-        env_path, values, before_env, db_id, db_volume = _remote_env_and_snapshot()
+        try:
+            env_path, values, before_env, db_id, db_volume, old_api_id, old_worker_id = _remote_env_and_snapshot()
+        except Exception as exc:
+            raise HarnessError("STAGE_0_DB_HEALTH", exc) from exc
         emit("COMPOSE_CONFIG_PASS", "true")
         emit("DB_RUNNING_PASS", "true")
         emit("API_RUNNING_PASS", "true")
         emit("WORKER_RUNNING_PASS", "true")
-        _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
         emit("DB_HEALTH_PASS", "true")
-        _require_alembic(_compose(), ALEMBIC)
+        _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
+        emit("APP_HEALTH_PASS", "true")
+        try:
+            _require_alembic(_compose(), ALEMBIC)
+        except Exception as exc:
+            raise HarnessError("STAGE_0_ALEMBIC", exc) from exc
         emit("ALEMBIC_0046_PASS", "true")
-        _require_exact_env(values, BOT_KEYS, nonempty=True)
-        _require_exact_env(values, MT_PROTO_KEYS + INVARIANT_KEYS, nonempty=True)
+        try:
+            planned_before, planned_env, env_mode = plan_bot_environment(env_path)
+            if planned_before != before_env:
+                raise RuntimeError("environment changed during preflight")
+            compose_config = _compose_config(_compose())
+            _validate_resolved_environment(
+                values,
+                _service_environment(compose_config, "api"),
+                _service_environment(compose_config, "worker"),
+            )
+        except Exception as exc:
+            raise HarnessError("STAGE_1_ENV_PREFLIGHT", exc) from exc
         emit("BOT_CREDENTIALS_AVAILABLE_PASS", "true")
         emit("MTPROTO_CREDENTIALS_AVAILABLE_PASS", "true")
         token = values["TELEGRAM_BOT_TOKEN"]
@@ -337,7 +426,8 @@ def remote_main() -> int:
             raise HarnessError("STAGE_3_VERIFY_WEBHOOK", exc) from exc
         emit("WEBHOOK_EMPTY_PASS", "true")
         try:
-            _, after_env = clear_bot_environment(env_path)
+            write_planned_bot_environment(env_path, before_env, planned_env, env_mode)
+            after_env = _read_preserving_newlines(env_path)
         except Exception as exc:
             raise HarnessError("STAGE_4_ENV_MUTATION", exc) from exc
         if not neutralized_equal(before_env, after_env):
@@ -348,6 +438,12 @@ def remote_main() -> int:
         except Exception as exc:
             raise HarnessError("STAGE_5_RECREATE_API_WORKER", exc) from exc
         emit("API_WORKER_RECREATED_PASS", "true")
+        new_api_id = _run([*_compose(), "ps", "-q", "api"])
+        new_worker_id = _run([*_compose(), "ps", "-q", "worker"])
+        if new_api_id == old_api_id or new_worker_id == old_worker_id:
+            raise HarnessError("STAGE_5_RECREATE_API_WORKER", RuntimeError("application container was not recreated"))
+        _require_running_container(new_api_id)
+        _require_running_container(new_worker_id)
         if _run([*_compose(), "ps", "-q", "db"]) != db_id:
             raise RuntimeError("database container changed")
         emit("DB_CONTAINER_UNCHANGED_PASS", "true")
@@ -373,6 +469,16 @@ def remote_main() -> int:
                     raise RuntimeError("protected service environment changed")
             if service_env.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
                 raise RuntimeError("MTProto AI flag is not disabled")
+        for service, container_id in (("api", new_api_id), ("worker", new_worker_id)):
+            actual = _container_environment(container_id)
+            for key in BOT_KEYS:
+                if actual.get(key, "") != "":
+                    raise RuntimeError(f"Bot setting remains in {service} container")
+            for key in MT_PROTO_KEYS + INVARIANT_KEYS:
+                if actual.get(key) != values.get(key):
+                    raise RuntimeError(f"protected setting changed in {service} container")
+            if actual.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+                raise RuntimeError(f"MTProto AI flag changed in {service} container")
         for key in MT_PROTO_KEYS + INVARIANT_KEYS:
             if post.get(key) != values.get(key):
                 raise RuntimeError("protected environment changed")
@@ -384,7 +490,10 @@ def remote_main() -> int:
         emit("TELEGRAM_MTPROTO_AI_DISABLED_PASS", "true")
         _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
         emit("HEALTH_PASS", "true")
-        _require_alembic(_compose(), ALEMBIC)
+        try:
+            _require_alembic(_compose(), ALEMBIC)
+        except Exception as exc:
+            raise HarnessError("STAGE_6_ALEMBIC_POST", exc) from exc
         emit("ALEMBIC_POST_0046_PASS", "true")
         emit("TELEGRAM_NETWORK_CALLS", str(network_calls))
         emit("M4BJ1_TERMINAL", "success")
