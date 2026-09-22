@@ -63,6 +63,20 @@ def _run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
+def authoritative_branch(branch: str) -> str:
+    """Return the exact SHA for one remote branch without touching tracking refs."""
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or branch.startswith("/"):
+        raise ValueError("invalid branch")
+    output = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"])
+    lines = output.splitlines()
+    if len(lines) != 1:
+        raise ValueError("unexpected ls-remote output")
+    match = re.fullmatch(rf"([0-9a-f]{{40}})\trefs/heads/{re.escape(branch)}", lines[0])
+    if match is None:
+        raise ValueError("malformed ls-remote output")
+    return match.group(1)
+
+
 def _compose() -> list[str]:
     return ["docker", "compose", "--env-file", ".env", "-f", "infra/compose.yaml", "-f", "infra/compose.deploy.yaml"]
 
@@ -205,14 +219,13 @@ def remote_main() -> int:
         if _run(["git", "remote", "get-url", "origin"]) != CANONICAL_ORIGIN:
             raise VerifyError("STAGE_0_CANONICAL_REPO", ValueError())
         try:
-            _run(["git", "fetch", "--prune", "origin", "production"])
             if _run(["git", "rev-parse", "HEAD"]) != RELEASE:
                 raise ValueError("head")
         except Exception as exc:
             raise VerifyError("STAGE_0_REMOTE_HEAD", exc) from exc
         emit("REMOTE_HEAD_PASS", "true")
         try:
-            if _run(["git", "rev-parse", "origin/production"]) != RELEASE:
+            if authoritative_branch("production") != RELEASE:
                 raise ValueError("production ref")
         except Exception as exc:
             raise VerifyError("STAGE_0_PRODUCTION_REF", exc) from exc
@@ -348,11 +361,17 @@ def parse_output(text: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("command", choices=("bundle", "remote", "validate", "target", "release")); parser.add_argument("path", nargs="?")
+    parser = argparse.ArgumentParser(); parser.add_argument("command", choices=("bundle", "remote", "validate", "target", "release", "authoritative")); parser.add_argument("path", nargs="?")
     args = parser.parse_args()
     if args.command == "bundle": print(Path(__file__).read_text(encoding="utf-8"), end=""); return 0
     if args.command == "remote": return remote_main()
     if args.command == "release": print(RELEASE); return 0
+    if args.command == "authoritative":
+        try:
+            print(authoritative_branch(args.path or ""))
+            return 0
+        except (OSError, ValueError):
+            return 2
     if args.command == "target":
         target = load_target(Path(args.path) if args.path else TARGET_FILE)
         for key in ("ssh_target", "ssh_port", "host_key_sha256", "repository_path", "origin_url"): print(target[key])

@@ -62,6 +62,50 @@ def test_exact_release_and_target_contract() -> None:
     assert target["repository_path"] == "/opt/secretary"
 
 
+def test_authoritative_branch_accepts_exact_single_line(monkeypatch) -> None:
+    monkeypatch.setattr(verifier, "_run", lambda _: "a" * 40 + "\trefs/heads/production")
+    assert verifier.authoritative_branch("production") == "a" * 40
+
+
+@pytest.mark.parametrize("output", [
+    "a" * 40 + " refs/heads/production",
+    "a" * 40 + "\trefs/heads/production\n" + "b" * 40 + "\trefs/heads/production",
+    "A" * 40 + "\trefs/heads/production",
+    "a" * 40 + "\trefs/heads/main",
+])
+def test_authoritative_branch_rejects_malformed_duplicate_or_unexpected(monkeypatch, output) -> None:
+    monkeypatch.setattr(verifier, "_run", lambda _: output)
+    with pytest.raises(ValueError):
+        verifier.authoritative_branch("production")
+
+
+def test_authoritative_branch_does_not_use_tracking_ref(monkeypatch) -> None:
+    commands = []
+    monkeypatch.setattr(verifier, "_run", lambda command: commands.append(command) or ("a" * 40 + "\trefs/heads/production"))
+    verifier.authoritative_branch("production")
+    assert commands == [["git", "ls-remote", "origin", "refs/heads/production"]]
+
+
+def test_remote_authoritative_mismatch_stops_before_runtime(monkeypatch, capsys) -> None:
+    commands = []
+
+    def fake_run(command):
+        commands.append(command)
+        if command == ["git", "remote", "get-url", "origin"]:
+            return verifier.CANONICAL_ORIGIN
+        if command == ["git", "rev-parse", "HEAD"]:
+            return verifier.RELEASE
+        if command == ["git", "ls-remote", "origin", "refs/heads/production"]:
+            return "0" * 40 + "\trefs/heads/production"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(verifier, "_run", fake_run)
+    assert verifier.remote_main() == 2
+    output = capsys.readouterr().out
+    assert "FAILURE_STAGE=STAGE_0_PRODUCTION_REF" in output
+    assert not any(command[:2] == ["docker", "compose"] for command in commands)
+
+
 def test_bundle_compiles_and_remote_entrypoint_exists() -> None:
     result = subprocess.run(["python3", str(SOURCE), "bundle"], capture_output=True, text=True, check=True)
     compile(result.stdout, "<bundle>", "exec")
@@ -73,6 +117,15 @@ def test_source_is_read_only_and_has_no_provider_capability() -> None:
     for forbidden in ("deleteWebhook", "getWebhookInfo", "api.telegram.org", ".flush(", ".commit(", "os.replace", "reconcile_scope", "fetch_history"):
         assert forbidden not in text
     assert "SERVICE_RECREATIONS" in text and "DB_WRITES" in text and "ENV_WRITES" in text
+
+
+def test_no_tracking_ref_or_production_fetch_dependency_remains() -> None:
+    text = SOURCE.read_text()
+    wrapper = (ROOT / "verify_telegram_bot_stage_c.sh").read_text()
+    assert "origin/production" not in text
+    assert "fetch" not in text
+    assert "origin/production" not in wrapper
+    assert "fetch --prune origin main production" not in wrapper
 
 
 def test_child_uses_generic_read_and_aggregate_only() -> None:

@@ -9,10 +9,11 @@ fail() { printf 'M4BR1_BLOCKED=%s\n' "$1"; exit 2; }
 for cmd in git python3 ssh ssh-keyscan ssh-keygen mktemp awk; do command -v "$cmd" >/dev/null || fail "missing_$cmd"; done
 [ "$(git -C "$ROOT" branch --show-current 2>/dev/null || true)" = main ] || fail wrong_local_branch
 [ -z "$(git -C "$ROOT" status --porcelain)" ] || fail local_worktree_dirty
-git -C "$ROOT" fetch --prune origin main production >/dev/null 2>&1 || fail local_fetch
 EXPECTED="$(python3 "$HELPER" release 2>/dev/null)" || fail release_contract
-[ "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)" = "$(git -C "$ROOT" rev-parse origin/main 2>/dev/null || true)" ] || fail local_main_stale
-[ "$(git -C "$ROOT" rev-parse origin/production 2>/dev/null || true)" = "$EXPECTED" ] || fail local_production_ref
+AUTHORITATIVE_MAIN="$(python3 "$HELPER" authoritative main 2>/dev/null)" || fail authoritative_main
+[ "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)" = "$AUTHORITATIVE_MAIN" ] || fail local_main_stale
+AUTHORITATIVE_PRODUCTION="$(python3 "$HELPER" authoritative production 2>/dev/null)" || fail authoritative_production
+[ "$AUTHORITATIVE_PRODUCTION" = "$EXPECTED" ] || fail local_production_ref
 mapfile -t target_values < <(python3 "$HELPER" target "$TARGET" 2>/dev/null) || fail target_parse
 [ "${#target_values[@]}" -eq 5 ] || fail target_parse
 SSH_TARGET="${target_values[0]}"; SSH_PORT="${target_values[1]}"; EXPECTED_PIN="${target_values[2]}"; REMOTE_PATH="${target_values[3]}"; ORIGIN="${target_values[4]}"
