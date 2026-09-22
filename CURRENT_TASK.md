@@ -1,102 +1,80 @@
-# Current task — Execute exactly one live self-authored Telegram E2E
+# Current task — Localize Telegram self-authored E2E one-shot startup failure
 
-## Human authorization
+## Status of the consumed live attempt
 
-Explicit authorization received for exactly one live production self-authored Telegram E2E using:
+Exactly one previously authorized live production self-authored Telegram E2E invocation was executed.
 
-`TG_SELF_E2E_0922A`
+Sanitized stdout:
 
-with real production ML/LLM providers while long-running Telegram AI remains false.
+```text
+SELF_E2E_REMOTE_BLOCKED=oneshot_failed
+```
 
-## Accepted harness
+Exit status: `1`.
 
-Live-ready harness:
+The attempt is consumed. No retry is authorized.
 
-`00a653a11f44f4122fb2689cbbffb06c133049e3`
-
-Current canonical main contains that accepted harness plus architect state/task commits.
+This result is not a Telegram/ML pipeline acceptance failure. The canonical remote wrapper passed its local/remote production-ref, worktree, origin, and long-running-AI checks, reached `docker compose run`, and received a nonzero child result with no harness-owned stdout marker. The wrapper intentionally suppressed child stderr and collapsed that class to `oneshot_failed`, so the current evidence localizes only to the one-shot container/interpreter/helper startup boundary.
 
 Production runtime/ref remains:
 
 `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-Alembic:
+Alembic remains:
 
 `0046`
 
-## Exact authorized invocation
+Long-running Telegram AI remains false.
 
-Execute exactly once from the canonical local checkout:
+## Authorized work
 
-```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin
-python3 ops/production/telegram_self_authored_e2e_remote.py
-```
+Code/test-only corrective work. Do not execute any production or provider operation.
 
-No alternate run, no direct SSH, no manual container command, no second invocation without architect review.
+Harden `ops/production/telegram_self_authored_e2e_remote.py` so a future separately-authorized one-shot can deterministically distinguish:
 
-## Expected success report
+1. one-shot container/Python bootstrap started;
+2. helper source compiled;
+3. helper module imported;
+4. helper `main(["--live"])` was entered and its existing sanitized protocol took over.
 
-A successful run must be non-empty and include at least:
+The bootstrap that establishes stages 1–3 must use Python standard library only and must not import `app` before the explicit helper-import stage.
 
-- `SELF_AUTHORED=PASS`
-- `SUMMARY_COHORT_SELF_AUTHORED=PASS`
-- `EMBEDDING=PASS`
-- `AUTO_LABEL_EXECUTED=PASS`
-- `TEMPORAL=PASS`
-- `CORRELATION=PASS`
-- `SUMMARY=PASS`
-- `CONTEXT_VISIBLE=PASS`
-- `RETRIEVAL_VISIBLE=PASS`
-- `IDEMPOTENT=PASS`
-- `DANGLING_SELECTED_JOBS=0`
-- `TELEGRAM_TRANSPORT_CALLS=0`
-- `PROCESS_LOCAL_AI=true`
-- `ENV_UNCHANGED=PASS`
-- `LONG_RUNNING_API_AI=false`
-- `LONG_RUNNING_WORKER_AI=false`
-- `PROVIDERS=live`
-- `LIVE_EXECUTION=1`
+## Required protocol
 
-`AUTO_LABEL_ASSIGNMENTS=0` is allowed.
+Preserve all existing `SELF_E2E_REMOTE_BLOCKED=...`, `SELF_E2E_BLOCKED=...`, `SELF_E2E_FAILED=...`, and success-report semantics.
 
-Temporal result may be one of the accepted canonical successful forms:
-- `temporal_hint`
-- `calendar_match`
-- `hint_merged`
-- `already_evidenced`
+Add deterministic sanitized startup evidence sufficient to separate at least:
 
-## Failure handling
+- container/interpreter did not start;
+- helper compile failure;
+- helper import failure;
+- helper imported and normal harness protocol ran.
 
-On any:
-- `SELF_E2E_REMOTE_BLOCKED=...`
-- `SELF_E2E_BLOCKED=...`
-- `SELF_E2E_FAILED=...`
-- nonzero exit with incomplete report
+Do not forward raw child stderr, exception messages, tracebacks, environment values, Telegram content, credentials, paths containing secrets, or provider responses.
 
-STOP.
+An exception class may be used only if the tests prove the emitted value is a fixed allowlisted/sanitized token. Prefer fixed stage codes.
 
-Do not retry.
-Do not run direct SSH.
-Do not inspect or bypass provider/privacy guards.
-Do not deploy/restart/recreate services.
-Do not change production env.
-Return the complete sanitized stdout to Architect.
+A future Docker-level failure before bootstrap may still map to a remote blocked marker, but must be distinguishable from helper compile/import failures.
 
-## Hard constraints
+## Tests
 
-- long-running API/worker Telegram AI=false;
-- no Telegram transport calls;
-- no session decrypt;
-- no catch-up/backlog;
-- no synthetic object insertion;
-- no deploy/ref movement;
-- no migration;
-- no production .env change.
+Add focused tests that execute the generated bootstrap/protocol locally with stub helper sources and prove:
 
-This task authorizes exactly one invocation only.
+- bootstrap-start marker appears before helper loading;
+- syntax/compile failure maps to the compile stage and never enters helper main;
+- import-time failure maps to the import stage and never enters helper main;
+- successful import enters helper main exactly once;
+- helper exit code/stdout are propagated unchanged once normal harness protocol owns execution;
+- raw stderr/traceback text is never surfaced;
+- existing local checkout/ref/host-key/long-running-AI guards remain unchanged;
+- no test requires production SSH, Docker, Telegram, OpenAI, or a production DB.
 
-`CURRENT_TASK.md` is the source of active authorization.
+Run the focused test suite, `py_compile`, Ruff check/format, and `git diff --check`.
+
+## Hard stop
+
+This task authorizes no production SSH, no `docker compose run` against production, no live E2E, no provider call, no Telegram transport/session access, no DB write, no deploy/restart/recreate, no production env change, and no ref movement.
+
+When code/tests are complete, commit and push the corrective change, record the factual result in `PROJECT_STATE.md`, report the commit SHA and checks, then STOP.
+
+Do not request or perform another live run. A replacement live authorization can only be issued after Architect review.
