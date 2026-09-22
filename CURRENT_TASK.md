@@ -1,209 +1,245 @@
-# Current task — Replace synthetic rehearsal with real self-authored MTProto E2E acceptance
+# Current task — Harden self-authored Telegram E2E for live correctness and provider-payload privacy
 
-## Architecture decision
+## Review status
 
-The synthetic production rehearsal path is ABANDONED for Telegram acceptance.
+Executor commit under review:
 
-Do not execute or further repair:
-- `ops/production/telegram_production_rehearsal.py`;
-- `ops/production/telegram_production_rehearsal_remote.py`.
+`9d4ed0ee25fbb2bbd9bba51888b63417f1a05957`
 
-They may remain in history/code until later cleanup, but are no longer the acceptance path.
+Architecture verdict:
 
-The new acceptance path uses REAL canonical MTProto objects produced by the normal Telegram sync, with content authored by the connected Telegram user in a dedicated private solo group.
+- core cohort/self-authorship proof: ACCEPTED;
+- summary privacy guard: ACCEPTED as a conservative pre-provider guard;
+- queue parking/drain concept: ACCEPTED;
+- transport/session-decrypt barrier: ACCEPTED;
+- LIVE ACCEPTANCE: NOT YET READY.
 
-Production global gate remains:
+Do not execute production live E2E yet.
 
-`TELEGRAM_MTPROTO_AI_ENABLED=false`
+## Blocking issue 1 — auto-label evidence is not cohort-scoped
 
-The acceptance process may temporarily set the gate true only inside one isolated one-shot process and must target only a proven self-authored test cohort.
+Current `_auto_label_evidence()` counts every historical `auto_label_result` event for the user.
 
-## Why
+On production this can report `AUTO_LABEL_EXECUTED=PASS` even if the selected Telegram cohort never ran auto-label.
 
-This validates the actual production chain:
+Fix:
 
-Telegram MTProto sync -> canonical Object -> normal enqueue/signatures -> real production ML/LLM handlers -> downstream artifacts/retrieval
+- join `AITraceEvent` to `AITrace`;
+- require `event_type=auto_label_result`;
+- require `AITrace.object_id` in the selected marker message ids;
+- snapshot/baseline existing matching event ids before AI is enabled;
+- after drain, count only new matching events from this acceptance run;
+- `0 accepted assignments` remains a valid classifier outcome;
+- no historical unrelated event may satisfy PASS.
 
-without synthetic DB injection.
+Add regression with pre-existing unrelated and pre-existing same-user auto-label events.
 
-It also avoids sending third-party Telegram content to ML/LLM providers during acceptance.
+## Blocking issue 2 — correlation provider payload can include unrelated Telegram content
 
-## User-side fixture
+Canonical `CorrelationCandidateService._participant_time_candidates()` considers arbitrary user objects in a 72-hour time window. With process-local Telegram AI=true, a self-authored Telegram trigger can therefore produce candidate rows whose `content_summary` comes from unrelated/third-party Telegram messages.
 
-The human will create a brand-new private Telegram group with no other participants and add it to an already-synced Secretary Telegram folder.
+That candidate text is passed to the correlation judge.
 
-Use exact marker:
+This violates the acceptance privacy rule.
 
-`TG_SELF_E2E_0922A`
+### Required acceptance-only correlation privacy barrier
 
-Human will send at least three messages FROM THE CONNECTED TELEGRAM ACCOUNT in that group, close together in time:
+Do NOT redesign generic correlation behavior for this acceptance task.
 
-1. `TG_SELF_E2E_0922A Завтра в 11:00 тестовая встреча по бюджету проекта.`
-2. `TG_SELF_E2E_0922A До встречи нужно подготовить тестовую смету.`
-3. `TG_SELF_E2E_0922A Это тестовый контекст для проверки Telegram AI pipeline.`
+At the exact correlation judge boundary, wrap the normal real/fake judge so that BEFORE the inner provider judge is called:
 
-Human should not add another participant.
+- inspect every `CorrelationCandidate.object_id`;
+- load its canonical Object;
+- non-Telegram candidates are allowed;
+- canonical Telegram MTProto candidates are allowed only if their object id belongs to the already privacy-approved self-authored Telegram set for this acceptance;
+- any Telegram candidate outside that approved set => `HarnessBlocked("correlation_privacy")`;
+- the inner judge/provider must not be called on block.
 
-For deterministic correlation, human should also create through the normal Secretary UI/API a normal task containing the same marker, for example:
+The approved Telegram set should be derived from the same self-authored conversation/privacy proof used before summarization, not from direction alone.
 
-`TG_SELF_E2E_0922A Подготовить тестовую смету`
+Add regression:
+- marker trigger + unrelated inbound Telegram message within correlation time window;
+- candidate service includes it;
+- privacy wrapper blocks;
+- underlying correlation judge call count remains zero.
 
-Do NOT require the human to create a dedicated test label.
+Also prove a non-Telegram marker task candidate can reach the inner judge normally.
 
-Auto-label acceptance must use the user's existing normal label vocabulary. The harness must not create labels directly in the DB and must not require any marker-matched label.
+## Blocking issue 3 — prove outcomes, not merely handler names
 
-A real auto-label run is PASS when the normal real classifier/handler path is proven to have executed for at least one selected Telegram object. Evidence should come from the normal AI-audit/job result, including the `auto_label_result` event (candidate count and raw/accepted assignment counts). A zero-assignment classifier result is a valid product outcome and is still PASS for pipeline execution. If one or more existing labels are assigned, report only sanitized counts/state, not label content unless separately needed.
+The eventual report must prove normal downstream product results for the marker cohort.
 
-The harness must not require direct DB insertion of task/label objects.
+Add explicit PASS/FAIL evidence for:
 
-## Current executor task — CODE/TEST ONLY
+### Embedding
 
-Build a new narrow ops acceptance harness for real already-synced objects.
+- every selected marker message has current embedding provenance after the run.
 
-Do NOT run it against production in this task.
+### Auto-label
 
-Suggested location:
+- at least one NEW cohort-scoped `auto_label_result` event exists;
+- accepted assignment count may be zero.
 
-`ops/production/telegram_self_authored_e2e.py`
-and a canonical remote wrapper under `ops/production/`.
+### Temporal
 
-Do not reuse the synthetic fixture creation logic.
+- at least one selected marker message produces a normal temporal result attributable to that selected source;
+- the explicit "Завтра в 11:00" message should produce a persisted temporal hint/evidence or an equivalent successful canonical temporal artifact/result;
+- report participation/result class in sanitized form;
+- no unrelated historical temporal artifact may satisfy PASS.
 
-## Cohort selection: fail closed
+### Correlation
 
-The harness must select Telegram messages only by the exact marker and then prove ALL of the following before any AI/provider call:
+- require a proposed normal correlation edge from a selected marker Telegram message to the existing marker Secretary task;
+- verify it is the exact marker task selected by `prove_cohort`;
+- no historical unrelated edge may satisfy PASS.
 
-1. canonical object:
-   - provider=telegram;
-   - kind=chat_message;
-   - metadata.transport=mtproto;
-2. all selected messages belong to one user;
-3. all selected messages have one `account_id` and one `peer_id`;
-4. corresponding `TelegramMtprotoAccount` belongs to that same user;
-5. selected chat is active scope;
-6. every selected message has:
-   - `direction=outbound`;
-   - `sender_peer_id == TelegramMtprotoAccount.telegram_user_id`;
-7. at least 2 selected messages exist; prefer 3;
-8. marker appears in each selected message;
-9. no selected object is already from another provider/transport;
-10. no real Telegram session decrypt or provider transport call is needed.
+### Conversation semantic summary
 
-Unknown/missing identity metadata => BLOCK, never infer self-authorship from direction alone.
+- require a current `conversation_stack_summary` representation for the selected stack/anchor produced by this acceptance;
+- evidence must be tied to the selected stack/signature, not any historical summary.
 
-## Conversation/summary privacy guard
+### Context / retrieval
 
-Before semantic conversation summarization, resolve the exact conversation stack/burst that would be summarized.
+Under process-local true, prove:
+- `ObjectQueryService(ai_only=True)` can see a selected marker message;
+- `ContextService` can include it when directly targeted;
+- normal search/retrieval can return at least one selected marker object for a narrow query derived only from the user's self-authored test content.
 
-The harness must prove that EVERY Telegram message whose text could enter that summary is also self-authored under the same exact identity rule above.
+Do NOT invoke broad Assistant/voice prompts.
 
-If a non-self-authored or unverifiable Telegram message is in the summary cohort:
-- do not summarize;
-- BLOCK the live acceptance before any summary-provider call.
+### Idempotency
 
-Do not rely only on the user's statement that the group is solo.
+Perform a bounded second enqueue/drain check through normal signatures and prove:
+- no duplicate temporal/correlation/summary artifacts beyond canonical contract;
+- no dangling selected pending/running jobs;
+- no backlog/catch-up.
 
-## Other provider-call privacy guard
+The report must contain explicit markers such as:
 
-For every real ML/LLM call in this acceptance:
-- third-party Telegram message text must be impossible to enter the payload;
-- self-authored selected Telegram text is allowed;
-- non-Telegram Secretary-owned data such as the user's normal task/label candidates may be used by normal product logic.
+```
+EMBEDDING=PASS
+AUTO_LABEL_EXECUTED=PASS
+TEMPORAL=PASS
+CORRELATION=PASS
+SUMMARY=PASS
+CONTEXT_VISIBLE=PASS
+RETRIEVAL_VISIBLE=PASS
+IDEMPOTENT=PASS
+```
 
-Prove this with focused tests/instrumentation around the acceptance harness.
+## Blocking issue 4 — live entrypoint and canonical remote wrapper are incomplete
 
-## Execution design
+Current helper intentionally returns:
 
-Global long-running API/worker remain `TELEGRAM_MTPROTO_AI_ENABLED=false`.
+`SELF_E2E_BLOCKED=live_not_authorized`
 
-One isolated one-shot backend process may set process-local:
+Current `telegram_self_authored_e2e_remote.py` only constructs a compose command. It is not yet a canonical remote/trust wrapper.
 
-`settings.telegram_mtproto_ai_enabled=True`
+Implement CODE/TEST ONLY:
 
-only after the cohort has passed the self-authorship/privacy checks.
+### Helper live boundary
 
-Do not change production .env.
-Do not restart/recreate API/worker.
-Do not run embedding catch-up.
-Do not enumerate/process arbitrary Telegram backlog.
-Do not consume unrelated Telegram jobs.
+`--live` must:
+- require fixed review confirmation env;
+- open normal production SessionLocal;
+- use real configured production providers;
+- read the already-probed long-running API/worker false state from fixed one-shot env markers;
+- call `run_acceptance(... providers="live")`;
+- emit sanitized stdout only;
+- catch broad provider/runtime exceptions;
+- fail selected pending/running jobs with fixed `harness_aborted`;
+- commit failure cleanup;
+- restore process-local settings/env in all paths;
+- never print traceback/raw exception/provider payload/message text/ids/secrets.
 
-Use canonical enqueue/signature/handler paths only for the selected cohort.
+### Remote wrapper
 
-Queue safety must preserve the prior accepted principle:
-- exact selected jobs are claimed/parked for synchronous in-process execution before worker visibility/race;
-- false long-running worker cannot consume them;
-- success/failure leaves zero selected pending/running jobs.
+Use the already-established canonical production trust pattern:
 
-## Required real pipeline proof targets
+- canonical local repo/origin/main/clean worktree;
+- fetch/refresh remote refs;
+- exact `origin/production == 8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`;
+- target.json validation;
+- pinned host key, BatchMode, strict known-hosts;
+- remote production HEAD exact release;
+- remote tracked worktree clean;
+- probe long-running api and worker and require Telegram AI=false;
+- stream reviewed helper source to a unique read-only path under `/app`;
+- run isolated `docker compose run --rm --no-deps --no-build`;
+- DO NOT pass `TELEGRAM_MTPROTO_AI_ENABLED=true` in container env;
+- process-local setting is changed only by the helper after privacy proofs;
+- no Docker socket;
+- no `up`, restart, recreate, deploy, migration, or production checkout mutation;
+- sanitize outer/remote errors so empty stdout is impossible.
 
-The eventual live run must prove on real synced self-authored objects:
+Do not reuse the abandoned synthetic helper business logic.
 
-- real canonical Inbox object exists;
-- normal conversation grouping works;
-- embedding produced with real configured provider;
-- auto-label real classifier/handler path executes against the existing label vocabulary; zero accepted assignments is allowed, while any existing-label assignment is reported as an observed result rather than a required outcome;
-- temporal extraction real handler produces a test hint from the explicit date/time message;
-- task correlation real handler proposes relation to the marker-matched normal Secretary task;
-- conversation semantic summary produced for the self-authored-only stack;
-- AI-only Context/ObjectQuery/retrieval visibility sees the selected objects under process-local true;
-- idempotent repeat handling does not duplicate artifacts beyond normal contract;
-- Telegram transport calls=0;
-- long-running API/worker AI=false throughout;
-- global env unchanged.
+## Metadata fail-closed hardening
 
-Do not run Assistant/voice prompts that could broaden retrieval over unrelated Telegram content. Voice parity remains architectural inheritance from Assistant.
+Malformed marker metadata such as invalid UUID `account_id` or non-integer `peer_id` must become a fixed `HarnessBlocked` reason, never an uncaught ValueError/traceback.
 
-## Tests
+Add tests.
 
-Add focused tests proving:
-- inbound object rejected;
-- outbound object with sender != account user id rejected;
-- missing sender/account identity rejected;
-- mixed account/peer rejected;
-- inactive scope rejected;
-- third-party message in summary cohort blocks before provider call;
-- only exact marker cohort gets jobs;
+## Preserve accepted behavior
+
+Keep:
+- exact marker `TG_SELF_E2E_0922A`;
+- existing normal Secretary marker task; no test label required;
+- existing label vocabulary only;
+- zero-assignment auto-label is allowed;
+- active-scope proof;
+- outbound + sender_peer_id == account.telegram_user_id proof;
+- summary cohort third-party block before provider calls;
+- Telegram transport/session decrypt unreachable;
 - no catch-up/backlog enqueue;
-- no Telegram transport/session decrypt;
-- process-local true only after privacy checks;
-- normal handlers are used;
-- failure leaves zero selected dangling jobs;
-- long-running service/env unchanged;
-- sanitized output only.
+- unrelated pending jobs untouched;
+- global production flag false;
+- no synthetic object insertion.
 
-Use fake providers locally for harness mechanics.
+## Validation
 
-Run compile, Ruff, diff-check.
+Run:
+- focused self-authored E2E tests;
+- execution-level remote-wrapper tests;
+- relevant correlation/temporal/summary tests as needed;
+- py_compile;
+- Ruff;
+- git diff --check.
 
-## Production authorization
+## Authorization
 
-NOT AUTHORIZED in this task:
-- live production execution;
-- production DB mutation caused by AI handlers;
-- real provider calls;
+AUTHORIZED:
+- local helper/wrapper/tests correction;
+- commit/push canonical main;
+- update PROJECT_STATE.md.
+
+NOT AUTHORIZED:
+- production live E2E;
 - production SSH;
-- Telegram provider calls;
+- real provider calls;
+- production DB mutation;
 - deploy/ref movement;
-- global AI=true.
+- global Telegram AI enablement;
+- Telegram transport/session decrypt;
+- synthetic cleanup.
 
-The human may create the Telegram solo group/messages and normal Secretary task/label manually. Those are user actions outside this code task.
+A new explicit human authorization will be requested only after architect review of the corrected live-ready harness, because this live path sends the user's real self-authored Telegram test content to production ML/LLM providers.
 
-## Required executor report
+## Required report
 
 Return:
 - commit SHA;
-- files changed;
-- exact self-authorship proof;
-- summary/privacy guard;
-- queue isolation design;
-- local fake-provider results;
+- cohort-scoped auto-label evidence design;
+- correlation provider-payload privacy barrier;
+- explicit downstream artifact/result proofs;
+- live boundary design;
+- canonical remote wrapper design;
 - tests/compile/Ruff/diff-check;
 - live execution=0.
 
 Final marker:
 
-`TELEGRAM_SELF_AUTHORED_E2E_HARNESS_READY`
+`TELEGRAM_SELF_AUTHORED_E2E_LIVE_READY`
 
 Then STOP.
 
