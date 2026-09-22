@@ -1,12 +1,12 @@
-# Current task — Telegram Bot API M4BV1: final live read-only Stage C acceptance awaiting explicit authorization
+# Current task — Telegram Bot API M4BV1: execute final one-shot live read-only Stage C acceptance
 
 ## Status
 
-M4BU1 protocol/runtime-env correction is ARCHITECT ACCEPTED.
+Human explicitly authorized the final live read-only Stage C acceptance after M4BU1.
 
-Accepted verifier code includes:
-- canonical Git bootstrap correction: `3c6da496fa0d6bb5dc7d4d37b22190c473a5a0bd`;
-- protocol/runtime-env correction: `7a9396a502224b02fb0037628531e4df6c9ada4d`.
+Accepted verifier baseline:
+- canonical Git bootstrap: `3c6da496fa0d6bb5dc7d4d37b22190c473a5a0bd`;
+- protocol/runtime-env consistency: `7a9396a502224b02fb0037628531e4df6c9ada4d`.
 
 Current production runtime/ref:
 `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
@@ -14,59 +14,39 @@ Current production runtime/ref:
 Expected Alembic:
 `0046`
 
-## Important corrected root cause
+## Authorization
 
-The two earlier `M4BR1_BLOCKED=local_production_ref` attempts were caused directly by the verifier containing a 39-character release constant missing the final `b`.
-
-That defect is fixed. The full expected release is now:
-`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
-
-Git trust-order and explicit canonical-URL checks were also hardened and remain accepted.
-
-## Authorization state
-
-FINAL LIVE READ-ONLY RUN IS NOT YET AUTHORIZED.
-
-Acceptable explicit authorization text:
-
-`Разрешаю финальный live read-only Stage C acceptance после M4BU1`
-
-After explicit authorization, execute exactly once:
+Authorize exactly ONE execution of:
 
 `bash ops/production/verify_telegram_bot_stage_c.sh`
 
-## Expected accepted behavior
-
-The verifier is read-only and must prove:
-- validated canonical target/origin before authoritative branch lookup;
-- authoritative main and production refs through explicit canonical URL;
-- exact production HEAD and clean worktree;
-- DB/API/worker running, DB healthy;
+The verifier may only read/inspect:
+- validated canonical target/origin;
+- authoritative remote `main` and `production` refs via explicit canonical URL;
+- exact production HEAD and clean tracked worktree;
+- DB/API/worker running state and DB health;
 - Alembic exact `0046 (head)`;
 - application health;
-- retired Bot keys absent from Compose/API/worker runtime env;
-- production `.env` Bot legacy lines absent or empty only;
-- MTProto credentials preserved;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- retired Bot routes absent;
-- required MTProto route present;
-- Bot Settings model fields absent;
+- absence of retired Bot variables from Compose API/worker and actual API/worker container environments;
+- production `.env` legacy Bot keys absent or empty only;
+- preservation of MTProto/protected credentials and `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- absence of retired Bot routes and Settings fields;
+- presence of required MTProto route;
 - exactly one MTProto account;
 - active scope count 28;
-- legacy non-MTProto Telegram objects preserved;
-- at least one historical Bot-derived object readable through canonical Inbox eligibility.
-
-The strict parser is now end-to-end tested against actual `remote_main()` output.
+- aggregate preserved legacy non-MTProto Telegram objects;
+- existence of at least one historical Bot-derived object readable through canonical Inbox eligibility.
 
 ## Hard prohibitions
 
-Must remain:
+The verifier must perform:
 - Telegram/provider calls = 0;
 - DB writes = 0;
 - env writes = 0;
-- service restart/recreate = 0;
-- deploy/ref movement = 0;
-- no object/account/peer/message identifiers or message content emitted.
+- service restarts/recreates = 0;
+- deploy/ref movement = 0.
+
+It must emit no object/account/peer/message identifiers and no message content.
 
 ## Failure handling
 
@@ -76,6 +56,12 @@ If verifier blocks or fails:
 - do not use direct SSH;
 - do not restart/recreate services;
 - do not modify DB/env;
-- return complete sanitized output and STOP.
+- return the complete sanitized output and STOP.
+
+## Required report
+
+Return the complete sanitized verifier output, including all PASS markers reached, any `FAILURE_STAGE`, zero mutation/provider counters, terminal marker, and final end marker if success.
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
