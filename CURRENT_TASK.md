@@ -1,157 +1,131 @@
-# Current task — Telegram Bot API M4BP1: Stage C non-destructive code/config cleanup
+# Current task — Telegram Bot API M4BP1R: close Stage C compatibility regressions
 
 ## Status
 
-Telegram Bot API retirement is COMPLETE through external/runtime lifecycle:
+M4BP1 implementation commit:
+`0789fc1c21b643667be0e20e328d14d14f32438f`
 
-- Bot ingress/link/send behavior retired in production;
-- webhook deleted and verified empty;
-- Bot runtime credentials cleared;
-- production health and Alembic 0046 verified;
-- Telegram bot account destroyed through BotFather;
-- MTProto is the sole live Telegram transport.
+Architect review: CODE DIRECTION ACCEPTED, but NOT YET ACCEPTED FOR DEPLOY.
 
-Historical Bot-derived canonical objects and legacy Bot DB schema remain intentionally preserved.
+Current production runtime/ref remains:
+`fe151f12f64886505253e765b82458710a949e34`
+
+Alembic:
+`0046`
+
+No migration exists in the candidate.
 
 ## Goal
 
-Remove dead Bot-only application/config/UI surfaces now that the bot no longer exists, without deleting historical data or performing destructive schema changes.
+Make a narrow compatibility/test/documentation correction. Do not broaden product behavior.
 
-This is CODE ONLY. No deploy or production mutation.
+## Required corrections
 
-## Required cleanup
+### 1. Historical Bot-derived Inbox/read regression
 
-### Backend routes and live services
+Add a focused DB-independent regression proving a legacy Bot-derived canonical Telegram object remains consumable by the generic Inbox/read presentation path after Stage C.
 
-Remove dead live Bot API surfaces, including as applicable:
+Use an in-memory/model-level object or existing pure helper where possible.
 
-- legacy `POST /telegram/link`;
-- legacy `POST /integrations/telegram/webhook`;
-- Bot-only router registration that is now unused;
-- Bot-only `TelegramHttpTransport`;
-- Bot-only webhook/link runtime services;
-- Bot-only CLI webhook registration utility;
-- legacy Bot send/reply branches that can no longer execute.
+At minimum prove for a legacy object with:
+- `provider="telegram"`;
+- `kind="chat_message"`;
+- `origin="source"`;
+- legacy Bot metadata with no `transport="mtproto"`;
 
-Do not remove generic historical-read behavior required to display old Bot-derived canonical objects.
+that:
+- the generic Inbox presentation/projection path can produce the expected source item without importing any retired Bot runtime module;
+- the MTProto visibility predicate is explicitly non-restrictive for non-MTProto Telegram objects (a compile/static assertion is acceptable for this part if a DB is unavailable).
 
-### Configuration
+Do not reintroduce Bot runtime code.
 
-Remove live Bot runtime configuration dependencies from application/config and Compose:
+### 2. Strengthen active-config regression
 
-- `TELEGRAM_BOT_TOKEN`;
-- `TELEGRAM_BOT_USERNAME`;
-- `TELEGRAM_WEBHOOK_SECRET`;
-- `TELEGRAM_WEBHOOK_URL`.
+In the Stage C test:
+- assert lowercase Python fields are absent from `app/core/config.py`:
+  - `telegram_bot_token`
+  - `telegram_bot_username`
+  - `telegram_webhook_secret`
+  - `telegram_webhook_url`;
+- assert uppercase env names are absent from Compose and `.env.example`;
+- retain positive assertions that MTProto config remains.
 
-Remove them from:
-- Settings/config declarations;
-- `.env.example`;
-- Compose API/worker environment declarations;
-- any active runtime readiness/config checks.
+### 3. Mark retained Bot stores as legacy-only
 
-Do not mutate production `.env` in this task. Empty legacy lines may remain there until a separately authorized environment hygiene step if desired.
+The retained Bot-only persistence helpers are historical compatibility artifacts, not live integration surfaces.
 
-### Client
+Add clear module/class documentation to:
+- `backend/app/connectors/telegram/account_store.py`;
+- `backend/app/connectors/telegram/link_state.py`;
 
-Remove remaining dead Bot API client models/calls/tests that survived Stage A, such as:
-- `linkTelegram()`;
-- legacy Bot connection DTO/state if no longer used;
-- obsolete Bot help/status text or tests.
+stating they are legacy Bot API persistence helpers retained only for historical/schema compatibility and must not be used to re-enable live Bot linking/ingress.
 
-Keep the MTProto account section and all MTProto behavior unchanged.
+No behavior change and no schema change.
 
-### Historical compatibility
+### 4. Clean duplicate MTProto comment
 
-Preserve:
+Remove the duplicated adjacent Telegram MTProto comment in `.env.example`.
+
+No other config change.
+
+## Preserve
+
+Do not change:
 - historical Bot-derived objects;
-- their existing provider/external IDs;
-- `telegram_accounts` and `telegram_link_states` tables/models if removing them would require migration or could break historical compatibility;
-- Alembic migration `0039_telegram_accounts.py`;
-- all old migrations;
-- any pure normalization/data-reading code demonstrably required for historical objects.
+- legacy DB models/tables/migrations;
+- `TelegramSendRoute` compatibility parsing;
+- fail-closed historical Bot send behavior;
+- MTProto send/reply/edit/delete/mark-read;
+- MTProto scope/session/sync;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- production `.env`.
 
-No migration `0047`.
+No migration / no `0047`.
 
-If a Bot-only model/store is provably unreferenced after cleanup but removing the model would imply schema semantics or complicate historical inspection, leave it in place and mark it legacy rather than deleting it.
-
-### Communication behavior
-
-For historical Bot-derived Telegram objects:
-- do not silently reroute through MTProto;
-- mutation/send/reply must remain unavailable/fail closed;
-- ordinary Inbox/object reading must remain functional.
-
-MTProto send/reply/edit/delete/mark-read remains unchanged.
-
-## Required tests
-
-Add/update focused tests proving:
-
-1. legacy Bot link route no longer exists / is not registered;
-2. legacy Bot webhook route no longer exists / is not registered;
-3. no active runtime code can construct/use Bot HTTP transport;
-4. historical Bot-derived Telegram objects remain readable through generic object/Inbox paths;
-5. historical Bot-derived mutation/send remains unavailable and never routes to MTProto;
-6. MTProto send path still works;
-7. Bot config fields are absent from active Settings/Compose/.env.example;
-8. MTProto config remains present;
-9. Flutter has no Bot link/connection client path;
-10. MTProto account UI remains present.
+## Validation
 
 Run:
-- relevant backend focused tests;
-- relevant MTProto tests;
+- focused M4BP1 tests;
+- any new historical-read regression;
 - Python compile;
-- Ruff;
-- Flutter focused tests;
-- Flutter analyzer for changed client code;
+- Ruff on touched Python;
+- relevant Flutter focused tests only if client files change;
 - `git diff --check`.
 
-## Scope discipline
-
-Do NOT:
-- delete historical Bot-derived canonical objects;
-- rewrite external IDs;
-- drop `telegram_accounts` / `telegram_link_states`;
-- add migration `0047`;
-- edit old migration files;
-- change production `.env`;
-- deploy;
-- move production ref;
-- call Telegram/Bot API;
-- modify MTProto scope/session/sync;
-- enable MTProto AI.
+DB-backed tests remain optional if the known local PostgreSQL hostname is unavailable; do not use production DB.
 
 ## Authorization
 
 AUTHORIZED:
-- local Stage C code/config/UI/test cleanup;
+- local test/documentation/cosmetic corrections above;
 - update `PROJECT_STATE.md`;
-- commit and push canonical `main`.
+- commit/push canonical `main`.
 
 NOT AUTHORIZED:
-- any production action;
-- destructive DB/schema cleanup.
+- production SSH;
+- deploy/ref movement;
+- provider calls;
+- production env changes;
+- schema/data mutation;
+- Stage C destructive cleanup;
+- MTProto behavior changes.
 
 ## Required report
 
 Return:
-- implementation commit SHA;
-- files removed/changed;
-- exact dead Bot surfaces removed;
-- exact legacy schema/data pieces intentionally retained;
-- historical-read / mutation-fail-closed evidence;
-- MTProto regression evidence;
-- backend/client test results;
-- compile/Ruff/analyzer/diff-check results;
+- corrective commit SHA;
+- files changed;
+- historical Bot generic-read regression description/result;
+- strengthened config assertions;
+- legacy-only store marking;
+- validation results;
 - production SSH=0;
 - provider calls=0;
 - production mutation=0.
 
 Final marker:
 
-`TELEGRAM_BOT_M4BP1_STAGE_C_CODE_CLEANUP_READY`
+`TELEGRAM_BOT_M4BP1R_STAGE_C_COMPAT_READY`
 
 Then STOP.
 
