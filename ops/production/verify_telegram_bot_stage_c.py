@@ -21,12 +21,15 @@ MT_KEYS = ("TELEGRAM_API_ID", "TELEGRAM_API_HASH")
 PROTECTED_KEYS = ("SECRETARY_CREDENTIAL_KEY", "POSTGRES_PASSWORD")
 LEGACY_READ_CANDIDATE_LIMIT = 1000
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+PASS_FIELDS = (
+    "REMOTE_HEAD_PASS", "REMOTE_PRODUCTION_REF_PASS", "REMOTE_WORKTREE_CLEAN",
+    "DB_RUNNING_PASS", "API_RUNNING_PASS", "WORKER_RUNNING_PASS", "DB_HEALTH_PASS",
+    "ALEMBIC_0046_PASS", "APP_HEALTH_PASS", "BOT_CONTAINER_ENV_ABSENT_PASS",
+    "MTPROTO_CREDENTIALS_PRESERVED_PASS", "TELEGRAM_MTPROTO_AI_DISABLED_PASS",
+    "LEGACY_BOT_ROUTES_ABSENT_PASS", "MTPROTO_ROUTE_PRESENT_PASS", "BOT_SETTINGS_MODEL_ABSENT_PASS",
+)
 SUCCESS_FIELDS = (
-    "M4BR1_BEGIN", "REMOTE_HEAD_PASS", "REMOTE_PRODUCTION_REF_PASS", "REMOTE_WORKTREE_CLEAN",
-    "DB_RUNNING_PASS", "API_RUNNING_PASS", "WORKER_RUNNING_PASS", "DB_HEALTH_PASS", "APP_HEALTH_PASS",
-    "ALEMBIC_0046_PASS", "LEGACY_BOT_ROUTES_ABSENT_PASS", "MTPROTO_ROUTE_PRESENT_PASS",
-    "BOT_SETTINGS_MODEL_ABSENT_PASS", "BOT_CONTAINER_ENV_ABSENT_PASS", "MTPROTO_CREDENTIALS_PRESERVED_PASS",
-    "TELEGRAM_MTPROTO_AI_DISABLED_PASS", "MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT",
+    "M4BR1_BEGIN", *PASS_FIELDS, "MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT",
     "LEGACY_BOT_OBJECT_COUNT", "LEGACY_BOT_INBOX_READABLE", "TELEGRAM_NETWORK_CALLS", "DB_WRITES",
     "ENV_WRITES", "SERVICE_RECREATIONS", "M4BR1_TERMINAL", "M4BR1_END",
 )
@@ -150,9 +153,16 @@ def _require_alembic(compose: list[str]) -> None:
         raise RuntimeError("unexpected Alembic revision")
 
 
-def _require_empty(values: dict[str, str], keys: tuple[str, ...]) -> None:
-    if any(values.get(key, "") != "" for key in keys):
+def _legacy_bot_lines_absent_or_empty(values: dict[str, str]) -> None:
+    """Production .env may omit the four legacy Bot keys or keep them empty."""
+    if any(values.get(key, "") != "" for key in BOT_KEYS):
         raise ValueError("Bot setting is nonempty")
+
+
+def _bot_keys_absent(values: dict[str, str]) -> None:
+    """Compose and container environments must not define the Bot keys at all."""
+    if any(key in values for key in BOT_KEYS):
+        raise ValueError("Bot setting is present")
 
 
 def _has_eligible_candidate(candidates, is_eligible) -> bool:
@@ -267,7 +277,7 @@ def remote_main() -> int:
             raise VerifyError("STAGE_0_APP_HEALTH", exc) from exc
         emit("APP_HEALTH_PASS", "true")
         try:
-            _require_empty(env_values, BOT_KEYS)
+            _legacy_bot_lines_absent_or_empty(env_values)
             if int(env_values.get("TELEGRAM_API_ID", "0")) <= 0 or not env_values.get("TELEGRAM_API_HASH"):
                 raise ValueError("MTProto credentials unavailable")
             if any(not env_values.get(key) for key in PROTECTED_KEYS):
@@ -276,14 +286,14 @@ def remote_main() -> int:
                 raise ValueError("AI flag enabled")
             for service in ("api", "worker"):
                 values = _service_env(config, service)
-                _require_empty(values, BOT_KEYS)
+                _bot_keys_absent(values)
                 for key in MT_KEYS + PROTECTED_KEYS:
                     if values.get(key) != env_values.get(key):
                         raise ValueError("protected service environment mismatch")
                 if values.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
                     raise ValueError("AI flag enabled")
                 values = _container_env(ids[service])
-                _require_empty(values, BOT_KEYS)
+                _bot_keys_absent(values)
                 for key in MT_KEYS + PROTECTED_KEYS:
                     if values.get(key) != env_values.get(key):
                         raise ValueError("protected container environment mismatch")
@@ -342,7 +352,7 @@ def parse_output(text: str) -> str:
         if keys != list(SUCCESS_FIELDS):
             raise ValueError("invalid success protocol")
         values = dict(pairs)
-        if values["M4BR1_TERMINAL"] != "success" or any(values[key] != "true" for key in SUCCESS_FIELDS[1:16]):
+        if values["M4BR1_TERMINAL"] != "success" or any(values[key] != "true" for key in PASS_FIELDS):
             raise ValueError("invalid success values")
         if values["LEGACY_BOT_INBOX_READABLE"] != "true" or any(values[key] != "0" for key in ("TELEGRAM_NETWORK_CALLS", "DB_WRITES", "ENV_WRITES", "SERVICE_RECREATIONS")):
             raise ValueError("invalid success counters")

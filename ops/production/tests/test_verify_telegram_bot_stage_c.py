@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import stat
@@ -21,11 +22,11 @@ def success() -> str:
     values = {
         "M4BR1_BEGIN": "true", "REMOTE_HEAD_PASS": "true", "REMOTE_PRODUCTION_REF_PASS": "true",
         "REMOTE_WORKTREE_CLEAN": "true", "DB_RUNNING_PASS": "true", "API_RUNNING_PASS": "true",
-        "WORKER_RUNNING_PASS": "true", "DB_HEALTH_PASS": "true", "APP_HEALTH_PASS": "true",
-        "ALEMBIC_0046_PASS": "true", "LEGACY_BOT_ROUTES_ABSENT_PASS": "true",
-        "MTPROTO_ROUTE_PRESENT_PASS": "true", "BOT_SETTINGS_MODEL_ABSENT_PASS": "true",
-        "BOT_CONTAINER_ENV_ABSENT_PASS": "true", "MTPROTO_CREDENTIALS_PRESERVED_PASS": "true",
-        "TELEGRAM_MTPROTO_AI_DISABLED_PASS": "true", "MTPROTO_ACCOUNT_COUNT": "1",
+        "WORKER_RUNNING_PASS": "true", "DB_HEALTH_PASS": "true", "ALEMBIC_0046_PASS": "true",
+        "APP_HEALTH_PASS": "true", "BOT_CONTAINER_ENV_ABSENT_PASS": "true",
+        "MTPROTO_CREDENTIALS_PRESERVED_PASS": "true", "TELEGRAM_MTPROTO_AI_DISABLED_PASS": "true",
+        "LEGACY_BOT_ROUTES_ABSENT_PASS": "true", "MTPROTO_ROUTE_PRESENT_PASS": "true",
+        "BOT_SETTINGS_MODEL_ABSENT_PASS": "true", "MTPROTO_ACCOUNT_COUNT": "1",
         "ACTIVE_SCOPE_COUNT": "28", "LEGACY_BOT_OBJECT_COUNT": "3", "LEGACY_BOT_INBOX_READABLE": "true",
         "TELEGRAM_NETWORK_CALLS": "0", "DB_WRITES": "0", "ENV_WRITES": "0",
         "SERVICE_RECREATIONS": "0", "M4BR1_TERMINAL": "success", "M4BR1_END": "true",
@@ -56,6 +57,18 @@ def test_protocol_accepts_success_and_sanitized_failure() -> None:
 def test_protocol_rejects_unknown_or_unsafe_output(bad: str) -> None:
     with pytest.raises(ValueError):
         verifier.parse_output(bad)
+
+
+def test_protocol_rejects_duplicate_and_out_of_order_fields() -> None:
+    lines = success().splitlines()
+    duplicate = "\n".join([lines[0], lines[1], *lines[1:]]) + "\n"
+    swapped = lines[:]
+    alembic = swapped.index("ALEMBIC_0046_PASS=true")
+    health = swapped.index("APP_HEALTH_PASS=true")
+    swapped[alembic], swapped[health] = swapped[health], swapped[alembic]
+    for bad in (duplicate, "\n".join(swapped) + "\n"):
+        with pytest.raises(ValueError):
+            verifier.parse_output(bad)
 
 
 def test_exact_release_and_target_contract() -> None:
@@ -406,3 +419,172 @@ def test_wrapper_ignores_tracking_refs_and_reaches_pin_without_mutation(tmp_path
         assert forbidden not in log
     assert "ssh-keyscan" in log
     assert "\nssh " not in f"\n{log}"
+
+
+RUNTIME_ENV = {
+    "TELEGRAM_API_ID": "1",
+    "TELEGRAM_API_HASH": "hash",
+    "SECRETARY_CREDENTIAL_KEY": "key",
+    "POSTGRES_PASSWORD": "pw",
+    "TELEGRAM_MTPROTO_AI_ENABLED": "false",
+}
+CHILD_SUCCESS = (
+    "MTPROTO_ACCOUNT_COUNT=1\n"
+    "ACTIVE_SCOPE_COUNT=28\n"
+    "LEGACY_BOT_OBJECT_COUNT=3\n"
+    "LEGACY_BOT_INBOX_READABLE=true"
+)
+
+
+def _dotenv(*, empty_bot: bool) -> str:
+    lines = [f"{key}=" for key in verifier.BOT_KEYS] if empty_bot else []
+    lines.extend(f"{key}={value}" for key, value in RUNTIME_ENV.items())
+    return "\n".join(lines) + "\n"
+
+
+def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None = None, service_envs: dict | None = None, container_env: dict, health_error: bool = False, child: str = CHILD_SUCCESS):
+    if service_envs is None:
+        service_envs = {"api": service_env, "worker": service_env}
+    config = {"services": {name: {"environment": values} for name, values in service_envs.items()}}
+
+    def fake_run(command):
+        if command == ["git", "remote", "get-url", "origin"]:
+            return verifier.CANONICAL_ORIGIN
+        if command == ["git", "rev-parse", "HEAD"]:
+            return verifier.RELEASE
+        if command == ["git", "ls-remote", verifier.CANONICAL_ORIGIN, "refs/heads/production"]:
+            return verifier.RELEASE + "\trefs/heads/production"
+        if command == ["git", "status", "--porcelain"]:
+            return ""
+        if command[-3:] == ["config", "--format", "json"]:
+            return json.dumps(config)
+        if command[-3:-1] == ["ps", "-q"]:
+            return f"{command[-1]}id"
+        if command[:3] == ["docker", "inspect", "-f"] and ".State" in command[3]:
+            if command[4] == "dbid":
+                return json.dumps({"Status": "running", "Health": {"Status": "healthy"}})
+            return json.dumps({"Status": "running"})
+        if command[:3] == ["docker", "inspect", "-f"] and ".Config.Env" in command[3]:
+            return json.dumps(container_env[command[4]])
+        if command[-2:] == ["alembic", "current"]:
+            return "0046 (head)"
+        if len(command) >= 2 and command[-2] == "-c":
+            return child
+        raise AssertionError(command)
+
+    def fake_read(self, encoding="utf-8", errors=None):
+        if self.name == ".env":
+            return dotenv
+        return Path.read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(verifier, "_run", fake_run)
+    monkeypatch.setattr(verifier.Path, "read_text", fake_read)
+    if health_error:
+        def fail_health(*_args, **_kwargs):
+            raise RuntimeError("health check exhausted")
+        monkeypatch.setattr(verifier, "_health", fail_health)
+    else:
+        monkeypatch.setattr(verifier, "_health", lambda *_args, **_kwargs: None)
+    code = verifier.remote_main()
+    return code, capsys.readouterr().out
+
+
+def _keys(text: str) -> list[str]:
+    return [line.split("=", 1)[0] for line in text.splitlines()]
+
+
+@pytest.mark.parametrize("empty_bot", [True, False])
+def test_remote_success_transcript_matches_parser_order(monkeypatch, capsys, empty_bot) -> None:
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=empty_bot),
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 0
+    assert _keys(stdout) == list(verifier.SUCCESS_FIELDS)
+    assert verifier.parse_output(stdout) == "success"
+    assert len(verifier.RELEASE) == 40
+
+
+def test_remote_app_health_failure_after_alembic_is_valid(monkeypatch, capsys) -> None:
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True), health_error=True,
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_0_APP_HEALTH" in stdout
+    assert stdout.index("ALEMBIC_0046_PASS=true") < stdout.index("FAILURE_STAGE=")
+    assert "APP_HEALTH_PASS" not in stdout
+
+
+def test_remote_environment_failure_after_health_is_valid(monkeypatch, capsys) -> None:
+    present = {**RUNTIME_ENV, "TELEGRAM_BOT_TOKEN": ""}
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True),
+        service_env=present, container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_1_ENVIRONMENT" in stdout
+    assert "APP_HEALTH_PASS=true" in stdout
+    assert "BOT_CONTAINER_ENV_ABSENT_PASS" not in stdout
+
+
+def test_remote_child_failure_after_environment_markers_is_valid(monkeypatch, capsys) -> None:
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    child = CHILD_SUCCESS.replace("MTPROTO_ACCOUNT_COUNT=1", "MTPROTO_ACCOUNT_COUNT=2")
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True), child=child,
+        service_env=dict(RUNTIME_ENV), container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_2_READ_ONLY_STATE" in stdout
+    assert "TELEGRAM_MTPROTO_AI_DISABLED_PASS=true" in stdout
+    assert "LEGACY_BOT_ROUTES_ABSENT_PASS" not in stdout
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_present_empty_bot_key_fails_in_compose_and_container(monkeypatch, capsys, service) -> None:
+    clean = dict(RUNTIME_ENV)
+    present = {**RUNTIME_ENV, "TELEGRAM_BOT_TOKEN": ""}
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    compose = {"api": dict(clean), "worker": dict(clean)}
+    compose[service] = present
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True),
+        service_envs=compose, container_env={"apiid": lines, "workerid": lines},
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_1_ENVIRONMENT" in stdout
+    containers = {"apiid": list(lines), "workerid": list(lines)}
+    containers[f"{service}id"] = [*lines, "TELEGRAM_BOT_TOKEN="]
+    code, stdout = _drive_remote(
+        monkeypatch, capsys, dotenv=_dotenv(empty_bot=True),
+        service_envs={"api": dict(clean), "worker": dict(clean)}, container_env=containers,
+    )
+    assert code == 2
+    assert verifier.parse_output(stdout) == "failure"
+    assert "FAILURE_STAGE=STAGE_1_ENVIRONMENT" in stdout
+
+
+def test_bot_env_helpers_distinguish_legacy_file_from_runtime_absence() -> None:
+    empty = {key: "" for key in verifier.BOT_KEYS}
+    verifier._legacy_bot_lines_absent_or_empty({})
+    verifier._legacy_bot_lines_absent_or_empty(empty)
+    with pytest.raises(ValueError, match="nonempty"):
+        verifier._legacy_bot_lines_absent_or_empty({"TELEGRAM_BOT_TOKEN": "x"})
+    verifier._bot_keys_absent({})
+    verifier._bot_keys_absent(dict(RUNTIME_ENV))
+    with pytest.raises(ValueError, match="present"):
+        verifier._bot_keys_absent({"TELEGRAM_BOT_TOKEN": ""})
+    listed = verifier._service_env(
+        {"services": {"api": {"environment": ["TELEGRAM_BOT_TOKEN=", *(f"{key}={value}" for key, value in RUNTIME_ENV.items())]}}},
+        "api",
+    )
+    with pytest.raises(ValueError, match="present"):
+        verifier._bot_keys_absent(listed)
