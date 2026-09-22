@@ -1,130 +1,171 @@
-# Current task — Telegram Bot API M4BQ1: schema-neutral production deploy of Stage C cleanup
+# Current task — Telegram Bot API M4BR1: build read-only Stage C post-deploy acceptance verifier
 
 ## Status
 
-Human explicitly authorized production deploy M4BP1 Stage C.
+M4BQ1 Stage C schema-neutral production deploy is COMPLETE / PASS.
 
-Accepted release:
+Current production runtime/ref:
 `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
 
-Rollback / current production before deploy:
-`fe151f12f64886505253e765b82458710a949e34`
-
-Expected Alembic:
+Alembic:
 `0046`
 
-The rollback -> release comparison is a fast-forward with no Alembic/migration changes.
+Confirmed deploy invariants:
+- health PASS;
+- DB container unchanged;
+- DB volume unchanged;
+- production `.env` unchanged;
+- API recreated;
+- worker recreated;
+- no migration / no `0047`.
 
-## Deploy scope
+## Goal
 
-Authorize exactly ONE normal schema-neutral production deploy through:
+Build a production-compatible READ-ONLY verifier for final Stage C acceptance.
 
-`ops/production/deploy.py`
+This task is CODE/TEST ONLY. Do not run it against production in M4BR1.
 
-This deploy rolls out server-side Stage C cleanup:
-- legacy Bot link/webhook routes removed;
-- Bot HTTP transport/webhook service/webhook CLI removed;
-- active Bot Settings/Compose runtime fields removed;
-- legacy Bot send execution removed;
-- historical Bot-derived canonical objects remain preserved/readable;
-- historical Bot mutations remain fail-closed;
-- legacy Bot DB models/tables/migrations remain preserved;
-- MTProto remains the sole live Telegram transport.
+## Required verifier
 
-Production `.env` must remain unchanged. The already-empty legacy Bot lines may remain; candidate Settings ignores unknown entries and Compose no longer injects them into API/worker.
+Add a committed verifier under `ops/production/` following the established target/pin/SSH/read-only patterns.
 
-## Mandatory bootstrap
-
-Follow `AGENTS.md`, `docs/executor_bootstrap.md`, and `docs/deploy.md`.
+It must make zero Telegram/provider calls and zero production writes.
 
 Verify:
-- canonical origin;
-- clean checkout;
-- fresh `origin/main`;
-- exact release and rollback SHAs resolve;
-- `origin/production == bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
 
-## Exact deploy command
+1. exact production target/host pin;
+2. canonical repository/path and fresh exact `origin/production`;
+3. current HEAD exact
+   `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
+4. tracked worktree clean;
+5. DB/API/worker containers running and DB healthy;
+6. application health PASS with bounded retry;
+7. Alembic exact `0046 (head)`;
+8. runtime route table does NOT contain:
+   - `/telegram/link`
+   - `/integrations/telegram/webhook`;
+9. runtime route table DOES contain the MTProto routes needed for the live account flow, including at minimum:
+   - `/telegram/mtproto/status`;
+10. active Settings model has no Bot runtime fields:
+   - `telegram_bot_token`
+   - `telegram_bot_username`
+   - `telegram_webhook_secret`
+   - `telegram_webhook_url`;
+11. actual API and worker container environments do not contain the four Bot variables;
+12. MTProto installation credentials remain present/consistent and `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+13. exactly one MTProto account still exists;
+14. active MTProto scope remains 28;
+15. historical Bot-derived canonical objects still exist, counted only in aggregate:
+   - provider `telegram`;
+   - kind `chat_message`;
+   - metadata transport absent/not `mtproto`;
+16. at least one historical Bot-derived object can be resolved through the generic Inbox eligibility/read path without revealing its id/content;
+17. historical Bot-derived objects remain ordinary read data only; no provider/send/mutation call is executed by the verifier.
 
-```bash
-RELEASE_SHA=bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b
-ROLLBACK_SHA=fe151f12f64886505253e765b82458710a949e34
-EXPECTED_ALEMBIC=0046
+## Sanitized protocol
 
-python3 ops/production/deploy.py \
-  --release-sha "$RELEASE_SHA" \
-  --rollback-sha "$ROLLBACK_SHA" \
-  --expected-alembic "$EXPECTED_ALEMBIC"
+Include fields equivalent to:
+
+```
+M4BR1_BEGIN=true
+REMOTE_HEAD_PASS=true
+REMOTE_PRODUCTION_REF_PASS=true
+REMOTE_WORKTREE_CLEAN=true
+DB_RUNNING_PASS=true
+API_RUNNING_PASS=true
+WORKER_RUNNING_PASS=true
+DB_HEALTH_PASS=true
+APP_HEALTH_PASS=true
+ALEMBIC_0046_PASS=true
+LEGACY_BOT_ROUTES_ABSENT_PASS=true
+MTPROTO_ROUTE_PRESENT_PASS=true
+BOT_SETTINGS_MODEL_ABSENT_PASS=true
+BOT_CONTAINER_ENV_ABSENT_PASS=true
+MTPROTO_CREDENTIALS_PRESERVED_PASS=true
+TELEGRAM_MTPROTO_AI_DISABLED_PASS=true
+MTPROTO_ACCOUNT_COUNT=1
+ACTIVE_SCOPE_COUNT=28
+LEGACY_BOT_OBJECT_COUNT=...
+LEGACY_BOT_INBOX_READABLE=true
+TELEGRAM_NETWORK_CALLS=0
+DB_WRITES=0
+ENV_WRITES=0
+SERVICE_RECREATIONS=0
+M4BR1_TERMINAL=success
+M4BR1_END=true
 ```
 
-Run exactly once.
+Do not print:
+- Telegram peer/chat/message/account IDs;
+- titles/bodies;
+- secret values/hashes/prefixes;
+- raw environment;
+- raw SQL rows.
 
-## Required invariants
+## Historical read check
 
-The harness must prove:
-- target/pin PASS;
-- current production runtime is rollback SHA or already release SHA;
-- `origin/production` exact release SHA;
-- production tracked worktree clean;
-- DB/API/worker preflight PASS;
-- DB healthy and current application health PASS;
-- schema-neutral release check PASS;
-- only API + worker rebuilt/recreated;
-- DB container identity unchanged;
-- DB volume identity unchanged;
-- production `.env` checksum unchanged;
-- post-deploy health PASS;
-- Alembic exact `0046`.
+Prefer selecting one legacy Bot-derived object internally, then invoking the same generic Inbox eligibility/read service used by production and outputting only a boolean.
 
-## Hard prohibitions
+If no legacy Bot-derived object exists, report a deterministic sanitized failure because Stage C preservation cannot then be verified from production state.
 
-Do NOT:
-- edit production `.env`;
-- remove the four empty legacy Bot lines;
-- touch Telegram/Bot provider;
-- change MTProto account/session/scope;
-- delete historical Bot-derived objects;
-- drop legacy Bot tables;
-- add/run migration;
-- enable MTProto AI;
-- perform unrelated client rollout.
+Do not construct or execute send/reply/mutation actions.
 
-## Failure handling
+## Required tests
 
-If bootstrap/harness blocks before mutation:
-- do not bypass;
-- do not use direct SSH;
-- do not retry;
-- report sanitized blocker and STOP.
+Add focused tests proving:
+- exact ref/HEAD/worktree fail-closed;
+- legacy Bot routes absent and MTProto route present;
+- Bot Settings fields absent;
+- Bot vars absent from actual API/worker env;
+- aggregate historical Bot object query excludes `transport="mtproto"`;
+- generic Inbox eligibility/read check emits boolean only;
+- zero provider/write/recreate capabilities;
+- health bounded retry;
+- exact Alembic contract;
+- strict sanitized output parser rejects unknown lines/fields.
 
-If mutation occurs and harness fails:
-- allow only harness automatic rollback to exact rollback SHA;
-- report rollback result;
-- do not manually repair/retry.
+Run:
+- focused verifier tests;
+- Python compile;
+- bundled helper compile if applicable;
+- Bash syntax;
+- Ruff;
+- `git diff --check`.
+
+## Authorization
+
+AUTHORIZED:
+- local verifier/test code only;
+- update `PROJECT_STATE.md`;
+- commit/push canonical `main`.
+
+NOT AUTHORIZED:
+- production SSH;
+- live verifier;
+- Telegram/provider calls;
+- DB/env writes;
+- service restart/recreate;
+- deploy/rollback/ref movement;
+- schema/data cleanup;
+- MTProto behavior/config changes;
+- AI enablement.
 
 ## Required report
 
 Return:
-- release SHA;
-- rollback SHA;
-- `origin/production`;
-- previous and resulting production runtime;
-- target/pin result;
-- schema-neutral check;
-- DB/API/worker preflight;
-- API/worker recreation;
-- DB container unchanged;
-- DB volume unchanged;
-- `.env` unchanged;
-- health;
-- Alembic;
-- rollback attempted yes/no;
-- migration: none;
-- confirmation canonical deploy harness only.
+- commit SHA;
+- files changed;
+- verifier protocol;
+- historical Bot read-verification mechanism;
+- zero-mutation/provider proof;
+- test/compile/Ruff/Bash/diff-check results;
+- production SSH=0;
+- provider calls=0;
+- production mutation=0.
 
-Final marker on success:
+Final marker:
 
-`TELEGRAM_BOT_M4BQ1_STAGE_C_DEPLOY_SUCCESS`
+`TELEGRAM_BOT_M4BR1_STAGE_C_VERIFIER_READY`
 
 Then STOP.
 
