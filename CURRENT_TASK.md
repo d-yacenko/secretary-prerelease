@@ -1,84 +1,45 @@
-# Current task — Close Telegram E2E post-import protocol blind spot
+# Current task — Await explicit replacement live Telegram E2E authorization
 
-## Architect review
+## Architect acceptance
 
-Commit:
+Post-import protocol correction:
 
-`86e856b4e8ab54a2bf535eae45a002692e94ee4c`
+`4fc6ff3b12f5e393be2ce3a46ab9b78b4280d86c`
 
-is mostly accepted: stdlib bootstrap, compile/import stage markers, fixed sanitized compile/import failures, preserved guards, and no-repeat discipline are correct.
+is ACCEPTED.
 
-One blocking observability defect remains before any replacement live authorization.
+The self-authored Telegram E2E acceptance harness and remote one-shot path are now architect-reviewed as live-ready again.
 
-The remote program currently treats any stdout containing `SELF_E2E_` as evidence that the harness produced its normal protocol. The new startup lines themselves begin with `SELF_E2E_STARTUP=`, so a failure after successful import but before a terminal harness result can bypass the `oneshot_failed` fallback and surface only startup markers with a nonzero exit. A helper that returns success without a terminal acceptance result can likewise produce startup-only stdout with exit 0.
+Accepted behavior:
 
-No live run is authorized.
+- `SELF_E2E_STARTUP=...` lines are progress evidence only, never terminal harness outcomes;
+- compile and import failures remain fixed sanitized blockers;
+- after import, an exception or exit without a terminal harness outcome fails closed as `SELF_E2E_REMOTE_BLOCKED=harness_protocol`;
+- legitimate `SELF_E2E_BLOCKED=...`, `SELF_E2E_FAILED=...`, and success output containing the exact `SELF_AUTHORED=PASS` line are propagated with the child exit code;
+- raw stderr, traceback, exception text, partial nonterminal helper output, credentials, and provider responses are not forwarded;
+- checkout/ref/origin/host-key/long-running-AI guards remain in place;
+- production runtime remains `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`;
+- Alembic remains `0046`;
+- long-running Telegram AI remains false.
 
-Production runtime/ref remains:
+## Authorization state
 
-`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
+NO replacement live E2E is currently authorized.
 
-Alembic remains:
+The previous one-shot authorization was consumed by the earlier `oneshot_failed` attempt.
 
-`0046`
+Do not execute:
 
-Long-running Telegram AI remains false.
+- production SSH;
+- production Docker;
+- the remote E2E wrapper;
+- provider calls;
+- Telegram transport/session access;
+- production DB writes;
+- deploy/restart/recreate;
+- production env changes;
+- production ref movement.
 
-## Authorized work
+STOP and wait for explicit human authorization for exactly one replacement live self-authored Telegram E2E.
 
-Code/test-only corrective change in the self-authored E2E remote/bootstrap path.
-
-Make startup-stage evidence explicitly distinct from a terminal harness outcome.
-
-The parent remote wrapper must not treat `SELF_E2E_STARTUP=...` as a terminal harness result.
-
-A terminal harness result is only an explicit sanitized acceptance outcome, for example:
-
-- successful acceptance report containing `SELF_AUTHORED=PASS`;
-- `SELF_E2E_BLOCKED=...`;
-- `SELF_E2E_FAILED=...`;
-- the bootstrap-owned fixed `SELF_E2E_REMOTE_BLOCKED=compile_failed` or `import_failed`.
-
-If the helper is imported and `main(["--live"])` then raises, returns nonzero, or returns zero without producing an appropriate terminal harness outcome, fail closed with a fixed sanitized remote-blocked code that clearly identifies the post-import harness/protocol stage. Do not expose exception text, stderr, traceback, environment, Telegram content, provider responses, or credentials.
-
-You may add one fixed stage marker immediately before invoking `main(["--live"])` if useful, but it must not itself count as terminal protocol evidence.
-
-Preserve:
-
-- existing compile/import stage behavior;
-- child stdout once a legitimate terminal harness protocol is present;
-- exact child exit code for legitimate blocked/failed harness results;
-- all checkout/ref/origin/host-key/long-running-AI guards;
-- no global `TELEGRAM_MTPROTO_AI_ENABLED=true`.
-
-## Required tests
-
-Add focused tests proving at least:
-
-1. startup-only stdout never counts as a terminal harness result;
-2. imported helper whose `main` raises produces a fixed sanitized post-import/protocol blocker and no traceback/error text;
-3. imported helper whose `main` returns nonzero without `SELF_E2E_BLOCKED/FAILED` is fail-closed;
-4. imported helper whose `main` returns zero without `SELF_AUTHORED=PASS` is fail-closed;
-5. legitimate `SELF_E2E_BLOCKED=...` remains propagated with its exit code;
-6. legitimate `SELF_E2E_FAILED=...` remains propagated with its exit code;
-7. a complete success report containing `SELF_AUTHORED=PASS` remains propagated with exit 0;
-8. compile/import failures remain distinguishable and sanitized;
-9. no raw child stderr or traceback is surfaced.
-
-Run focused tests, `py_compile`, Ruff check/format, and `git diff --check`.
-
-## Hard stop
-
-No production SSH.
-No production Docker.
-No live E2E.
-No provider calls.
-No Telegram transport/session access.
-No production DB writes.
-No deploy/restart/recreate.
-No production env changes.
-No production ref movement.
-
-When complete, update `PROJECT_STATE.md` factually, commit and push, report SHA/checks, then STOP.
-
-A replacement live E2E may only be authorized by the human after Architect acceptance of this correction.
+If such authorization is received, Architect must first replace this file with the exact one-shot invocation and success/failure contract. Do not infer authorization from this acceptance entry.
