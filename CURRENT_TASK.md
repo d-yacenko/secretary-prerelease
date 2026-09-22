@@ -1,169 +1,162 @@
-# Current task — Telegram final closure: deploy accepted downstream code and build one-shot production rehearsal helper
+# Current task — Fix live production rehearsal path and remote execution wrapper
 
-## Human authorization
+## Context
 
-Human authorized:
+Helper commit:
+`02ea29f58c36ff629cb5c6fc00f225d65f035ede`
 
-- schema-neutral deploy of exact release
-  `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
-  while long-running production API/worker remain
-  `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+Local fake-provider path is useful and accepted.
 
-- exactly ONE production synthetic ML rehearsal after helper review, using real production ML/LLM adapters, synthetic Telegram-shaped content only, and zero Telegram transport calls.
+Architect live-path review found blocking issues. Do not execute the production rehearsal yet.
 
-This authorization remains valid for the one rehearsal after architect review of the helper, provided scope does not change.
+## Accepted facts
 
-## Production release
+- production runtime/ref remains:
+  `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`;
+- production API/worker Telegram AI remains false;
+- no second product deploy is desired merely to run the rehearsal;
+- user authorization already covers one live synthetic rehearsal after this correction/review;
+- live rehearsal must use real production ML/LLM adapters, synthetic Telegram content only, zero Telegram transport calls.
 
-Release:
-`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
+## Blocker 1 — live CLI exit code
 
-Rollback:
-`f31f8f5b704159b7ec903da4c26a590d23f86e78`
+Current `main(--live)` calls `execute_live(...)` and then unconditionally returns exit code 2.
 
-Expected Alembic:
-`0046`
+Fix:
+- return the actual `execute_live()` code;
+- add a regression proving live success => 0 and live refusal/failure => nonzero.
 
-Canonical `production` has already been fast-forwarded non-force to the release.
+## Blocker 2 — fail-closed live exception handling
 
-## Phase A — canonical deploy COMPLETE / PASS
+Real provider/LLM failures can raise exceptions outside `RehearsalRefused`.
 
-Executed successfully via the canonical deploy path:
+Current live path can then:
+- emit a traceback/provider error;
+- leave already-committed rehearsal jobs parked as `running`;
+- violate sanitized-output and no-dangling-job guarantees.
 
-```bash
-python3 ops/production/deploy.py \
-  --release-sha 8ad52f0653f9f90e1932c49532dc4f993ea1a9cc \
-  --rollback-sha f31f8f5b704159b7ec903da4c26a590d23f86e78 \
-  --expected-alembic 0046
-```
+Required:
+- catch broad runtime/provider exceptions at the live boundary;
+- never print raw exception message, traceback, prompt, response, credentials, ids, or provider payload;
+- emit one fixed sanitized failure marker/class;
+- rollback current transaction;
+- load the synthetic rehearsal user by run id;
+- mark every rehearsal `pending/running` job failed with a fixed safe error such as `rehearsal_aborted`;
+- commit that failure cleanup;
+- leave synthetic objects/artifacts intact for audit;
+- restore process-local AI setting in all paths;
+- prove dangling pending/running = 0 after injected provider failure.
 
-Required invariants:
-- health PASS;
-- Alembic 0046;
-- DB container unchanged;
-- DB volume unchanged;
-- .env unchanged;
-- API/worker recreated as normal;
-- API/worker runtime Telegram AI flag remains false.
+Do not change generic worker semantics.
 
-Observed result: release exact, health PASS, Alembic 0046, DB container/volume and .env unchanged, API/worker recreated. Do not redeploy.
+## Clarification — embedding live adapter
 
-## Phase B — build rehearsal helper locally (ACTIVE)
+Do NOT add a special live embedding adapter merely because the helper passes `None` into job handlers.
 
-No suitable existing helper exists.
+This is intentional and correct: `handle_embed_object` resolves the real configured embedding service when `embedding_service is None`.
 
-Create a reviewable one-shot rehearsal helper under `ops/production/` plus focused tests.
+Preserve this canonical production behavior.
 
-Do NOT execute it against production in this task.
+## Blocker 3 — helper is not in production checkout
 
-### Rehearsal safety contract
+The helper is on `main`; production checkout intentionally remains `8ad52f06...`.
 
-The helper must:
+Do not deploy/recreate API/worker just to place an ops helper on production.
 
-1. require explicit unique run id;
-2. use only synthetic text clearly containing `TG_REHEARSAL_<run-id>`;
-3. never decrypt/use MTProto session material;
-4. never instantiate/call Telegram transport;
-5. set/override `telegram_mtproto_ai_enabled=True` only inside the one-shot process;
-6. verify at startup that long-running production API and worker environments remain false;
-7. use production DB/config and real configured production ML/LLM adapters when live;
-8. create only clearly attributable synthetic rows;
-9. avoid leaving ordinary pending Telegram-AI jobs for the false production worker to race on;
-10. execute the relevant service/handler work synchronously within the isolated process;
-11. emit only sanitized markers/counters, never message bodies, prompts, responses, embeddings, Telegram ids, credentials, sessions, or secret env values;
-12. make zero Telegram transport calls;
-13. retain synthetic artifacts unless separately authorized for cleanup.
+Create a canonical local production wrapper under `ops/production/`, following the trust model used by `deploy.py`:
 
-### Synthetic scenario
+- validate canonical local repo/origin/main/clean worktree;
+- validate `target.json`;
+- host-key pinning / BatchMode / strict known-hosts;
+- authoritative production ref must remain exact `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`;
+- remote production checkout HEAD exact same release and tracked worktree clean;
+- verify API and worker long-running env flag are false on the host BEFORE launching the rehearsal;
+- stream the reviewed helper code to the production environment rather than requiring it to exist in the production Git checkout;
+- run the helper in an isolated one-shot backend process/container with production DB/network/config available;
+- do not modify .env and do not recreate/restart long-running API/worker;
+- process-local AI=true only in the rehearsal process;
+- no Telegram transport access;
+- return only helper sanitized stdout.
 
-Create:
-- two inbound canonical MTProto-shaped `chat_message` objects in one synthetic private conversation burst;
-- one matching synthetic task;
-- minimal synthetic supporting label/config as needed.
+Preferred execution model:
+- host-side remote driver performs the long-running service flag probes;
+- run a temporary `docker compose run --rm --no-deps` backend/api process for the rehearsal, or equivalent isolated one-shot container;
+- pass the verified long-running false state into the helper through fixed non-secret rehearsal-only markers/environment;
+- do not mount Docker socket into the rehearsal container;
+- do not use an ad-hoc manual SSH command.
 
-The synthetic messages should express a harmless fake scenario such as:
-- synthetic project budget meeting tomorrow at 11:00;
-- synthetic estimate preparation before the meeting.
+If a different design is simpler and equally safe, document why.
 
-Use a synthetic/private peer model so the temporal result may legitimately become personally expected.
+## Live provider wiring
 
-Do not reuse real message text.
+For `providers=live`:
+- embedding handler receives `None` and resolves configured real embedding service normally;
+- auto-label, temporal, correlation, summary handlers use their normal production effective-settings factories;
+- no fake provider patches may be active.
 
-### Real ML/LLM production proof targets
+Add an explicit test proving the live code path does not enter `_fake_providers`.
 
-The live helper, once reviewed, must prove with normal services and real configured adapters:
+## Queue safety
 
-- Inbox eligibility PASS;
-- stack grouping PASS;
-- real embedding PASS;
-- auto-label PASS;
-- temporal extraction PASS with participation;
-- proposed correlation edge PASS;
-- semantic conversation summary PASS;
-- AI-only context/retrieval visibility PASS;
-- idempotency PASS;
-- TELEGRAM_TRANSPORT_CALLS=0;
-- LONG_RUNNING_API_AI=false;
-- LONG_RUNNING_WORKER_AI=false.
+Preserve:
+- canonical enqueue/signature logic;
+- jobs parked running before commit;
+- synchronous in-process execution;
+- no ordinary false worker consumption;
+- success => no pending/running synthetic jobs;
+- failure => cleanup to failed => no pending/running synthetic jobs.
 
-### Queue/race design
+## Tests
 
-Do not enqueue work and wait for normal worker consumption.
+At minimum:
+1. live success exit code propagates 0;
+2. live refusal propagates nonzero;
+3. injected real-provider-style exception produces sanitized failure only;
+4. failure cleanup marks rehearsal pending/running jobs failed and leaves zero dangling;
+5. settings AI flag restored after failure;
+6. environment unchanged after failure;
+7. live path uses no fake providers;
+8. wrapper refuses wrong local origin/branch/dirty tree;
+9. wrapper refuses wrong production ref/head/worktree;
+10. wrapper refuses API or worker AI=true;
+11. wrapper uses host-key pinning and no raw stderr leakage;
+12. wrapper launches isolated one-shot backend process and does not restart/recreate API/worker;
+13. helper code is streamed; production checkout need not contain helper;
+14. Telegram transport remains blocked;
+15. local fake-provider rehearsal remains green.
 
-Prefer:
-- build payload/signature through canonical enqueue logic where needed;
-- identify the exact synthetic job row;
-- execute its normal handler/service synchronously in the rehearsal process;
-- prevent or immediately neutralize any race with the long-running false worker without pausing/reconfiguring production services.
+Run compile, Ruff, bash syntax if shell wrapper, and `git diff --check`.
 
-If the canonical architecture makes safe synchronous execution impossible without altering worker behavior, STOP and report the constraint rather than weakening safety.
+## Authorization
 
-### Tests
+AUTHORIZED:
+- local helper/wrapper/test correction;
+- commit/push canonical `main`.
 
-Add focused tests proving:
-- helper refuses non-synthetic run id/content;
-- helper cannot call Telegram transport;
-- process-local AI=true does not imply service-level env mutation;
-- long-running API/worker false verification is required;
-- synthetic object/account/scope eligibility only;
-- sanitized output only;
-- synchronous pipeline traversal works with fake providers;
-- repeated run id fails closed or is idempotent according to explicit design;
-- zero dangling pending/running rehearsal jobs after successful local fake-provider run.
+NOT AUTHORIZED:
+- live production rehearsal execution in this task;
+- another product deploy;
+- production ref movement;
+- global AI=true;
+- Telegram transport calls;
+- migration;
+- cleanup of synthetic rows.
 
-Run compile, Ruff, and `git diff --check`.
-
-## Authorization boundaries
-
-AUTHORIZED now:
-- Phase A deploy;
-- local helper/tests/docs implementation;
-- commit/push canonical main.
-
-NOT AUTHORIZED in this task:
-- live production rehearsal execution before architect review;
-- global production AI=true;
-- Telegram transport/provider calls;
-- production cleanup of synthetic artifacts;
-- DB migration;
-- direct production SSH outside canonical helper design.
-
-## Required report from executor
+## Required report
 
 Return:
-- deploy output if executor performs Phase A, otherwise human will provide it separately;
-- helper commit SHA;
+- commit SHA;
 - files changed;
-- process-isolation design;
-- queue/race-safety design;
-- proof Telegram transport is unreachable;
-- local fake-provider rehearsal result;
-- compile/Ruff/diff-check;
+- corrected live exit behavior;
+- failure cleanup design;
+- isolated remote execution design;
+- proof no second deploy is needed;
+- tests/compile/Ruff/Bash/diff-check;
 - live rehearsal executed=0.
 
 Final marker:
 
-`TELEGRAM_PRODUCTION_REHEARSAL_HELPER_READY`
+`TELEGRAM_PRODUCTION_REHEARSAL_LIVE_PATH_READY`
 
 Then STOP.
 
