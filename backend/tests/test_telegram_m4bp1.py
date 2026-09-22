@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from app.api.schemas import ObjectOut
+from app.db.models import Object
 from app.main import app
 from app.services.communication_external_action_service import CommunicationExternalActionService
+from app.services.recent_source_service import RecentSourceService, inbox_feed_at
 from app.tools.schemas import (
     SendMessageCanonicalInput,
     TelegramMtprotoSendRoute,
@@ -32,6 +36,41 @@ def test_active_code_has_no_bot_transport_or_webhook_runtime():
     assert "telegram_bot_token" not in source
     assert "telegram_webhook_secret" not in source
     assert "setWebhook" not in source
+
+
+def test_legacy_bot_object_remains_available_to_generic_read_projection():
+    """Historical Bot objects remain readable without importing retired runtime code."""
+    occurred_at = datetime(2024, 1, 2, tzinfo=UTC)
+    obj = Object(
+        id=uuid4(),
+        user_id=uuid4(),
+        kind="chat_message",
+        title="Legacy Telegram message",
+        body="historical body",
+        provider="telegram",
+        external_id="business|chat|message",
+        metadata_={"business_connection_id": "legacy", "chat_id": "chat"},
+        origin="source",
+        state="confirmed",
+        occurred_at=occurred_at,
+        created_at=occurred_at,
+        updated_at=occurred_at,
+    )
+
+    projected = ObjectOut.from_model(obj)
+
+    assert projected.provider == "telegram"
+    assert projected.kind == "chat_message"
+    assert projected.origin == "source"
+    assert projected.body == "historical body"
+    assert inbox_feed_at(obj) == occurred_at
+    assert RecentSourceService.excerpt(obj.body) == "historical body"
+    assert "transport" not in projected.metadata
+
+    visibility_source = (
+        ROOT / "app/domain/telegram_mtproto_visibility.py"
+    ).read_text()
+    assert 'model.metadata_["transport"].as_string().is_distinct_from("mtproto")' in visibility_source
 
 
 def test_historical_bot_anchor_fails_closed_without_mtproto_reroute():
@@ -82,5 +121,12 @@ def test_active_config_keeps_mtproto_and_removes_bot_fields():
         assert "TELEGRAM_BOT_USERNAME" not in text
         assert "TELEGRAM_WEBHOOK_SECRET" not in text
         assert "TELEGRAM_WEBHOOK_URL" not in text
+    for field in (
+        "telegram_bot_token",
+        "telegram_bot_username",
+        "telegram_webhook_secret",
+        "telegram_webhook_url",
+    ):
+        assert field not in config
     assert "telegram_api_id" in config
     assert "TELEGRAM_API_ID" in compose

@@ -1,3 +1,8 @@
+"""Legacy Telegram Bot API persistence retained for schema compatibility only.
+
+Do not use this store to re-enable live Bot linking or ingress.
+"""
+
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 

@@ -1,3 +1,8 @@
+"""Legacy Telegram Bot API link-state persistence retained for compatibility.
+
+Do not use this store to re-enable live Bot linking or ingress.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +21,6 @@ from app.connectors.telegram.constants import (
     TELEGRAM_START_PARAM_MAX_LENGTH,
 )
 from app.db.models import TelegramLinkState
-
 
 _ALPHABET = string.ascii_letters + string.digits + "_-"
 
