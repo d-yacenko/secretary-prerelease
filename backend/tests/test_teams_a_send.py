@@ -33,8 +33,6 @@ from tests.test_teams_a import (
     _graph_message,
     _graph_reply_with_quote,
 )
-from tests.test_telegram_a_send import _service as _telegram_service
-from tests.test_telegram_a_send import _tg_account, _tg_object
 from tests.test_unified_communications_a import ALLOWED_URL
 
 SOURCE_MESSAGE_ID = "src-1"
@@ -382,29 +380,6 @@ def test_outbound_not_duplicated_by_later_poll(db_session, teams_settings) -> No
         )
     )
     assert len(objects) == 1
-
-
-def test_telegram_prepare_still_works_alongside_teams(
-    db_session, teams_settings, monkeypatch
-) -> None:
-    monkeypatch.setattr("app.core.config.settings.telegram_bot_token", "test-bot-token")
-    monkeypatch.setattr("app.core.config.settings.telegram_bot_username", "secretary_bot")
-    monkeypatch.setattr("app.core.config.settings.telegram_webhook_secret", "webhook-secret")
-    monkeypatch.setattr(
-        "app.core.config.settings.telegram_webhook_url",
-        "https://example.test/integrations/telegram/webhook",
-    )
-    user = User(id=uuid4(), display_name="both")
-    db_session.add(user)
-    db_session.flush()
-    account = _tg_account(db_session, user.id)
-    inbound = _tg_object(db_session, user.id, account)
-    service = _telegram_service(db_session, user.id)
-    composed = service.prepare_send_message(
-        SendMessageInput(body="tg", conversation_object_id=inbound.id)
-    )
-    assert composed.provider == "telegram"
-    assert composed.telegram_route.chat_id == inbound.metadata_["chat_id"]
 
 
 def test_legacy_mattermost_canonical_still_parses_with_teams_union() -> None:

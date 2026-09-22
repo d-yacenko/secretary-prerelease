@@ -23,21 +23,10 @@ from tests.test_assistant_action_plans import (
     _bind_action_plan_test_session,
     _set_assistant_runtime_override,
 )
-from tests.test_telegram_a_send import BOT_TOKEN, BOT_USERNAME, _tg_account, _tg_object
 from tests.test_unified_communications_a import _patch_session_spy
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 import app.api.assistant as assistant_api_module
 
-
-@pytest.fixture
-def telegram_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.core.config.settings.telegram_bot_token", BOT_TOKEN)
-    monkeypatch.setattr("app.core.config.settings.telegram_bot_username", BOT_USERNAME)
-    monkeypatch.setattr("app.core.config.settings.telegram_webhook_secret", "webhook-secret")
-    monkeypatch.setattr(
-        "app.core.config.settings.telegram_webhook_url",
-        "https://example.test/integrations/telegram/webhook",
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -192,53 +181,6 @@ def test_prose_confirmation_without_send_message_has_null_pending_plan(
     body = response.json()
     assert body["pending_action_plan"] is None
     assert "Подтвердите отправку" in body["answer"]
-
-
-def test_staged_telegram_send_message_returns_pending_action_plan(
-    db_session, fake_embedding_service, action_plan_user, action_plan_client, telegram_settings
-):
-    client, user_id = action_plan_client
-    account = _tg_account(db_session, user_id)
-    inbound = _tg_object(db_session, user_id, account, body="TMLR есть в Scopus")
-    provider = _SendMessageProvider(
-        {
-            "body": "Да, это действительно обидно",
-            "reply_to_object_id": str(inbound.id),
-        }
-    )
-    _set_assistant_runtime_override(provider)
-    _bind_integrity_sessions(db_session)
-
-    response = client.post(
-        "/assistant/message",
-        json={
-            "message": "Да, это действительно обидно, ответь это Петрушину.",
-            "context_object_id": str(inbound.id),
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    plan = body["pending_action_plan"]
-    assert plan is not None
-    assert plan["status"] == "pending"
-    assert plan["actions"][0]["tool_name"] == "send_message"
-    frozen = plan["actions"][0]["arguments"]
-    assert frozen["provider"] == "telegram"
-    assert frozen["mode"] == "reply"
-    assert frozen["body"] == "Да, это действительно обидно"
-    assert frozen["anchor_object_id"] == str(inbound.id)
-    assert str(inbound.id) in provider.ui_context
-    attempts = db_session.scalars(select(ExternalActionAttempt)).all()
-    assert attempts == []
-    outbound = db_session.scalars(
-        select(Object).where(
-            Object.user_id == user_id,
-            Object.provider == "telegram",
-            Object.id != inbound.id,
-        )
-    ).all()
-    assert outbound == []
 
 
 def test_staged_teams_send_message_returns_pending_action_plan(

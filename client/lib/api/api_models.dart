@@ -267,61 +267,6 @@ class MattermostConnectResult {
   }
 }
 
-class TelegramConnection {
-  TelegramConnection({
-    required this.configured,
-    required this.identityLinked,
-    required this.businessConnected,
-    required this.canReply,
-    this.telegramUsername,
-    this.displayName,
-    this.botUsername,
-  });
-
-  final bool configured;
-  final bool identityLinked;
-  final bool businessConnected;
-  final bool canReply;
-  final String? telegramUsername;
-  final String? displayName;
-  final String? botUsername;
-
-  factory TelegramConnection.unavailable() {
-    return TelegramConnection(
-      configured: false,
-      identityLinked: false,
-      businessConnected: false,
-      canReply: false,
-    );
-  }
-
-  factory TelegramConnection.fromJson(Map<String, dynamic> json) {
-    return TelegramConnection(
-      configured: json['configured'] as bool? ?? false,
-      identityLinked: json['identity_linked'] as bool? ?? false,
-      businessConnected: json['business_connected'] as bool? ?? false,
-      canReply: json['can_reply'] as bool? ?? false,
-      telegramUsername: json['telegram_username'] as String?,
-      displayName: json['display_name'] as String?,
-      botUsername: json['bot_username'] as String?,
-    );
-  }
-}
-
-class TelegramLinkResult {
-  TelegramLinkResult({required this.telegramUrl, required this.expiresAt});
-
-  final String telegramUrl;
-  final String expiresAt;
-
-  factory TelegramLinkResult.fromJson(Map<String, dynamic> json) {
-    return TelegramLinkResult(
-      telegramUrl: json['telegram_url'] as String,
-      expiresAt: json['expires_at'] as String,
-    );
-  }
-}
-
 class TelegramMtprotoAccount {
   TelegramMtprotoAccount({
     required this.id,
@@ -729,7 +674,6 @@ class Connections {
     required this.yandexMail,
     required this.yandexCalendar,
     required this.mattermost,
-    required this.telegram,
     required this.teams,
   });
 
@@ -737,12 +681,10 @@ class Connections {
   final YandexMailConnection yandexMail;
   final YandexCalendarConnection yandexCalendar;
   final List<MattermostConnection> mattermost;
-  final TelegramConnection telegram;
   final TeamsConnection teams;
 
   factory Connections.fromJson(Map<String, dynamic> json) {
     final mattermostRaw = json['mattermost'];
-    final telegramRaw = json['telegram'];
     final teamsRaw = json['teams'];
     return Connections(
       google: GoogleConnection.fromJson(json['google'] as Map<String, dynamic>),
@@ -760,9 +702,6 @@ class Connections {
                 )
                 .toList()
           : const [],
-      telegram: telegramRaw is Map<String, dynamic>
-          ? TelegramConnection.fromJson(telegramRaw)
-          : TelegramConnection.unavailable(),
       teams: teamsRaw is Map<String, dynamic>
           ? TeamsConnection.fromJson(teamsRaw)
           : TeamsConnection.unavailable(),

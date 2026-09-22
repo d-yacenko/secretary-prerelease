@@ -13,7 +13,6 @@ Map<String, dynamic> accountConnectionsJson({
   bool calendarAvailable = true,
   bool driveAvailable = false,
   List<Map<String, dynamic>> mattermost = const [],
-  Map<String, dynamic>? telegram,
   Map<String, dynamic>? teams,
 }) {
   return {
@@ -27,16 +26,6 @@ Map<String, dynamic> accountConnectionsJson({
     'yandex_mail': {'connected': false, 'email': null},
     'yandex_calendar': {'connected': false, 'email': null},
     'mattermost': mattermost,
-    'telegram': telegram ??
-        {
-          'configured': false,
-          'identity_linked': false,
-          'business_connected': false,
-          'can_reply': false,
-          'telegram_username': null,
-          'display_name': null,
-          'bot_username': null,
-        },
     'teams': teams ??
         {
           'configured': false,

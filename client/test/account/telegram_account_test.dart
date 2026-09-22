@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:personal_secretary/account/account_screen.dart';
 import 'package:personal_secretary/api/api_models.dart';
 import 'package:personal_secretary/auth/auth_controller.dart';
 import 'package:personal_secretary/auth/server_url_store.dart';
@@ -11,26 +10,6 @@ import 'package:personal_secretary/ui/object_presentation.dart';
 import 'package:personal_secretary/ui/provider_icon.dart';
 
 import 'account_test_helpers.dart';
-
-Map<String, dynamic> _telegramJson({
-  bool configured = true,
-  bool identityLinked = false,
-  bool businessConnected = false,
-  bool canReply = false,
-  String? username,
-  String? displayName,
-  String? botUsername = 'secretary_bot',
-}) {
-  return {
-    'configured': configured,
-    'identity_linked': identityLinked,
-    'business_connected': businessConnected,
-    'can_reply': canReply,
-    'telegram_username': username,
-    'display_name': displayName,
-    'bot_username': botUsername,
-  };
-}
 
 AuthController _buildAuth(SecretaryApiClient apiClient) {
   final auth = AuthController(
@@ -49,39 +28,6 @@ AuthController _buildAuth(SecretaryApiClient apiClient) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  test('TelegramConnection parses safe status only', () {
-    final connection = TelegramConnection.fromJson(_telegramJson(
-      identityLinked: true,
-      businessConnected: true,
-      canReply: true,
-      username: 'alice',
-      displayName: 'Alice',
-    ));
-    expect(connection.configured, isTrue);
-    expect(connection.identityLinked, isTrue);
-    expect(connection.businessConnected, isTrue);
-    expect(connection.canReply, isTrue);
-    expect(connection.telegramUsername, 'alice');
-    expect(connection.displayName, 'Alice');
-    expect(connection.botUsername, 'secretary_bot');
-  });
-
-  test('Connections.fromJson defaults telegram when omitted', () {
-    final connections = Connections.fromJson({
-      'google': {
-        'connected': false,
-        'email': null,
-        'gmail_available': false,
-        'calendar_available': false,
-        'drive_available': false,
-      },
-      'yandex_mail': {'connected': false, 'email': null},
-      'yandex_calendar': {'connected': false, 'email': null},
-      'mattermost': [],
-    });
-    expect(connections.telegram.configured, isFalse);
-  });
 
   test('telegram provider presentation uses local icon', () {
     expect(providerLabel('telegram'), 'Telegram');

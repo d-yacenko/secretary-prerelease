@@ -28,7 +28,6 @@ from app.api.source_preferences import router as source_preferences_router
 from app.api.sources import router as sources_router
 from app.api.teams import router as teams_router
 from app.api.teams_webhook import router as teams_webhook_router
-from app.api.telegram import router as telegram_router
 from app.api.telegram_mtproto import router as telegram_mtproto_router
 from app.api.today import router as today_router
 from app.api.week import router as week_router
@@ -106,7 +105,6 @@ app.include_router(intake_router)
 app.include_router(sources_router)
 app.include_router(yandex_router)
 app.include_router(mattermost_router)
-app.include_router(telegram_router)
 app.include_router(telegram_mtproto_router)
 app.include_router(teams_router)
 app.include_router(teams_webhook_router)

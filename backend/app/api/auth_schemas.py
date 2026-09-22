@@ -46,16 +46,6 @@ class MattermostConnectionOut(BaseModel):
     email: str | None = None
 
 
-class TelegramConnectionOut(BaseModel):
-    configured: bool = False
-    identity_linked: bool = False
-    business_connected: bool = False
-    can_reply: bool = False
-    telegram_username: str | None = None
-    display_name: str | None = None
-    bot_username: str | None = None
-
-
 class TeamsConnectionOut(BaseModel):
     configured: bool = False
     connected: bool = False
@@ -70,7 +60,6 @@ class ConnectionsOut(BaseModel):
     yandex_mail: YandexMailConnectionOut
     yandex_calendar: YandexCalendarConnectionOut
     mattermost: list[MattermostConnectionOut] = Field(default_factory=list)
-    telegram: TelegramConnectionOut = Field(default_factory=TelegramConnectionOut)
     teams: TeamsConnectionOut = Field(default_factory=TeamsConnectionOut)
 
 

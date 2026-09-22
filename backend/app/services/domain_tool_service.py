@@ -145,7 +145,6 @@ class DomainToolService:
         yandex_imap_transport=None,
         yandex_caldav_transport=None,
         mattermost_transport=None,
-        telegram_transport=None,
         telegram_mtproto_transport=None,
         teams_transport=None,
     ) -> None:
@@ -161,7 +160,6 @@ class DomainToolService:
         self._yandex_imap_transport = yandex_imap_transport
         self._yandex_caldav_transport = yandex_caldav_transport
         self._mattermost_transport = mattermost_transport
-        self._telegram_transport = telegram_transport
         self._telegram_mtproto_transport = telegram_mtproto_transport
         self._teams_transport = teams_transport
         from app.core.client_timezone import get_request_timezone
@@ -1143,8 +1141,6 @@ class DomainToolService:
         kwargs = {}
         if self._mattermost_transport is not None:
             kwargs["transport"] = self._mattermost_transport
-        if self._telegram_transport is not None:
-            kwargs["telegram_transport"] = self._telegram_transport
         if self._telegram_mtproto_transport is not None:
             kwargs["telegram_mtproto_transport"] = self._telegram_mtproto_transport
         if self._teams_transport is not None:

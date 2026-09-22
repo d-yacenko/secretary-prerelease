@@ -70,10 +70,6 @@ class Settings(BaseSettings):
     mattermost_sync_initial_posts_per_channel: int = 100
     mattermost_sync_max_posts_per_run: int = 500
     mattermost_sync_overlap_seconds: int = 300
-    telegram_bot_token: str = ""
-    telegram_bot_username: str = ""
-    telegram_webhook_secret: str = ""
-    telegram_webhook_url: str = ""
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
     telegram_mtproto_ai_enabled: bool = False

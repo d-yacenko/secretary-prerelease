@@ -51,17 +51,6 @@ class MattermostConnectionStatus:
 
 
 @dataclass(frozen=True)
-class TelegramConnectionStatus:
-    configured: bool = False
-    identity_linked: bool = False
-    business_connected: bool = False
-    can_reply: bool = False
-    telegram_username: str | None = None
-    display_name: str | None = None
-    bot_username: str | None = None
-
-
-@dataclass(frozen=True)
 class TeamsConnectionStatus:
     configured: bool = False
     connected: bool = False
@@ -77,7 +66,6 @@ class ConnectionStatusSnapshot:
     yandex_mail: YandexMailConnectionStatus
     yandex_calendar: YandexCalendarConnectionStatus
     mattermost: list[MattermostConnectionStatus]
-    telegram: TelegramConnectionStatus
     teams: TeamsConnectionStatus
 
 
@@ -91,14 +79,12 @@ class ConnectionStatusService:
         yandex_mail = self._yandex_mail_status()
         yandex_calendar = self._yandex_calendar_status()
         mattermost = self._mattermost_accounts()
-        telegram = self._telegram_status()
         teams = self._teams_status()
         return ConnectionStatusSnapshot(
             google=google,
             yandex_mail=yandex_mail,
             yandex_calendar=yandex_calendar,
             mattermost=mattermost,
-            telegram=telegram,
             teams=teams,
         )
 
@@ -156,11 +142,6 @@ class ConnectionStatusService:
             )
             for account in store.list_accounts(self._user_id)
         ]
-
-    def _telegram_status(self) -> TelegramConnectionStatus:
-        # Bot API is retired; preserve the response shape while keeping the
-        # legacy transport inactive and independent of Bot credentials/rows.
-        return TelegramConnectionStatus()
 
     def _teams_status(self) -> TeamsConnectionStatus:
         configured = teams_is_configured()
