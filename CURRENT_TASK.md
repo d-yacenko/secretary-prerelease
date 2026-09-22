@@ -1,10 +1,10 @@
-# Current task — Telegram Bot API M4BS1: final live read-only Stage C acceptance awaiting explicit authorization
+# Current task — Telegram Bot API M4BS1: execute final one-shot live read-only Stage C acceptance
 
 ## Status
 
-M4BR1R Stage C post-deploy verifier is ARCHITECT ACCEPTED.
+Human explicitly authorized the final live read-only Stage C acceptance.
 
-Accepted verifier commit:
+Accepted verifier code:
 `bfea4b308e7513cc743da573d7934e85ff51b393`
 
 Current production runtime/ref:
@@ -13,40 +13,40 @@ Current production runtime/ref:
 Expected Alembic:
 `0046`
 
-Stage C deploy is already COMPLETE / PASS.
+Stage C schema-neutral deploy is already COMPLETE / PASS.
 
-## Authorization state
+## Authorization
 
-FINAL LIVE READ-ONLY STAGE C VERIFIER IS NOT YET AUTHORIZED.
-
-Acceptable explicit authorization text:
-
-`Разрешаю финальный live read-only Stage C acceptance`
-
-After explicit authorization, run exactly once:
+Authorize exactly ONE execution of:
 
 `bash ops/production/verify_telegram_bot_stage_c.sh`
 
-## Verifier guarantees
+The verifier may only read/inspect:
+- canonical target/host pin/repository;
+- fresh exact production ref and HEAD;
+- tracked worktree cleanliness;
+- DB/API/worker container running state and DB health;
+- application health with bounded retry;
+- Alembic exact `0046 (head)`;
+- absence of retired Bot routes;
+- presence of required MTProto route;
+- absence of Bot Settings/runtime env;
+- preservation of MTProto credentials and AI=false;
+- exactly one MTProto account;
+- active scope count 28;
+- aggregate historical non-MTProto Telegram object count;
+- existence of at least one historical Bot-derived object readable through canonical Inbox eligibility.
 
-The accepted verifier:
-- makes zero Telegram/provider calls;
-- performs zero DB writes;
-- performs zero env writes;
-- performs zero service restart/recreate;
-- does not deploy or move refs;
-- checks exact production ref/HEAD/worktree;
-- checks DB/API/worker running state and DB health;
-- checks application health with bounded retry;
-- checks Alembic exact `0046`;
-- proves retired Bot routes absent;
-- proves live MTProto route present;
-- proves Bot Settings/runtime env absent;
-- proves MTProto credentials preserved and AI=false;
-- proves exactly one MTProto account and active scope count 28;
-- proves legacy non-MTProto Telegram objects still exist in aggregate;
-- proves at least one preserved legacy Bot-derived object remains readable through canonical generic Inbox eligibility;
-- emits no Telegram object/account/peer/message identifiers or message content.
+## Hard prohibitions
+
+The verifier must perform:
+- Telegram/provider calls = 0;
+- DB writes = 0;
+- env writes = 0;
+- service restarts/recreates = 0;
+- deploy/ref movement = 0.
+
+It must emit no object/account/peer/message identifiers and no message content.
 
 ## Failure handling
 
@@ -55,15 +55,13 @@ If verifier blocks or fails:
 - do not bypass;
 - do not use direct SSH;
 - do not restart/recreate services;
-- do not change DB/env;
+- do not modify DB/env;
 - return the complete sanitized output and STOP.
 
-## Not authorized
+## Required report
 
-- any production mutation;
-- provider calls;
-- schema/data cleanup;
-- MTProto changes;
-- AI enablement.
+Return the complete sanitized verifier output including all PASS markers reached, any `FAILURE_STAGE`, zero mutation/provider counters, and terminal marker.
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
