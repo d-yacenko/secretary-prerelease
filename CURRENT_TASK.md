@@ -48,11 +48,13 @@ For deterministic correlation, human should also create through the normal Secre
 
 `TG_SELF_E2E_0922A Подготовить тестовую смету`
 
-For deterministic auto-label, if convenient, human may create a normal Secretary label:
+Do NOT require the human to create a dedicated test label.
 
-`TG_SELF_E2E_0922A`
+Auto-label acceptance must use the user's existing normal label vocabulary. The harness must not create labels directly in the DB and must not require any marker-matched label.
 
-The harness must not require direct DB insertion of these task/label objects.
+A real auto-label run is PASS when the normal real classifier/handler path is proven to have executed for at least one selected Telegram object. Evidence should come from the normal AI-audit/job result, including the `auto_label_result` event (candidate count and raw/accepted assignment counts). A zero-assignment classifier result is a valid product outcome and is still PASS for pipeline execution. If one or more existing labels are assigned, report only sanitized counts/state, not label content unless separately needed.
+
+The harness must not require direct DB insertion of task/label objects.
 
 ## Current executor task — CODE/TEST ONLY
 
@@ -140,7 +142,7 @@ The eventual live run must prove on real synced self-authored objects:
 - real canonical Inbox object exists;
 - normal conversation grouping works;
 - embedding produced with real configured provider;
-- auto-label real handler path executes and, when deterministic test label exists, produces assignment;
+- auto-label real classifier/handler path executes against the existing label vocabulary; zero accepted assignments is allowed, while any existing-label assignment is reported as an observed result rather than a required outcome;
 - temporal extraction real handler produces a test hint from the explicit date/time message;
 - task correlation real handler proposes relation to the marker-matched normal Secretary task;
 - conversation semantic summary produced for the self-authored-only stack;
