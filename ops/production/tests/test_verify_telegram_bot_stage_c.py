@@ -20,6 +20,7 @@ SPEC = importlib.util.spec_from_file_location("stage_c", SOURCE)
 verifier = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(verifier)
+_ORIGINAL_OPENAPI = verifier._openapi_paths
 
 
 def success() -> str:
@@ -463,7 +464,7 @@ def _dotenv(*, empty_bot: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None = None, service_envs: dict | None = None, container_env: dict, health_error: bool = False, child: str = CHILD_SUCCESS, child_crash: bool = False):
+def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None = None, service_envs: dict | None = None, container_env: dict, health_error: bool = False, child: str = CHILD_SUCCESS, child_crash: bool = False, openapi_paths: dict | None = None, openapi_mode: str = "ok", settings_out: str = "CHILD_STATUS=ok\n", settings_crash: bool = False):
     if service_envs is None:
         service_envs = {"api": service_env, "worker": service_env}
     config = {"services": {name: {"environment": values} for name, values in service_envs.items()}}
@@ -490,9 +491,16 @@ def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None 
         if command[-2:] == ["alembic", "current"]:
             return "0046 (head)"
         if len(command) >= 2 and command[-2] == "-c":
-            if child_crash:
-                raise RuntimeError("container died secret traceback")
-            return child
+            script = command[-1]
+            if script == verifier.SETTINGS_CHILD:
+                if settings_crash:
+                    raise RuntimeError("settings died secret")
+                return settings_out
+            if script == verifier.DB_CHILD:
+                if child_crash:
+                    raise RuntimeError("container died secret traceback")
+                return child
+            raise AssertionError(script)
         raise AssertionError(command)
 
     def fake_read(self, encoding="utf-8", errors=None):
@@ -500,7 +508,30 @@ def _drive_remote(monkeypatch, capsys, *, dotenv: str, service_env: dict | None 
             return dotenv
         return Path.read_text(self, encoding=encoding, errors=errors)
 
+    class Response:
+        def __init__(self, status: int, body: bytes) -> None:
+            self.status = status
+            self._body = body
+        def read(self) -> bytes:
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+
+    def fake_request(_url, timeout=5):
+        del timeout
+        if openapi_mode == "down":
+            raise OSError("openapi down")
+        if openapi_mode == "bad":
+            return Response(200, b"not-json")
+        paths = {"/telegram/mtproto/status": {}} if openapi_paths is None else openapi_paths
+        return Response(200, json.dumps({"paths": paths}).encode())
+
+    def patched_openapi():
+        return _ORIGINAL_OPENAPI(request=fake_request, sleeper=lambda _delay: None, attempts=2)
     monkeypatch.setattr(verifier, "_run", fake_run)
+    monkeypatch.setattr(verifier, "_openapi_paths", patched_openapi)
     monkeypatch.setattr(verifier.Path, "read_text", fake_read)
     if health_error:
         def fail_health(*_args, **_kwargs):
@@ -566,8 +597,7 @@ def test_remote_child_failure_after_environment_markers_is_valid(monkeypatch, ca
     assert code == 2
     assert verifier.parse_output(stdout) == "failure"
     assert "FAILURE_STAGE=STAGE_2_ACCOUNT" in stdout
-    assert "TELEGRAM_MTPROTO_AI_DISABLED_PASS=true" in stdout
-    assert "LEGACY_BOT_ROUTES_ABSENT_PASS" not in stdout
+    assert "BOT_SETTINGS_MODEL_ABSENT_PASS=true" in stdout
     assert "MTPROTO_ACCOUNT_COUNT" not in stdout
     assert "=2" not in stdout
 
@@ -653,13 +683,6 @@ def _install_child_modules(**options: object) -> list[str]:
     sa.or_ = lambda *_args: "or"  # type: ignore[attr-defined]
     sa.select = lambda *_args, **_kwargs: Query()  # type: ignore[attr-defined]
     pkg("app")
-    pkg("app.core")
-    config = pkg("app.core.config")
-
-    class Settings:
-        model_fields = {"telegram_bot_token": object()} if options.get("bot_field") else {"telegram_api_id": object()}
-
-    config.Settings = Settings
     pkg("app.db")
     models = pkg("app.db.models")
     for model_name in ("Object", "TelegramMtprotoAccount", "TelegramMtprotoChatSelection"):
@@ -694,9 +717,6 @@ def _install_child_modules(**options: object) -> list[str]:
         return Session()
 
     session_mod.SessionLocal = session_local
-    main = pkg("app.main")
-    paths = options.get("routes", ["/telegram/mtproto/status"])
-    main.app = types.SimpleNamespace(routes=[types.SimpleNamespace(path=path) for path in paths])
     pkg("app.services")
     service = pkg("app.services.recent_source_service")
 
@@ -715,18 +735,30 @@ def _install_child_modules(**options: object) -> list[str]:
 
 def _run_child_script(**options: object) -> str:
     names = [
-        "sqlalchemy", "app", "app.core", "app.core.config", "app.db", "app.db.models",
-        "app.db.session", "app.main", "app.services", "app.services.recent_source_service",
+        "sqlalchemy", "app", "app.db", "app.db.models", "app.db.session",
+        "app.services", "app.services.recent_source_service",
     ]
     saved = {name: sys.modules.get(name) for name in names}
     for name in names:
         sys.modules.pop(name, None)
+    blocked = {
+        "sqlalchemy": "sqlalchemy",
+        "models": "app.db.models",
+        "session": "app.db.session",
+        "recent": "app.services.recent_source_service",
+    }.get(str(options.get("block") or ""))
     try:
-        if not options.get("missing_import"):
+        if options.get("block") != "sqlalchemy":
             _install_child_modules(**options)
+        if blocked:
+            sys.modules[blocked] = None
+        main_before = "app.main" in sys.modules
+        config_before = "app.core.config" in sys.modules
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            exec(compile(verifier.CHILD, "<child>", "exec"), {"__name__": "child"})  # noqa: S102
+            exec(compile(verifier.DB_CHILD, "<db-child>", "exec"), {"__name__": "child"})  # noqa: S102
+        if (not main_before and "app.main" in sys.modules) or (not config_before and "app.core.config" in sys.modules):
+            raise AssertionError("narrow db child imported a forbidden module")
         return buffer.getvalue()
     finally:
         for name in names:
@@ -736,11 +768,10 @@ def _run_child_script(**options: object) -> str:
 
 
 @pytest.mark.parametrize(("options", "stage", "leaks"), [
-    ({"missing_import": True}, "STAGE_2_BOOTSTRAP", []),
-    ({"routes": ["/telegram/link"]}, "STAGE_2_LEGACY_ROUTES", []),
-    ({"routes": ["/integrations/telegram/webhook"]}, "STAGE_2_LEGACY_ROUTES", []),
-    ({"routes": []}, "STAGE_2_MTPROTO_ROUTE", []),
-    ({"bot_field": True}, "STAGE_2_BOT_SETTINGS", []),
+    ({"block": "sqlalchemy"}, "STAGE_2_SQLALCHEMY", []),
+    ({"block": "models"}, "STAGE_2_MODELS", []),
+    ({"block": "session"}, "STAGE_2_DB_SESSION", []),
+    ({"block": "recent"}, "STAGE_2_RECENT_SOURCE", []),
     ({"session_raise": True}, "STAGE_2_DB_SESSION", ["session secret"]),
     ({"scalar_raise_at": 1}, "STAGE_2_ACCOUNT", ["sql secret", "id=99"]),
     ({"scalar_values": [2]}, "STAGE_2_ACCOUNT", ["object-secret"]),
@@ -766,10 +797,89 @@ def test_each_stage2_failure_reaches_remote_transcript(monkeypatch, capsys, opti
     assert code == 2
     assert verifier.parse_output(stdout) == "failure"
     assert f"FAILURE_STAGE={stage}\n" in stdout
-    assert "TELEGRAM_MTPROTO_AI_DISABLED_PASS=true" in stdout
-    assert "LEGACY_BOT_ROUTES_ABSENT_PASS" not in stdout
+    assert "BOT_SETTINGS_MODEL_ABSENT_PASS=true" in stdout
+    assert "MTPROTO_ROUTE_PRESENT_PASS=true" in stdout
     for leak in (*leaks, "CHILD_STAGE", "MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT"):
         assert leak not in stdout
+
+
+def test_db_child_source_has_no_monolithic_bootstrap() -> None:
+    text = verifier.DB_CHILD
+    assert "from app.main import app" not in text
+    assert "app.main" not in text
+    assert "Settings" not in text
+    assert "STAGE_2_BOOTSTRAP" not in SOURCE.read_text()
+
+
+def test_openapi_and_settings_failures_have_distinct_transcripts(monkeypatch, capsys) -> None:
+    lines = [f"{key}={value}" for key, value in RUNTIME_ENV.items()]
+    common = {"dotenv": _dotenv(empty_bot=True), "service_env": dict(RUNTIME_ENV), "container_env": {"apiid": lines, "workerid": lines}}
+    cases = [
+        ({"openapi_mode": "down"}, "STAGE_2_OPENAPI_FETCH", "LEGACY_BOT_ROUTES_ABSENT_PASS"),
+        ({"openapi_mode": "bad"}, "STAGE_2_OPENAPI_PROTOCOL", "LEGACY_BOT_ROUTES_ABSENT_PASS"),
+        ({"openapi_paths": {"/telegram/link": {}, "/telegram/mtproto/status": {}}}, "STAGE_2_LEGACY_ROUTES", "LEGACY_BOT_ROUTES_ABSENT_PASS"),
+        ({"openapi_paths": {"/integrations/telegram/webhook": {}}}, "STAGE_2_LEGACY_ROUTES", "LEGACY_BOT_ROUTES_ABSENT_PASS"),
+        ({"openapi_paths": {}}, "STAGE_2_MTPROTO_ROUTE", "MTPROTO_ROUTE_PRESENT_PASS"),
+        ({"settings_out": "CHILD_STATUS=fail\nCHILD_STAGE=STAGE_2_BOT_SETTINGS\n"}, "STAGE_2_BOT_SETTINGS", "BOT_SETTINGS_MODEL_ABSENT_PASS"),
+        ({"settings_out": "SECRET=value\n"}, "STAGE_2_SETTINGS_PROTOCOL", "BOT_SETTINGS_MODEL_ABSENT_PASS"),
+        ({"settings_crash": True}, "STAGE_2_SETTINGS_EXECUTION", "BOT_SETTINGS_MODEL_ABSENT_PASS"),
+    ]
+    for kwargs, stage, absent in cases:
+        code, stdout = _drive_remote(monkeypatch, capsys, **common, **kwargs)
+        assert code == 2
+        assert verifier.parse_output(stdout) == "failure"
+        assert f"FAILURE_STAGE={stage}\n" in stdout
+        assert absent not in stdout
+        assert "SECRET" not in stdout
+        assert "/telegram/" not in stdout
+
+
+def test_settings_child_rejects_bot_field_without_leaking_values() -> None:
+    saved = sys.modules.get("app.core.config")
+    module = types.ModuleType("app.core.config")
+
+    class Settings:
+        pass
+
+    Settings.model_fields = {"telegram_bot_token": "must-not-leak"}
+    module.Settings = Settings
+    sys.modules["app.core.config"] = module
+    try:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            exec(compile(verifier.SETTINGS_CHILD, "<settings-child>", "exec"), {"__name__": "settings"})  # noqa: S102
+        text = buffer.getvalue()
+    finally:
+        if saved is None:
+            sys.modules.pop("app.core.config", None)
+        else:
+            sys.modules["app.core.config"] = saved
+    assert text == "CHILD_STATUS=fail\nCHILD_STAGE=STAGE_2_BOT_SETTINGS\n"
+    assert "must-not-leak" not in text
+
+
+def test_actual_backend_package_imports_without_app_main_or_db_connection() -> None:
+    backend = Path(__file__).resolve().parents[3] / "backend"
+    script = """
+import sys
+from app.core.config import Settings
+forbidden = {"telegram_bot_token", "telegram_bot_username", "telegram_webhook_secret", "telegram_webhook_url"}
+assert not forbidden & set(Settings.model_fields)
+from sqlalchemy import func, or_, select
+from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.db.session import SessionLocal
+from app.services.recent_source_service import RecentSourceService
+assert "app.main" not in sys.modules
+assert SessionLocal is not None and RecentSourceService is not None
+assert Object is not None and TelegramMtprotoAccount is not None and TelegramMtprotoChatSelection is not None
+assert callable(func.count) and callable(select)
+print("SMOKE_OK")
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(backend) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run([sys.executable, "-c", script], cwd=backend, env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "SMOKE_OK"
 
 
 def test_child_success_protocol_has_no_identifiers() -> None:
@@ -805,7 +915,7 @@ def test_malformed_child_output_and_crash_are_fixed_stage2_codes(monkeypatch, ca
     assert "container died" not in stdout
 
 
-def _remote_failure_transcript(stage: str = "STAGE_2_ACCOUNT") -> str:
+def _remote_failure_transcript(stage: str = "STAGE_2_OPENAPI_FETCH") -> str:
     prefix = []
     for key in verifier.SUCCESS_FIELDS:
         if key == "LEGACY_BOT_ROUTES_ABSENT_PASS":

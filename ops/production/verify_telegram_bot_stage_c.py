@@ -170,12 +170,20 @@ def _has_eligible_candidate(candidates, is_eligible) -> bool:
     return any(is_eligible(candidate) for candidate in candidates)
 
 
-CHILD_FAIL_STAGES = frozenset({
-    "STAGE_2_BOOTSTRAP",
-    "STAGE_2_LEGACY_ROUTES",
-    "STAGE_2_MTPROTO_ROUTE",
+OPENAPI_URL = "http://127.0.0.1:18080/openapi.json"
+LEGACY_ROUTE_PATHS = ("/telegram/link", "/integrations/telegram/webhook")
+MTPROTO_ROUTE_PATH = "/telegram/mtproto/status"
+BOT_SETTING_FIELDS = ("telegram_bot_token", "telegram_bot_username", "telegram_webhook_secret", "telegram_webhook_url")
+SETTINGS_FAIL_STAGES = frozenset({
+    "STAGE_2_SETTINGS_IMPORT",
+    "STAGE_2_SETTINGS_EXECUTION",
     "STAGE_2_BOT_SETTINGS",
+})
+CHILD_FAIL_STAGES = frozenset({
+    "STAGE_2_SQLALCHEMY",
+    "STAGE_2_MODELS",
     "STAGE_2_DB_SESSION",
+    "STAGE_2_RECENT_SOURCE",
     "STAGE_2_ACCOUNT",
     "STAGE_2_SCOPE",
     "STAGE_2_LEGACY_AGGREGATE",
@@ -183,31 +191,44 @@ CHILD_FAIL_STAGES = frozenset({
     "STAGE_2_INBOX_READ",
     "STAGE_2_CANDIDATE_BOUND",
 })
-CHILD = r"""
+SETTINGS_CHILD = r"""
 def _run():
     try:
-        from sqlalchemy import func, or_, select
         from app.core.config import Settings
-        from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
-        from app.db.session import SessionLocal
-        from app.main import app
-        from app.services.recent_source_service import RecentSourceService
     except Exception:
-        return "STAGE_2_BOOTSTRAP"
-    try:
-        routes = {route.path for route in app.routes}
-    except Exception:
-        return "STAGE_2_BOOTSTRAP"
-    if "/telegram/link" in routes or "/integrations/telegram/webhook" in routes:
-        return "STAGE_2_LEGACY_ROUTES"
-    if "/telegram/mtproto/status" not in routes:
-        return "STAGE_2_MTPROTO_ROUTE"
+        return "STAGE_2_SETTINGS_IMPORT"
     try:
         fields = set(Settings.model_fields)
     except Exception:
-        return "STAGE_2_BOT_SETTINGS"
+        return "STAGE_2_SETTINGS_EXECUTION"
     if {"telegram_bot_token", "telegram_bot_username", "telegram_webhook_secret", "telegram_webhook_url"} & fields:
         return "STAGE_2_BOT_SETTINGS"
+    print("CHILD_STATUS=ok")
+    return ""
+
+_stage = _run()
+if _stage:
+    print("CHILD_STATUS=fail")
+    print("CHILD_STAGE=" + _stage)
+"""
+DB_CHILD = r"""
+def _run():
+    try:
+        from sqlalchemy import func, or_, select
+    except Exception:
+        return "STAGE_2_SQLALCHEMY"
+    try:
+        from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+    except Exception:
+        return "STAGE_2_MODELS"
+    try:
+        from app.db.session import SessionLocal
+    except Exception:
+        return "STAGE_2_DB_SESSION"
+    try:
+        from app.services.recent_source_service import RecentSourceService
+    except Exception:
+        return "STAGE_2_RECENT_SOURCE"
     session = None
     try:
         session = SessionLocal()
@@ -259,15 +280,60 @@ def _run():
             except Exception:
                 pass
 
-try:
-    _stage = _run()
-except Exception:
-    _stage = "STAGE_2_BOOTSTRAP"
+_stage = _run()
 if _stage:
     print("CHILD_STATUS=fail")
     print("CHILD_STAGE=" + _stage)
 """
 _CHILD_COUNT_KEYS = ("MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT")
+
+
+def _openapi_paths(*, request=None, sleeper=time.sleep, attempts: int = 30, delay: float = 2.0) -> dict:
+    """Read running API paths. Do not import app.main and do not print the schema."""
+    request = request or urllib.request.urlopen
+    for attempt in range(attempts):
+        try:
+            with request(OPENAPI_URL, timeout=5) as response:
+                status = getattr(response, "status", 0)
+                body = response.read()
+        except (OSError, urllib.error.URLError, TimeoutError):
+            if attempt + 1 < attempts:
+                sleeper(delay)
+                continue
+            raise VerifyError("STAGE_2_OPENAPI_FETCH", RuntimeError()) from None
+        if not isinstance(status, int) or not 200 <= status < 300:
+            if attempt + 1 < attempts:
+                sleeper(delay)
+                continue
+            raise VerifyError("STAGE_2_OPENAPI_FETCH", RuntimeError())
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            raise VerifyError("STAGE_2_OPENAPI_PROTOCOL", ValueError()) from None
+        paths = payload.get("paths") if isinstance(payload, dict) else None
+        if not isinstance(paths, dict):
+            raise VerifyError("STAGE_2_OPENAPI_PROTOCOL", ValueError())
+        return paths
+    raise VerifyError("STAGE_2_OPENAPI_FETCH", RuntimeError())
+
+
+def _parse_status_child(output: str, fail_stages: frozenset[str], protocol_stage: str) -> None:
+    lines = output.splitlines()
+    if lines == ["CHILD_STATUS=ok"]:
+        return
+    if len(lines) == 2 and lines[0] == "CHILD_STATUS=fail" and lines[1].startswith("CHILD_STAGE="):
+        stage = lines[1].split("=", 1)[1]
+        if stage in fail_stages:
+            raise VerifyError(stage, RuntimeError())
+    raise VerifyError(protocol_stage, ValueError())
+
+
+def _settings_child(compose: list[str]) -> None:
+    try:
+        output = _run([*compose, "exec", "-T", "api", "python", "-c", SETTINGS_CHILD])
+    except Exception as exc:
+        raise VerifyError("STAGE_2_SETTINGS_EXECUTION", RuntimeError()) from exc
+    _parse_status_child(output, SETTINGS_FAIL_STAGES, "STAGE_2_SETTINGS_PROTOCOL")
 
 
 def _parse_child(output: str) -> dict[str, str]:
@@ -306,7 +372,7 @@ def _parse_child(output: str) -> dict[str, str]:
 
 def _child(compose: list[str]) -> dict[str, str]:
     try:
-        output = _run([*compose, "exec", "-T", "api", "python", "-c", CHILD])
+        output = _run([*compose, "exec", "-T", "api", "python", "-c", DB_CHILD])
     except Exception as exc:
         raise VerifyError("STAGE_2_CHILD_EXECUTION", RuntimeError()) from exc
     return _parse_child(output)
@@ -391,14 +457,30 @@ def remote_main() -> int:
         emit("MTPROTO_CREDENTIALS_PRESERVED_PASS", "true")
         emit("TELEGRAM_MTPROTO_AI_DISABLED_PASS", "true")
         try:
+            paths = _openapi_paths()
+        except VerifyError:
+            raise
+        except Exception as exc:
+            raise VerifyError("STAGE_2_OPENAPI_FETCH", exc) from exc
+        if any(path in paths for path in LEGACY_ROUTE_PATHS):
+            raise VerifyError("STAGE_2_LEGACY_ROUTES", RuntimeError())
+        emit("LEGACY_BOT_ROUTES_ABSENT_PASS", "true")
+        if MTPROTO_ROUTE_PATH not in paths:
+            raise VerifyError("STAGE_2_MTPROTO_ROUTE", RuntimeError())
+        emit("MTPROTO_ROUTE_PRESENT_PASS", "true")
+        try:
+            _settings_child(compose)
+        except VerifyError:
+            raise
+        except Exception as exc:
+            raise VerifyError("STAGE_2_SETTINGS_PROTOCOL", exc) from exc
+        emit("BOT_SETTINGS_MODEL_ABSENT_PASS", "true")
+        try:
             values = _child(compose)
         except VerifyError:
             raise
         except Exception as exc:
             raise VerifyError("STAGE_2_CHILD_PROTOCOL", exc) from exc
-        emit("LEGACY_BOT_ROUTES_ABSENT_PASS", "true")
-        emit("MTPROTO_ROUTE_PRESENT_PASS", "true")
-        emit("BOT_SETTINGS_MODEL_ABSENT_PASS", "true")
         for key in ("MTPROTO_ACCOUNT_COUNT", "ACTIVE_SCOPE_COUNT", "LEGACY_BOT_OBJECT_COUNT"):
             emit(key, values[key])
         emit("LEGACY_BOT_INBOX_READABLE", values["LEGACY_BOT_INBOX_READABLE"])
