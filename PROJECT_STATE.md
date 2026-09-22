@@ -5,8 +5,8 @@
 - Production/runtime work relies on the pre-existing Executor/workstation SSH credential integration plus the pinned target contract. Do not create/copy/request new production private-key material as a workaround.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `c69d2353c19c4958e1fb60aac69466fcf6ac1482`.
-- Production branch/ref: `c69d2353c19c4958e1fb60aac69466fcf6ac1482`.
+- Production application/runtime: `fe151f12f64886505253e765b82458710a949e34`.
+- Production branch/ref: `fe151f12f64886505253e765b82458710a949e34`.
 - Production Alembic: `0046 / 0046`.
 - Production health: PASS.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
@@ -213,3 +213,6 @@
 
 
 - Telegram Bot API M4BI1 backend deploy: HUMAN AUTHORIZED for exact release `fe151f12f64886505253e765b82458710a949e34`, rollback `c69d2353c19c4958e1fb60aac69466fcf6ac1482`, expected Alembic `0046`. This is a schema-neutral server rollout through the canonical harness only. The harness deploys API+worker, not Flutter; therefore Bot backend isolation may be deployed now, but Stage A client UX retirement still requires a separate client rollout/verification before Stage B webhook/credential removal. No Bot webhook deletion or env/credential change is authorized by this deploy.
+
+
+- Telegram Bot API M4BI1 Stage A backend production deploy: PASS. Canonical schema-neutral deploy harness reported exact release `fe151f12f64886505253e765b82458710a949e34`, health PASS, Alembic `0046`, DB container unchanged, DB volume unchanged, production `.env` unchanged, API recreated, worker recreated, deployment PASS. GitHub `production` ref is exact release. No migration / no `0047`; no Bot API/provider call, webhook change, credential/env removal, or client rollout occurred. Stage A backend isolation is therefore live: legacy link/webhook/send behavior is fail-closed by release code while MTProto remains the live Telegram transport. Because old clients receive inactive Bot status and server endpoints/send paths are independently retired, Flutter artifact rollout is not a safety prerequisite for Stage B; full dead-UI cleanup may remain a later cleanup item.
