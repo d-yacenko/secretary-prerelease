@@ -24,7 +24,7 @@ while IFS= read -r line; do [ -n "$line" ] || continue; case "$line" in \#*) con
 [ -s "$TMP/known" ] || fail host_key_pin_mismatch
 python3 "$HELPER" bundle >"$TMP/remote.py" 2>/dev/null || fail bundle
 set +e
-ssh -T -p "$SSH_PORT" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$TMP/known" -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519 -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey "$SSH_TARGET" "cd $REMOTE_PATH && python3 - remote" <"$TMP/remote.py" >"$TMP/stdout" 2>"$TMP/stderr"
+ssh -T -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$TMP/known" -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519 -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey "$SSH_TARGET" "cd $REMOTE_PATH && python3 - remote" <"$TMP/remote.py" >"$TMP/stdout" 2>"$TMP/stderr"
 ssh_rc=$?
 python3 "$HELPER" validate "$TMP/stdout" >/dev/null 2>&1
 protocol_rc=$?

@@ -172,11 +172,21 @@ def remote_main() -> int:
                 raise RuntimeError("runtime unavailable")
         except Exception as exc:
             raise VerifyError("STAGE_0_RUNTIME", exc) from exc
-        emit("DB_RUNNING_PASS", "true"); emit("API_RUNNING_PASS", "true"); emit("WORKER_RUNNING_PASS", "true")
         try:
             _container_state(ids["db"], healthy=True)
         except Exception as exc:
             raise VerifyError("STAGE_0_DB_HEALTH", exc) from exc
+        emit("DB_RUNNING_PASS", "true")
+        try:
+            _container_state(ids["api"])
+        except Exception as exc:
+            raise VerifyError("STAGE_0_API_RUNNING", exc) from exc
+        emit("API_RUNNING_PASS", "true")
+        try:
+            _container_state(ids["worker"])
+        except Exception as exc:
+            raise VerifyError("STAGE_0_WORKER_RUNNING", exc) from exc
+        emit("WORKER_RUNNING_PASS", "true")
         emit("DB_HEALTH_PASS", "true")
         try:
             db_volume = _run(["docker", "inspect", "-f", "{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}", ids["db"]])
@@ -254,29 +264,48 @@ def emit_failure(stage: str, cause: BaseException) -> None:
 
 def parse_output(text: str) -> str:
     lines = text.splitlines()
-    if not lines or lines[0] != "M4BM1_BEGIN=true":
+    if not lines:
+        raise ValueError("empty protocol")
+    parsed: list[tuple[str, str]] = []
+    for line in lines:
+        if "=" not in line:
+            raise ValueError("malformed protocol line")
+        key, value = line.split("=", 1)
+        if not key or not value:
+            raise ValueError("malformed protocol line")
+        parsed.append((key, value))
+    if parsed[0] != ("M4BM1_BEGIN", "true"):
         raise ValueError("invalid begin")
-    if lines[-1] == "M4BM1_END=true":
-        if len(lines) != len(SUCCESS_FIELDS) or [line.split("=", 1)[0] for line in lines] != list(SUCCESS_FIELDS):
+    keys = [key for key, _ in parsed]
+    if parsed[-1] == ("M4BM1_END", "true"):
+        if keys != list(SUCCESS_FIELDS):
             raise ValueError("invalid success protocol")
-        if lines[-2] != "M4BM1_TERMINAL=success" or any(line.endswith("=false") for line in lines):
+        values = dict(parsed)
+        if parsed[-2] != ("M4BM1_TERMINAL", "success"):
+            raise ValueError("missing success terminal")
+        if any(values[key] != "true" for key in SUCCESS_FIELDS[1:17]):
             raise ValueError("invalid success values")
-        values = {line.split("=", 1)[0]: line.split("=", 1)[1] for line in lines}
         if any(values[key] != "0" for key in ("TELEGRAM_NETWORK_CALLS", "DB_WRITES", "ENV_WRITES", "SERVICE_RECREATIONS")):
             raise ValueError("invalid counters")
         return "success"
-    required = {"FAILURE_STAGE", "RAW_EXCEPTION_CLASS", "TELEGRAM_NETWORK_CALLS", "DB_WRITES", "ENV_WRITES", "SERVICE_RECREATIONS", "M4BM1_TERMINAL"}
-    keys = [line.split("=", 1)[0] for line in lines]
-    if lines[-1] != "M4BM1_TERMINAL=failure" or not required.issubset(keys) or len(keys) != len(set(keys)):
-        raise ValueError("invalid failure protocol")
-    if any(not re.fullmatch(r"[A-Za-z0-9_]+", line.split("=", 1)[1]) for line in lines if line.startswith("RAW_EXCEPTION_CLASS=")):
-        raise ValueError("unsafe failure class")
-    if any(not re.fullmatch(r"STAGE_[A-Z0-9_]+", line.split("=", 1)[1]) for line in lines if line.startswith("FAILURE_STAGE=")):
+    tail = ("FAILURE_STAGE", "RAW_EXCEPTION_CLASS", "TELEGRAM_NETWORK_CALLS", "DB_WRITES", "ENV_WRITES", "SERVICE_RECREATIONS", "M4BM1_TERMINAL")
+    if len(parsed) < 1 + len(tail) or tuple(keys[-len(tail):]) != tail:
+        raise ValueError("invalid failure tail")
+    prefix = keys[:-len(tail)]
+    allowed_prefix = list(SUCCESS_FIELDS[:17])
+    if prefix != allowed_prefix[:len(prefix)] or not prefix:
+        raise ValueError("invalid failure prefix")
+    values = dict(parsed)
+    if any(values[key] != "true" for key in prefix[1:]):
+        raise ValueError("invalid failure prefix value")
+    if not re.fullmatch(r"STAGE_[A-Z0-9_]+", values["FAILURE_STAGE"]):
         raise ValueError("unsafe failure stage")
-    for key in ("TELEGRAM_NETWORK_CALLS", "DB_WRITES", "ENV_WRITES", "SERVICE_RECREATIONS"):
-        value = next(line.split("=", 1)[1] for line in lines if line.startswith(key + "="))
-        if value != "0":
-            raise ValueError("nonzero failure counter")
+    if not re.fullmatch(r"[A-Za-z0-9_]+", values["RAW_EXCEPTION_CLASS"]):
+        raise ValueError("unsafe failure class")
+    if any(values[key] != "0" for key in tail[2:-1]):
+        raise ValueError("nonzero failure counter")
+    if values["M4BM1_TERMINAL"] != "failure":
+        raise ValueError("invalid failure terminal")
     return "failure"
 
 

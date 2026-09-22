@@ -37,7 +37,7 @@ def test_protocol_accepts_success_and_sanitized_failure():
     assert verifier.parse_output(failure()) == "failure"
 
 
-@pytest.mark.parametrize("text", ["M4BM1_BEGIN=true\n", success_transcript().replace("DB_WRITES=0", "DB_WRITES=1"), failure().replace("RAW_EXCEPTION_CLASS=ValueError", "RAW_EXCEPTION_CLASS=ValueError:secret")])
+@pytest.mark.parametrize("text", ["M4BM1_BEGIN=true\n", success_transcript().replace("DB_WRITES=0", "DB_WRITES=1"), failure().replace("RAW_EXCEPTION_CLASS=ValueError", "RAW_EXCEPTION_CLASS=ValueError:secret"), failure().replace("M4BM1_TERMINAL=failure", "SECRET=leak\nM4BM1_TERMINAL=failure")])
 def test_protocol_fail_closed(text):
     with pytest.raises(ValueError):
         verifier.parse_output(text)
@@ -96,7 +96,7 @@ def test_bundle_compiles_and_contains_remote_main():
     compile(result.stdout, "<bundle>", "exec")
 
 
-def _remote_fixture(monkeypatch, tmp_path, *, env_updates=None, container_updates=None, head=None, production=None):
+def _remote_fixture(monkeypatch, tmp_path, *, env_updates=None, container_updates=None, head=None, production=None, stopped=None):
     monkeypatch.chdir(tmp_path)
     values = {
         "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_BOT_USERNAME": "", "TELEGRAM_WEBHOOK_SECRET": "", "TELEGRAM_WEBHOOK_URL": "",
@@ -121,7 +121,10 @@ def _remote_fixture(monkeypatch, tmp_path, *, env_updates=None, container_update
             return {"db": "db-id", "api": "api-id", "worker": "worker-id"}[command[-1]]
         if command[:3] == ["docker", "inspect", "-f"]:
             fmt = command[3]
-            if "State" in fmt: return json.dumps({"Status": "running", "Health": {"Status": "healthy"}})
+            if "State" in fmt:
+                container = command[-1]
+                status = "exited" if container == {"api": "api-id", "worker": "worker-id", "db": "db-id"}.get(stopped) else "running"
+                return json.dumps({"Status": status, "Health": {"Status": "healthy"}})
             if "Mounts" in fmt: return "volume=/var/lib/postgresql/data"
             if "Config.Env" in fmt:
                 container = command[-1]
@@ -149,6 +152,8 @@ def test_remote_success_is_read_only(monkeypatch, tmp_path, capsys):
     ({"env_updates": {"TELEGRAM_API_HASH": ""}}, "STAGE_1_ENV"),
     ({"env_updates": {"TELEGRAM_MTPROTO_AI_ENABLED": "true"}}, "STAGE_1_ENV"),
     ({"container_updates": {"api": {"TELEGRAM_API_HASH": "other"}}}, "STAGE_1_CONTAINER_ENV"),
+    ({"stopped": "api"}, "STAGE_0_API_RUNNING"),
+    ({"stopped": "worker"}, "STAGE_0_WORKER_RUNNING"),
 ])
 def test_remote_failures_are_staged_and_zero_mutation(monkeypatch, tmp_path, capsys, kwargs, stage):
     _remote_fixture(monkeypatch, tmp_path, **kwargs)
