@@ -1,10 +1,10 @@
-# Current task — Telegram Bot API M4BZ1: final live read-only Stage C acceptance awaiting explicit authorization
+# Current task — Telegram Bot API M4BZ1: execute final one-shot live read-only Stage C acceptance
 
 ## Status
 
-M4BY1 Stage 2 redesign is ARCHITECT ACCEPTED.
+Human explicitly authorized the final live read-only Stage C acceptance.
 
-Accepted verifier redesign commit:
+Accepted verifier redesign:
 `02c6240bb17e7d6a353db907b49cf32e2caf5eaf`
 
 Current production runtime/ref:
@@ -13,43 +13,16 @@ Current production runtime/ref:
 Expected Alembic:
 `0046`
 
-Previously proven live invariants:
-- exact production HEAD/ref;
-- clean production worktree;
-- DB/API/worker running;
-- DB healthy;
-- Alembic 0046;
-- application health;
-- retired Bot runtime env absent;
-- MTProto/protected credentials preserved;
-- TELEGRAM_MTPROTO_AI_ENABLED=false;
-- zero provider calls / DB writes / env writes / service recreations.
+## Authorization
 
-## Stage 2 architecture now accepted
-
-- route checks use read-only GET `http://127.0.0.1:18080/openapi.json`;
-- no `app.main` import in DB child;
-- Settings uses a separate minimal child;
-- DB/read-state uses a narrow child only;
-- no generic `STAGE_2_BOOTSTRAP` normal-path failure remains;
-- fixed sanitized narrow failure stages remain available.
-
-## Authorization state
-
-FINAL LIVE READ-ONLY STAGE C ACCEPTANCE IS NOT YET AUTHORIZED.
-
-Acceptable explicit authorization text:
-
-`Разрешаю финальный live read-only Stage C acceptance M4BZ1`
-
-After explicit authorization, execute exactly once:
+Authorize exactly ONE execution of:
 
 `bash ops/production/verify_telegram_bot_stage_c.sh`
 
 ## Expected success evidence
 
 A successful run must include:
-- all existing Stage 0/1 PASS markers;
+- all Stage 0/1 PASS markers;
 - `LEGACY_BOT_ROUTES_ABSENT_PASS=true`;
 - `MTPROTO_ROUTE_PRESENT_PASS=true`;
 - `BOT_SETTINGS_MODEL_ABSENT_PASS=true`;
@@ -64,17 +37,7 @@ A successful run must include:
 - `M4BR1_TERMINAL=success`;
 - `M4BR1_END=true`.
 
-## Failure handling
-
-If verifier fails or blocks:
-- do not retry;
-- do not bypass;
-- do not use direct SSH;
-- do not restart/recreate services;
-- do not modify DB/env;
-- return complete sanitized stdout and STOP.
-
-## Hard prohibitions
+## Read-only guarantees
 
 No:
 - Telegram/provider calls;
@@ -85,5 +48,21 @@ No:
 - schema/data cleanup;
 - MTProto behavior/config changes;
 - AI enablement.
+
+## Failure handling
+
+If verifier fails or blocks:
+- do not retry;
+- do not bypass;
+- do not use direct SSH;
+- do not restart/recreate services;
+- do not modify DB/env;
+- return complete sanitized stdout and STOP.
+
+## Required report
+
+Return the complete sanitized stdout exactly as produced.
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
