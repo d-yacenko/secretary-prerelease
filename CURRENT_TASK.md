@@ -26,9 +26,9 @@ Expected Alembic:
 
 Canonical `production` has already been fast-forwarded non-force to the release.
 
-## Phase A — execute canonical deploy
+## Phase A — canonical deploy COMPLETE / PASS
 
-Execute exactly once via:
+Executed successfully via the canonical deploy path:
 
 ```bash
 python3 ops/production/deploy.py \
@@ -46,9 +46,9 @@ Required invariants:
 - API/worker recreated as normal;
 - API/worker runtime Telegram AI flag remains false.
 
-If deploy fails, STOP. No retry.
+Observed result: release exact, health PASS, Alembic 0046, DB container/volume and .env unchanged, API/worker recreated. Do not redeploy.
 
-## Phase B — build rehearsal helper locally
+## Phase B — build rehearsal helper locally (ACTIVE)
 
 No suitable existing helper exists.
 
