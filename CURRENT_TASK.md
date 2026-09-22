@@ -1,8 +1,11 @@
-# Current task — Telegram Bot API M4BR1: build read-only Stage C post-deploy acceptance verifier
+# Current task — Telegram Bot API M4BR1R: fix historical-read existential check
 
 ## Status
 
-M4BQ1 Stage C schema-neutral production deploy is COMPLETE / PASS.
+M4BR1 verifier commit:
+`ababcfacf6526fcd71ccaa752278dfe268be9a1e`
+
+Architect review: read-only/safety boundary accepted, but NOT YET ACCEPTED FOR LIVE RUN.
 
 Current production runtime/ref:
 `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
@@ -10,124 +13,75 @@ Current production runtime/ref:
 Alembic:
 `0046`
 
-Confirmed deploy invariants:
-- health PASS;
-- DB container unchanged;
-- DB volume unchanged;
-- production `.env` unchanged;
-- API recreated;
-- worker recreated;
-- no migration / no `0047`.
+## Problem
+
+The verifier currently does:
+
+- select an arbitrary legacy Bot-derived Telegram object with `.limit(1)`;
+- call `RecentSourceService(...).get_inbox_eligible(sample.id)`;
+- fail if that one arbitrary row is not Inbox-eligible.
+
+This is not equivalent to the requirement.
+
+Historical Bot data can legitimately include outbound, hidden, deleted, rejected, or otherwise non-Inbox rows. If one of those happens to be returned first, the verifier produces a false negative even when other preserved legacy Bot messages are correctly readable.
 
 ## Goal
 
-Build a production-compatible READ-ONLY verifier for final Stage C acceptance.
+Change the read-only child check from "arbitrary sample is readable" to:
 
-This task is CODE/TEST ONLY. Do not run it against production in M4BR1.
+> at least one preserved legacy Bot-derived object is eligible through the canonical generic Inbox read predicate.
 
-## Required verifier
+No product/runtime behavior change.
 
-Add a committed verifier under `ops/production/` following the established target/pin/SSH/read-only patterns.
+## Required correction
 
-It must make zero Telegram/provider calls and zero production writes.
+Preferred implementation:
 
-Verify:
+1. Keep the aggregate `LEGACY_BOT_OBJECT_COUNT` over legacy non-MTProto Telegram chat objects.
+2. Build the Inbox-eligible existence check using the canonical `RecentSourceService` predicate/service semantics, not a hand-maintained approximation.
+3. Do not print or return any object ID/content/title.
+4. Emit only:
+   `LEGACY_BOT_INBOX_READABLE=true|false`.
 
-1. exact production target/host pin;
-2. canonical repository/path and fresh exact `origin/production`;
-3. current HEAD exact
-   `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
-4. tracked worktree clean;
-5. DB/API/worker containers running and DB healthy;
-6. application health PASS with bounded retry;
-7. Alembic exact `0046 (head)`;
-8. runtime route table does NOT contain:
-   - `/telegram/link`
-   - `/integrations/telegram/webhook`;
-9. runtime route table DOES contain the MTProto routes needed for the live account flow, including at minimum:
-   - `/telegram/mtproto/status`;
-10. active Settings model has no Bot runtime fields:
-   - `telegram_bot_token`
-   - `telegram_bot_username`
-   - `telegram_webhook_secret`
-   - `telegram_webhook_url`;
-11. actual API and worker container environments do not contain the four Bot variables;
-12. MTProto installation credentials remain present/consistent and `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-13. exactly one MTProto account still exists;
-14. active MTProto scope remains 28;
-15. historical Bot-derived canonical objects still exist, counted only in aggregate:
-   - provider `telegram`;
-   - kind `chat_message`;
-   - metadata transport absent/not `mtproto`;
-16. at least one historical Bot-derived object can be resolved through the generic Inbox eligibility/read path without revealing its id/content;
-17. historical Bot-derived objects remain ordinary read data only; no provider/send/mutation call is executed by the verifier.
+Acceptable approaches:
+- add a small read-only service method such as an existence/count helper only if it is generic and genuinely useful; OR
+- in the verifier child, inspect a bounded set of legacy candidate rows and call `get_inbox_eligible()` until one is eligible, without outputting identifiers.
 
-## Sanitized protocol
+If using bounded candidate iteration:
+- choose a deterministic bounded limit large enough for existing historical Bot data;
+- report a sanitized failure if legacy count is larger than the checked bound and no readable candidate was established, rather than falsely claiming unreadable;
+- no writes/flush/commit.
 
-Include fields equivalent to:
+Do not duplicate the full Inbox eligibility SQL manually in the verifier.
 
-```
-M4BR1_BEGIN=true
-REMOTE_HEAD_PASS=true
-REMOTE_PRODUCTION_REF_PASS=true
-REMOTE_WORKTREE_CLEAN=true
-DB_RUNNING_PASS=true
-API_RUNNING_PASS=true
-WORKER_RUNNING_PASS=true
-DB_HEALTH_PASS=true
-APP_HEALTH_PASS=true
-ALEMBIC_0046_PASS=true
-LEGACY_BOT_ROUTES_ABSENT_PASS=true
-MTPROTO_ROUTE_PRESENT_PASS=true
-BOT_SETTINGS_MODEL_ABSENT_PASS=true
-BOT_CONTAINER_ENV_ABSENT_PASS=true
-MTPROTO_CREDENTIALS_PRESERVED_PASS=true
-TELEGRAM_MTPROTO_AI_DISABLED_PASS=true
-MTPROTO_ACCOUNT_COUNT=1
-ACTIVE_SCOPE_COUNT=28
-LEGACY_BOT_OBJECT_COUNT=...
-LEGACY_BOT_INBOX_READABLE=true
-TELEGRAM_NETWORK_CALLS=0
-DB_WRITES=0
-ENV_WRITES=0
-SERVICE_RECREATIONS=0
-M4BR1_TERMINAL=success
-M4BR1_END=true
-```
+## Regression requirements
 
-Do not print:
-- Telegram peer/chat/message/account IDs;
-- titles/bodies;
-- secret values/hashes/prefixes;
-- raw environment;
-- raw SQL rows.
+Add tests proving:
+1. first legacy candidate non-eligible + later candidate eligible => `LEGACY_BOT_INBOX_READABLE=true`;
+2. no eligible candidate => false/failure;
+3. no IDs/content are emitted;
+4. provider/write/recreate counters remain zero;
+5. all prior strict protocol/read-only tests still pass.
 
-## Historical read check
+## Preserve
 
-Prefer selecting one legacy Bot-derived object internally, then invoking the same generic Inbox eligibility/read service used by production and outputting only a boolean.
+Do not change:
+- production release expectation;
+- route/config/container checks;
+- MTProto account count = 1;
+- active scope = 28;
+- AI=false;
+- bounded health retry;
+- Alembic 0046;
+- strict parser;
+- zero provider/write/env/recreate capabilities.
 
-If no legacy Bot-derived object exists, report a deterministic sanitized failure because Stage C preservation cannot then be verified from production state.
-
-Do not construct or execute send/reply/mutation actions.
-
-## Required tests
-
-Add focused tests proving:
-- exact ref/HEAD/worktree fail-closed;
-- legacy Bot routes absent and MTProto route present;
-- Bot Settings fields absent;
-- Bot vars absent from actual API/worker env;
-- aggregate historical Bot object query excludes `transport="mtproto"`;
-- generic Inbox eligibility/read check emits boolean only;
-- zero provider/write/recreate capabilities;
-- health bounded retry;
-- exact Alembic contract;
-- strict sanitized output parser rejects unknown lines/fields.
+## Validation
 
 Run:
 - focused verifier tests;
 - Python compile;
-- bundled helper compile if applicable;
+- bundled helper compile;
 - Bash syntax;
 - Ruff;
 - `git diff --check`.
@@ -135,37 +89,34 @@ Run:
 ## Authorization
 
 AUTHORIZED:
-- local verifier/test code only;
+- local verifier/test correction only;
 - update `PROJECT_STATE.md`;
 - commit/push canonical `main`.
 
 NOT AUTHORIZED:
 - production SSH;
 - live verifier;
-- Telegram/provider calls;
+- provider calls;
 - DB/env writes;
 - service restart/recreate;
-- deploy/rollback/ref movement;
+- deploy/ref movement;
 - schema/data cleanup;
-- MTProto behavior/config changes;
-- AI enablement.
+- MTProto changes.
 
 ## Required report
 
 Return:
-- commit SHA;
-- files changed;
-- verifier protocol;
-- historical Bot read-verification mechanism;
-- zero-mutation/provider proof;
-- test/compile/Ruff/Bash/diff-check results;
+- corrective commit SHA;
+- exact existential historical-read mechanism;
+- regression results;
+- compile/Ruff/Bash/diff-check results;
 - production SSH=0;
 - provider calls=0;
 - production mutation=0.
 
 Final marker:
 
-`TELEGRAM_BOT_M4BR1_STAGE_C_VERIFIER_READY`
+`TELEGRAM_BOT_M4BR1R_VERIFIER_READY`
 
 Then STOP.
 
