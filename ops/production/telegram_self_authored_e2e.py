@@ -152,9 +152,14 @@ def prove_cohort(session: Session, rows: list[Object]) -> Cohort:
         raise HarnessBlocked("mixed_account")
     if None in peer_ids or len(peer_ids) != 1:
         raise HarnessBlocked("mixed_peer")
-    account_id = UUID(account_ids.pop())
+    raw_account = account_ids.pop()
     peer_id = peer_ids.pop()
-    assert peer_id is not None
+    assert raw_account is not None and peer_id is not None
+    try:
+        account_id = UUID(raw_account)
+        peer_int = int(peer_id)
+    except (TypeError, ValueError):
+        raise HarnessBlocked("identity") from None
     account = session.scalar(
         select(TelegramMtprotoAccount).where(
             TelegramMtprotoAccount.id == account_id,
@@ -166,7 +171,7 @@ def prove_cohort(session: Session, rows: list[Object]) -> Cohort:
     selection = session.scalar(
         select(TelegramMtprotoChatSelection).where(
             TelegramMtprotoChatSelection.account_id == account.id,
-            TelegramMtprotoChatSelection.peer_id == int(peer_id),
+            TelegramMtprotoChatSelection.peer_id == peer_int,
         )
     )
     if selection is None or not selection.scope_active:
@@ -216,7 +221,7 @@ def summary_candidates(session: Session, cohort: Cohort) -> list[Object]:
     return sorted(window, key=lambda item: (item.occurred_at, item.id))
 
 
-def prove_summary_cohort(session: Session, cohort: Cohort) -> None:
+def prove_summary_cohort(session: Session, cohort: Cohort) -> frozenset[UUID]:
     """Block before any provider call if summary text could include a stranger."""
     objects = summary_candidates(session, cohort)
     selected = {obj.id for obj in cohort.messages}
@@ -226,11 +231,42 @@ def prove_summary_cohort(session: Session, cohort: Cohort) -> None:
     covered = [group for group in groups if selected.intersection(group.object_ids)]
     if not covered:
         raise HarnessBlocked("summary_cohort")
+    approved: set[UUID] = set()
     for group in covered:
         members = [obj for obj in objects if obj.id in group.object_ids]
         for obj in members:
             if obj.provider == TELEGRAM_PROVIDER and message_identity_block(obj, cohort.account):
                 raise HarnessBlocked("summary_cohort")
+            if is_canonical_telegram_mtproto_object(obj):
+                approved.add(obj.id)
+    if not selected <= approved:
+        raise HarnessBlocked("summary_cohort")
+    return frozenset(approved)
+
+
+class PrivacyCorrelationJudge:
+    """Acceptance-only fence in front of the real or fake correlation judge."""
+
+    def __init__(self, inner, session: Session, approved_telegram_ids: frozenset[UUID]) -> None:
+        self._inner = inner
+        self._session = session
+        self._approved = approved_telegram_ids
+        self.calls = 0
+
+    def judge(self, trigger_title, trigger_kind, trigger_summary, candidates):
+        for candidate in candidates:
+            obj = self._session.get(Object, candidate.object_id)
+            if obj is None:
+                raise HarnessBlocked("correlation_privacy")
+            if is_canonical_telegram_mtproto_object(obj) and obj.id not in self._approved:
+                raise HarnessBlocked("correlation_privacy")
+        self.calls += 1
+        return self._inner.judge(
+            trigger_title=trigger_title,
+            trigger_kind=trigger_kind,
+            trigger_summary=trigger_summary,
+            candidates=candidates,
+        )
 
 
 def _job_object_ids(job: Job) -> set[UUID]:
@@ -274,7 +310,7 @@ def _fail_selected(session: Session, cohort: Cohort) -> None:
             continue
         if job.status in {JOB_STATUS_PENDING, JOB_STATUS_RUNNING}:
             queue.mark_failed(job.id, ABORTED)
-    session.flush()
+    session.commit()
 
 
 def _dangling_selected(session: Session, cohort: Cohort) -> int:
@@ -360,7 +396,11 @@ class _TransportFinder:
 
 
 @contextmanager
-def _fake_providers(task_id: UUID) -> Iterator[FakeEmbeddingService]:
+def _fake_providers(
+    task_id: UUID,
+    session: Session,
+    approved_telegram_ids: frozenset[UUID],
+) -> Iterator[FakeEmbeddingService]:
     from unittest.mock import patch
 
     extractor = FakeTemporalSignalExtractor(
@@ -413,7 +453,7 @@ def _fake_providers(task_id: UUID) -> Iterator[FakeEmbeddingService]:
         ),
         patch(
             "app.jobs.handlers.create_correlation_judge_from_effective",
-            lambda _settings: _Judge(),
+            lambda _settings: PrivacyCorrelationJudge(_Judge(), session, approved_telegram_ids),
         ),
         patch(
             "app.llm.openai_summarizer.create_openai_conversation_stack_summarizer_from_effective",
@@ -466,14 +506,36 @@ def format_report(
     worker_ai: bool,
     env_changed: bool,
     providers: str,
+    embedding: bool,
+    temporal: bool,
+    temporal_participation: str,
+    temporal_result: str,
+    correlation: bool,
+    summary: bool,
+    context_visible: bool,
+    retrieval_visible: bool,
+    idempotent: bool,
 ) -> str:
+    if temporal_participation not in {"expected", "possible", "none"}:
+        raise HarnessBlocked("unsanitized_output")
+    if temporal_result not in {"temporal_hint", "none"}:
+        raise HarnessBlocked("unsanitized_output")
     lines = [
         f"COHORT_SIZE={cohort_size}",
         "SELF_AUTHORED=PASS",
         "SUMMARY_COHORT_SELF_AUTHORED=PASS",
         f"HANDLERS={','.join(handlers)}",
+        f"EMBEDDING={'PASS' if embedding else 'FAIL'}",
         f"AUTO_LABEL_EXECUTED={'PASS' if auto_label_events else 'FAIL'}",
         f"AUTO_LABEL_ASSIGNMENTS={assignments}",
+        f"TEMPORAL={'PASS' if temporal else 'FAIL'}",
+        f"TEMPORAL_PARTICIPATION={temporal_participation}",
+        f"TEMPORAL_RESULT={temporal_result}",
+        f"CORRELATION={'PASS' if correlation else 'FAIL'}",
+        f"SUMMARY={'PASS' if summary else 'FAIL'}",
+        f"CONTEXT_VISIBLE={'PASS' if context_visible else 'FAIL'}",
+        f"RETRIEVAL_VISIBLE={'PASS' if retrieval_visible else 'FAIL'}",
+        f"IDEMPOTENT={'PASS' if idempotent else 'FAIL'}",
         f"DANGLING_SELECTED_JOBS={dangling}",
         f"TELEGRAM_TRANSPORT_CALLS={transport_calls}",
         "PROCESS_LOCAL_AI=true",
@@ -490,24 +552,178 @@ def format_report(
     return text
 
 
-def _auto_label_evidence(session: Session, user_id: UUID) -> tuple[int, int]:
-    from app.db.models import AITraceEvent
+def _auto_label_event_rows(session: Session, selected_ids: set[UUID]):
+    from app.db.models import AITrace, AITraceEvent
 
-    events = list(
-        session.scalars(
-            select(AITraceEvent).where(
-                AITraceEvent.user_id == user_id,
+    return list(
+        session.execute(
+            select(AITraceEvent.id, AITraceEvent.metadata_, AITrace.object_id)
+            .join(AITrace, AITrace.id == AITraceEvent.trace_id)
+            .where(
                 AITraceEvent.event_type == "auto_label_result",
+                AITrace.object_id.in_(selected_ids),
             )
         )
     )
+
+
+def snapshot_auto_label_events(session: Session, selected_ids: set[UUID]) -> set[UUID]:
+    return {row[0] for row in _auto_label_event_rows(session, selected_ids)}
+
+
+def _auto_label_evidence(
+    session: Session,
+    selected_ids: set[UUID],
+    baseline_ids: set[UUID],
+) -> tuple[int, int]:
+    events = 0
     assignments = 0
-    for event in events:
-        metadata = event.metadata_ if hasattr(event, "metadata_") else {}
-        raw = metadata or {}
-        if isinstance(raw, dict):
-            assignments += int(raw.get("accepted_assignment_count") or 0)
-    return len(events), assignments
+    for event_id, metadata, object_id in _auto_label_event_rows(session, selected_ids):
+        if event_id in baseline_ids or object_id not in selected_ids:
+            continue
+        events += 1
+        if isinstance(metadata, dict):
+            assignments += int(metadata.get("accepted_assignment_count") or 0)
+    return events, assignments
+
+
+def _artifact_ids(session: Session, cohort: Cohort) -> frozenset[tuple[str, UUID]]:
+    from app.db.models import Edge, Representation
+
+    found: set[tuple[str, UUID]] = set()
+    hints = session.scalars(
+        select(Object).where(Object.user_id == cohort.user_id, Object.kind == "temporal_hint")
+    )
+    for hint in hints:
+        found.add(("hint", hint.id))
+    edges = session.scalars(select(Edge).where(Edge.user_id == cohort.user_id))
+    for edge in edges:
+        found.add(("edge", edge.id))
+    anchors = [obj.id for obj in cohort.messages]
+    reps = session.scalars(select(Representation).where(Representation.object_id.in_(anchors)))
+    for rep in reps:
+        found.add(("summary", rep.id))
+    return frozenset(found)
+
+
+def _outcome_proofs(
+    session: Session, cohort: Cohort, baseline: frozenset[tuple[str, UUID]]
+) -> dict:
+    from app.db.models import Edge, Representation
+    from app.llm.embedding_text import embedding_input_signature
+    from app.services.context_service import ContextService
+    from app.services.embedding_index import object_has_current_embedding_provenance
+    from app.services.object_query_service import ObjectQueryService
+    from app.services.search_service import SearchService
+
+    selected = {obj.id for obj in cohort.messages}
+    embedding_ok = True
+    for obj in cohort.messages:
+        session.refresh(obj)
+        if not object_has_current_embedding_provenance(obj, embedding_input_signature(obj)):
+            embedding_ok = False
+    new_ids = _artifact_ids(session, cohort) - baseline
+    hint_ids = {item_id for kind, item_id in new_ids if kind == "hint"}
+    hints = list(session.scalars(select(Object).where(Object.id.in_(hint_ids)))) if hint_ids else []
+    matched = []
+    for hint in hints:
+        evidence = str((hint.metadata_ or {}).get("primary_evidence_object_id") or "")
+        if evidence in {str(item) for item in selected}:
+            matched.append(hint)
+    participation = "none"
+    result = "none"
+    if matched:
+        participation = str((matched[0].metadata_ or {}).get("participation") or "none")
+        result = "temporal_hint"
+    edge_ids = {item_id for kind, item_id in new_ids if kind == "edge"}
+    linked = False
+    if edge_ids:
+        for edge in session.scalars(select(Edge).where(Edge.id.in_(edge_ids))):
+            if (
+                edge.source_id in selected
+                and edge.target_id == cohort.task_id
+                and edge.type == "related_to"
+                and edge.state == "proposed"
+            ):
+                linked = True
+    summary_ids = {item_id for kind, item_id in new_ids if kind == "summary"}
+    summary_ok = False
+    if summary_ids:
+        grouped = group_inbox_conversation_items(list(cohort.messages))
+        stacks = [item.stack for item in grouped if item.stack is not None]
+        if len(stacks) == 1:
+            current = session.scalar(
+                select(Representation).where(
+                    Representation.id.in_(summary_ids),
+                    Representation.kind == "conversation_stack_summary",
+                    Representation.object_id == stacks[0].object_ids[-1],
+                )
+            )
+            meta = (
+                current.metadata_
+                if current is not None and isinstance(current.metadata_, dict)
+                else {}
+            )
+            summary_ok = bool(
+                current and current.text and meta.get("stack_fingerprint") == stacks[0].fingerprint
+            )
+    visible = ObjectQueryService(session, cohort.user_id, ai_only=True).query(
+        kinds=["chat_message"], providers=["telegram"]
+    )
+    context_ok = False
+    try:
+        context = ContextService(session, cohort.user_id).build_context(
+            object_id=cohort.messages[0].id
+        )
+        context_ok = any(item.object_id == cohort.messages[0].id for item in context.items)
+    except Exception:  # noqa: BLE001
+        context_ok = False
+    query = _narrow_query(cohort)
+    found = SearchService(session, cohort.user_id).search(
+        query=query or "x",
+        kind="chat_message",
+        provider="telegram",
+    )
+    return {
+        "embedding": embedding_ok,
+        "temporal": bool(matched),
+        "temporal_participation": participation
+        if participation in {"expected", "possible", "none"}
+        else "none",
+        "temporal_result": result,
+        "correlation": linked,
+        "summary": summary_ok,
+        "context_visible": any(obj.id in selected for obj in visible) and context_ok,
+        "retrieval_visible": any(item.id in selected for item in found),
+    }
+
+
+def _narrow_query(cohort: Cohort) -> str:
+    import re
+
+    blocked = set(re.findall(r"[A-Za-z0-9]{4,}", MARKER))
+    for obj in cohort.messages:
+        for token in re.findall(r"[A-Za-z0-9]{4,}", obj.body or ""):
+            if token not in blocked:
+                return token
+    return ""
+
+
+@contextmanager
+def _live_correlation_guard(session: Session, approved: frozenset[UUID]) -> Iterator[None]:
+    from unittest.mock import patch
+
+    from app.llm.correlation_judge import create_correlation_judge_from_effective
+
+    def factory(effective):
+        return PrivacyCorrelationJudge(
+            create_correlation_judge_from_effective(effective),
+            session,
+            approved,
+        )
+
+    with patch("app.jobs.handlers.create_correlation_judge_from_effective", factory):
+        yield
 
 
 def run_acceptance(
@@ -526,7 +742,10 @@ def run_acceptance(
     if api_ai or worker_ai:
         raise HarnessBlocked("long_running_ai")
     cohort = prove_cohort(session, load_marker_objects(session))
-    prove_summary_cohort(session, cohort)
+    approved = prove_summary_cohort(session, cohort)
+    selected_ids = {obj.id for obj in cohort.messages}
+    auto_label_baseline = snapshot_auto_label_events(session, selected_ids)
+    artifact_baseline = _artifact_ids(session, cohort)
     if on_ready is not None:
         on_ready()
     if settings.telegram_mtproto_ai_enabled:
@@ -539,9 +758,9 @@ def run_acceptance(
         with transport_barrier() as barrier:
             if providers == "fake":
                 bridge = _session_bridges(session)
-                paid = _fake_providers(cohort.task_id)
+                paid = _fake_providers(cohort.task_id, session, approved)
             else:
-                bridge = nullcontext()
+                bridge = _live_correlation_guard(session, approved)
                 paid = nullcontext(None)
             with bridge, paid as embedding:
                 _enqueue_cohort(session, cohort)
@@ -549,13 +768,19 @@ def run_acceptance(
                 commit()
                 try:
                     handlers = _drain(session, cohort, embedding)
+                    before = _artifact_ids(session, cohort)
+                    _enqueue_cohort(session, cohort)
+                    _park_selected(session, cohort)
+                    handlers.extend(_drain(session, cohort, embedding))
+                    idempotent = before == _artifact_ids(session, cohort)
                 except HarnessBlocked:
                     _fail_selected(session, cohort)
                     raise
                 except Exception:  # noqa: BLE001
                     _fail_selected(session, cohort)
                     raise HarnessBlocked(ABORTED) from None
-        events, assignments = _auto_label_evidence(session, cohort.user_id)
+        events, assignments = _auto_label_evidence(session, selected_ids, auto_label_baseline)
+        outcomes = _outcome_proofs(session, cohort, artifact_baseline)
         summary_jobs = [
             job
             for job in _selected_jobs(session, cohort)
@@ -574,9 +799,69 @@ def run_acceptance(
             worker_ai=worker_ai,
             env_changed=os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED") != env_before,
             providers=providers,
+            idempotent=idempotent and _dangling_selected(session, cohort) == 0,
+            **outcomes,
         )
     finally:
         settings.telegram_mtproto_ai_enabled = previous
+
+
+def live_long_running_probe() -> tuple[bool, bool]:
+    api = os.environ.get("REHEARSAL_LONG_RUNNING_API_AI")
+    worker = os.environ.get("REHEARSAL_LONG_RUNNING_WORKER_AI")
+    if api is None or worker is None:
+        raise HarnessBlocked("long_running_probe")
+    true_flags = {"1", "true", "yes", "on"}
+    return (api.strip().lower() in true_flags, worker.strip().lower() in true_flags)
+
+
+def _restore_process_local(previous: bool, env_before: str | None) -> None:
+    settings.telegram_mtproto_ai_enabled = previous
+    if os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED") != env_before:
+        if env_before is None:
+            os.environ.pop("TELEGRAM_MTPROTO_AI_ENABLED", None)
+        else:
+            os.environ["TELEGRAM_MTPROTO_AI_ENABLED"] = env_before
+
+
+def execute_live(*, session_factory=None) -> int:
+    if os.environ.get("SELF_E2E_CONFIRM") != "reviewed":
+        sys.stdout.write("SELF_E2E_BLOCKED=review_required\n")
+        return 2
+    from app.db.session import SessionLocal
+
+    previous = settings.telegram_mtproto_ai_enabled
+    env_before = os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED")
+    session = (session_factory or SessionLocal)()
+    try:
+        report = run_acceptance(
+            session,
+            probe=live_long_running_probe,
+            providers="live",
+        )
+    except HarnessBlocked as exc:
+        sys.stdout.write(f"SELF_E2E_BLOCKED={exc}\n")
+        return 2
+    except Exception:  # noqa: BLE001
+        sys.stdout.write("SELF_E2E_FAILED=harness_aborted\n")
+        return 1
+    else:
+        sys.stdout.write(report)
+        required = (
+            "EMBEDDING=PASS\n",
+            "AUTO_LABEL_EXECUTED=PASS\n",
+            "TEMPORAL=PASS\n",
+            "CORRELATION=PASS\n",
+            "SUMMARY=PASS\n",
+            "CONTEXT_VISIBLE=PASS\n",
+            "RETRIEVAL_VISIBLE=PASS\n",
+            "IDEMPOTENT=PASS\n",
+            "DANGLING_SELECTED_JOBS=0\n",
+        )
+        return 0 if all(line in report for line in required) else 1
+    finally:
+        _restore_process_local(previous, env_before)
+        session.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -585,27 +870,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args(argv)
     if args.live:
-        if os.environ.get("SELF_E2E_CONFIRM") != "reviewed":
-            sys.stdout.write("SELF_E2E_BLOCKED=review_required\n")
-            return 2
-        sys.stdout.write("SELF_E2E_BLOCKED=live_not_authorized\n")
-        return 2
+        return execute_live()
     if not args.fake:
         sys.stdout.write("SELF_E2E_BLOCKED=mode_required\n")
         return 2
     from app.db.session import SessionLocal
 
     session = SessionLocal()
+    previous = settings.telegram_mtproto_ai_enabled
+    env_before = os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED")
     try:
         report = run_acceptance(session, probe=lambda: (False, False))
     except HarnessBlocked as exc:
         sys.stdout.write(f"SELF_E2E_BLOCKED={exc}\n")
         return 2
+    except Exception:  # noqa: BLE001
+        sys.stdout.write("SELF_E2E_FAILED=harness_aborted\n")
+        return 1
     else:
         sys.stdout.write(report)
-        ready = "DANGLING_SELECTED_JOBS=0\n" in report and "SELF_AUTHORED=PASS\n" in report
+        ready = "DANGLING_SELECTED_JOBS=0\n" in report and "EMBEDDING=PASS\n" in report
         return 0 if ready else 1
     finally:
+        _restore_process_local(previous, env_before)
         session.close()
 
 
