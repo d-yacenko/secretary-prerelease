@@ -850,7 +850,16 @@ def fake_run(cmd, **_kwargs):
             )
         if MODE == "harness":
             return Proc(2, "SELF_E2E_STARTUP=imported\\nSELF_E2E_BLOCKED=review_required\\n")
-        return Proc(0, "EMBEDDING=PASS\\n")
+        if MODE == "startup":
+            return Proc(
+                0,
+                "SELF_E2E_STARTUP=bootstrap\\n"
+                "SELF_E2E_STARTUP=compiled\\n"
+                "SELF_E2E_STARTUP=imported\\n",
+            )
+        if MODE == "failed":
+            return Proc(1, "SELF_E2E_STARTUP=imported\\nSELF_E2E_FAILED=harness_aborted\\n")
+        return Proc(0, "SELF_E2E_STARTUP=imported\\nSELF_AUTHORED=PASS\\nEMBEDDING=PASS\\n")
     raise AssertionError(cmd)
 
 
@@ -913,6 +922,7 @@ def test_bootstrap_marker_precedes_helper_load() -> None:
         "sys.stdout.write('HELPER_IMPORT\\n')\n"
         "def main(argv):\n"
         "    sys.stdout.write('HELPER_MAIN %s\\n' % (argv,))\n"
+        "    sys.stdout.write('SELF_AUTHORED=PASS\\n')\n"
         "    return 0\n"
     )
     assert result.returncode == 0
@@ -922,6 +932,7 @@ def test_bootstrap_marker_precedes_helper_load() -> None:
         "HELPER_IMPORT",
         remote.STARTUP_IMPORTED,
         "HELPER_MAIN ['--live']",
+        "SELF_AUTHORED=PASS",
     ]
     assert "Traceback" not in result.stderr
 
@@ -980,6 +991,81 @@ def test_bootstrap_propagates_harness_stdout_and_exit_code() -> None:
     assert "Traceback" not in result.stderr
 
 
+def test_startup_markers_are_not_a_terminal_harness_result() -> None:
+    startup = f"{remote.STARTUP_BOOTSTRAP}\n{remote.STARTUP_COMPILED}\n{remote.STARTUP_IMPORTED}"
+    assert remote.terminal_harness_outcome(startup) is False
+    assert remote.terminal_harness_outcome(remote.STARTUP_IMPORTED) is False
+    assert remote.classify_child_output(startup + "\n", 0) == (
+        f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n",
+        1,
+    )
+    assert remote.classify_child_output(startup + "\n", 1) == (
+        f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n",
+        1,
+    )
+
+
+def test_post_import_main_failures_are_sanitized() -> None:
+    raised = _run_bootstrap(
+        "import sys\n"
+        "def main(argv):\n"
+        "    sys.stderr.write('Traceback sk-secret\\n')\n"
+        "    raise RuntimeError('sk-secret traceback payload')\n"
+    )
+    assert raised.returncode == 1
+    assert raised.stdout.endswith(f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n")
+    assert remote.STARTUP_IMPORTED in raised.stdout
+    assert "sk-secret" not in raised.stdout
+    assert "sk-secret" not in raised.stderr
+    assert "Traceback" not in raised.stdout
+    assert "Traceback" not in raised.stderr
+
+    nonzero = _run_bootstrap(
+        "import sys\ndef main(argv):\n    sys.stdout.write('sk-secret partial\\n')\n    return 3\n"
+    )
+    assert nonzero.returncode == 1
+    assert nonzero.stdout.endswith(f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n")
+    assert "SELF_E2E_BLOCKED=" not in nonzero.stdout
+    assert "SELF_E2E_FAILED=" not in nonzero.stdout
+    assert "sk-secret" not in nonzero.stdout
+    assert "Traceback" not in nonzero.stderr
+
+    silent = _run_bootstrap(
+        "import sys\ndef main(argv):\n    sys.stdout.write('EMBEDDING=PASS\\n')\n    return 0\n"
+    )
+    assert silent.returncode == 1
+    assert silent.stdout.endswith(f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n")
+    assert "SELF_AUTHORED=PASS" not in silent.stdout
+    assert "EMBEDDING=PASS" not in silent.stdout
+
+
+def test_terminal_harness_outcomes_propagate() -> None:
+    blocked = _run_bootstrap(
+        "import sys\n"
+        "def main(argv):\n"
+        "    sys.stdout.write('SELF_E2E_BLOCKED=review_required\\n')\n"
+        "    return 2\n"
+    )
+    assert blocked.returncode == 2
+    assert blocked.stdout.endswith("SELF_E2E_BLOCKED=review_required\n")
+
+    failed = _run_bootstrap(
+        "import sys\n"
+        "def main(argv):\n"
+        "    sys.stdout.write('SELF_E2E_FAILED=harness_aborted\\n')\n"
+        "    return 1\n"
+    )
+    assert failed.returncode == 1
+    assert failed.stdout.endswith("SELF_E2E_FAILED=harness_aborted\n")
+    assert "Traceback" not in failed.stderr
+
+    passed = _run_bootstrap(
+        "import sys\ndef main(argv):\n    sys.stdout.write('SELF_AUTHORED=PASS\\n')\n    return 0\n"
+    )
+    assert passed.returncode == 0
+    assert passed.stdout.endswith("SELF_AUTHORED=PASS\n")
+
+
 def test_checkout_ref_host_key_and_long_running_guards_remain() -> None:
     release = remote.PRODUCTION_RELEASE
     assert remote.assess_remote_state("other", "", "false", "false", release) == "production_ref"
@@ -1033,11 +1119,13 @@ def test_generated_remote_program_reaches_oneshot_and_sanitizes_failure() -> Non
         raised = _run_generated(program, mode="raise")
         compiled = _run_generated(program, mode="compile")
         harness_owned = _run_generated(program, mode="harness")
+        startup_only = _run_generated(program, mode="startup")
+        harness_failed = _run_generated(program, mode="failed")
     finally:
         written.unlink(missing_ok=True)
         bootstrap.unlink(missing_ok=True)
     assert ok.returncode == 0
-    assert ok.stdout == "EMBEDDING=PASS\n"
+    assert ok.stdout == "SELF_E2E_STARTUP=imported\nSELF_AUTHORED=PASS\nEMBEDDING=PASS\n"
     assert "NameError" not in ok.stderr
     assert failed.returncode == 1
     assert failed.stdout == "SELF_E2E_REMOTE_BLOCKED=oneshot_failed\n"
@@ -1049,6 +1137,13 @@ def test_generated_remote_program_reaches_oneshot_and_sanitizes_failure() -> Non
     assert harness_owned.returncode == 2
     assert harness_owned.stdout == (
         f"{remote.STARTUP_IMPORTED}\nSELF_E2E_BLOCKED=review_required\n"
+    )
+    assert startup_only.returncode == 1
+    assert startup_only.stdout == f"SELF_E2E_REMOTE_BLOCKED={remote.HARNESS_PROTOCOL}\n"
+    assert remote.STARTUP_IMPORTED not in startup_only.stdout
+    assert harness_failed.returncode == 1
+    assert harness_failed.stdout == (
+        f"{remote.STARTUP_IMPORTED}\nSELF_E2E_FAILED=harness_aborted\n"
     )
     assert raised.returncode == 1
     assert raised.stdout == "SELF_E2E_REMOTE_BLOCKED=remote_program\n"

@@ -39,6 +39,7 @@ STARTUP_COMPILED = "SELF_E2E_STARTUP=compiled"
 STARTUP_IMPORTED = "SELF_E2E_STARTUP=imported"
 COMPILE_FAILED = "compile_failed"
 IMPORT_FAILED = "import_failed"
+HARNESS_PROTOCOL = "harness_protocol"
 GitRunner = Callable[[list[str]], str]
 
 
@@ -146,10 +147,37 @@ def ssh_command(target: str, port: int, known_hosts: Path) -> list[str]:
     ]
 
 
+def terminal_harness_outcome(output: str) -> bool:
+    """Startup lines are evidence of progress, not a harness result."""
+    if "SELF_AUTHORED=PASS" in output.splitlines():
+        return True
+    for line in output.splitlines():
+        if line.startswith(("SELF_E2E_BLOCKED=", "SELF_E2E_FAILED=")):
+            return True
+        prefix = "SELF_E2E_REMOTE_BLOCKED="
+        if line.startswith(prefix) and line[len(prefix) :] in {
+            "compile_failed",
+            "import_failed",
+            "harness_protocol",
+        }:
+            return True
+    return False
+
+
+def classify_child_output(output: str, returncode: int) -> tuple[str, int]:
+    if terminal_harness_outcome(output):
+        return output, returncode
+    if "SELF_E2E_STARTUP=imported" in output.splitlines():
+        return "SELF_E2E_REMOTE_BLOCKED=harness_protocol\n", 1
+    return "SELF_E2E_REMOTE_BLOCKED=oneshot_failed\n", 1
+
+
 def oneshot_bootstrap_source(helper_path: str = ONESHOT_HELPER_DEST) -> str:
     """Stdlib-only child entrypoint. It does not import application code itself."""
     return f"""import importlib.util
+import io
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 HELPER = {helper_path!r}
@@ -163,6 +191,15 @@ def _emit(line):
 def _blocked(stage):
     _emit("SELF_E2E_REMOTE_BLOCKED=" + stage)
     raise SystemExit(1)
+
+
+def _terminal(text):
+    if "SELF_AUTHORED=PASS" in text.splitlines():
+        return True
+    for line in text.splitlines():
+        if line.startswith("SELF_E2E_BLOCKED=") or line.startswith("SELF_E2E_FAILED="):
+            return True
+    return False
 
 
 _emit({STARTUP_BOOTSTRAP!r})
@@ -188,7 +225,21 @@ except BaseException:
 if not imported:
     _blocked({IMPORT_FAILED!r})
 _emit({STARTUP_IMPORTED!r})
-raise SystemExit(module.main(["--live"]))
+captured = io.StringIO()
+exit_code = None
+try:
+    with redirect_stdout(captured), redirect_stderr(io.StringIO()):
+        result = module.main(["--live"])
+    exit_code = result if isinstance(result, int) else None
+except SystemExit as exc:
+    exit_code = exc.code if isinstance(exc.code, int) else None
+except BaseException:
+    exit_code = None
+held = captured.getvalue()
+if exit_code is not None and _terminal(held):
+    sys.stdout.write(held)
+    raise SystemExit(exit_code)
+_blocked({HARNESS_PROTOCOL!r})
 """
 
 
@@ -234,6 +285,10 @@ def build_remote_program(helper_source: str) -> str:
         + inspect.getsource(_flag_enabled)
         + "\n"
         + inspect.getsource(assess_remote_state)
+        + "\n"
+        + inspect.getsource(terminal_harness_outcome)
+        + "\n"
+        + inspect.getsource(classify_child_output)
     )
     return f"""import base64
 import subprocess
@@ -296,11 +351,9 @@ try:
     Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
     Path(BOOTSTRAP_PATH).write_text(BOOTSTRAP_TEXT, encoding="utf-8")
     proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
-    output = proc.stdout
-    if proc.returncode != 0 and "SELF_AUTHORED=PASS" not in output and "SELF_E2E_" not in output:
-        output = "SELF_E2E_REMOTE_BLOCKED=oneshot_failed\\n"
+    output, code = classify_child_output(proc.stdout, proc.returncode)
     sys.stdout.write(output)
-    raise SystemExit(proc.returncode)
+    raise SystemExit(code)
 except SystemExit:
     raise
 except Exception:
