@@ -1,107 +1,182 @@
-# Current task — Telegram Bot API M4BT1R: remove symbolic-origin ambiguity from final verifier
+# Current task — Telegram Bot API M4BT1R: finish final Stage C verifier Git bootstrap cleanly
 
-## Status
+## Executor handoff
 
-The replacement M4BT1 live read-only run again blocked locally before SSH:
+You are a fresh executor with no prior chat context. Everything needed for this task is in the canonical repository.
+
+Canonical repo:
+`https://github.com/d-yacenko/secretary-prerelease.git`
+
+Read before editing:
+1. `AGENTS.md`
+2. `CURRENT_TASK.md`
+3. `PROJECT_STATE.md`
+4. `DECISIONS.md`
+5. `docs/executor_bootstrap.md`
+6. `docs/deploy.md`
+7. established production bootstrap in `ops/production/deploy.py`
+
+Do not infer authorization from old commits. This file is the active authorization source.
+
+## Current production facts
+
+Production runtime/ref:
+`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
+
+Alembic:
+`0046`
+
+Telegram Bot lifecycle:
+- Bot runtime retired;
+- webhook deleted;
+- Bot credentials cleared;
+- Bot account destroyed;
+- Stage C code cleanup deployed;
+- MTProto is the sole live Telegram transport;
+- historical Bot-derived objects/schema are intentionally preserved.
+
+The final Stage C verifier is read-only.
+
+Two live attempts blocked locally before SSH with:
 
 `M4BR1_BLOCKED=local_production_ref`
 
-No production access or mutation occurred.
+No production access or mutation occurred in either blocked attempt.
 
-Canonical GitHub `production` is independently confirmed exact:
+GitHub independently confirms canonical `production` is exact
+`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
 
-`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
+## Problem to solve
 
-The consumed live authorization must not be retried in this task.
+The verifier Git bootstrap has accumulated bespoke ref-validation logic and has produced false blockers.
 
-## Root cause
+Current specific defect:
+- wrapper performs authoritative branch lookup using symbolic local remote name `origin`;
+- that lookup happens before local `origin` is proven canonical;
+- therefore a wrong/mispointed local `origin` can make the verifier compare the wrong repository and report `local_production_ref`.
 
-The previous correction switched to `git ls-remote origin refs/heads/<branch>`, but the local wrapper still performs those calls before validating the local `origin` URL.
+Do not add another ad-hoc patch layer.
 
-Therefore the authoritative check is only authoritative for whatever repository happens to be named `origin` locally.
-
-The observed blocker proves the command succeeded but returned a SHA different from the accepted production SHA.
+Review the whole local+remote Git bootstrap for this verifier and make it consistent with the established production deployment trust model.
 
 ## Goal
 
-Remove symbolic-remote ambiguity completely.
+Deliver one clean correction so the Stage C verifier:
 
-CODE/TEST ONLY.
+1. establishes canonical repository identity first;
+2. queries authoritative GitHub refs using an explicit validated canonical URL;
+3. never relies on stale remote-tracking refs for production truth;
+4. never mutates Git refs merely to verify them;
+5. fails with the correct deterministic local/remote stage;
+6. remains strictly read-only with respect to production.
 
-## Required correction
+CODE/TEST ONLY. No live verifier run.
 
-### 1. Authoritative branch helper must accept an explicit remote URL
+## Required design
 
-Refactor the helper contract to query:
+### A. Single explicit canonical remote identity
 
-`git ls-remote <validated-canonical-url> refs/heads/<branch>`
+Use the validated canonical repository URL:
 
-rather than hard-coded symbolic remote name `origin`.
+`https://github.com/d-yacenko/secretary-prerelease.git`
 
-Requirements:
-- remote URL must exactly equal
-  `https://github.com/d-yacenko/secretary-prerelease.git`;
-- branch name strict validation remains;
+Authoritative branch checks must execute equivalent to:
+
+`git ls-remote <canonical-url> refs/heads/<branch>`
+
+not:
+
+`git ls-remote origin ...`
+
+and not:
+
+`rev-parse origin/production`.
+
+Prefer one reusable/testable Python function rather than duplicating Git parsing in shell.
+
+Strictly require:
+- canonical URL exact match;
+- strict branch-name validation;
 - exactly one output line;
-- exact 40-char lowercase SHA;
-- exact expected ref name;
+- exact lowercase 40-char SHA;
+- exact requested ref name;
 - malformed/duplicate/unexpected output fails closed;
-- raw output is never printed.
+- raw Git output is never surfaced.
 
-### 2. Local wrapper ordering
+### B. Local wrapper trust order
 
-Before any authoritative branch check:
+Before any branch lookup or SSH:
 
-1. load and validate `target.json`;
-2. obtain canonical `origin_url` from the validated target;
-3. require local `git remote get-url origin` equals that canonical URL;
-4. only then query authoritative remote `main` and `production`, passing the canonical URL explicitly;
-5. require local HEAD equals authoritative main;
-6. require authoritative production equals accepted release;
-7. only then continue to host pin / SSH.
+1. validate `target.json`;
+2. obtain canonical `origin_url` from validated target;
+3. require local repo root/branch/worktree are correct;
+4. require local `git remote get-url origin` equals canonical URL;
+5. query authoritative `main` via explicit canonical URL;
+6. require local HEAD == authoritative main;
+7. query authoritative `production` via explicit canonical URL;
+8. require production == accepted release;
+9. only then perform host pin / SSH.
 
-Thus a wrong local origin must fail with `wrong_local_origin`, never masquerade as `local_production_ref`.
+Wrong local origin must fail as `wrong_local_origin`, not as a branch mismatch.
 
-### 3. Remote helper
+### C. Remote helper trust order
 
-The remote helper already validates its configured origin before production-ref inspection.
+Before Docker/DB/runtime inspection:
 
-Still remove symbolic ambiguity there too:
-- after requiring remote repo origin exact canonical URL;
-- query production using the canonical URL explicitly, not symbolic `origin`.
+1. require remote repo origin equals canonical URL;
+2. require HEAD exact accepted production release;
+3. query authoritative production using explicit canonical URL;
+4. require authoritative production exact accepted release;
+5. require clean tracked worktree;
+6. only then continue to read-only runtime verification.
 
-No fetch/tracking-ref mutation.
+No `git fetch`, tracking-ref update, branch checkout, reset, or ref mutation.
 
-### 4. Regression tests
+### D. Reuse existing production conventions
 
-Add tests proving:
-- authoritative helper command contains the explicit canonical URL and no symbolic `origin`;
-- local wrapper validates target/local origin before authoritative main/production lookup;
-- wrong local origin fails before any `ls-remote` branch comparison / SSH;
-- explicit canonical production SHA exact => pass even if a hypothetical local remote-tracking ref is stale;
-- canonical production mismatch fails before SSH;
-- remote helper uses explicit canonical URL after origin validation;
-- no `git ls-remote origin` remains in this verifier path.
+Inspect `ops/production/deploy.py` and existing accepted verifier/harness code.
 
-Static wrapper ordering assertions are acceptable where shell unit tests are impractical.
+Do not invent another parallel trust model when an existing canonical helper/pattern can be reused or factored safely.
 
-## Preserve
+If a small shared read-only Git/target helper can remove duplication without broad refactor risk, that is allowed. Keep the change narrow.
+
+## Required regressions
+
+Prove at minimum:
+
+1. authoritative lookup command uses explicit canonical URL, never symbolic `origin`;
+2. malformed/duplicate/unexpected `ls-remote` output fails closed;
+3. wrapper validates local origin before authoritative branch lookup;
+4. wrong local origin fails before branch comparison and before SSH;
+5. authoritative main mismatch rejects stale local main;
+6. canonical production mismatch rejects before SSH;
+7. stale/missing local remote-tracking refs are irrelevant;
+8. remote helper validates origin before authoritative production lookup;
+9. remote production mismatch stops before Docker/DB inspection;
+10. no `git fetch`, `origin/production`, ref mutation, checkout, or reset is used in verifier ref validation;
+11. strict sanitized output and zero-mutation/provider invariants remain intact.
+
+## Preserve exactly
 
 Do not change:
-- production release `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
-- Alembic 0046;
-- Stage C historical-read existential check;
-- strict sanitized protocol;
+- production release expectation `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
+- Alembic `0046`;
+- historical Bot existential Inbox-read check;
 - route/config/container/MTProto checks;
+- exactly one MTProto account;
+- active scope count 28;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
 - bounded health retry;
-- zero provider calls;
-- zero DB/env writes;
+- strict sanitized parser;
+- zero Telegram/provider calls;
+- zero DB writes;
+- zero env writes;
 - zero service restart/recreate;
-- no IDs/content output.
+- no object/account/peer/message IDs or message content in output.
 
 ## Validation
 
-Run:
+Run all of:
 - focused Stage C verifier tests;
 - Python compile;
 - bundled helper compile;
@@ -109,31 +184,36 @@ Run:
 - Ruff;
 - `git diff --check`.
 
+Review your own final diff specifically for duplicated Git bootstrap logic and ordering mistakes before committing.
+
 ## Authorization
 
 AUTHORIZED:
-- local verifier/wrapper/test correction only;
+- local verifier/wrapper/test correction necessary to finish the Git bootstrap cleanly;
+- small local refactor of production read-only Git/target helpers if it removes duplication safely;
 - update `PROJECT_STATE.md`;
-- commit/push canonical `main`.
+- commit and push canonical `main`.
 
 NOT AUTHORIZED:
 - production SSH;
 - live verifier retry;
-- provider calls;
+- Telegram/provider calls;
 - DB/env writes;
 - service restart/recreate;
-- deploy/ref movement;
+- deploy/rollback/ref movement;
 - schema/data cleanup;
-- MTProto changes.
+- MTProto behavior/config changes;
+- AI enablement.
 
 ## Required report
 
 Return:
-- corrective commit SHA;
-- explicit canonical-URL ref mechanism;
-- wrapper ordering correction;
-- remote helper correction;
-- regression results;
+- commit SHA;
+- files changed;
+- final trust-order design;
+- exact authoritative-ref command shape;
+- whether any shared helper was factored;
+- regression/test results;
 - compile/Ruff/Bash/diff-check results;
 - production SSH=0;
 - provider calls=0;
