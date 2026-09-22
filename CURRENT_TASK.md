@@ -1,62 +1,47 @@
-# Current task — Deploy Telegram MTProto ordinary Inbox UX release
+# Current task — Human UI acceptance for Telegram ordinary Inbox
 
-## Authorization
+## Status
 
-Human explicitly authorized schema-neutral production deploy of:
+Production deploy SUCCESS.
+
+Production runtime/ref:
 
 `f31f8f5b704159b7ec903da4c26a590d23f86e78`
 
-Rollback/current production before deploy:
-
-`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
-
-Expected Alembic:
+Alembic:
 
 `0046`
 
-Canonical `production` branch has been fast-forwarded non-force to the exact release.
-
-## Execute exactly once
-
-From canonical repo:
-
-```bash
-python3 ops/production/deploy.py \
-  --release-sha f31f8f5b704159b7ec903da4c26a590d23f86e78 \
-  --rollback-sha bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b \
-  --expected-alembic 0046
-```
-
-## Expected deployment invariants
-
-- schema-neutral preflight passes;
+Deployment invariants:
+- health PASS;
 - DB container unchanged;
 - DB volume unchanged;
 - `.env` unchanged;
-- only API/worker recreated;
-- health PASS;
-- Alembic exact `0046`;
-- no DB/schema/data cleanup;
-- no MTProto AI enablement.
+- API recreated;
+- worker recreated.
 
-## Failure handling
+## Human acceptance
 
-If deploy fails:
-- do not retry automatically;
-- do not use direct SSH;
-- return complete sanitized deploy output and STOP.
+Using an already-installed current client:
 
-## Post-deploy human acceptance
+1. refresh or reopen Inbox;
+2. verify historical routine Telegram `message_created` cards are no longer shown under `Требует внимания`;
+3. send one fresh inbound Telegram message into a chat in an active configured folder;
+4. wait for normal sync / refresh Inbox;
+5. verify the fresh message appears under ordinary Inbox / `Последние входящие`;
+6. verify no corresponding new `Требует внимания` card appears.
 
-Using already-installed current clients:
+No client rebuild is required for this backend-only correction.
 
-1. refresh/reopen Inbox;
-2. verify old routine Telegram `message_created` cards disappear from `Требует внимания`;
-3. send one fresh inbound message in an active configured folder;
-4. refresh/wait for normal sync;
-5. verify the message appears under ordinary Inbox / `Последние входящие`;
-6. verify no corresponding new attention card appears.
+## If acceptance fails
 
-No client rebuild required.
+Report:
+- whether old Telegram attention cards disappeared;
+- whether the new message appeared anywhere in Inbox;
+- whether it appeared under `Требует внимания`, `Последние входящие`, both, or neither;
+- approximate message/send time;
+- any sanitized UI error.
+
+Do not perform production SSH, DB cleanup, or additional deploys without a new architect task.
 
 `CURRENT_TASK.md` is the source of active authorization.
