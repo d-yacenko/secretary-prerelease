@@ -66,6 +66,8 @@ def project_inbox_object(obj: Object) -> ConversationProjection | None:
     if provider == "yandex_mail":
         return _project_yandex(obj, meta, feed_at, occurred)
     if provider == "telegram":
+        if _meta_text(meta, "transport") == "mtproto":
+            return _project_telegram_mtproto(obj, meta, feed_at, occurred)
         return _project_chat(obj, meta, feed_at, occurred, provider="telegram", label_keys=("chat_display_name", "from_display_name"))
     if provider == "teams":
         return _project_chat(obj, meta, feed_at, occurred, provider="teams", label_keys=("chat_display_title", "sender_display_name"))
@@ -286,6 +288,54 @@ def _project_chat(
         occurred_at=occurred,
         feed_at=feed_at,
         reply_ref=_meta_text(meta, "reply_to_message_id") or _meta_text(meta, "quoted_message_id"),
+        title=obj.title,
+        body=obj.body,
+        excerpt=RecentSourceService.excerpt(obj.body),
+        identity_strength="strong",
+        rfc_ids=frozenset(),
+        conversation_label=conversation_label,
+        subject_key=None,
+        unthreaded_public_channel=False,
+    )
+
+
+def _project_telegram_mtproto(
+    obj: Object, meta: dict[str, Any], feed_at: datetime, occurred: datetime
+) -> ConversationProjection | None:
+    """Project canonical MTProto metadata without legacy Bot chat aliases."""
+    peer_id = _meta_text(meta, "peer_id")
+    if not peer_id:
+        return None
+    account = _account_scope("telegram", meta)
+    topic_id = _meta_text(meta, "topic_id")
+    topic_suffix = f":topic:{topic_id}" if topic_id else ""
+    scope = f"telegram:{account}:peer:{peer_id}{topic_suffix}"
+    direction = (_meta_text(meta, "direction") or DIRECTION_UNKNOWN).lower()
+    if direction not in {DIRECTION_INBOUND, DIRECTION_OUTBOUND}:
+        direction = DIRECTION_UNKNOWN
+    sender_id = _meta_text(meta, "sender_peer_id")
+    conversation_label = None
+    for key in ("peer_title", "group_title", "peer_username", "group_username", "username"):
+        conversation_label = _meta_text(meta, key)
+        if conversation_label:
+            break
+    conversation_label = conversation_label or "Telegram"
+    participants = frozenset(item for item in [sender_id, peer_id] if item)
+    return ConversationProjection(
+        object_id=obj.id,
+        provider="telegram",
+        account_scope=account,
+        conversation_scope_key=scope,
+        strong_thread_key=peer_id if not topic_id else f"{peer_id}:topic:{topic_id}",
+        grouping_seed=scope,
+        sender_id=sender_id,
+        sender_label=sender_id,
+        participant_ids=participants,
+        participant_labels=(conversation_label,),
+        direction=direction,
+        occurred_at=occurred,
+        feed_at=feed_at,
+        reply_ref=_meta_text(meta, "reply_to_message_id"),
         title=obj.title,
         body=obj.body,
         excerpt=RecentSourceService.excerpt(obj.body),

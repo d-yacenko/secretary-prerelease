@@ -18,6 +18,18 @@ CORRELATION_TRIGGER_KINDS = frozenset(
     }
 )
 
+
+def correlation_trigger_allowed(obj) -> bool:
+    """Existing trigger kinds, plus canonical Telegram MTProto chat messages only."""
+    if obj.kind in CORRELATION_TRIGGER_KINDS:
+        return True
+    metadata = obj.metadata_ or {}
+    return (
+        obj.provider == "telegram"
+        and obj.kind == "chat_message"
+        and metadata.get("transport") == "mtproto"
+    )
+
 CORRELATION_ALLOWED_TYPES = frozenset({"related_to", "references"})
 
 CORRELATION_MIN_CONFIDENCE = 0.80

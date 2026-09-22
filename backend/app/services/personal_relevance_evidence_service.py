@@ -22,6 +22,7 @@ from app.db.models import (
     Object,
     TeamsAccount,
     TelegramAccount,
+    TelegramMtprotoAccount,
     UserSettings,
     YandexCalendarAccount,
     YandexMailAccount,
@@ -300,6 +301,12 @@ class PersonalRelevanceEvidenceService:
                 select(TelegramAccount).where(TelegramAccount.user_id == user_id)
             )
         }
+        telegram_ids.update(
+            str(account.telegram_user_id)
+            for account in self._session.scalars(
+                select(TelegramMtprotoAccount).where(TelegramMtprotoAccount.user_id == user_id)
+            )
+        )
         teams_ids = {
             account.microsoft_user_id
             for account in self._session.scalars(

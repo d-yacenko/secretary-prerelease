@@ -9,14 +9,15 @@ from sqlalchemy.orm import Session
 from app.api.schemas import EdgeCreate
 from app.db.models import Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.llm.correlation_judge import CorrelationJudge
 from app.services.correlation_candidate_service import CorrelationCandidateService
 from app.services.correlation_constants import (
     CORRELATION_ALLOWED_TYPES,
     CORRELATION_MAX_PROPOSED_EDGES,
     CORRELATION_MIN_CONFIDENCE,
-    CORRELATION_TRIGGER_KINDS,
     CORRELATION_VERSION,
+    correlation_trigger_allowed,
 )
 from app.services.correlation_input import effective_trigger_summary
 from app.services.correlation_models import CorrelationCandidate, CorrelationDecision
@@ -54,7 +55,9 @@ class CorrelationService:
         )
         if trigger is None:
             raise NotFoundError("object", trigger_object_id)
-        if trigger.kind not in CORRELATION_TRIGGER_KINDS:
+        if not correlation_trigger_allowed(trigger):
+            return 0
+        if not telegram_mtproto_ai_eligible(self._session, trigger):
             return 0
         if trigger.state == "rejected":
             return 0
@@ -160,9 +163,7 @@ def _is_valid_judge_decision(
         return False
     if target.state == "rejected":
         return False
-    if is_object_hidden_from_active_reads(target):
-        return False
-    return True
+    return not is_object_hidden_from_active_reads(target)
 
 
 def _candidate_reasons(

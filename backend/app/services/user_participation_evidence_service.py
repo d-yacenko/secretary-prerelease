@@ -152,7 +152,14 @@ def current_user_participation(
         business_user_id = _scalar_str(metadata.get("business_user_id"))
         sender_id = _scalar_str(metadata.get("from_user_id"))
         direction = _scalar_str(metadata.get("direction"))
-        if business_user_id in identity.telegram_user_ids:
+        if metadata.get("transport") == "mtproto":
+            sender_id = _scalar_str(metadata.get("sender_peer_id"))
+            if identity.telegram_user_ids:
+                if sender_id in identity.telegram_user_ids and direction == "outbound":
+                    roles.add("sender")
+                elif direction == "inbound" and sender_id not in identity.telegram_user_ids:
+                    roles.add("direct_recipient")
+        elif business_user_id in identity.telegram_user_ids:
             if sender_id == business_user_id and direction == "outbound":
                 roles.add("sender")
             elif sender_id and sender_id != business_user_id and direction == "inbound":

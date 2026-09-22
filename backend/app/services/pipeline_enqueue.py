@@ -18,7 +18,7 @@ from app.jobs.constants import (
     JOB_TYPE_SUMMARIZE_RESOURCE,
 )
 from app.llm.embedding_text import embed_job_payload, embedding_input_signature
-from app.services.correlation_constants import CORRELATION_TRIGGER_KINDS
+from app.services.correlation_constants import correlation_trigger_allowed
 from app.services.correlation_input import correlation_input_signature
 from app.services.embedding_index import object_has_current_embedding_provenance
 from app.services.job_queue_service import JobQueueService
@@ -120,14 +120,13 @@ def enqueue_correlate_object(
     user_id: UUID,
     object_kind: str,
 ) -> None:
-    if object_kind not in CORRELATION_TRIGGER_KINDS:
-        return
+    del object_kind
     from app.db.models import Object
 
     obj = session.scalar(
         select(Object).where(Object.id == object_id, Object.user_id == user_id)
     )
-    if obj is None:
+    if obj is None or not correlation_trigger_allowed(obj):
         return
     if not telegram_mtproto_ai_eligible(session, obj):
         return
