@@ -425,3 +425,6 @@
 
 
 - Telegram self-authored E2E fixture policy refined: no dedicated test label is required or desired. Acceptance uses the user's existing Secretary label vocabulary. Auto-label pipeline PASS means the normal real classifier/handler demonstrably executed for a selected self-authored Telegram object, proven via the normal `auto_label_result` AI-audit/job evidence; a legitimate zero-assignment result is acceptable and must not be treated as pipeline failure. Existing-label assignments, if any, are observational output, not a deterministic prerequisite. The marker-matched normal Secretary task remains useful for deterministic correlation testing.
+
+
+- Communication presentation parity decision: current `RecentSourceService._not_outbound_chat_clause()` suppresses outbound `chat_message` rows only for Telegram and Teams, while Mattermost is not covered by that suppression. This explains the observed provider inconsistency. Architect decision: canonical conversation history/detail must be bidirectional for all chat providers, including the user's own outbound messages; attention/unread semantics remain a separate inbound-driven concern. A follow-up parity correction is required after the active Telegram self-authored E2E harness task; do not interrupt the current executor task unless this defect blocks it.
