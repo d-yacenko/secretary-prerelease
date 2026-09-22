@@ -258,3 +258,6 @@
 
 
 - Telegram Bot API M4BM1R review of `27f54763bd04c72a98046a5d649b703072e0369f`: ACCEPTED / READY FOR ONE LIVE READ-ONLY POST-RETIREMENT VERIFICATION, subject to fresh explicit human production authorization. Review confirms failure transcripts are strict ordered allowlist only and unknown/duplicate/malformed/nonzero fields are rejected before wrapper stdout is surfaced; API and worker Docker states are explicitly required `running`; SSH uses `BatchMode=yes`; no Telegram provider, DB/env write, service restart/recreate, deploy, or ref-movement capability was introduced. Production remains `fe151f12f64886505253e765b82458710a949e34`. Stage B irreversible core actions remain materially applied; final production acceptance now depends only on this read-only verification.
+
+
+- Telegram Bot API M4BN1 live read-only post-retirement verification: EXPLICITLY HUMAN AUTHORIZED. Exactly one execution of the architect-accepted `ops/production/verify_telegram_bot_retirement.sh` is authorized against production runtime/ref `fe151f12f64886505253e765b82458710a949e34`, Alembic `0046`. The verifier is observation-only: zero Telegram/Bot API/provider calls, zero DB writes, zero env writes, zero service restart/recreate, zero deploy/ref movement. No retry is authorized if the verifier blocks or fails.
