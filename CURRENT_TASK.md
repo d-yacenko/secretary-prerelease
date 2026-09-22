@@ -1,95 +1,184 @@
-# Current task — MTProto temporal participation semantic correction
+# Current task — Telegram final closure: deploy accepted downstream code, then production synthetic ML rehearsal
 
-## Context
+## Status
 
-Commit `10cb4a3179e2a4c1acdfe94c3814a8aaf9ec7694` is architecturally accepted in all reviewed areas except one blocking temporal-participation semantic issue.
+Telegram downstream development is ARCHITECT ACCEPTED through:
 
-Do not reopen the broader Telegram implementation. This is a focused correctness correction, not a new feature phase.
+`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-Production remains `TELEGRAM_MTPROTO_AI_ENABLED=false`.
+Current production:
 
-## Blocking issue
+`f31f8f5b704159b7ec903da4c26a590d23f86e78`
 
-Current MTProto participation logic marks any inbound message whose `sender_peer_id` is not the connected Telegram user id as `direct_recipient`.
+Expected Alembic:
 
-That is correct for a private 1:1 peer, but incorrect for `peer_kind=group` / `peer_kind=supergroup`.
+`0046`
 
-A group message is not evidence that the current user was directly addressed. Marking every group message `direct_recipient` can cause temporal extraction to promote another participant's event into the user's consolidated calendar as personally expected.
+Production currently remains:
 
-## Required correction
+`TELEGRAM_MTPROTO_AI_ENABLED=false`
 
-1. In MTProto participation evidence:
-   - outbound message authored by the connected Telegram user may keep the sender role;
-   - inbound `peer_kind=private` from another sender may be `direct_recipient`;
-   - inbound `peer_kind=group` or `supergroup` MUST NOT become `direct_recipient` merely because it is inbound;
-   - unknown/missing peer kind must fail conservatively, not assume personal addressing.
+Production->candidate is fast-forward and contains no migration/Alembic or infra changes.
 
-2. In temporal extraction request semantics:
-   - treat MTProto `group` / `supergroup` as group/channel-style communication for participation resolution, analogous to the existing non-direct channel semantics;
-   - do not change private-chat semantics;
-   - do not make all Telegram messages personally relevant.
+## Why this final step exists
 
-3. Temporal source signature must include every MTProto metadata field that now affects participation/extraction behavior, at minimum:
-   - `sender_peer_id`
-   - `peer_kind`
-   - existing `direction`
-   This preserves stale-job fencing correctness.
+The local synthetic false->true suite proves the domain pipeline with fake providers.
 
-4. Add focused regressions:
-   - private inbound => direct_recipient;
-   - private outbound self => sender;
-   - group inbound => NOT direct_recipient;
-   - supergroup inbound => NOT direct_recipient;
-   - group/supergroup request is treated as channel/group semantics;
-   - a high-confidence group temporal statement may follow the normal non-direct group policy, but cannot be promoted to personally `expected` solely from inbound direction;
-   - changing peer_kind/sender identity changes the temporal extraction signature;
-   - false/true Telegram AI gate behavior from the full pipeline remains unchanged.
+The final acceptance should additionally prove the accepted Telegram-shaped object can traverse the actual production backend configuration and real ML/LLM adapters, while still preventing any real Telegram content from entering AI processing.
 
-5. Re-run the new full-pipeline test plus focused participation/temporal/Telegram suites. Do not add a workaround that weakens participation policy.
+## Authorization state
 
-## Already accepted; do not redesign
+NOT YET AUTHORIZED:
+- production deploy of `8ad52f06...`;
+- production synthetic object creation;
+- real production LLM/embedding calls for the rehearsal.
 
-- native MTProto conversation projection by account + peer + topic;
-- legacy Telegram projection compatibility;
-- narrow MTProto-only correlation trigger;
-- false→true embedding catch-up;
-- labels;
-- assistant/context gating;
-- stack semantic summaries;
-- CRUD paths;
-- production flag remains false.
+Do not execute production actions until explicit human authorization.
 
-## Authorization
+Suggested explicit authorization:
 
-AUTHORIZED:
-- local code/tests/docs needed for this semantic correction;
-- commit/push canonical `main`.
+`Разрешаю deploy 8ad52f06 при Telegram AI=false и один production synthetic ML rehearsal с реальными ML/LLM, без Telegram transport calls`
 
-NOT AUTHORIZED:
-- production SSH;
-- deploy/ref movement;
-- production env changes;
-- real Telegram calls;
-- real LLM/provider calls;
-- DB migration.
+## Phase A — schema-neutral deploy after authorization
 
-## Required report
+Fast-forward canonical `production` to exact:
 
-Return:
-- commit SHA;
-- exact participation rule after correction;
-- temporal group/private behavior;
-- source-signature change;
-- tests run/results;
-- production flag=false;
-- production SSH=0;
-- provider calls=0;
-- production mutation=0.
+`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-Final marker:
+Deploy only through canonical `ops/production/deploy.py`.
 
-`TELEGRAM_MTPROTO_TEMPORAL_PARTICIPATION_FIXED`
+Rollback:
 
-Then STOP.
+`f31f8f5b704159b7ec903da4c26a590d23f86e78`
+
+Expected Alembic remains `0046`.
+
+Hard requirement after deploy:
+- production API environment: `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- production worker environment: `TELEGRAM_MTPROTO_AI_ENABLED=false`.
+
+No global/process-service AI enablement.
+
+## Phase B — production synthetic ML rehearsal design
+
+Use a dedicated, reviewable one-shot backend helper rather than an ad-hoc shell Python blob.
+
+The helper must be implemented/tested locally before any live execution if it does not already exist.
+
+### Process isolation
+
+The rehearsal process alone may run with:
+
+`TELEGRAM_MTPROTO_AI_ENABLED=true`
+
+The long-running production API and worker MUST remain false for the entire rehearsal.
+
+Do not restart/recreate them with true.
+
+### Data policy
+
+Use only clearly synthetic content, with a unique marker such as:
+
+`TG_REHEARSAL_<run-id>`
+
+No real Telegram message body/title is passed to an ML/LLM provider.
+
+No Telegram session/provider transport operation is allowed.
+
+Synthetic records may use a dedicated synthetic MTProto account/selection if safe; otherwise use only the minimum existing identity metadata necessary for AI eligibility. Never decrypt or call the Telegram session.
+
+All created records must be attributable to the rehearsal run through explicit synthetic metadata/marker.
+
+### Rehearsal content
+
+Create at minimum:
+- two synthetic inbound canonical MTProto chat messages in the same synthetic conversation burst;
+- one synthetic task/object with matching subject matter;
+- any deterministic supporting label/config needed to observe normal auto-label behavior.
+
+Example semantic content may express:
+- meeting tomorrow at 11 about synthetic project budget;
+- prepare a synthetic estimate before that meeting.
+
+### Real production pipeline proof
+
+Use production DB/config and the normal backend services.
+
+Use REAL configured production adapters for:
+- embedding;
+- auto-label/classification;
+- temporal extraction/judging;
+- correlation/judging;
+- conversation summarization.
+
+No real Telegram provider call.
+
+Prove, with synthetic objects only:
+1. canonical Inbox eligibility;
+2. conversation stack grouping;
+3. real embedding is produced;
+4. normal label edge/result is produced;
+5. temporal hint/evidence is produced with correct participation semantics;
+6. proposed task/object correlation edge is produced;
+7. conversation-stack semantic summary is produced;
+8. AI-only context/retrieval can expose the synthetic MTProto object;
+9. repeated/idempotent processing does not create duplicate semantic artifacts beyond normal contract.
+
+### Queue safety
+
+The normal production worker remains AI=false and must not accidentally consume the rehearsal's Telegram AI work.
+
+Therefore do NOT rely on leaving normal pending jobs for the production worker.
+
+The rehearsal helper should exercise normal enqueue/signature logic in a transaction/process-safe way, but execute the relevant handler/service work inside the isolated AI=true process, or otherwise ensure the false worker cannot race and consume the rehearsal jobs.
+
+Do not pause/reconfigure the production worker merely to make the rehearsal work.
+
+### Output
+
+Emit only a sanitized summary:
+- run id;
+- object count created;
+- stack PASS;
+- embedding PASS;
+- label PASS;
+- temporal PASS + participation class;
+- correlation PASS;
+- summary PASS;
+- context/retrieval PASS;
+- idempotency PASS;
+- TELEGRAM_TRANSPORT_CALLS=0;
+- long-running API/worker AI flag remains false.
+
+Do not print message bodies, credentials, Telegram ids, session material, raw prompts/responses, embeddings, or secret env values.
+
+## Cleanup
+
+Automatic destructive cleanup is NOT required.
+
+Prefer retaining the clearly marked synthetic rehearsal artifacts until human review. Any later cleanup must be separately authorized.
+
+## Acceptance result
+
+If deploy and rehearsal pass, Telegram development is considered CLOSED:
+
+- transport/CRUD production-ready;
+- ordinary Inbox production-ready;
+- downstream AI/ML pipeline deployed but globally quarantined;
+- production flag remains false;
+- future activation requires only explicitly authorized:
+  1. `TELEGRAM_MTPROTO_AI_ENABLED=true`;
+  2. API/worker environment reload/recreate;
+  3. existing bounded recurring catch-up.
+
+No migration, relogin, folder reconfiguration, metadata rewrite, or product redesign should be required.
+
+## Failure handling
+
+On any deploy/rehearsal failure:
+- no automatic retry;
+- do not globally enable Telegram AI;
+- do not call Telegram;
+- return sanitized output and STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
