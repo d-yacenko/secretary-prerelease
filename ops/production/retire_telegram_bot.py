@@ -391,7 +391,10 @@ def remote_main() -> int:
         emit("API_RUNNING_PASS", "true")
         emit("WORKER_RUNNING_PASS", "true")
         emit("DB_HEALTH_PASS", "true")
-        _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
+        try:
+            _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
+        except Exception as exc:
+            raise HarnessError("STAGE_0_APP_HEALTH", exc) from exc
         emit("APP_HEALTH_PASS", "true")
         try:
             _require_alembic(_compose(), ALEMBIC)
@@ -438,57 +441,81 @@ def remote_main() -> int:
         except Exception as exc:
             raise HarnessError("STAGE_5_RECREATE_API_WORKER", exc) from exc
         emit("API_WORKER_RECREATED_PASS", "true")
-        new_api_id = _run([*_compose(), "ps", "-q", "api"])
-        new_worker_id = _run([*_compose(), "ps", "-q", "worker"])
-        if new_api_id == old_api_id or new_worker_id == old_worker_id:
-            raise HarnessError("STAGE_5_RECREATE_API_WORKER", RuntimeError("application container was not recreated"))
-        _require_running_container(new_api_id)
-        _require_running_container(new_worker_id)
-        if _run([*_compose(), "ps", "-q", "db"]) != db_id:
-            raise RuntimeError("database container changed")
+        try:
+            new_api_id = _run([*_compose(), "ps", "-q", "api"])
+            new_worker_id = _run([*_compose(), "ps", "-q", "worker"])
+            if new_api_id == old_api_id or new_worker_id == old_worker_id:
+                raise RuntimeError("application container was not recreated")
+            _require_running_container(new_api_id)
+            _require_running_container(new_worker_id)
+        except Exception as exc:
+            raise HarnessError("STAGE_5_RECREATE_API_WORKER", exc) from exc
+        try:
+            if _run([*_compose(), "ps", "-q", "db"]) != db_id:
+                raise RuntimeError("database container changed")
+            if _run(["docker", "inspect", "-f", "{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}", db_id]) != db_volume:
+                raise RuntimeError("database volume changed")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_DB_PRESERVATION", exc) from exc
         emit("DB_CONTAINER_UNCHANGED_PASS", "true")
-        if _run(["docker", "inspect", "-f", "{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}", db_id]) != db_volume:
-            raise RuntimeError("database volume changed")
         emit("DB_VOLUME_UNCHANGED_PASS", "true")
-        if not neutralized_equal(before_env, _read_preserving_newlines(env_path)):
-            raise RuntimeError("non-Bot environment changed")
+        try:
+            if not neutralized_equal(before_env, _read_preserving_newlines(env_path)):
+                raise RuntimeError("non-Bot environment changed")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_NON_BOT_ENV", exc) from exc
         emit("NON_BOT_ENV_UNCHANGED_PASS", "true")
-        post = _env_assignments(_read_preserving_newlines(env_path))
-        for key in BOT_KEYS:
-            if post.get(key, "") != "":
-                raise RuntimeError("Bot environment was not cleared")
+        try:
+            post = _env_assignments(_read_preserving_newlines(env_path))
+            for key in BOT_KEYS:
+                if post.get(key, "") != "":
+                    raise RuntimeError("Bot environment was not cleared")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_BOT_SETTINGS", exc) from exc
         emit("BOT_SETTINGS_EMPTY_PASS", "true")
-        post_config = _compose_config(_compose())
-        for service in ("api", "worker"):
-            service_env = _service_environment(post_config, service)
-            for key in BOT_KEYS:
-                if service_env.get(key, "") != "":
-                    raise RuntimeError("Bot settings remain in a service environment")
+        try:
+            post_config = _compose_config(_compose())
+            for service in ("api", "worker"):
+                service_env = _service_environment(post_config, service)
+                for key in BOT_KEYS:
+                    if service_env.get(key, "") != "":
+                        raise RuntimeError("Bot settings remain in a service environment")
+                for key in MT_PROTO_KEYS + INVARIANT_KEYS:
+                    if service_env.get(key) != values.get(key):
+                        raise RuntimeError("protected service environment changed")
+                if service_env.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+                    raise RuntimeError("MTProto AI flag is not disabled")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_COMPOSE_ENV", exc) from exc
+        try:
+            for service, container_id in (("api", new_api_id), ("worker", new_worker_id)):
+                actual = _container_environment(container_id)
+                for key in BOT_KEYS:
+                    if actual.get(key, "") != "":
+                        raise RuntimeError(f"Bot setting remains in {service} container")
+                for key in MT_PROTO_KEYS + INVARIANT_KEYS:
+                    if actual.get(key) != values.get(key):
+                        raise RuntimeError(f"protected setting changed in {service} container")
+                if actual.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+                    raise RuntimeError(f"MTProto AI flag changed in {service} container")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_CONTAINER_ENV", exc) from exc
+        try:
             for key in MT_PROTO_KEYS + INVARIANT_KEYS:
-                if service_env.get(key) != values.get(key):
-                    raise RuntimeError("protected service environment changed")
-            if service_env.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
+                if post.get(key) != values.get(key):
+                    raise RuntimeError("protected environment changed")
+            if values.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
                 raise RuntimeError("MTProto AI flag is not disabled")
-        for service, container_id in (("api", new_api_id), ("worker", new_worker_id)):
-            actual = _container_environment(container_id)
-            for key in BOT_KEYS:
-                if actual.get(key, "") != "":
-                    raise RuntimeError(f"Bot setting remains in {service} container")
-            for key in MT_PROTO_KEYS + INVARIANT_KEYS:
-                if actual.get(key) != values.get(key):
-                    raise RuntimeError(f"protected setting changed in {service} container")
-            if actual.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
-                raise RuntimeError(f"MTProto AI flag changed in {service} container")
-        for key in MT_PROTO_KEYS + INVARIANT_KEYS:
-            if post.get(key) != values.get(key):
-                raise RuntimeError("protected environment changed")
+        except Exception as exc:
+            raise HarnessError("STAGE_5_PROTECTED_ENV", exc) from exc
         emit("MTPROTO_CREDENTIALS_PRESERVED_PASS", "true")
         emit("CREDENTIAL_KEY_PRESERVED_PASS", "true")
         emit("DB_CREDENTIAL_PRESERVED_PASS", "true")
-        if values.get("TELEGRAM_MTPROTO_AI_ENABLED", "false").lower() != "false":
-            raise RuntimeError("MTProto AI flag is not disabled")
         emit("TELEGRAM_MTPROTO_AI_DISABLED_PASS", "true")
-        _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
+        try:
+            _run(["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:18080/health"])
+        except Exception as exc:
+            raise HarnessError("STAGE_6_APP_HEALTH", exc) from exc
         emit("HEALTH_PASS", "true")
         try:
             _require_alembic(_compose(), ALEMBIC)

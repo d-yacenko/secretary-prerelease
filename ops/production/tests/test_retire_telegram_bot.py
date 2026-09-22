@@ -217,11 +217,15 @@ def _remote_main_context(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(harness, "_run", fake_run)
     monkeypatch.setattr(harness, "_require_running_container", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(harness, "_container_environment", lambda _container: {
-        **{key: "" for key in harness.BOT_KEYS},
-        **{key: values[key] for key in (*harness.MT_PROTO_KEYS, *harness.INVARIANT_KEYS)},
-        "TELEGRAM_MTPROTO_AI_ENABLED": "false",
-    })
+    def actual_environment(container):
+        events.append(f"inspect:{container}")
+        return {
+            **{key: "" for key in harness.BOT_KEYS},
+            **{key: values[key] for key in (*harness.MT_PROTO_KEYS, *harness.INVARIANT_KEYS)},
+            "TELEGRAM_MTPROTO_AI_ENABLED": "false",
+        }
+
+    monkeypatch.setattr(harness, "_container_environment", actual_environment)
     monkeypatch.setattr(
         harness,
         "_remote_env_and_snapshot",
@@ -281,12 +285,14 @@ def test_remote_success_proves_destructive_order_and_two_provider_calls(monkeypa
     output = capsys.readouterr().out
     assert harness.parse_output(output) == "success"
     assert "TELEGRAM_NETWORK_CALLS=2" in output
-    assert [event for event in events if event != "fetch"] == [
+    assert [event for event in events if event in {"delete", "readback", "env", "recreate"}] == [
         "delete",
         "readback",
         "env",
         "recreate",
     ]
+    assert "inspect:api-container" in events
+    assert "inspect:worker-container" in events
     assert "db" not in events
     assert path.read_text(encoding="utf-8").count("TELEGRAM_BOT_TOKEN=\n") == 1
 
@@ -382,3 +388,47 @@ def test_invalid_resolved_mtproto_environment_stops_before_provider(monkeypatch,
     assert "STAGE_1_ENV_PREFLIGHT" in output
     assert "TELEGRAM_NETWORK_CALLS=0" in output
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda text: text.replace("TELEGRAM_BOT_TOKEN=BOT_SECRET\n", ""),
+        lambda text: text + "TELEGRAM_BOT_TOKEN=duplicate\n",
+        lambda text: text.replace("TELEGRAM_BOT_TOKEN=BOT_SECRET", "TELEGRAM_BOT_TOKEN: BOT_SECRET"),
+    ],
+)
+def test_malformed_bot_env_fails_through_remote_main_before_provider(monkeypatch, tmp_path, capsys, transform):
+    path, events = _remote_main_context(monkeypatch, tmp_path)
+    malformed = transform(env_text())
+    path.write_text(malformed, encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_1_ENV_PREFLIGHT" in output
+    assert "TELEGRAM_NETWORK_CALLS=0" in output
+    assert calls == []
+    assert "recreate" not in events
+
+
+def test_actual_worker_environment_failure_is_named_after_two_provider_calls(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: None)
+    monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: None)
+    inspected: list[str] = []
+
+    def fail_worker(container):
+        inspected.append(container)
+        if container == "worker-container":
+            raise RuntimeError("worker environment mismatch")
+        return {**{key: "" for key in harness.BOT_KEYS}, "TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "api-secret", "SECRETARY_CREDENTIAL_KEY": "credential-secret", "POSTGRES_PASSWORD": "db-secret", "TELEGRAM_MTPROTO_AI_ENABLED": "false"}
+
+    monkeypatch.setattr(harness, "_container_environment", fail_worker)
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_5_CONTAINER_ENV" in output
+    assert "TELEGRAM_NETWORK_CALLS=2" in output
+    assert inspected == ["api-container", "worker-container"]
