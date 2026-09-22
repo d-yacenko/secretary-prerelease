@@ -81,6 +81,24 @@ def test_child_uses_generic_read_and_aggregate_only() -> None:
     assert "LEGACY_BOT_OBJECT_COUNT" in text
     assert "Object.metadata_[\"transport\"]" in text
     assert "ObjectOut" not in text
+    assert "order_by(Object.created_at.asc(), Object.id.asc())" in text
+    assert ".limit(1000)" in text
+
+
+def test_first_ineligible_candidate_does_not_mask_later_eligible_candidate() -> None:
+    candidates = ["hidden", "visible"]
+    assert verifier._has_eligible_candidate(candidates, lambda value: value == "visible") is True
+
+
+def test_no_eligible_candidate_is_false() -> None:
+    assert verifier._has_eligible_candidate(["hidden", "deleted"], lambda _value: False) is False
+
+
+def test_read_check_does_not_emit_identifiers_or_content() -> None:
+    text = SOURCE.read_text()
+    assert "print(candidate.id" not in text
+    assert "print(candidate.body" not in text
+    assert "print(candidate.title" not in text
 
 
 def test_health_retries_bounded_then_succeeds() -> None:

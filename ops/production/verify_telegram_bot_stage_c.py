@@ -19,6 +19,7 @@ ALEMBIC = "0046"
 BOT_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_USERNAME", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_WEBHOOK_URL")
 MT_KEYS = ("TELEGRAM_API_ID", "TELEGRAM_API_HASH")
 PROTECTED_KEYS = ("SECRETARY_CREDENTIAL_KEY", "POSTGRES_PASSWORD")
+LEGACY_READ_CANDIDATE_LIMIT = 1000
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 SUCCESS_FIELDS = (
     "M4BR1_BEGIN", "REMOTE_HEAD_PASS", "REMOTE_PRODUCTION_REF_PASS", "REMOTE_WORKTREE_CLEAN",
@@ -138,6 +139,11 @@ def _require_empty(values: dict[str, str], keys: tuple[str, ...]) -> None:
         raise ValueError("Bot setting is nonempty")
 
 
+def _has_eligible_candidate(candidates, is_eligible) -> bool:
+    """Return whether any bounded legacy candidate passes the canonical read check."""
+    return any(is_eligible(candidate) for candidate in candidates)
+
+
 CHILD = r"""
 from sqlalchemy import func, or_, select
 from app.core.config import Settings
@@ -159,8 +165,19 @@ try:
     scope_count = int(session.scalar(select(func.count()).select_from(TelegramMtprotoChatSelection).where(TelegramMtprotoChatSelection.scope_active.is_(True))) or 0)
     legacy_filter = (Object.provider == "telegram", Object.kind == "chat_message", or_(Object.metadata_["transport"].as_string().is_(None), Object.metadata_["transport"].as_string() != "mtproto"))
     legacy_count = int(session.scalar(select(func.count()).select_from(Object).where(*legacy_filter)) or 0)
-    sample = session.scalar(select(Object).where(*legacy_filter).limit(1))
-    readable = sample is not None and RecentSourceService(session, sample.user_id).get_inbox_eligible(sample.id) is not None
+    candidates = session.scalars(
+        select(Object)
+        .where(*legacy_filter)
+        .order_by(Object.created_at.asc(), Object.id.asc())
+        .limit(1000)
+    )
+    candidate_rows = list(candidates)
+    readable = any(
+        RecentSourceService(session, candidate.user_id).get_inbox_eligible(candidate.id) is not None
+        for candidate in candidate_rows
+    )
+    if not readable and legacy_count > 1000:
+        raise RuntimeError("legacy read candidate bound exhausted")
     print(f"MTPROTO_ACCOUNT_COUNT={account_count}")
     print(f"ACTIVE_SCOPE_COUNT={scope_count}")
     print(f"LEGACY_BOT_OBJECT_COUNT={legacy_count}")
