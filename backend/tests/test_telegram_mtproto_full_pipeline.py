@@ -143,6 +143,7 @@ def _message(session, user, account, peer_id: int, *, when, topic_id=None, reply
         "peer_id": peer_id,
         "peer_title": f"Peer {peer_id}",
         "sender_peer_id": 900,
+        "peer_kind": "group",
         "direction": direction,
         "reply_to_message_id": reply,
         "topic_id": topic_id,
@@ -355,6 +356,9 @@ def test_false_to_true_pipeline_uses_existing_catchup(db_session, monkeypatch) -
         match_judge=FakeTemporalMatchJudge(),
     ).run_extract_job(dict(temporal_job.payload))
     assert outcome.hint_id is not None, outcome
+    hint = db_session.get(Object, outcome.hint_id)
+    assert hint is not None
+    assert hint.metadata_["participation"] == "possible"
     assert db_session.scalar(
         select(func.count()).select_from(Object).where(
             Object.user_id == user.id, Object.kind == KIND_TEMPORAL_HINT

@@ -224,6 +224,9 @@ def source_extraction_signature(obj: Object) -> str:
                 "direction": metadata.get("direction"),
             }
         )
+        if metadata.get("transport") == "mtproto":
+            participants["sender_peer_id"] = metadata.get("sender_peer_id")
+            participants["peer_kind"] = metadata.get("peer_kind")
     elif obj.provider == "teams":
         participants.update(
             {
@@ -1014,6 +1017,12 @@ class TemporalSignalService:
             roles = snapshot.objects[0].user_participation_roles
         metadata = source.metadata_ or {}
         is_channel = source.provider == SOURCE_MATTERMOST and bool(metadata.get("channel_id"))
+        if (
+            source.provider == "telegram"
+            and metadata.get("transport") == "mtproto"
+            and metadata.get("peer_kind") in {"group", "supergroup"}
+        ):
+            is_channel = True
         has_others = _has_other_participants(source, roles)
         return TemporalExtractionRequest(
             object_id=source.id,

@@ -153,11 +153,17 @@ def current_user_participation(
         sender_id = _scalar_str(metadata.get("from_user_id"))
         direction = _scalar_str(metadata.get("direction"))
         if metadata.get("transport") == "mtproto":
-            sender_id = _scalar_str(metadata.get("sender_peer_id"))
+            sender_id = _id_token(metadata.get("sender_peer_id"))
+            peer_kind = _scalar_str(metadata.get("peer_kind"))
             if identity.telegram_user_ids:
                 if sender_id in identity.telegram_user_ids and direction == "outbound":
                     roles.add("sender")
-                elif direction == "inbound" and sender_id not in identity.telegram_user_ids:
+                elif (
+                    direction == "inbound"
+                    and peer_kind == "private"
+                    and sender_id is not None
+                    and sender_id not in identity.telegram_user_ids
+                ):
                     roles.add("direct_recipient")
         elif business_user_id in identity.telegram_user_ids:
             if sender_id == business_user_id and direction == "outbound":
@@ -272,6 +278,14 @@ def _scalar_str(value: object) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _id_token(value: object) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return _scalar_str(value)
 
 
 def _truthy_flag(value: object) -> bool:
