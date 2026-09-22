@@ -435,7 +435,6 @@ class TelegramMtprotoHistoryService:
         latest_message_id = selection.history_latest_message_id
         backfill_before_message_id = selection.history_backfill_before_message_id
         history_complete = selection.history_complete
-        previous_latest_message_id = latest_message_id
         stats = _ImportStats()
         materializer = TelegramObjectMaterializer(self._session)
         remaining = TELEGRAM_MTPROTO_HISTORY_MAX_MESSAGES_PER_RUN
@@ -458,7 +457,6 @@ class TelegramMtprotoHistoryService:
                 page,
                 cutoff,
                 stats,
-                previous_latest_message_id=None,
             )
             stats.scanned += len(page.entries)
             stats.skipped += len(page.entries) - materialized_in_page
@@ -484,7 +482,6 @@ class TelegramMtprotoHistoryService:
                 page,
                 cutoff,
                 stats,
-                previous_latest_message_id=previous_latest_message_id,
             )
             stats.scanned += len(page.entries)
             stats.skipped += len(page.entries) - materialized_in_page
@@ -575,10 +572,8 @@ class TelegramMtprotoHistoryService:
         page: TelegramMtprotoHistoryPage,
         cutoff: datetime,
         stats: _ImportStats,
-        previous_latest_message_id: int | None = None,
     ) -> int:
         materialized = 0
-        notifications = TelegramMtprotoTransportNotificationService(self._session)
         with self._session.begin_nested():
             for entry in sorted(page.entries, key=lambda item: item.message_id):
                 normalized = _normalize_entry(account, selection, entry, cutoff)
@@ -590,22 +585,6 @@ class TelegramMtprotoHistoryService:
                     normalized=normalized,
                 )
                 stats.add(result)
-                if (
-                    previous_latest_message_id is not None
-                    and entry.message_id > previous_latest_message_id
-                    and result.change == "created"
-                    and normalized["metadata"].get("direction") == "inbound"
-                    and selection.scope_active
-                ):
-                    notifications.message_created(
-                        user_id=account.user_id,
-                        account_id=account.id,
-                        peer_id=selection.peer_id,
-                        message_id=entry.message_id,
-                        obj=result.obj,
-                        occurred_at=entry.occurred_at,
-                        conversation_title=selection.title,
-                    )
         return materialized
 
 

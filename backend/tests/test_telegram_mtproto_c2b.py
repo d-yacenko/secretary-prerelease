@@ -1,6 +1,5 @@
 """Telegram MTProto C2B deterministic notification regressions."""
 
-import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -19,6 +18,7 @@ from app.connectors.telegram.mtproto_transport import (
 from app.core.config import settings
 from app.db.models import Edge, Job, Notification, Object
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
+from app.services.recent_source_service import RecentSourceService
 from app.services.telegram_mtproto_history_service import TelegramMtprotoHistoryService
 from app.services.telegram_mtproto_notification_service import (
     TelegramMtprotoNotificationPersistenceError,
@@ -115,7 +115,7 @@ async def test_bounded_backfill_and_replayed_history_create_no_notifications(
 
 
 @pytest.mark.asyncio
-async def test_established_forward_cursor_creates_one_deterministic_inbound_event(
+async def test_established_forward_cursor_materializes_inbound_without_notification(
     db_session, credential_key
 ):
     user, account, selection, obj = _fixture(db_session, credential_key)
@@ -125,31 +125,33 @@ async def test_established_forward_cursor_creates_one_deterministic_inbound_even
         user.id, selection.peer_id
     )
 
-    notes = _notifications(db_session, user.id)
-    assert len(notes) == 1
-    note = notes[0]
-    assert note.source_object_id != obj.id
-    assert note.proposal_["type"] == "transport_event"
-    assert note.proposal_["event_type"] == "message_created"
-    assert note.proposal_["event_key"].endswith(":42:created")
-    assert note.proposal_["account_id"] == str(account.id)
-    assert note.proposal_["peer_id"] == selection.peer_id
-    payload = json.dumps(note.proposal_)
-    for forbidden in (
-        "provider_peer_reference",
-        "session",
-        "access_hash",
-        "api_hash",
-        "credentials",
-    ):
-        assert forbidden not in payload
+    created = db_session.scalar(
+        select(Object).where(
+            Object.user_id == user.id,
+            Object.external_id == f"mtproto|{account.id}|{selection.peer_id}|42",
+        )
+    )
+    assert created is not None
+    assert created.id != obj.id
+    assert created.metadata_["direction"] == "inbound"
+    assert RecentSourceService(db_session, user.id).get_inbox_eligible(created.id) is created
+    assert _notifications(db_session, user.id) == []
 
     await _service(db_session, credential_key, _ForwardTransport([entry])).sync_scope_peer(
         user.id, selection.peer_id
     )
-    assert db_session.scalar(
-        select(func.count()).select_from(Notification).where(Notification.user_id == user.id)
-    ) == 1
+    assert _notifications(db_session, user.id) == []
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(Object)
+            .where(
+                Object.user_id == user.id,
+                Object.external_id == f"mtproto|{account.id}|{selection.peer_id}|42",
+            )
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -163,8 +165,10 @@ async def test_outgoing_forward_message_creates_no_event(db_session, credential_
 
 
 @pytest.mark.asyncio
-async def test_two_newer_inbound_messages_create_two_events(db_session, credential_key):
-    user, _, selection, _ = _fixture(db_session, credential_key)
+async def test_two_newer_inbound_messages_create_objects_without_notifications(
+    db_session, credential_key
+):
+    user, account, selection, _ = _fixture(db_session, credential_key)
     selection.history_latest_message_id = 41
     await _service(
         db_session,
@@ -172,7 +176,20 @@ async def test_two_newer_inbound_messages_create_two_events(db_session, credenti
         _ForwardTransport([_entry(42), _entry(43)]),
     ).sync_scope_peer(user.id, selection.peer_id)
 
-    assert [note.proposal_["message_id"] for note in _notifications(db_session, user.id)] == [42, 43]
+    external_ids = {
+        db_session.scalar(
+            select(Object.external_id).where(
+                Object.user_id == user.id,
+                Object.external_id == f"mtproto|{account.id}|{selection.peer_id}|{message_id}",
+            )
+        )
+        for message_id in (42, 43)
+    }
+    assert external_ids == {
+        f"mtproto|{account.id}|{selection.peer_id}|42",
+        f"mtproto|{account.id}|{selection.peer_id}|43",
+    }
+    assert _notifications(db_session, user.id) == []
 
 
 @pytest.mark.asyncio
@@ -326,7 +343,10 @@ async def test_ai_false_event_has_no_embedding_job(db_session, credential_key):
         _ForwardTransport([_entry(42)]),
     ).sync_scope_peer(user.id, selection.peer_id)
 
-    assert len(_notifications(db_session, user.id)) == 1
+    assert _notifications(db_session, user.id) == []
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.user_id == user.id)
+    ) == 2
     assert db_session.scalar(
         select(func.count()).select_from(Job).where(
             Job.user_id == user.id, Job.type == JOB_TYPE_EMBED_OBJECT
@@ -585,3 +605,148 @@ def test_transport_event_notification_api_lifecycle(db_session, auth_headers):
         select(func.count()).select_from(Job).where(Job.user_id == BOOTSTRAP_USER_ID)
     ) == before_jobs
     app.dependency_overrides.clear()
+
+
+def test_inbox_hides_historical_message_created_and_keeps_source_object(
+    db_session, credential_key, auth_headers
+):
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_db
+    from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+    from app.main import app
+    from app.services.notification_service import NotificationService
+    from app.users.bootstrap import BOOTSTRAP_USER_ID
+    from tests.conftest import AuthTestClient
+
+    encryption = CredentialEncryption(credential_key)
+    account = TelegramMtprotoAccount(
+        user_id=BOOTSTRAP_USER_ID,
+        telegram_user_id=990001,
+        session_encrypted=encryption.encrypt("session-material"),
+        username="inbox",
+        display_name="Inbox",
+    )
+    db_session.add(account)
+    db_session.flush()
+    peer_id = 4242
+    selection = TelegramMtprotoChatSelection(
+        account_id=account.id,
+        peer_id=peer_id,
+        peer_kind="private",
+        provider_peer_reference_encrypted=encryption.encrypt('{"entity_type":"user","id":4242}'),
+        title="Inbox chat",
+        username="inbox",
+        manual_selected=False,
+        scope_active=True,
+    )
+    db_session.add(selection)
+    source = Object(
+        user_id=BOOTSTRAP_USER_ID,
+        kind="chat_message",
+        provider="telegram",
+        external_id=f"mtproto|{account.id}|{peer_id}|7",
+        origin="source",
+        state="observed",
+        title="Inbox chat: hello",
+        body="hello from telegram",
+        metadata_={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": peer_id,
+            "message_id": 7,
+            "direction": "inbound",
+        },
+        occurred_at=datetime.now(UTC),
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    def add_note(title: str, proposal: dict) -> Notification:
+        row = Notification(
+            user_id=BOOTSTRAP_USER_ID,
+            title=title,
+            body="body",
+            priority="normal",
+            status="new",
+            source_object_id=source.id,
+            proposal_=proposal,
+        )
+        db_session.add(row)
+        return row
+
+    created = add_note(
+        "created",
+        {
+            "type": "transport_event",
+            "provider": "telegram",
+            "transport": "mtproto",
+            "event_type": "message_created",
+        },
+    )
+    edited = add_note(
+        "edited",
+        {
+            "type": "transport_event",
+            "provider": "telegram",
+            "transport": "mtproto",
+            "event_type": "message_edited",
+        },
+    )
+    deleted = add_note(
+        "deleted",
+        {
+            "type": "transport_event",
+            "provider": "telegram",
+            "transport": "mtproto",
+            "event_type": "message_deleted",
+        },
+    )
+    other = add_note("task", {"type": "task", "title": "Call back"})
+    legacy_bot = add_note(
+        "bot",
+        {
+            "type": "transport_event",
+            "provider": "telegram",
+            "transport": "bot",
+            "event_type": "message_created",
+        },
+    )
+    db_session.flush()
+    stored_ids = {created.id, edited.id, deleted.id, other.id, legacy_bot.id}
+
+    service = NotificationService(db_session, BOOTSTRAP_USER_ID)
+    generic_ids = {row.id for row in service.list_notifications(status="unresolved", limit=50)}
+    attention_ids = {row.id for row in service.list_inbox_attention(limit=50)}
+    assert stored_ids <= generic_ids
+    assert created.id not in attention_ids
+    assert {edited.id, deleted.id, other.id, legacy_bot.id} <= attention_ids
+
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = AuthTestClient(TestClient(app), auth_headers)
+    try:
+        listed = client.get("/notifications", params={"status": "unresolved"})
+        assert listed.status_code == 200
+        listed_ids = {item["id"] for item in listed.json()["notifications"]}
+        assert str(created.id) in listed_ids
+
+        inbox = client.get("/inbox")
+        assert inbox.status_code == 200
+        body = inbox.json()
+        unresolved_ids = {item["id"] for item in body["unresolved_notifications"]}
+        recent_ids = {item["id"] for item in body["recent_source_objects"]}
+        assert str(created.id) not in unresolved_ids
+        assert {str(edited.id), str(deleted.id), str(other.id), str(legacy_bot.id)} <= unresolved_ids
+        assert str(source.id) in recent_ids
+    finally:
+        app.dependency_overrides.clear()
+
+    remaining = set(
+        db_session.scalars(select(Notification.id).where(Notification.id.in_(stored_ids)))
+    )
+    assert remaining == stored_ids
+    db_session.refresh(created)
+    assert created.proposal_["event_type"] == "message_created"

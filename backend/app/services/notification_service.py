@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import EdgeCreate, ObjectCreate
@@ -116,6 +116,28 @@ class NotificationService:
         elif status is not None:
             stmt = stmt.where(Notification.status == status)
         stmt = stmt.limit(bounded_limit)
+        return list(self._session.scalars(stmt))
+
+    def list_inbox_attention(self, limit: int = 50) -> list[Notification]:
+        """Unresolved notifications for Inbox attention, without routine MTProto creates."""
+        bounded_limit = max(1, min(limit, MAX_LIST_LIMIT))
+        proposal = Notification.proposal_
+        ordinary_created = and_(
+            func.coalesce(proposal["type"].as_string(), "") == "transport_event",
+            func.coalesce(proposal["provider"].as_string(), "") == "telegram",
+            func.coalesce(proposal["transport"].as_string(), "") == "mtproto",
+            func.coalesce(proposal["event_type"].as_string(), "") == "message_created",
+        )
+        stmt = (
+            select(Notification)
+            .where(
+                Notification.user_id == self._user_id,
+                Notification.status.in_((NOTIFICATION_STATUS_NEW, NOTIFICATION_STATUS_READ)),
+                ~ordinary_created,
+            )
+            .order_by(Notification.created_at.desc(), Notification.id.desc())
+            .limit(bounded_limit)
+        )
         return list(self._session.scalars(stmt))
 
     def mark_read(self, notification_id: UUID) -> Notification:

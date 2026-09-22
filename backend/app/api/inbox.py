@@ -17,7 +17,6 @@ from app.api.schemas import (
 )
 from app.core.current_user import CurrentUserContext
 from app.db.models import Object
-from app.notifications.constants import NOTIFICATION_FILTER_UNRESOLVED
 from app.services.conversation_stack import groups_to_overlay
 from app.services.errors import NotFoundError, ValidationError
 from app.services.inbox_conversation_overlay import build_inbox_conversation_groups
@@ -139,10 +138,7 @@ def get_inbox(
     recent_limit: int = Query(default=30, ge=1, le=50),
 ) -> InboxOut:
     user_id = current_user.user_id
-    notifications = NotificationService(session, user_id).list_notifications(
-        status=NOTIFICATION_FILTER_UNRESOLVED,
-        limit=50,
-    )
+    notifications = NotificationService(session, user_id).list_inbox_attention(limit=50)
     page = RecentSourceService(session, user_id).list_page(limit=recent_limit)
     status_rows = SourceStatusService(session, user_id).list_status()
     marker = InboxReviewMarkerService(session, user_id).get_marker()
