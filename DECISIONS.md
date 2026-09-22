@@ -58,3 +58,15 @@
 - Assistant semantic retrieval/context must continue to exclude MTProto while the flag is false and include eligible active-scope MTProto objects when true. Voice uses the same Assistant path and therefore inherits the same gate.
 - A production flag change requires the running API/worker environments to be reloaded/recreated; editing a file without applying the environment to running services is not sufficient.
 - After explicit external permission, production activation is only: set `TELEGRAM_MTPROTO_AI_ENABLED=true`, reload/recreate the API and worker through an authorized production operation, and let the existing recurring MTProto sync run its bounded embedding catch-up. No migration, metadata rewrite, Telegram relogin, folder reconfiguration, or further product redesign is required for that transition.
+
+
+## Communication conversation visibility parity
+
+- Canonical communication objects must preserve both inbound and outbound messages when the provider exposes them.
+- Conversation history/detail is bidirectional: a user must be able to see their own sent messages together with messages received from other participants.
+- This rule is provider-neutral and applies to Telegram, Teams, Mattermost, and future chat-style providers.
+- Outbound visibility must not be conflated with attention semantics. Unread/attention/"requires attention" state may remain driven by inbound activity only.
+- The unified Inbox/conversation presentation should not hide outbound messages merely because their direction is outbound. If a communication item is grouped into a conversation, the group/member history must include both directions and may use the latest message from either direction for preview/chronology.
+- Do not create actionable Notifications merely because an outbound message exists.
+- Provider-specific outbound suppression in ordinary communication presentation is a parity defect unless there is a separately documented provider limitation.
+- Existing canonical source objects/history should be reused; do not duplicate or rewrite messages solely to change visibility.
