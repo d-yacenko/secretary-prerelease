@@ -1,203 +1,150 @@
-# Current task — Telegram Bot API M4BT1R: finish final Stage C verifier Git bootstrap cleanly
+# Current task — Telegram Bot API M4BU1: make Stage C verifier internally self-consistent before final live run
 
 ## Executor handoff
 
-You are a fresh executor with no prior chat context. Everything needed for this task is in the canonical repository.
+Continue as implementation executor in the canonical repo.
 
-Canonical repo:
-`https://github.com/d-yacenko/secretary-prerelease.git`
+Read:
+- `AGENTS.md`
+- `CURRENT_TASK.md`
+- latest `PROJECT_STATE.md`
+- `DECISIONS.md`
+- `ops/production/verify_telegram_bot_stage_c.py`
+- `ops/production/verify_telegram_bot_stage_c.sh`
+- focused Stage C verifier tests
 
-Read before editing:
-1. `AGENTS.md`
-2. `CURRENT_TASK.md`
-3. `PROJECT_STATE.md`
-4. `DECISIONS.md`
-5. `docs/executor_bootstrap.md`
-6. `docs/deploy.md`
-7. established production bootstrap in `ops/production/deploy.py`
+This is CODE/TEST ONLY. No production SSH or live verifier.
 
-Do not infer authorization from old commits. This file is the active authorization source.
+## Accepted baseline
 
-## Current production facts
+Commit:
+`3c6da496fa0d6bb5dc7d4d37b22190c473a5a0bd`
 
-Production runtime/ref:
-`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
+The canonical Git bootstrap changes in that commit are architect-accepted:
+- full release SHA restored:
+  `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
+- target/canonical origin validated before branch lookup;
+- authoritative refs use explicit canonical URL;
+- no fetch/tracking-ref mutation;
+- remote ref checked before Docker/DB.
 
-Alembic:
-`0046`
+Do not regress those changes.
 
-Telegram Bot lifecycle:
-- Bot runtime retired;
-- webhook deleted;
-- Bot credentials cleared;
-- Bot account destroyed;
-- Stage C code cleanup deployed;
-- MTProto is the sole live Telegram transport;
-- historical Bot-derived objects/schema are intentionally preserved.
+## Root-cause correction
 
-The final Stage C verifier is read-only.
-
-Two live attempts blocked locally before SSH with:
+The two previous live blockers:
 
 `M4BR1_BLOCKED=local_production_ref`
 
-No production access or mutation occurred in either blocked attempt.
+were directly caused by a 39-character `RELEASE` constant missing the final `b`.
 
-GitHub independently confirms canonical `production` is exact
-`bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
+Earlier theories about stale tracking refs / symbolic origin identified real hardening opportunities, now fixed, but they were not the direct cause of those observed blockers.
 
-## Problem to solve
+Preserve this factual correction in `PROJECT_STATE.md`.
 
-The verifier Git bootstrap has accumulated bespoke ref-validation logic and has produced false blockers.
+## Blocker 1 — protocol field order is inconsistent
 
-Current specific defect:
-- wrapper performs authoritative branch lookup using symbolic local remote name `origin`;
-- that lookup happens before local `origin` is proven canonical;
-- therefore a wrong/mispointed local `origin` can make the verifier compare the wrong repository and report `local_production_ref`.
+The strict parser's `SUCCESS_FIELDS` order does not match the actual order emitted by `remote_main()`.
 
-Do not add another ad-hoc patch layer.
+Current examples:
+- `remote_main()` emits `ALEMBIC_0046_PASS` before `APP_HEALTH_PASS`;
+- `SUCCESS_FIELDS` expects APP health before Alembic;
+- `remote_main()` emits environment markers before the child route/read markers;
+- `SUCCESS_FIELDS` expects route/settings markers before environment markers.
 
-Review the whole local+remote Git bootstrap for this verifier and make it consistent with the established production deployment trust model.
+Consequences:
+- a genuinely successful live verifier transcript would be rejected locally as `remote_protocol`;
+- some valid late-stage failure transcripts would also be rejected because failure-prefix validation uses the same incorrect field order.
 
-## Goal
+### Required fix
 
-Deliver one clean correction so the Stage C verifier:
+Create one canonical protocol order matching actual verifier execution.
 
-1. establishes canonical repository identity first;
-2. queries authoritative GitHub refs using an explicit validated canonical URL;
-3. never relies on stale remote-tracking refs for production truth;
-4. never mutates Git refs merely to verify them;
-5. fails with the correct deterministic local/remote stage;
-6. remains strictly read-only with respect to production.
+Prefer the least risky approach:
+- define `SUCCESS_FIELDS` in exact emission order; or
+- restructure emission to match one documented order.
 
-CODE/TEST ONLY. No live verifier run.
+Do not weaken strict parsing.
 
-## Required design
+The parser must still reject:
+- unknown fields;
+- duplicates;
+- malformed lines;
+- out-of-order lines;
+- unsafe failure data;
+- nonzero mutation/provider counters.
 
-### A. Single explicit canonical remote identity
+## Blocker 2 — runtime Bot env contract must prove absence, not merely emptiness
 
-Use the validated canonical repository URL:
+Stage C intentionally allows production `.env` to retain the old four Bot keys as empty legacy lines.
 
-`https://github.com/d-yacenko/secretary-prerelease.git`
+But Compose service environments and the actual API/worker container environments must no longer contain those Bot variables at all.
 
-Authoritative branch checks must execute equivalent to:
+Current `_require_empty()` treats a missing key and a present empty key as equivalent everywhere.
 
-`git ls-remote <canonical-url> refs/heads/<branch>`
+### Required fix
 
-not:
+Make the distinction explicit:
 
-`git ls-remote origin ...`
+- production `.env`:
+  four legacy Bot keys may be absent OR present with empty values;
+- resolved Compose environment for `api` and `worker`:
+  the four Bot keys must be ABSENT;
+- actual API/worker container environment:
+  the four Bot keys must be ABSENT.
 
-and not:
+Do not expose environment values.
 
-`rev-parse origin/production`.
+Use clearly named helpers so this contract is obvious.
 
-Prefer one reusable/testable Python function rather than duplicating Git parsing in shell.
+## Required end-to-end regression strategy
 
-Strictly require:
-- canonical URL exact match;
-- strict branch-name validation;
-- exactly one output line;
-- exact lowercase 40-char SHA;
-- exact requested ref name;
-- malformed/duplicate/unexpected output fails closed;
-- raw Git output is never surfaced.
+Do not rely only on a hand-built success fixture derived from `SUCCESS_FIELDS`.
 
-### B. Local wrapper trust order
+Add tests that exercise `remote_main()` itself with mocked command/runtime/child dependencies and capture its emitted stdout.
 
-Before any branch lookup or SSH:
+At minimum prove:
 
-1. validate `target.json`;
-2. obtain canonical `origin_url` from validated target;
-3. require local repo root/branch/worktree are correct;
-4. require local `git remote get-url origin` equals canonical URL;
-5. query authoritative `main` via explicit canonical URL;
-6. require local HEAD == authoritative main;
-7. query authoritative `production` via explicit canonical URL;
-8. require production == accepted release;
-9. only then perform host pin / SSH.
+1. full successful `remote_main()` transcript is accepted by `parse_output()`;
+2. emitted key sequence exactly equals canonical success order;
+3. app-health failure after Alembic is accepted as a valid sanitized failure transcript;
+4. environment-stage failure after health/Alembic is accepted as valid sanitized failure;
+5. read-state/child failure after environment markers is accepted as valid sanitized failure;
+6. unknown/duplicate/out-of-order field remains rejected;
+7. nonzero provider/write/env/recreate counter remains rejected;
+8. empty legacy Bot keys in production `.env` are allowed;
+9. present-even-empty Bot key in Compose API/worker env fails;
+10. present-even-empty Bot key in actual API/worker container env fails;
+11. absent Bot keys in Compose/container env pass;
+12. full 40-character release SHA remains asserted;
+13. canonical explicit-URL Git bootstrap tests from M4BT1R remain green;
+14. no production/provider/write/recreate capability is introduced.
 
-Wrong local origin must fail as `wrong_local_origin`, not as a branch mismatch.
-
-### C. Remote helper trust order
-
-Before Docker/DB/runtime inspection:
-
-1. require remote repo origin equals canonical URL;
-2. require HEAD exact accepted production release;
-3. query authoritative production using explicit canonical URL;
-4. require authoritative production exact accepted release;
-5. require clean tracked worktree;
-6. only then continue to read-only runtime verification.
-
-No `git fetch`, tracking-ref update, branch checkout, reset, or ref mutation.
-
-### D. Reuse existing production conventions
-
-Inspect `ops/production/deploy.py` and existing accepted verifier/harness code.
-
-Do not invent another parallel trust model when an existing canonical helper/pattern can be reused or factored safely.
-
-If a small shared read-only Git/target helper can remove duplication without broad refactor risk, that is allowed. Keep the change narrow.
-
-## Required regressions
-
-Prove at minimum:
-
-1. authoritative lookup command uses explicit canonical URL, never symbolic `origin`;
-2. malformed/duplicate/unexpected `ls-remote` output fails closed;
-3. wrapper validates local origin before authoritative branch lookup;
-4. wrong local origin fails before branch comparison and before SSH;
-5. authoritative main mismatch rejects stale local main;
-6. canonical production mismatch rejects before SSH;
-7. stale/missing local remote-tracking refs are irrelevant;
-8. remote helper validates origin before authoritative production lookup;
-9. remote production mismatch stops before Docker/DB inspection;
-10. no `git fetch`, `origin/production`, ref mutation, checkout, or reset is used in verifier ref validation;
-11. strict sanitized output and zero-mutation/provider invariants remain intact.
-
-## Preserve exactly
-
-Do not change:
-- production release expectation `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`;
-- Alembic `0046`;
-- historical Bot existential Inbox-read check;
-- route/config/container/MTProto checks;
-- exactly one MTProto account;
-- active scope count 28;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- bounded health retry;
-- strict sanitized parser;
-- zero Telegram/provider calls;
-- zero DB writes;
-- zero env writes;
-- zero service restart/recreate;
-- no object/account/peer/message IDs or message content in output.
+If useful, factor a small pure helper for protocol/env validation. Keep scope narrow.
 
 ## Validation
 
-Run all of:
-- focused Stage C verifier tests;
+Run:
+- all focused Stage C verifier tests;
 - Python compile;
 - bundled helper compile;
 - Bash syntax;
 - Ruff;
 - `git diff --check`.
 
-Review your own final diff specifically for duplicated Git bootstrap logic and ordering mistakes before committing.
+Before commit, self-review the complete happy-path emission order against parser order.
 
 ## Authorization
 
 AUTHORIZED:
-- local verifier/wrapper/test correction necessary to finish the Git bootstrap cleanly;
-- small local refactor of production read-only Git/target helpers if it removes duplication safely;
+- verifier/test-only corrections described above;
 - update `PROJECT_STATE.md`;
-- commit and push canonical `main`.
+- commit/push canonical `main`.
 
 NOT AUTHORIZED:
 - production SSH;
-- live verifier retry;
-- Telegram/provider calls;
+- live verifier;
+- provider calls;
 - DB/env writes;
 - service restart/recreate;
 - deploy/rollback/ref movement;
@@ -210,9 +157,9 @@ NOT AUTHORIZED:
 Return:
 - commit SHA;
 - files changed;
-- final trust-order design;
-- exact authoritative-ref command shape;
-- whether any shared helper was factored;
+- canonical final success field order;
+- end-to-end `remote_main -> parse_output` proof;
+- Bot env absence proof;
 - regression/test results;
 - compile/Ruff/Bash/diff-check results;
 - production SSH=0;
@@ -221,7 +168,7 @@ Return:
 
 Final marker:
 
-`TELEGRAM_BOT_M4BT1R_CANONICAL_REF_READY`
+`TELEGRAM_BOT_M4BU1_PROTOCOL_READY`
 
 Then STOP.
 
