@@ -1,72 +1,55 @@
-# Current task — Telegram Bot API M4BN1: execute one-shot live read-only post-retirement verification
+# Current task — Telegram Bot API M4BO1: Bot account destruction awaiting explicit human authorization
 
 ## Status
 
-Human explicitly authorized the live read-only post-retirement verification.
-
-Accepted verifier code:
-`27f54763bd04c72a98046a5d649b703072e0369f`
+Telegram Bot API Stage B retirement is COMPLETE / PRODUCTION ACCEPTED.
 
 Current production runtime/ref:
 `fe151f12f64886505253e765b82458710a949e34`
 
-Expected Alembic:
+Alembic:
 `0046`
 
-Stage B irreversible core actions are already materially applied:
-- Bot webhook deleted;
-- webhook read-back confirmed empty;
-- four Bot env settings cleared;
-- API + worker recreated;
-- DB container/volume preserved;
-- MTProto/protected credentials preserved;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`.
-
-## Authorization
-
-Authorize exactly ONE execution of:
-
-`bash ops/production/verify_telegram_bot_retirement.sh`
-
-The verifier may only read/inspect:
-- canonical target/host pin/repository;
-- fresh exact production ref and HEAD;
-- tracked worktree cleanliness;
-- DB/API/worker container existence/running state;
-- DB health and volume identity;
-- Bot settings empty in `.env`, Compose, and actual API/worker containers;
-- MTProto/protected credentials consistency;
+Accepted final Stage B state:
+- Bot webhook deleted and verified empty;
+- four Bot runtime settings are empty;
+- Bot ingress/link/send paths are retired in production application code;
+- DB/API/worker are healthy;
+- MTProto credentials are preserved;
 - `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- application health with bounded retry up to 30 attempts, 2 seconds apart;
-- Alembic exact `0046 (head)`.
+- MTProto is the sole live Telegram transport;
+- historical Bot-derived objects remain readable/preserved;
+- legacy Bot DB schema remains preserved for now.
 
-## Hard prohibitions
+## Next product step
 
-The verifier must perform:
-- Telegram/Bot API/provider calls = 0;
-- DB writes = 0;
-- env writes = 0;
-- service restarts/recreates = 0;
-- deploy/ref movement = 0.
+The remaining external Bot lifecycle step is destruction of the Telegram bot account itself through the human-controlled Telegram/BotFather flow.
 
-## Failure handling
+This is irreversible and is separate from Stage B runtime retirement.
 
-If verifier blocks or fails:
-- do not retry;
-- do not bypass;
-- do not use direct SSH;
-- do not restart/recreate services;
-- do not restore Bot webhook/secrets;
-- return the complete sanitized output and STOP.
+## Authorization state
 
-## Required report
+BOT ACCOUNT DESTRUCTION IS NOT YET AUTHORIZED.
 
-Return the complete sanitized verifier output including:
-- all PASS markers reached;
-- any `FAILURE_STAGE`;
-- zero mutation/provider counters;
-- terminal marker.
+Do not delete/revoke/destroy the bot account until the human explicitly authorizes it.
 
-Then STOP.
+Acceptable explicit authorization text:
+
+`Разрешаю удалить Telegram bot account через BotFather`
+
+After explicit authorization, Architect will provide the exact human-only BotFather action and required confirmation report.
+
+## Scope boundary
+
+Bot account destruction must NOT:
+- restore or alter Secretary Bot credentials;
+- change production `.env`;
+- call Secretary deploy/rollback;
+- delete historical Bot-derived objects;
+- delete legacy Bot DB tables/migrations;
+- change MTProto account/session/scope behavior;
+- enable MTProto AI.
+
+Stage C source/UI/config/schema cleanup is a separate later task.
 
 `CURRENT_TASK.md` is the source of active authorization.
