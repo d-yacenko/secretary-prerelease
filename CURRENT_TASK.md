@@ -1,20 +1,18 @@
-# Current task — Localize Telegram self-authored E2E one-shot startup failure
+# Current task — Close Telegram E2E post-import protocol blind spot
 
-## Status of the consumed live attempt
+## Architect review
 
-Exactly one previously authorized live production self-authored Telegram E2E invocation was executed.
+Commit:
 
-Sanitized stdout:
+`86e856b4e8ab54a2bf535eae45a002692e94ee4c`
 
-```text
-SELF_E2E_REMOTE_BLOCKED=oneshot_failed
-```
+is mostly accepted: stdlib bootstrap, compile/import stage markers, fixed sanitized compile/import failures, preserved guards, and no-repeat discipline are correct.
 
-Exit status: `1`.
+One blocking observability defect remains before any replacement live authorization.
 
-The attempt is consumed. No retry is authorized.
+The remote program currently treats any stdout containing `SELF_E2E_` as evidence that the harness produced its normal protocol. The new startup lines themselves begin with `SELF_E2E_STARTUP=`, so a failure after successful import but before a terminal harness result can bypass the `oneshot_failed` fallback and surface only startup markers with a nonzero exit. A helper that returns success without a terminal acceptance result can likewise produce startup-only stdout with exit 0.
 
-This result is not a Telegram/ML pipeline acceptance failure. The canonical remote wrapper passed its local/remote production-ref, worktree, origin, and long-running-AI checks, reached `docker compose run`, and received a nonzero child result with no harness-owned stdout marker. The wrapper intentionally suppressed child stderr and collapsed that class to `oneshot_failed`, so the current evidence localizes only to the one-shot container/interpreter/helper startup boundary.
+No live run is authorized.
 
 Production runtime/ref remains:
 
@@ -28,53 +26,59 @@ Long-running Telegram AI remains false.
 
 ## Authorized work
 
-Code/test-only corrective work. Do not execute any production or provider operation.
+Code/test-only corrective change in the self-authored E2E remote/bootstrap path.
 
-Harden `ops/production/telegram_self_authored_e2e_remote.py` so a future separately-authorized one-shot can deterministically distinguish:
+Make startup-stage evidence explicitly distinct from a terminal harness outcome.
 
-1. one-shot container/Python bootstrap started;
-2. helper source compiled;
-3. helper module imported;
-4. helper `main(["--live"])` was entered and its existing sanitized protocol took over.
+The parent remote wrapper must not treat `SELF_E2E_STARTUP=...` as a terminal harness result.
 
-The bootstrap that establishes stages 1–3 must use Python standard library only and must not import `app` before the explicit helper-import stage.
+A terminal harness result is only an explicit sanitized acceptance outcome, for example:
 
-## Required protocol
+- successful acceptance report containing `SELF_AUTHORED=PASS`;
+- `SELF_E2E_BLOCKED=...`;
+- `SELF_E2E_FAILED=...`;
+- the bootstrap-owned fixed `SELF_E2E_REMOTE_BLOCKED=compile_failed` or `import_failed`.
 
-Preserve all existing `SELF_E2E_REMOTE_BLOCKED=...`, `SELF_E2E_BLOCKED=...`, `SELF_E2E_FAILED=...`, and success-report semantics.
+If the helper is imported and `main(["--live"])` then raises, returns nonzero, or returns zero without producing an appropriate terminal harness outcome, fail closed with a fixed sanitized remote-blocked code that clearly identifies the post-import harness/protocol stage. Do not expose exception text, stderr, traceback, environment, Telegram content, provider responses, or credentials.
 
-Add deterministic sanitized startup evidence sufficient to separate at least:
+You may add one fixed stage marker immediately before invoking `main(["--live"])` if useful, but it must not itself count as terminal protocol evidence.
 
-- container/interpreter did not start;
-- helper compile failure;
-- helper import failure;
-- helper imported and normal harness protocol ran.
+Preserve:
 
-Do not forward raw child stderr, exception messages, tracebacks, environment values, Telegram content, credentials, paths containing secrets, or provider responses.
+- existing compile/import stage behavior;
+- child stdout once a legitimate terminal harness protocol is present;
+- exact child exit code for legitimate blocked/failed harness results;
+- all checkout/ref/origin/host-key/long-running-AI guards;
+- no global `TELEGRAM_MTPROTO_AI_ENABLED=true`.
 
-An exception class may be used only if the tests prove the emitted value is a fixed allowlisted/sanitized token. Prefer fixed stage codes.
+## Required tests
 
-A future Docker-level failure before bootstrap may still map to a remote blocked marker, but must be distinguishable from helper compile/import failures.
+Add focused tests proving at least:
 
-## Tests
+1. startup-only stdout never counts as a terminal harness result;
+2. imported helper whose `main` raises produces a fixed sanitized post-import/protocol blocker and no traceback/error text;
+3. imported helper whose `main` returns nonzero without `SELF_E2E_BLOCKED/FAILED` is fail-closed;
+4. imported helper whose `main` returns zero without `SELF_AUTHORED=PASS` is fail-closed;
+5. legitimate `SELF_E2E_BLOCKED=...` remains propagated with its exit code;
+6. legitimate `SELF_E2E_FAILED=...` remains propagated with its exit code;
+7. a complete success report containing `SELF_AUTHORED=PASS` remains propagated with exit 0;
+8. compile/import failures remain distinguishable and sanitized;
+9. no raw child stderr or traceback is surfaced.
 
-Add focused tests that execute the generated bootstrap/protocol locally with stub helper sources and prove:
-
-- bootstrap-start marker appears before helper loading;
-- syntax/compile failure maps to the compile stage and never enters helper main;
-- import-time failure maps to the import stage and never enters helper main;
-- successful import enters helper main exactly once;
-- helper exit code/stdout are propagated unchanged once normal harness protocol owns execution;
-- raw stderr/traceback text is never surfaced;
-- existing local checkout/ref/host-key/long-running-AI guards remain unchanged;
-- no test requires production SSH, Docker, Telegram, OpenAI, or a production DB.
-
-Run the focused test suite, `py_compile`, Ruff check/format, and `git diff --check`.
+Run focused tests, `py_compile`, Ruff check/format, and `git diff --check`.
 
 ## Hard stop
 
-This task authorizes no production SSH, no `docker compose run` against production, no live E2E, no provider call, no Telegram transport/session access, no DB write, no deploy/restart/recreate, no production env change, and no ref movement.
+No production SSH.
+No production Docker.
+No live E2E.
+No provider calls.
+No Telegram transport/session access.
+No production DB writes.
+No deploy/restart/recreate.
+No production env changes.
+No production ref movement.
 
-When code/tests are complete, commit and push the corrective change, record the factual result in `PROJECT_STATE.md`, report the commit SHA and checks, then STOP.
+When complete, update `PROJECT_STATE.md` factually, commit and push, report SHA/checks, then STOP.
 
-Do not request or perform another live run. A replacement live authorization can only be issued after Architect review.
+A replacement live E2E may only be authorized by the human after Architect acceptance of this correction.
