@@ -1,168 +1,152 @@
-# Current task — Telegram Bot API M4BJ1: build fail-closed Stage B retirement harness
+# Current task — Telegram Bot API M4BJ1R: harden Stage B retirement harness
 
 ## Status
 
-M4BI1 Stage A backend production deploy is COMPLETE / PASS.
+M4BJ1 implementation commit:
+`31703dcef0f93443abe67d408fed26cd8430debe`
 
-Current production runtime/ref:
+Architect review: NOT YET ACCEPTED FOR LIVE STAGE B.
+
+Current production runtime/ref remains:
 `fe151f12f64886505253e765b82458710a949e34`
 
 Alembic:
 `0046`
 
-Stage A live behavior:
-- legacy `POST /telegram/link` is retired;
-- legacy Bot webhook ingress is retired;
-- Bot-derived send/reply is retired;
-- MTProto remains the live Telegram transport;
-- historical Bot-derived objects/tables remain preserved.
+No Stage B production action has occurred.
 
-Human product direction remains:
-- no cross-transport deduplication;
-- Bot API will be retired and later destroyed;
-- historical Bot-derived objects are retained.
+## Accepted parts
 
-## Goal
+The current harness already has the correct high-level retirement order:
+1. production preflight;
+2. one `deleteWebhook(drop_pending_updates=true)`;
+3. one `getWebhookInfo` read-back;
+4. clear only the four Bot env values;
+5. recreate only API + worker;
+6. verify DB/volume/non-Bot env/MTProto/AI/health/Alembic.
 
-Build and locally verify a dedicated, fail-closed production harness for Stage B retirement.
+Secret output handling, atomic four-key mutation, and DB exclusion are directionally accepted.
 
-This task is CODE/TEST ONLY.
+## Required corrections
 
-Do NOT execute the harness against production in this task.
+### 1. Fresh authoritative production ref before any provider mutation
 
-## Intended future Stage B live behavior
+The remote helper currently checks its local `origin/production` tracking ref without first fetching.
 
-A later separately-authorized one-shot run must:
+Before any Bot API call, it must:
+- run a bounded `git fetch --prune origin` (or explicit `production` fetch);
+- require fetched `origin/production` exact
+  `fe151f12f64886505253e765b82458710a949e34`;
+- require current HEAD exact same release;
+- fail closed before provider work on any mismatch/fetch failure.
 
-1. verify exact production target/host pin/repository/ref/worktree/health/Alembic;
-2. verify current runtime is exact `fe151f12f64886505253e765b82458710a949e34`;
-3. verify DB/API/worker preflight and preserve DB container + volume;
-4. verify Bot credentials are currently available without printing values;
-5. verify MTProto credentials/capability state before mutation without printing values;
-6. call Telegram Bot API `deleteWebhook` exactly once with pending Bot updates dropped;
-7. verify webhook deletion through a bounded read-back such as `getWebhookInfo`, emitting only sanitized booleans/count-free facts;
-8. clear only these four production Bot settings:
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_BOT_USERNAME`
-   - `TELEGRAM_WEBHOOK_SECRET`
-   - `TELEGRAM_WEBHOOK_URL`
-9. recreate only API + worker so retired Bot secrets are removed from running container environments;
-10. prove DB container unchanged;
-11. prove DB volume unchanged;
-12. prove no non-Bot `.env` setting changed;
-13. prove the four Bot settings resolve empty in API + worker;
-14. prove `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` remain present/equal for API + worker;
-15. prove `SECRETARY_CREDENTIAL_KEY` and DB credential invariants remain intact without printing values;
-16. prove `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-17. prove health PASS and Alembic exact `0046`.
+The local wrapper should also fetch both `main` and `production` and require local `origin/production` exact release before SSH.
 
-This harness does NOT delete the Telegram bot account itself. Final BotFather/account destruction is a later human step after Stage B is production-accepted.
+### 2. target.json is the only production identity source
 
-## Required implementation shape
+Remove duplicated concrete SSH target / port / host-key literals from
+`retire_telegram_bot.sh`.
 
-Prefer the established production harness pattern:
+Use the committed `ops/production/target.json` as the single source, following the established `deploy.py` contract:
+- validate required fields;
+- validate canonical repository path/origin/health/compose files;
+- validate port and fingerprint format;
+- obtain ssh target/port/pin only from that file.
 
-- local entrypoint under `ops/production/`, e.g. `retire_telegram_bot.py`;
-- streamed remote helper under `ops/production/`;
-- committed `target.json` only;
-- canonical origin/path checks;
-- strict pinned SSH host-key verification;
-- no direct ad-hoc SSH;
-- no secret values in argv, stdout, stderr, logs, temp files, Git, or test snapshots.
+Do not add a second hard-coded copy of the current endpoint or fingerprint in the wrapper or tests.
 
-The provider call must not put the Bot token in a shell/process command line. Use an in-process HTTP client/stdlib mechanism or equivalent that keeps the token out of argv and sanitizes all failures.
+Prefer factoring a small testable Python target loader if that keeps the shell wrapper simple.
 
-## Environment mutation contract
+### 3. Real destructive-ordering regression coverage
 
-Do not delete or rewrite arbitrary `.env` content.
+Add tests that exercise the `remote_main` control flow with all external effects mocked.
 
-The helper must:
-- require exactly one assignment for each of the four Bot keys before mutation;
-- atomically clear their values while preserving all other file content/settings;
-- preserve file permissions;
-- compare a redacted/neutralized before-vs-after representation to prove only those four values changed;
-- never print old/new secret values, hashes, prefixes, line contents, or the full environment.
+At minimum prove:
 
-If any target key is duplicated, malformed, or cannot be changed deterministically: fail closed before environment mutation.
+A. `deleteWebhook` failure:
+- provider delete attempted exactly once;
+- no read-back;
+- no env mutation;
+- no service recreation;
+- sanitized failure stage;
+- network call count = 1.
 
-## Provider ordering / failure boundary
+B. webhook read-back failure after successful delete:
+- delete exactly once;
+- read-back exactly once;
+- no env mutation;
+- no service recreation;
+- sanitized failure stage;
+- network call count = 2.
 
-Required order:
-1. all production preflight;
-2. Bot `deleteWebhook`;
-3. sanitized webhook-deleted verification;
-4. only then clear Bot env values;
-5. recreate API + worker;
-6. postflight verification.
+C. full provider success:
+- delete occurs before read-back;
+- read-back occurs before env mutation;
+- env mutation occurs before API/worker recreation;
+- recreation command contains only `api worker`, never `db`;
+- no extra provider call/retry;
+- terminal success has network call count = 2.
 
-If provider deletion fails:
-- do not change `.env`;
-- do not recreate services;
-- report sanitized blocker.
+D. fresh production-ref fetch failure/mismatch:
+- zero provider calls;
+- zero env mutation;
+- zero service recreation.
 
-After webhook deletion succeeds, do not attempt to re-enable/reconfigure the webhook automatically on later failure. Report the exact sanitized stage and preserve the already-retired direction.
+Tests must not depend on live DB, Docker, SSH, or provider access.
 
-Do not automatically restore Bot secrets after they have been deliberately cleared.
+### 4. Preserve existing safety
 
-## Tests
+Do not weaken:
+- exact release `fe151f12f64886505253e765b82458710a949e34`;
+- Alembic `0046`;
+- four-key-only atomic env clearing;
+- permissions preservation;
+- neutralized non-Bot env equality proof;
+- Bot token absent from subprocess argv/output;
+- max two provider calls;
+- no automatic webhook restore;
+- no automatic Bot-secret restore after deliberate clear;
+- DB container/volume invariants;
+- MTProto credential preservation;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- sanitized output protocol.
 
-Add focused tests covering at minimum:
-- canonical checkout/target/ref/release validation;
-- exact four-key env mutation;
-- duplicate/missing target env key fail-closed;
-- non-Bot env bytes/content preserved by neutralized comparison;
-- Bot token never appears in subprocess argv or emitted output;
-- mocked `deleteWebhook` success/failure;
-- mocked webhook read-back confirms empty URL;
-- provider failure causes zero env/service mutation;
-- env mutation occurs only after provider success;
-- only API+worker recreate is issued; never DB;
-- MTProto credentials and AI=false postflight checks;
-- sanitized failure protocol;
-- no second provider call/retry loop beyond the bounded delete + verification sequence.
+## Validation
 
 Run:
-- focused harness tests;
-- Python compile for local + remote helpers;
+- focused retirement harness tests;
+- local helper compile;
+- bundled remote helper compile;
+- Bash syntax;
 - Ruff;
 - `git diff --check`.
-
-## Scope discipline
-
-Do NOT in this task:
-- call Telegram Bot API;
-- SSH to production;
-- change production `.env`;
-- delete webhook;
-- recreate production services;
-- deploy/rollback/move refs;
-- delete Bot-only source files;
-- remove Bot config fields from Compose/Settings;
-- delete legacy DB tables/migrations/objects;
-- change MTProto behavior;
-- enable MTProto AI;
-- delete the bot account through BotFather.
 
 ## Authorization
 
 AUTHORIZED:
-- local code/tests for the Stage B retirement harness;
+- local code/tests only for the M4BJ1 retirement harness;
 - update `PROJECT_STATE.md`;
-- commit and push to canonical `main`.
+- commit and push canonical `main`.
 
 NOT AUTHORIZED:
-- any live Stage B action.
+- production SSH;
+- Bot API/provider calls;
+- webhook deletion;
+- production env mutation;
+- production service recreation;
+- deploy/rollback/ref changes;
+- deleting the bot account;
+- Stage C cleanup;
+- MTProto changes or AI enablement.
 
 ## Required report
 
 Return:
-- commit SHA;
+- corrective commit SHA;
 - files changed;
-- exact harness protocol/stages;
-- secret-safety mechanism;
-- env mutation proof mechanism;
-- provider-call bounds;
-- service recreation scope;
+- exact fresh-ref correction;
+- target.json single-source correction;
+- destructive-ordering regression results;
 - focused tests/compile/Ruff/diff-check results;
 - production SSH=0;
 - Bot API/provider calls=0;
@@ -170,7 +154,7 @@ Return:
 
 Final marker:
 
-`TELEGRAM_BOT_M4BJ1_RETIREMENT_HARNESS_READY`
+`TELEGRAM_BOT_M4BJ1R_RETIREMENT_HARNESS_FIXED`
 
 Then STOP.
 
