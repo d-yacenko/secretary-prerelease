@@ -1,68 +1,56 @@
-# Current task — Telegram Bot API M4BZ1: execute final one-shot live read-only Stage C acceptance
+# Current task — no active Telegram Bot production task
 
 ## Status
 
-Human explicitly authorized the final live read-only Stage C acceptance.
+Telegram Bot API retirement is COMPLETE / PRODUCTION ACCEPTED through Stage C.
 
-Accepted verifier redesign:
-`02c6240bb17e7d6a353db907b49cf32e2caf5eaf`
-
-Current production runtime/ref:
+Final accepted production runtime/ref:
 `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`
 
-Expected Alembic:
+Alembic:
 `0046`
+
+Final live read-only acceptance proved:
+- exact production HEAD/ref and clean worktree;
+- DB/API/worker running and DB healthy;
+- application health PASS;
+- retired Bot runtime env absent;
+- MTProto/protected credentials preserved;
+- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- retired Bot routes absent;
+- required MTProto route present;
+- active Settings contains no retired Bot fields;
+- exactly one MTProto account;
+- active scope count 28;
+- 431 preserved legacy non-MTProto Telegram chat objects;
+- at least one preserved legacy Bot-derived object remains Inbox-readable;
+- Telegram/provider calls = 0;
+- DB writes = 0;
+- env writes = 0;
+- service recreations = 0;
+- terminal success.
+
+External/runtime retirement state:
+- Bot account destroyed;
+- webhook deleted;
+- Bot credentials cleared;
+- Bot runtime/code/config surfaces retired;
+- historical Bot-derived objects and legacy Bot schema intentionally retained;
+- MTProto is the sole live Telegram transport.
 
 ## Authorization
 
-Authorize exactly ONE execution of:
+NO NEW IMPLEMENTATION OR PRODUCTION ACTION IS AUTHORIZED BY THIS FILE.
 
-`bash ops/production/verify_telegram_bot_stage_c.sh`
+Do not:
+- deploy;
+- mutate production;
+- clean up legacy schema/data;
+- alter MTProto;
+- enable Telegram MTProto AI;
+- perform provider calls;
+- move refs.
 
-## Expected success evidence
+Await the next architect task.
 
-A successful run must include:
-- all Stage 0/1 PASS markers;
-- `LEGACY_BOT_ROUTES_ABSENT_PASS=true`;
-- `MTPROTO_ROUTE_PRESENT_PASS=true`;
-- `BOT_SETTINGS_MODEL_ABSENT_PASS=true`;
-- `MTPROTO_ACCOUNT_COUNT=1`;
-- `ACTIVE_SCOPE_COUNT=28`;
-- `LEGACY_BOT_OBJECT_COUNT` >= 1;
-- `LEGACY_BOT_INBOX_READABLE=true`;
-- `TELEGRAM_NETWORK_CALLS=0`;
-- `DB_WRITES=0`;
-- `ENV_WRITES=0`;
-- `SERVICE_RECREATIONS=0`;
-- `M4BR1_TERMINAL=success`;
-- `M4BR1_END=true`.
-
-## Read-only guarantees
-
-No:
-- Telegram/provider calls;
-- DB writes;
-- env writes;
-- service restarts/recreates;
-- deploy/rollback/ref movement;
-- schema/data cleanup;
-- MTProto behavior/config changes;
-- AI enablement.
-
-## Failure handling
-
-If verifier fails or blocks:
-- do not retry;
-- do not bypass;
-- do not use direct SSH;
-- do not restart/recreate services;
-- do not modify DB/env;
-- return complete sanitized stdout and STOP.
-
-## Required report
-
-Return the complete sanitized stdout exactly as produced.
-
-Then STOP.
-
-`CURRENT_TASK.md` is the source of active authorization.
+`CURRENT_TASK.md` remains the source of active authorization.
