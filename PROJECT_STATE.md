@@ -267,3 +267,6 @@
 
 
 - Telegram Bot API M4BO1 Bot account destruction: EXPLICITLY HUMAN AUTHORIZED. Stage B runtime retirement is already COMPLETE / PRODUCTION ACCEPTED; this authorization is limited to deleting the retired Telegram bot itself through the human-controlled @BotFather flow. No Secretary production/env/DB/deploy/MTProto action is authorized. Historical Bot-derived objects and legacy schema remain preserved. Telegram's current official BotFather documentation states that `/deletebot` deletes the selected bot and frees its username and cannot be undone.
+
+
+- Telegram Bot API M4BO1 human BotFather destruction: COMPLETE. Human reported `TELEGRAM_BOT_ACCOUNT_DELETED` after the explicitly authorized BotFather deletion flow. Combined with accepted Stage B, the legacy Telegram Bot API integration is now fully retired externally and at runtime: webhook deleted, Bot runtime credentials cleared, application ingress/link/send paths retired, and the bot account itself destroyed. MTProto remains the sole live Telegram transport. Historical Bot-derived canonical objects and legacy Bot schema remain preserved pending separate retention/destructive-schema decisions.
