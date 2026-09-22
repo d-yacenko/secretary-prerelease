@@ -14,7 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TARGET_FILE = HERE / "target.json"
 CANONICAL_ORIGIN = "https://github.com/d-yacenko/secretary-prerelease.git"
-RELEASE = "bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4"
+RELEASE = "bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b"
 ALEMBIC = "0046"
 BOT_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_USERNAME", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_WEBHOOK_URL")
 MT_KEYS = ("TELEGRAM_API_ID", "TELEGRAM_API_HASH")
@@ -63,11 +63,13 @@ def _run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
-def authoritative_branch(branch: str) -> str:
-    """Return the exact SHA for one remote branch without touching tracking refs."""
-    if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or branch.startswith("/"):
+def authoritative_branch(branch: str, origin_url: str) -> str:
+    """Return one exact branch SHA from the canonical URL without mutating refs."""
+    if origin_url != CANONICAL_ORIGIN:
+        raise ValueError("invalid origin")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or branch.startswith("/") or ".." in branch:
         raise ValueError("invalid branch")
-    output = _run(["git", "ls-remote", "origin", f"refs/heads/{branch}"])
+    output = _run(["git", "ls-remote", origin_url, f"refs/heads/{branch}"])
     lines = output.splitlines()
     if len(lines) != 1:
         raise ValueError("unexpected ls-remote output")
@@ -216,7 +218,8 @@ def _child(compose: list[str]) -> dict[str, str]:
 def remote_main() -> int:
     try:
         emit("M4BR1_BEGIN", "true")
-        if _run(["git", "remote", "get-url", "origin"]) != CANONICAL_ORIGIN:
+        origin = _run(["git", "remote", "get-url", "origin"])
+        if origin != CANONICAL_ORIGIN:
             raise VerifyError("STAGE_0_CANONICAL_REPO", ValueError())
         try:
             if _run(["git", "rev-parse", "HEAD"]) != RELEASE:
@@ -225,7 +228,7 @@ def remote_main() -> int:
             raise VerifyError("STAGE_0_REMOTE_HEAD", exc) from exc
         emit("REMOTE_HEAD_PASS", "true")
         try:
-            if authoritative_branch("production") != RELEASE:
+            if authoritative_branch("production", origin) != RELEASE:
                 raise ValueError("production ref")
         except Exception as exc:
             raise VerifyError("STAGE_0_PRODUCTION_REF", exc) from exc
@@ -361,16 +364,16 @@ def parse_output(text: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("command", choices=("bundle", "remote", "validate", "target", "release", "authoritative")); parser.add_argument("path", nargs="?")
+    parser = argparse.ArgumentParser(); parser.add_argument("command", choices=("bundle", "remote", "validate", "target", "release", "authoritative")); parser.add_argument("path", nargs="?"); parser.add_argument("origin", nargs="?")
     args = parser.parse_args()
     if args.command == "bundle": print(Path(__file__).read_text(encoding="utf-8"), end=""); return 0
     if args.command == "remote": return remote_main()
     if args.command == "release": print(RELEASE); return 0
     if args.command == "authoritative":
         try:
-            print(authoritative_branch(args.path or ""))
+            print(authoritative_branch(args.path or "", args.origin or ""))
             return 0
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             return 2
     if args.command == "target":
         target = load_target(Path(args.path) if args.path else TARGET_FILE)
