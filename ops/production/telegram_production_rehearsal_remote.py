@@ -177,7 +177,12 @@ def build_remote_program(run_id: str, helper_source: str) -> str:
         raise RemoteBlocked("run_id")
     encoded = base64.b64encode(helper_source.encode("utf-8")).decode("ascii")
     command = oneshot_compose_command(run_id, "/tmp/telegram_production_rehearsal.py")
-    logic = inspect.getsource(_flag_enabled) + "\n" + inspect.getsource(assess_remote_state)
+    logic = (
+        f"TRUE_FLAGS = {tuple(sorted(TRUE_FLAGS))!r}\n"
+        + inspect.getsource(_flag_enabled)
+        + "\n"
+        + inspect.getsource(assess_remote_state)
+    )
     return f"""import base64
 import subprocess
 import sys
@@ -220,26 +225,32 @@ def service_flag(service):
     return proc.stdout.strip()
 
 
-head = git("rev-parse", "HEAD")
-porcelain = git("status", "--porcelain")
-origin = git("remote", "get-url", "origin")
-if origin != CANONICAL_ORIGIN:
-    sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=origin\\n")
-    raise SystemExit(2)
-if head != RELEASE or porcelain.strip():
-    reason = assess_remote_state(head, porcelain, "false", "false", RELEASE)
-    sys.stdout.write(f"REHEARSAL_REMOTE_BLOCKED={{reason or 'production_ref'}}\\n")
-    raise SystemExit(2)
-reason = assess_remote_state(head, porcelain, service_flag("api"), service_flag("worker"), RELEASE)
-if reason:
-    sys.stdout.write(f"REHEARSAL_REMOTE_BLOCKED={{reason}}\\n")
-    raise SystemExit(2)
-Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
-proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
-sys.stdout.write(proc.stdout)
-if proc.returncode != 0 and not proc.stdout.strip():
-    sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=oneshot_failed\\n")
-raise SystemExit(proc.returncode)
+try:
+    head = git("rev-parse", "HEAD")
+    porcelain = git("status", "--porcelain")
+    origin = git("remote", "get-url", "origin")
+    if origin != CANONICAL_ORIGIN:
+        sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=origin\\n")
+        raise SystemExit(2)
+    if head != RELEASE or porcelain.strip():
+        reason = assess_remote_state(head, porcelain, "false", "false", RELEASE)
+        sys.stdout.write(f"REHEARSAL_REMOTE_BLOCKED={{reason or 'production_ref'}}\\n")
+        raise SystemExit(2)
+    reason = assess_remote_state(head, porcelain, service_flag("api"), service_flag("worker"), RELEASE)
+    if reason:
+        sys.stdout.write(f"REHEARSAL_REMOTE_BLOCKED={{reason}}\\n")
+        raise SystemExit(2)
+    Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
+    proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
+    sys.stdout.write(proc.stdout)
+    if proc.returncode != 0 and not proc.stdout.strip():
+        sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=oneshot_failed\\n")
+    raise SystemExit(proc.returncode)
+except SystemExit:
+    raise
+except Exception:
+    sys.stdout.write("REHEARSAL_REMOTE_BLOCKED=remote_program\\n")
+    raise SystemExit(1)
 """
 
 

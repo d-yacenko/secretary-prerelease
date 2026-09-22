@@ -2,6 +2,7 @@
 
 import base64
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -124,3 +125,95 @@ def test_wrapper_streams_helper_into_isolated_oneshot() -> None:
     encoded = program.split("HELPER_B64 = ", 1)[1].split("\n", 1)[0].strip().strip("'")
     assert "One-shot Telegram synthetic ML rehearsal" in base64.b64decode(encoded).decode("utf-8")
     assert "/opt/secretary/telegram_production_rehearsal.py" not in program
+
+
+_FAKE_SUBPROCESS = """
+import subprocess
+import sys
+from pathlib import Path
+
+RELEASE = sys.argv[2]
+ORIGIN = sys.argv[3]
+FAIL = sys.argv[4] == "1"
+
+
+class Proc:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def fake_run(cmd, **_kwargs):
+    if FAIL:
+        raise RuntimeError("sk-secret NameError TRUE_FLAGS")
+    if cmd and cmd[0] == "git":
+        answers = {
+            ("rev-parse", "HEAD"): RELEASE,
+            ("status", "--porcelain"): "",
+            ("remote", "get-url", "origin"): ORIGIN,
+        }
+        return Proc(0, answers[tuple(cmd[1:])] + "\\n")
+    if "exec" in cmd:
+        return Proc(0, "false\\n")
+    if "run" in cmd:
+        return Proc(0, "INBOX_ELIGIBLE=PASS\\n")
+    raise AssertionError(cmd)
+
+
+subprocess.run = fake_run
+program = Path(sys.argv[1]).read_text(encoding="utf-8")
+try:
+    exec(compile(program, "remote_program.py", "exec"), {"__name__": "__main__"})
+except SystemExit as exc:
+    raise SystemExit(0 if exc.code is None else exc.code)
+"""
+
+
+def _run_generated(program: str, *, fail: bool) -> subprocess.CompletedProcess[str]:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        script = root / "remote.py"
+        runner = root / "runner.py"
+        script.write_text(program, encoding="utf-8")
+        runner.write_text(_FAKE_SUBPROCESS, encoding="utf-8")
+        return subprocess.run(
+            [
+                sys.executable,
+                str(runner),
+                str(script),
+                wrapper.PRODUCTION_RELEASE,
+                wrapper.CANONICAL_ORIGIN,
+                "1" if fail else "0",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+
+def test_generated_remote_program_reaches_oneshot_without_nameerror() -> None:
+    written = Path("/tmp/telegram_production_rehearsal.py")
+    program = wrapper.build_remote_program("tgprod0922a", "synthetic-helper\n")
+    try:
+        result = _run_generated(program, fail=False)
+        body = written.read_text(encoding="utf-8")
+    finally:
+        written.unlink(missing_ok=True)
+    assert result.returncode == 0
+    assert result.stdout == "INBOX_ELIGIBLE=PASS\n"
+    assert body == "synthetic-helper\n"
+    assert "NameError" not in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_generated_remote_program_sanitizes_unexpected_exception() -> None:
+    program = wrapper.build_remote_program("tgprod0922a", "synthetic-helper\n")
+    result = _run_generated(program, fail=True)
+    assert result.returncode == 1
+    assert result.stdout == "REHEARSAL_REMOTE_BLOCKED=remote_program\n"
+    assert "sk-secret" not in result.stdout
+    assert "Traceback" not in result.stdout
+    assert "NameError" not in result.stdout
