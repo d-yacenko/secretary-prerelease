@@ -154,3 +154,152 @@ def test_recreate_scope_never_contains_db_and_bundle_is_local_only():
 def test_compile_and_wrapper_syntax():
     subprocess.run(["python3", "-m", "py_compile", str(harness.__file__)], check=True)
     subprocess.run(["bash", "-n", str(Path(harness.__file__).with_suffix(".sh"))], check=True)
+
+
+def test_target_loader_is_single_identity_source():
+    target = harness.load_target()
+    assert target["origin_url"] == harness.CANONICAL_ORIGIN
+    wrapper = Path(harness.__file__).with_suffix(".sh").read_text(encoding="utf-8")
+    assert "web-itx.duckdns.org" not in wrapper
+    assert "SHA256:VSSBeGqYXy8GGruKZhPJ2WZu8dP38i5ldE6FH+etoRs" not in wrapper
+    assert '"$HELPER" target' in wrapper
+    assert "https://github.com/d-yacenko/secretary-prerelease.git" not in wrapper
+    assert "origin main production" in wrapper
+
+
+def _remote_main_context(monkeypatch, tmp_path: Path):
+    path = tmp_path / ".env"
+    path.write_text(env_text(), encoding="utf-8")
+    events: list[str] = []
+    values = harness._env_assignments(env_text())
+
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["git", "remote", "get-url"]:
+            return harness.CANONICAL_ORIGIN
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return harness.RELEASE
+        if command[:3] == ["git", "rev-parse", "origin/production"]:
+            return harness.RELEASE
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return ""
+        if command[:3] == ["git", "fetch", "--prune"]:
+            events.append("fetch")
+            return ""
+        if command[-3:] == ["ps", "-q", "db"]:
+            return "db-container"
+        if command[-3:] == ["ps", "-q", "api"]:
+            return "api-container"
+        if command[-3:] == ["ps", "-q", "worker"]:
+            return "worker-container"
+        if command[:2] == ["docker", "inspect"]:
+            return "db-volume"
+        if "--force-recreate" in command:
+            events.append("recreate")
+            assert command[-2:] == ["api", "worker"]
+            return ""
+        return ""
+
+    monkeypatch.setattr(harness, "_run", fake_run)
+    monkeypatch.setattr(
+        harness,
+        "_remote_env_and_snapshot",
+        lambda: (path, values, env_text(), "db-container", "db-volume"),
+    )
+    monkeypatch.setattr(harness, "_require_alembic", lambda *_args: None)
+
+    def config(_compose):
+        post = harness._env_assignments(path.read_text(encoding="utf-8"))
+        service = {key: post.get(key, "") for key in (*harness.BOT_KEYS, *harness.MT_PROTO_KEYS, *harness.INVARIANT_KEYS, "TELEGRAM_MTPROTO_AI_ENABLED")}
+        return {"services": {"api": {"environment": service}, "worker": {"environment": service}, "db": {}}}
+
+    monkeypatch.setattr(harness, "_compose_config", config)
+    return path, events
+
+
+def test_remote_delete_failure_stops_before_readback_env_and_recreate(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: (calls.append("delete"), (_ for _ in ()).throw(RuntimeError("provider")))[1])
+    monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: calls.append("readback"))
+    monkeypatch.setattr(harness, "clear_bot_environment", lambda _path: calls.append("env"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_3_DELETE_WEBHOOK" in output
+    assert "TELEGRAM_NETWORK_CALLS=1" in output
+    assert calls == ["delete"]
+
+
+def test_remote_readback_failure_stops_before_env_and_recreate(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: (calls.append("readback"), (_ for _ in ()).throw(RuntimeError("provider")))[1])
+    monkeypatch.setattr(harness, "clear_bot_environment", lambda _path: calls.append("env"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_3_VERIFY_WEBHOOK" in output
+    assert "TELEGRAM_NETWORK_CALLS=2" in output
+    assert calls == ["delete", "readback"]
+
+
+def test_remote_success_proves_destructive_order_and_two_provider_calls(monkeypatch, tmp_path, capsys):
+    path, events = _remote_main_context(monkeypatch, tmp_path)
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: events.append("delete"))
+    monkeypatch.setattr(harness, "verify_webhook_empty", lambda _token: events.append("readback"))
+    real_clear = harness.clear_bot_environment
+
+    def clear(path_arg):
+        events.append("env")
+        return real_clear(path_arg)
+
+    monkeypatch.setattr(harness, "clear_bot_environment", clear)
+    assert harness.remote_main() == 0
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "success"
+    assert "TELEGRAM_NETWORK_CALLS=2" in output
+    assert events[-4:] == ["delete", "readback", "env", "recreate"]
+    assert "db" not in events
+    assert path.read_text(encoding="utf-8").count("TELEGRAM_BOT_TOKEN=\n") == 1
+
+
+def test_remote_production_ref_fetch_failure_is_before_provider(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    calls: list[str] = []
+    original_run = harness._run
+
+    def fail_fetch(command, **kwargs):
+        if command[:3] == ["git", "fetch", "--prune"]:
+            raise RuntimeError("fetch failed")
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(harness, "_run", fail_fetch)
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    monkeypatch.setattr(harness, "clear_bot_environment", lambda _path: calls.append("env"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_0_PRODUCTION_REF_FETCH" in output
+    assert "TELEGRAM_NETWORK_CALLS=0" in output
+    assert calls == []
+
+
+def test_remote_production_ref_mismatch_is_before_provider(monkeypatch, tmp_path, capsys):
+    _remote_main_context(monkeypatch, tmp_path)
+    calls: list[str] = []
+    original_run = harness._run
+
+    def mismatched_ref(command, **kwargs):
+        if command[:3] == ["git", "rev-parse", "origin/production"]:
+            return "0" * 40
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(harness, "_run", mismatched_ref)
+    monkeypatch.setattr(harness, "delete_webhook_once", lambda _token: calls.append("delete"))
+    assert harness.remote_main() == 2
+    output = capsys.readouterr().out
+    assert harness.parse_output(output) == "failure"
+    assert "STAGE_0_PRODUCTION_REF" in output
+    assert "TELEGRAM_NETWORK_CALLS=0" in output
+    assert calls == []

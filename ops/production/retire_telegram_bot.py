@@ -35,6 +35,15 @@ BOT_KEYS = (
 MT_PROTO_KEYS = ("TELEGRAM_API_ID", "TELEGRAM_API_HASH")
 INVARIANT_KEYS = ("SECRETARY_CREDENTIAL_KEY", "POSTGRES_PASSWORD")
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+REQUIRED_TARGET_KEYS = {
+    "ssh_target",
+    "ssh_port",
+    "host_key_sha256",
+    "repository_path",
+    "origin_url",
+    "health_url",
+    "compose_files",
+}
 
 SUCCESS_FIELDS = (
     "M4BJ1_BEGIN",
@@ -80,6 +89,28 @@ class HarnessError(RuntimeError):
 
 def _safe_class(exc: BaseException) -> str:
     return type(exc).__name__[:80] or "RuntimeError"
+
+
+def load_target(path: Path = TARGET_FILE) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    missing = REQUIRED_TARGET_KEYS - data.keys()
+    if missing:
+        raise ValueError("target.json is missing required fields")
+    if not str(data["ssh_target"]).strip():
+        raise ValueError("target SSH identity is empty")
+    if not isinstance(data["ssh_port"], int) or not 1 <= data["ssh_port"] <= 65535:
+        raise ValueError("target SSH port is invalid")
+    if not FINGERPRINT_RE.fullmatch(str(data["host_key_sha256"])):
+        raise ValueError("target host-key pin is invalid")
+    if data["repository_path"] != "/opt/secretary":
+        raise ValueError("target repository path is invalid")
+    if data["origin_url"] != CANONICAL_ORIGIN:
+        raise ValueError("target origin is invalid")
+    if data["health_url"] != "http://127.0.0.1:18080/health":
+        raise ValueError("target health URL is invalid")
+    if data["compose_files"] != ["infra/compose.yaml", "infra/compose.deploy.yaml"]:
+        raise ValueError("target Compose contract is invalid")
+    return data
 
 
 def neutralize_bot_env(text: str) -> str:
@@ -197,7 +228,7 @@ def _compose() -> list[str]:
         "docker",
         "compose",
         "--env-file",
-        "/opt/secretary/.env",
+        ".env",
         "-f",
         "infra/compose.yaml",
         "-f",
@@ -228,7 +259,7 @@ def _service_environment(config: dict, service: str) -> dict[str, str]:
 
 
 def _remote_env_and_snapshot() -> tuple[Path, dict[str, str], str, str, str]:
-    env_path = Path("/opt/secretary/.env")
+    env_path = Path(".env")
     raw = _read_preserving_newlines(env_path)
     values = _env_assignments(raw)
     compose = _compose()
@@ -266,6 +297,10 @@ def remote_main() -> int:
             raise HarnessError("STAGE_0_CANONICAL_REPO", ValueError("wrong origin"))
         emit("CANONICAL_REPO_PASS", "true")
         emit("TARGET_PIN_PASS", "true")
+        try:
+            _run(["git", "fetch", "--prune", "origin", "production"])
+        except Exception as exc:
+            raise HarnessError("STAGE_0_PRODUCTION_REF_FETCH", exc) from exc
         if _run(["git", "rev-parse", "HEAD"]) != RELEASE:
             raise HarnessError("STAGE_0_REMOTE_HEAD", ValueError("wrong release"))
         emit("REMOTE_HEAD_PASS", "true")
@@ -419,7 +454,7 @@ def parse_output(text: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("bundle", "remote", "validate"))
+    parser.add_argument("command", choices=("bundle", "remote", "validate", "target", "release"))
     parser.add_argument("path", nargs="?")
     args = parser.parse_args()
     if args.command == "bundle":
@@ -427,6 +462,14 @@ def main() -> int:
         return 0
     if args.command == "remote":
         return remote_main()
+    if args.command == "release":
+        print(RELEASE)
+        return 0
+    if args.command == "target":
+        target = load_target(Path(args.path) if args.path else TARGET_FILE)
+        for key in ("ssh_target", "ssh_port", "host_key_sha256", "repository_path", "origin_url"):
+            print(target[key])
+        return 0
     if not args.path:
         raise SystemExit("validate requires transcript path")
     try:
