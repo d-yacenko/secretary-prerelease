@@ -32,3 +32,14 @@
 - When MTProto AI is disabled, canonical MTProto objects must not be embedded, summarized/classified by AI, placed in LLM context, or surfaced through assistant semantic retrieval/tool paths.
 - A future `false -> true` transition must use a bounded idempotent catch-up on the existing Postgres queue to embed accumulated active MTProto objects without architectural redesign.
 - If Telegram ultimately rejects the private AI use case, the flag remains false and Android/Linux user-owned local surfaces may be researched separately.
+
+
+## Telegram ordinary Inbox vs attention notifications
+
+- Ordinary inbound Telegram MTProto message creation is an Inbox communication event, not an actionable attention notification.
+- Canonical `message_created` MTProto objects remain normal `chat_message` source objects and must surface through the ordinary Inbox/recent-source feed.
+- Do not create new unresolved `transport_event/message_created` Notifications for routine inbound MTProto messages.
+- Historical deterministic `message_created` Notification rows are retained for compatibility/audit; do not destructively delete or rewrite them merely to change presentation.
+- Inbox unresolved/attention presentation must exclude historical MTProto `transport_event/message_created` notifications so existing rows do not continue to clutter `Требует внимания`.
+- MTProto `message_edited` and `message_deleted` transport notifications remain unchanged unless separately revised.
+- This decision supersedes the earlier C2B/C3B requirement that `message_created` produce an unresolved transport notification; deterministic source-object materialization remains unchanged.
