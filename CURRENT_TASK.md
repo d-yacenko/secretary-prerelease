@@ -1,129 +1,96 @@
-# Current task — Telegram Bot API M4BM1: build read-only post-retirement verifier
+# Current task — Telegram Bot API M4BM1R: finalize post-retirement verifier fail-closed boundary
 
 ## Status
 
-M4BL1 second live Stage B retirement completed all irreversible retirement actions and failed only on the immediate final application health check.
+M4BM1 verifier implementation:
+`aaa09236c57c780403d3096d410416330532d9aa`
 
-Confirmed live effects:
-- exact production runtime/ref remained
-  `fe151f12f64886505253e765b82458710a949e34`;
-- Alembic preflight `0046`;
-- Bot webhook deleted;
-- webhook read-back confirmed empty;
-- exactly two Telegram network calls total;
-- four Bot env settings cleared;
-- API + worker recreated;
-- DB container unchanged;
-- DB volume unchanged;
-- non-Bot env unchanged;
-- Bot settings empty;
-- MTProto credentials preserved;
-- credential key preserved;
-- DB credential preserved;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`.
+Architect review: NOT YET ACCEPTED FOR LIVE VERIFICATION.
 
-Final result:
-`FAILURE_STAGE=STAGE_6_APP_HEALTH`
+Current production runtime/ref remains:
+`fe151f12f64886505253e765b82458710a949e34`
 
-Do NOT rerun the retirement harness and do NOT restore webhook/Bot secrets.
+No live verifier execution is authorized.
 
-## Goal
+## Accepted parts
 
-Build a production-compatible READ-ONLY post-retirement verifier that determines whether the final health failure was only startup timing and proves the final Stage B state without any provider call or mutation.
+The verifier is directionally correct and read-only:
+- no Telegram/Bot API calls;
+- no DB writes;
+- no env writes;
+- no service restart/recreate;
+- exact production ref/HEAD/worktree checks;
+- Bot settings checked empty in `.env`, Compose, and actual containers;
+- MTProto/protected credentials and AI=false checked;
+- health retries up to 30 attempts with 2-second spacing;
+- Alembic 0046 checked.
 
-This task is CODE/TEST ONLY. Do not run it against production in M4BM1.
+## Required corrections
 
-## Required verifier
+### 1. Strict failure-protocol whitelist
 
-Add a committed verifier under `ops/production/` following the established target/pin/SSH pattern.
+`parse_output()` must reject any unknown/unexpected line in failure transcripts.
 
-It must perform NO Telegram provider calls and NO production writes.
+The failure protocol must allow only:
+- the valid ordered prefix of already-emitted known PASS markers;
+- exactly one `FAILURE_STAGE=...`;
+- exactly one `RAW_EXCEPTION_CLASS=...`;
+- exactly:
+  - `TELEGRAM_NETWORK_CALLS=0`
+  - `DB_WRITES=0`
+  - `ENV_WRITES=0`
+  - `SERVICE_RECREATIONS=0`
+- final `M4BM1_TERMINAL=failure`.
 
-It must verify:
+Reject:
+- any unknown key such as `SECRET=...`;
+- duplicate keys;
+- malformed/out-of-order failure tail;
+- nonzero counters;
+- any text not matching the sanitized protocol.
 
-1. exact production target/host pin;
-2. canonical origin/path;
-3. fresh `origin/production` exact
-   `fe151f12f64886505253e765b82458710a949e34`;
-4. current HEAD exact same release;
-5. clean tracked worktree;
-6. DB/API/worker containers exist and are running;
-7. DB container health is healthy;
-8. DB container identity and DB volume are only inspected, never changed;
-9. the four Bot settings are empty in production `.env`;
-10. the four Bot settings are empty in resolved Compose env for API+worker;
-11. the four Bot settings are empty in the actual running API+worker container environments;
-12. `TELEGRAM_API_ID` is positive and `TELEGRAM_API_HASH` is nonempty;
-13. API and worker actual/resolved MTProto credentials match the `.env` snapshot;
-14. `SECRETARY_CREDENTIAL_KEY` and DB credential invariants are present/consistent without printing values;
-15. `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-16. application health with bounded retry equivalent to canonical deploy semantics: up to 30 attempts with 2-second spacing;
-17. Alembic exact `0046 (head)`;
-18. no provider/network call to Telegram;
-19. no DB write;
-20. no env write;
-21. no service recreation/restart.
+Add an explicit regression proving a transcript containing all required failure fields PLUS an extra unknown line is rejected before the wrapper can print it.
 
-## Protocol
+### 2. Explicit API/worker running-state proof
 
-Emit sanitized aggregate/status markers only. Include at minimum:
+After resolving API and worker container IDs, inspect each Docker container state and require `Status == running`.
 
-```
-M4BM1_BEGIN=true
-REMOTE_HEAD_PASS=true
-REMOTE_PRODUCTION_REF_PASS=true
-REMOTE_WORKTREE_CLEAN=true
-DB_RUNNING_PASS=true
-API_RUNNING_PASS=true
-WORKER_RUNNING_PASS=true
-DB_HEALTH_PASS=true
-BOT_ENV_EMPTY_PASS=true
-BOT_COMPOSE_ENV_EMPTY_PASS=true
-BOT_CONTAINER_ENV_EMPTY_PASS=true
-MTPROTO_CREDENTIALS_PRESERVED_PASS=true
-CREDENTIAL_KEY_PRESERVED_PASS=true
-DB_CREDENTIAL_PRESERVED_PASS=true
-TELEGRAM_MTPROTO_AI_DISABLED_PASS=true
-HEALTH_PASS=true
-ALEMBIC_0046_PASS=true
-TELEGRAM_NETWORK_CALLS=0
-DB_WRITES=0
-ENV_WRITES=0
-SERVICE_RECREATIONS=0
-M4BM1_TERMINAL=success
-M4BM1_END=true
-```
+Do not emit:
+- `API_RUNNING_PASS=true`
+- `WORKER_RUNNING_PASS=true`
 
-On failure emit a deterministic sanitized `FAILURE_STAGE`, exception class, zero mutation/provider counters, and terminal failure.
+based only on nonempty `compose ps -q`.
 
-## Health semantics
+Keep DB health logic unchanged.
 
-Reuse the canonical deploy health retry behavior:
-- up to 30 attempts;
-- 2 seconds between attempts;
-- no service restart/recreate during retry;
-- do not print HTTP body or raw errors.
+Add regressions for stopped API and stopped worker producing deterministic zero-mutation failure.
 
-The verifier is observational only.
+### 3. Noninteractive SSH
 
-## Required tests
+Add `-o BatchMode=yes` to the verifier shell wrapper, matching the established production harness contract.
 
-Add focused tests covering at minimum:
-- target/ref/HEAD/worktree fail-closed;
-- Bot env nonempty -> failure;
-- actual API/worker container Bot env nonempty -> failure;
-- missing/mismatched MTProto credentials -> failure;
-- AI flag true -> failure;
-- health succeeds after several mocked failures without any mutation;
-- health exhausts 30 attempts -> deterministic failure;
-- exact `alembic current` contract;
-- source/static assertion that no `deleteWebhook`, `getWebhookInfo`, provider URL, Compose `up`, restart, or env write path exists;
-- protocol parser accepts only sanitized bounded output.
+No other wrapper behavior needs to change unless required by tests.
+
+## Preserve
+
+Do not weaken:
+- `target.json` single-source identity;
+- fresh exact production-ref fetch/check;
+- read-only runtime behavior;
+- zero provider/write/recreate counters;
+- Bot env empty checks across file/Compose/actual containers;
+- MTProto/protected credential checks;
+- AI=false;
+- bounded health retries;
+- exact Alembic 0046 proof;
+- secret-free protocol.
+
+## Validation
 
 Run:
 - focused verifier tests;
 - Python compile;
-- bundled helper compile if applicable;
+- bundled helper compile;
 - Bash syntax;
 - Ruff;
 - `git diff --check`.
@@ -131,32 +98,31 @@ Run:
 ## Authorization
 
 AUTHORIZED:
-- local verifier/test code only;
+- local verifier/test changes only;
 - update `PROJECT_STATE.md`;
 - commit/push canonical `main`.
 
 NOT AUTHORIZED:
 - production SSH;
-- live verifier execution;
+- live verifier;
 - Telegram/Bot API/provider calls;
-- env mutation;
-- DB mutation;
+- DB/env mutation;
 - service restart/recreate;
 - deploy/rollback/ref movement;
-- webhook/Bot secret restoration;
+- webhook/Bot-secret restoration;
 - BotFather/account destruction;
 - Stage C cleanup;
-- MTProto behavior changes;
+- MTProto changes;
 - AI enablement.
 
 ## Required report
 
 Return:
-- commit SHA;
+- corrective commit SHA;
 - files changed;
-- verifier protocol;
-- health retry mechanism;
-- proof of zero provider/write/recreate capabilities;
+- strict failure-protocol correction;
+- API/worker running-state correction;
+- BatchMode correction;
 - focused tests/compile/Ruff/Bash/diff-check results;
 - production SSH=0;
 - provider calls=0;
@@ -164,7 +130,7 @@ Return:
 
 Final marker:
 
-`TELEGRAM_BOT_M4BM1_POST_RETIREMENT_VERIFIER_READY`
+`TELEGRAM_BOT_M4BM1R_VERIFIER_HARDENED`
 
 Then STOP.
 
