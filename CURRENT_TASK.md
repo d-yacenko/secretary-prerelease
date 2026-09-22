@@ -1,141 +1,69 @@
-# Current task — Telegram Bot API M4BK1R2: finalize deterministic Stage B failure protocol
+# Current task — Telegram Bot API M4BL1: second live Stage B retirement awaiting explicit human authorization
 
 ## Status
 
-M4BK1R corrective commit:
-`f2eb592a9f7103006d5edbbdf6c9a547b87250bb`
+M4BK1R2 retirement harness is ARCHITECT ACCEPTED.
 
-Architect review: core safety hardening accepted, but NOT YET ACCEPTED FOR SECOND LIVE RUN.
+Accepted harness commit:
+`f2e3ef441368d52b7583f0604df127504dbffdf7`
 
-Current production runtime/ref remains:
+Current production runtime/ref:
 `fe151f12f64886505253e765b82458710a949e34`
 
-Alembic:
+Expected Alembic:
 `0046`
 
-No second live Stage B action is authorized.
+The first live Stage B authorization was consumed by a safe preflight failure with `TELEGRAM_NETWORK_CALLS=0`. No webhook/env/service mutation occurred.
 
-## Goal
+A second live run is NOT yet authorized.
 
-Make the final small harness correction so every expected pre/postflight failure has a deterministic sanitized stage and the remaining ordering assertions are covered through `remote_main`.
+## Future authorized action
 
-CODE/TEST ONLY.
+Exactly one execution of:
 
-## Required corrections
+`bash ops/production/retire_telegram_bot.sh`
 
-### 1. No STAGE_UNKNOWN for expected retirement checks
+The accepted harness may:
+- verify canonical target/host pin and fresh exact production ref;
+- verify DB/API/worker/health/Alembic;
+- validate deterministic four-key env transform before provider work;
+- call `deleteWebhook(drop_pending_updates=true)` exactly once;
+- call `getWebhookInfo` exactly once;
+- clear only the four Bot settings;
+- recreate only API + worker;
+- verify actual new container IDs/environments;
+- verify DB container/volume unchanged;
+- verify MTProto/protected settings preserved;
+- verify `TELEGRAM_MTPROTO_AI_ENABLED=false`;
+- verify health and Alembic 0046.
 
-Wrap expected checks in explicit `HarnessError` stages.
+## Authorization state
 
-At minimum distinguish:
+SECOND LIVE RUN IS NOT YET AUTHORIZED.
 
-- application HTTP health preflight;
-- Alembic preflight;
-- env/resolved-credential preflight;
-- provider delete;
-- provider read-back;
-- env race/write;
-- API/worker recreation;
-- post-recreate application container identity/running checks;
-- DB container identity/volume checks;
-- non-Bot env preservation;
-- Bot-settings-empty checks;
-- Compose resolved-environment postflight;
-- actual API/worker running-container environment postflight;
-- MTProto/protected/AI=false postflight;
-- application health postflight;
-- Alembic postflight.
+Acceptable explicit authorization text:
 
-Stage names may be consolidated where logically appropriate, but a failure after irreversible provider/env mutation must identify whether it occurred during env write, service recreation, DB preservation, running-container env validation, health, or Alembic.
+`Разрешаю второй live Stage B retirement Telegram Bot API`
 
-`STAGE_UNKNOWN` should remain only for truly unexpected programmer/runtime exceptions outside known checks.
+After that authorization, run the accepted wrapper exactly once and return the complete sanitized output.
 
-### 2. Malformed Bot env must be proven pre-provider through remote_main
+## Failure handling
 
-Add a mocked `remote_main` regression for at least one malformed/duplicate/missing Bot-key case proving:
-- terminal failure at the env-preflight stage;
-- `TELEGRAM_NETWORK_CALLS=0`;
-- no env write;
-- no service recreation.
+If wrapper/harness blocks or fails:
+- do not retry;
+- do not bypass;
+- do not use direct SSH;
+- do not call Bot API manually;
+- do not restore/reconfigure webhook;
+- do not restore Bot secrets;
+- return the complete sanitized output and STOP.
 
-Existing direct helper tests are retained but are not sufficient by themselves.
+## Not authorized
 
-### 3. Prove both actual new container environments are inspected
-
-Add focused assertions that on success:
-- `_container_environment` is called with the new API container ID;
-- `_container_environment` is called with the new worker container ID;
-- failures in either actual container environment produce the named postflight stage;
-- provider call count remains exactly 2 and there is no retry.
-
-### 4. Preserve all accepted hardening
-
-Do not weaken:
-- fresh exact `origin/production` fetch/check before provider calls;
-- `target.json` as sole production identity;
-- canonical `compose exec -T api alembic current` / `0046 (head)`;
-- direct DB running/health proof;
-- precomputed four-key-only env transform before provider calls;
-- byte-identical env race guard before atomic write;
-- permissions preservation;
-- positive MTProto API ID and API/worker credential equality;
-- `TELEGRAM_MTPROTO_AI_ENABLED=false`;
-- exactly one `deleteWebhook(drop_pending_updates=true)`;
-- exactly one `getWebhookInfo`;
-- no provider retry;
-- API+worker-only recreation;
-- old/new API+worker IDs must differ;
-- DB container/volume unchanged;
-- actual running-container env verification;
-- no automatic webhook or Bot-secret restoration.
-
-## Validation
-
-Run:
-- focused retirement harness tests;
-- local helper compile;
-- bundled helper compile;
-- Bash syntax;
-- Ruff;
-- `git diff --check`.
-
-## Authorization
-
-AUTHORIZED:
-- local harness/test changes only;
-- update `PROJECT_STATE.md`;
-- commit/push canonical `main`.
-
-NOT AUTHORIZED:
-- production SSH;
-- second live harness run;
-- Bot API/provider calls;
-- webhook changes;
-- production env mutation;
-- production service recreation;
-- deploy/rollback/ref movement;
 - BotFather/account destruction;
-- Stage C cleanup;
-- MTProto behavior changes;
+- Stage C source/schema cleanup;
+- deploy/rollback/ref movement;
+- MTProto behavior/config changes;
 - AI enablement.
-
-## Required report
-
-Return:
-- corrective commit SHA;
-- files changed;
-- explicit stage map;
-- malformed-env remote_main regression result;
-- actual-container-env inspection regression result;
-- complete focused tests/compile/Ruff/Bash/diff-check results;
-- production SSH=0;
-- Bot API/provider calls=0;
-- production mutation=0.
-
-Final marker:
-
-`TELEGRAM_BOT_M4BK1R2_FAILURE_PROTOCOL_READY`
-
-Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
