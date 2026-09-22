@@ -1,168 +1,152 @@
-# Current task — Executor client acceptance: Android x2 + Linux
+# Current task — Telegram MTProto Inbox UX: routine new messages must not require attention
 
-## Status
+## Context
 
-Telegram Bot retirement Stage C is COMPLETE / PRODUCTION ACCEPTED.
+Client acceptance proved transport delivery works: fresh inbound Telegram MTProto messages reach Secretary.
 
-The next task is local client execution/installation only.
+However current production behavior is wrong for the intended Inbox UX:
+- each ordinary new inbound MTProto message is materialized as the correct canonical `chat_message`;
+- it also creates an unresolved Notification with proposal:
+  - `type=transport_event`
+  - `provider=telegram`
+  - `transport=mtproto`
+  - `event_type=message_created`;
+- Flutter renders unresolved notifications under `Требует внимания` with `Готово / Пропустить`.
+
+This makes routine communication look like an actionable item and visually dominates the Inbox.
+
+Architecture decision has been revised:
+ordinary inbound MTProto `message_created` belongs in the normal Inbox/source feed only.
 
 ## Goal
 
-Using the current canonical `main` checkout on the workstation:
+Implement a schema-neutral correction so:
 
-1. diagnose the interrupted/garbled Linux build output if necessary;
-2. build and launch the Linux Flutter client locally;
-3. detect the Android devices currently connected and authorized to this workstation;
-4. build one debug APK;
-5. install/upgrade it on exactly the two connected Android devices without uninstalling existing app data;
-6. launch the app on both Android devices;
-7. report the resulting client readiness for the human Telegram Inbox acceptance.
+1. future routine inbound MTProto `message_created` events do NOT create Notification rows;
+2. existing historical MTProto `transport_event/message_created` Notification rows remain stored but are excluded from the Inbox `Требует внимания` unresolved presentation;
+3. the canonical Telegram source object remains visible in `Последние входящие`;
+4. `message_edited` and `message_deleted` transport notifications remain unchanged.
 
-Do not perform backend or production work.
+CODE/TEST ONLY. No production deploy.
 
-## Repository/workstation bootstrap
+## Required backend changes
 
-Use the existing checkout:
+### A. Stop creating notifications for new inbound messages
 
-`~/work/secretary-prerelease`
+In the MTProto history/new-message path, do not call/create
+`TelegramMtprotoTransportNotificationService.message_created(...)`
+for routine inbound message creation.
 
-Start with:
-- verify canonical origin;
-- `git switch main`;
-- `git pull --ff-only`;
-- require clean tracked worktree before any build;
-- inspect `client/README.md`.
+Do not alter:
+- canonical object materialization;
+- incoming/outgoing direction metadata;
+- scope visibility;
+- recurring sync cadence;
+- edit/delete reconciliation;
+- AI quarantine.
 
-Do not alter Git refs.
+Keep the notification service methods for edit/delete.
 
-## Authorized local actions
+If `message_created` method becomes unused, it may be removed only if no compatibility/test/API consumer requires it. Prefer the smallest clear cleanup.
+
+### B. Hide historical created-event notifications from Inbox attention
+
+Do not delete or mutate historical rows.
+
+Introduce an explicit Inbox-attention query/filter so unresolved notifications included in `GET /inbox` exclude only:
+
+- proposal.type == `transport_event`
+- proposal.provider == `telegram`
+- proposal.transport == `mtproto`
+- proposal.event_type == `message_created`
+
+Do not globally change generic notification listing semantics unless required.
+
+Prefer a dedicated NotificationService method such as an Inbox-attention/unresolved selector rather than embedding JSON filtering directly in the API handler.
+
+Existing edited/deleted Telegram transport notifications must still be returned as unresolved attention items.
+
+### C. Preserve ordinary Inbox visibility
+
+Regression must prove a newly materialized inbound active-scope MTProto object is still eligible through `RecentSourceService` / `GET /inbox` recent source objects after removing the notification side effect.
+
+No client-side hiding of the source object.
+
+## Required regressions
+
+At minimum prove:
+
+1. new inbound MTProto message materialization creates/updates the canonical object but does not create `message_created` Notification;
+2. replay/idempotent sync still does not create such notification;
+3. outbound message behavior remains unchanged;
+4. edit transport event still creates deterministic notification;
+5. delete transport event still creates deterministic notification;
+6. generic Notification API/list behavior for historical `message_created` rows remains compatible;
+7. Inbox unresolved/attention selector excludes historical MTProto `message_created` transport notifications;
+8. the selector does NOT exclude:
+   - Telegram `message_edited`;
+   - Telegram `message_deleted`;
+   - non-Telegram notifications;
+   - non-MTProto Telegram notifications if any historical row exists;
+9. `GET /inbox` returns the Telegram source object in ordinary recent-source feed while omitting its historical created-event notification from unresolved attention;
+10. no schema migration;
+11. `TELEGRAM_MTPROTO_AI_ENABLED=false` behavior unchanged;
+12. no provider call added.
+
+## Client
+
+No Flutter behavior change should be necessary if backend contract is corrected.
+
+Add/adjust a client regression only if an existing test explicitly assumes that `message_created` transport notifications belong under `Требует внимания`.
+
+Do not redesign the Inbox UI in this task.
+
+## Validation
+
+Run:
+- focused Telegram notification/history tests;
+- Inbox/NotificationService tests;
+- relevant client tests if touched;
+- backend compile;
+- Ruff;
+- `git diff --check`.
+
+## Authorization
 
 AUTHORIZED:
-- `flutter doctor -v`;
-- `flutter devices`;
-- `adb devices -l`;
-- local package/toolchain inspection;
-- `flutter pub get`;
-- `flutter analyze`;
-- focused/client tests if useful;
-- `flutter clean` if needed to clear corrupted/interrupted local build artifacts;
-- `flutter build linux --debug`;
-- launch the built Linux bundle locally;
-- `flutter build apk --debug`;
-- install/upgrade APK with `adb -s <serial> install -r ...` on exactly two connected, authorized Android devices;
-- launch the installed app on those two devices through adb/Flutter tooling;
-- read sanitized build/device diagnostics.
-
-The two Android installs must preserve existing app data. Do NOT uninstall the application or clear package data.
-
-## Device rules
-
-- Operate only on Android devices already connected and authorized to this workstation.
-- Require exactly two intended Android devices before installation.
-- If more than two Android devices/emulators are visible and intent is ambiguous, STOP and report sanitized device model/serial summaries rather than choosing arbitrarily.
-- Do not enable wireless debugging, pair new devices, alter device security settings, or factory-reset anything.
-
-## Linux build handling
-
-The previous human attempt produced garbled binary-looking terminal output and was interrupted during:
-
-`Building Linux application...`
-
-Do not assume product-code corruption from that output.
-
-First verify the local Flutter/Linux toolchain and build cleanly.
-
-If Linux build fails:
-- capture the first meaningful textual compiler/linker error;
-- do not dump binary garbage;
-- do not patch application code in this task;
-- report whether the blocker is toolchain/dependency, build cache, or not yet classified;
-- STOP only if the local build cannot be completed safely.
-
-If the build succeeds, launch:
-
-`client/build/linux/x64/debug/bundle/personal_secretary`
-
-(or the exact bundle path produced by the current Flutter toolchain).
-
-## Android install handling
-
-From `client/`:
-
-- build one debug APK;
-- identify its exact produced path;
-- install the same APK on both intended connected Android devices using upgrade semantics;
-- do not use uninstall/reinstall;
-- launch the application on each device after successful install.
-
-If one device rejects installation:
-- do not clear data or uninstall;
-- report the sanitized adb/install error and continue only with safe read-only diagnosis.
-
-## Acceptance boundary
-
-Executor may establish:
-- Linux BUILD PASS/FAIL;
-- Linux LAUNCH PASS/FAIL;
-- Android device 1 INSTALL PASS/FAIL and LAUNCH PASS/FAIL;
-- Android device 2 INSTALL PASS/FAIL and LAUNCH PASS/FAIL.
-
-Human remains responsible for visual/product acceptance:
-- confirm production connection/authentication;
-- Telegram MTProto connected;
-- folder selection/save/apply;
-- send a fresh inbound Telegram message;
-- verify it appears in ordinary Inbox.
-
-Do not automate Telegram/provider message sending in this task.
-
-## Folder UX reminder for the human
-
-Deterministic flow:
-
-1. tick folder checkbox;
-2. keep `Исключать заглушенные чаты` enabled;
-3. press `Сохранить папки`;
-4. optional `Предпросмотр области`;
-5. press `Применить область`.
-
-Recurring MTProto sync also reconciles the saved folder configuration automatically, but Apply gives immediate deterministic reconciliation.
-
-## Hard prohibitions
+- code/tests/docs for this Inbox-attention correction;
+- update `PROJECT_STATE.md`;
+- commit/push canonical `main`.
 
 NOT AUTHORIZED:
+- production deploy;
 - production SSH;
-- backend deploy/rollback;
-- DB/env writes outside normal client API use;
-- schema/data cleanup;
-- provider credential changes;
-- Bot API restoration;
-- Telegram provider calls by executor;
-- MTProto AI enablement;
-- application source-code changes;
-- Git ref movement;
-- Android uninstall / clear-data.
+- direct DB mutation/cleanup;
+- migration;
+- historical notification deletion/update;
+- Telegram provider calls;
+- MTProto config/scope changes;
+- AI enablement.
 
 ## Required report
 
 Return:
-- canonical main SHA used;
-- Flutter version / doctor summary only if relevant;
-- Linux build PASS/FAIL;
-- Linux launch PASS/FAIL;
-- Android devices detected (sanitized model + serial suffix is enough);
-- APK path;
-- Android 1 install PASS/FAIL;
-- Android 1 launch PASS/FAIL;
-- Android 2 install PASS/FAIL;
-- Android 2 launch PASS/FAIL;
-- whether existing app data was preserved (must be yes / no uninstall);
-- any sanitized blocker.
-
-Then STOP.
+- commit SHA;
+- files changed;
+- exact new `message_created` behavior;
+- exact Inbox historical-filter semantics;
+- proof ordinary source object remains Inbox-visible;
+- proof edit/delete notifications remain;
+- tests/compile/Ruff/diff-check;
+- migration=none;
+- production SSH=0;
+- provider calls=0;
+- production mutation=0.
 
 Final marker:
 
-`CLIENT_ACCEPTANCE_BUILDS_INSTALLED_READY`
+`TELEGRAM_MTPROTO_ORDINARY_INBOX_READY`
+
+Then STOP.
 
 `CURRENT_TASK.md` is the source of active authorization.
