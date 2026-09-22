@@ -660,25 +660,83 @@ def _compose_ai_flag(service: str) -> bool:
     return long_running_ai_from_env([f"TELEGRAM_MTPROTO_AI_ENABLED={proc.stdout.strip()}"])
 
 
-def execute_live(run_id: str) -> int:
+REHEARSAL_ABORTED = "rehearsal_aborted"
+
+
+def live_long_running_probe() -> tuple[bool, bool]:
+    api = os.environ.get("REHEARSAL_LONG_RUNNING_API_AI")
+    worker = os.environ.get("REHEARSAL_LONG_RUNNING_WORKER_AI")
+    if api is None or worker is None:
+        return compose_long_running_probe()
+    return (
+        long_running_ai_from_env([f"TELEGRAM_MTPROTO_AI_ENABLED={api}"]),
+        long_running_ai_from_env([f"TELEGRAM_MTPROTO_AI_ENABLED={worker}"]),
+    )
+
+
+def abort_rehearsal_jobs(session: Session, run_id: str) -> None:
+    """Roll back the failed transaction, then fail leftover synthetic jobs."""
+    session.rollback()
+    token = f"TG_REHEARSAL_{run_id}"
+    user_id = session.scalar(select(User.id).where(User.display_name == token))
+    if user_id is None:
+        return
+    jobs = list(
+        session.scalars(
+            select(Job).where(
+                Job.user_id == user_id,
+                Job.status.in_((JOB_STATUS_PENDING, JOB_STATUS_RUNNING)),
+            )
+        )
+    )
+    queue = JobQueueService(session)
+    for job in jobs:
+        queue.mark_failed(job.id, REHEARSAL_ABORTED)
+    session.commit()
+
+
+def _cleanup_failed_rehearsal(session: Session, run_id: str) -> None:
+    try:
+        abort_rehearsal_jobs(session, run_id)
+    except Exception:  # noqa: BLE001
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            return
+
+
+def execute_live(run_id: str, *, session_factory=None) -> int:
     from app.db.session import SessionLocal
 
-    session = SessionLocal()
+    previous_ai = settings.telegram_mtproto_ai_enabled
+    env_before = os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED")
+    session = (session_factory or SessionLocal)()
     try:
         report = run_rehearsal(
             session,
             run_id,
-            probe=compose_long_running_probe,
+            probe=live_long_running_probe,
             providers="live",
         )
-    except RehearsalRefused as exc:
-        sys.stdout.write(f"REHEARSAL_REFUSED={exc}\n")
-        session.rollback()
+    except RehearsalRefused:
+        _cleanup_failed_rehearsal(session, run_id)
+        sys.stdout.write("REHEARSAL_REFUSED=rehearsal_refused\n")
         return 2
+    except Exception:  # noqa: BLE001
+        _cleanup_failed_rehearsal(session, run_id)
+        sys.stdout.write("REHEARSAL_FAILED=rehearsal_aborted\n")
+        return 1
     else:
         sys.stdout.write(report)
-        return 0 if "DANGLING_JOBS=0\n" in report else 1
+        ready = "DANGLING_JOBS=0\n" in report and "INBOX_ELIGIBLE=PASS\n" in report
+        return 0 if ready else 1
     finally:
+        settings.telegram_mtproto_ai_enabled = previous_ai
+        if os.environ.get("TELEGRAM_MTPROTO_AI_ENABLED") != env_before:
+            if env_before is None:
+                os.environ.pop("TELEGRAM_MTPROTO_AI_ENABLED", None)
+            else:
+                os.environ["TELEGRAM_MTPROTO_AI_ENABLED"] = env_before
         session.close()
 
 
@@ -692,8 +750,7 @@ def main(argv: list[str] | None = None) -> int:
         if os.environ.get("REHEARSAL_LIVE_CONFIRM") != "reviewed":
             sys.stdout.write("LIVE_REHEARSAL_BLOCKED=architect_review_required\n")
             return 2
-        execute_live(args.run_id)
-        return 2
+        return execute_live(args.run_id)
     if not args.fake:
         sys.stdout.write("REHEARSAL_BLOCKED=mode_required\n")
         return 2
