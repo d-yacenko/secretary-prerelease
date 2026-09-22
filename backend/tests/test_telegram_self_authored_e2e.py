@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.db.models import (
     AITrace,
     AITraceEvent,
+    Edge,
     Job,
     Object,
     TelegramMtprotoAccount,
@@ -22,6 +23,7 @@ from app.db.models import (
     UserSettings,
 )
 from app.jobs.handlers import HANDLERS
+from app.services.correlation_models import CorrelationCandidate
 from app.services.label_service import LabelService
 
 HELPER_PATH = (
@@ -510,6 +512,279 @@ def test_correlation_privacy_blocks_unapproved_telegram_before_judge(db_session)
     assert task_only
     judge.judge("title", "task", "summary", task_only)
     assert len(calls) == 1
+
+
+def _candidate(obj: Object) -> CorrelationCandidate:
+    return CorrelationCandidate(
+        object_id=obj.id,
+        kind=obj.kind,
+        title=obj.title or "",
+        primary_date=None,
+        content_summary=obj.body or "",
+    )
+
+
+def test_correlation_privacy_blocks_every_unapproved_telegram_provider(db_session) -> None:
+    user, account = _user(db_session)
+    task = _task(db_session, user)
+    messages = _pair(db_session, user, account)
+    inbound = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        direction="inbound",
+        sender=77,
+        body="third party note",
+        when=datetime(2026, 9, 22, 9, 0, tzinfo=UTC),
+    )
+    legacy = Object(
+        user_id=user.id,
+        kind="chat_message",
+        origin="source",
+        state="observed",
+        provider="telegram",
+        title="legacy",
+        body="bot history",
+        metadata_={"transport": "bot"},
+    )
+    unknown = Object(
+        user_id=user.id,
+        kind="note",
+        origin="source",
+        state="observed",
+        provider="telegram",
+        title="unknown telegram",
+        body="untyped telegram object",
+        metadata_={},
+    )
+    db_session.add_all([legacy, unknown])
+    db_session.flush()
+    approved = harness.prove_summary_cohort(
+        db_session, harness.prove_cohort(db_session, harness.load_marker_objects(db_session))
+    )
+    assert messages[0].id in approved
+    assert inbound.id not in approved
+    assert legacy.id not in approved
+    calls = []
+
+    class _Inner:
+        def judge(self, trigger_title, trigger_kind, trigger_summary, candidates):
+            calls.append([item.object_id for item in candidates])
+            return harness.CorrelationJudgeResult(decisions=())
+
+    judge = harness.PrivacyCorrelationJudge(_Inner(), db_session, approved)
+    for blocked in (legacy, inbound, unknown):
+        with pytest.raises(harness.HarnessBlocked, match="correlation_privacy"):
+            judge.judge("title", "chat_message", "summary", [_candidate(blocked), _candidate(task)])
+    assert calls == []
+    judge.judge(
+        "title",
+        "chat_message",
+        "summary",
+        [_candidate(messages[0]), _candidate(task)],
+    )
+    assert calls == [[messages[0].id, task.id]]
+
+
+def test_correlation_pass_accepts_any_allowed_relation_type(db_session) -> None:
+    user, account = _user(db_session)
+    task = _task(db_session, user)
+    messages = _pair(db_session, user, account)
+    selected = {item.id for item in messages}
+    historical = Edge(
+        user_id=user.id,
+        source_id=messages[0].id,
+        target_id=task.id,
+        type="related_to",
+        origin="system",
+        state="proposed",
+    )
+    db_session.add(historical)
+    db_session.flush()
+    known = {historical.id}
+    assert (
+        harness.proposed_marker_correlation(
+            db_session,
+            user_id=user.id,
+            selected_ids=selected,
+            task_id=task.id,
+            known_edge_ids=known,
+        )
+        is False
+    )
+    disallowed = Edge(
+        user_id=user.id,
+        source_id=messages[1].id,
+        target_id=task.id,
+        type="caused_by",
+        origin="system",
+        state="proposed",
+    )
+    db_session.add(disallowed)
+    db_session.flush()
+    assert (
+        harness.proposed_marker_correlation(
+            db_session,
+            user_id=user.id,
+            selected_ids=selected,
+            task_id=task.id,
+            known_edge_ids=known,
+        )
+        is False
+    )
+    allowed = Edge(
+        user_id=user.id,
+        source_id=messages[1].id,
+        target_id=task.id,
+        type="references",
+        origin="system",
+        state="proposed",
+    )
+    db_session.add(allowed)
+    db_session.flush()
+    assert (
+        harness.proposed_marker_correlation(
+            db_session,
+            user_id=user.id,
+            selected_ids=selected,
+            task_id=task.id,
+            known_edge_ids=known,
+        )
+        is True
+    )
+
+
+def _temporal_event(session, user, object_id, result_class: str, **metadata) -> AITraceEvent:
+    trace = AITrace(
+        id=uuid4(),
+        user_id=user.id,
+        workload="background_temporal_signal",
+        object_id=object_id,
+    )
+    session.add(trace)
+    session.flush()
+    event = AITraceEvent(
+        trace_id=trace.id,
+        user_id=user.id,
+        sequence=1,
+        event_type="temporal_signal_result",
+        metadata_={"result_class": result_class, "stale": False, **metadata},
+    )
+    session.add(event)
+    session.flush()
+    return event
+
+
+def test_temporal_pass_uses_new_cohort_audit_evidence(db_session) -> None:
+    user, account = _user(db_session)
+    messages = _pair(db_session, user, account)
+    selected = {item.id for item in messages}
+    _temporal_event(db_session, user, messages[0].id, "hint_created")
+    other = Object(
+        user_id=user.id,
+        kind="note",
+        origin="user",
+        state="confirmed",
+        title="unrelated",
+        body="not in the cohort",
+    )
+    db_session.add(other)
+    db_session.flush()
+    _temporal_event(db_session, user, other.id, "hint_created")
+    baseline = harness.snapshot_temporal_events(db_session, selected)
+    assert harness.temporal_cohort_outcome(db_session, selected, baseline) == (
+        False,
+        "none",
+        "none",
+    )
+    _temporal_event(db_session, user, messages[0].id, "disabled")
+    _temporal_event(db_session, user, messages[0].id, "stale_after_model", stale=True)
+    _temporal_event(db_session, user, messages[0].id, "no_temporal_signal")
+    assert harness.temporal_cohort_outcome(db_session, selected, baseline) == (
+        False,
+        "none",
+        "none",
+    )
+    _temporal_event(db_session, user, messages[0].id, "calendar_first_match")
+    assert harness.temporal_cohort_outcome(db_session, selected, baseline) == (
+        True,
+        "none",
+        "calendar_match",
+    )
+
+    hinted_user, hinted_account = _user(db_session)
+    hinted = _pair(db_session, hinted_user, hinted_account)
+    hint = Object(
+        user_id=hinted_user.id,
+        kind="temporal_hint",
+        origin="system",
+        state="observed",
+        title="hint",
+        metadata_={"participation": "possible", "primary_evidence_object_id": str(hinted[0].id)},
+    )
+    db_session.add(hint)
+    db_session.flush()
+    hinted_ids = {item.id for item in hinted}
+    hinted_baseline = harness.snapshot_temporal_events(db_session, hinted_ids)
+    _temporal_event(
+        db_session,
+        hinted_user,
+        hinted[0].id,
+        "hint_created",
+        chosen_hint_id=str(hint.id),
+    )
+    assert harness.temporal_cohort_outcome(db_session, hinted_ids, hinted_baseline) == (
+        True,
+        "possible",
+        "temporal_hint",
+    )
+
+    evidenced_user, evidenced_account = _user(db_session)
+    evidenced = _pair(db_session, evidenced_user, evidenced_account)
+    evidenced_ids = {item.id for item in evidenced}
+    evidenced_baseline = harness.snapshot_temporal_events(db_session, evidenced_ids)
+    anchor = Object(
+        user_id=evidenced_user.id,
+        kind="temporal_hint",
+        origin="system",
+        state="observed",
+        title="anchor",
+        metadata_={"participation": "expected"},
+    )
+    db_session.add(anchor)
+    db_session.flush()
+    _temporal_event(
+        db_session,
+        evidenced_user,
+        evidenced[0].id,
+        "already_evidenced",
+        chosen_hint_id=str(anchor.id),
+    )
+    assert harness.temporal_cohort_outcome(db_session, evidenced_ids, evidenced_baseline) == (
+        False,
+        "none",
+        "none",
+    )
+    from app.services.temporal_signals_service import source_extraction_signature
+
+    db_session.add(
+        Edge(
+            user_id=evidenced_user.id,
+            source_id=anchor.id,
+            target_id=evidenced[0].id,
+            type="temporal_evidence",
+            origin="system",
+            state="proposed",
+            metadata_={"source_signature": source_extraction_signature(evidenced[0])},
+        )
+    )
+    db_session.flush()
+    assert harness.temporal_cohort_outcome(db_session, evidenced_ids, evidenced_baseline) == (
+        True,
+        "expected",
+        "already_evidenced",
+    )
 
 
 def test_live_entrypoint_is_sanitized_and_uses_real_boundary(monkeypatch, capsys) -> None:

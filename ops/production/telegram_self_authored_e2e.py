@@ -258,7 +258,7 @@ class PrivacyCorrelationJudge:
             obj = self._session.get(Object, candidate.object_id)
             if obj is None:
                 raise HarnessBlocked("correlation_privacy")
-            if is_canonical_telegram_mtproto_object(obj) and obj.id not in self._approved:
+            if obj.provider == TELEGRAM_PROVIDER and obj.id not in self._approved:
                 raise HarnessBlocked("correlation_privacy")
         self.calls += 1
         return self._inner.judge(
@@ -518,7 +518,13 @@ def format_report(
 ) -> str:
     if temporal_participation not in {"expected", "possible", "none"}:
         raise HarnessBlocked("unsanitized_output")
-    if temporal_result not in {"temporal_hint", "none"}:
+    if temporal_result not in {
+        "temporal_hint",
+        "calendar_match",
+        "hint_merged",
+        "already_evidenced",
+        "none",
+    }:
         raise HarnessBlocked("unsanitized_output")
     lines = [
         f"COHORT_SIZE={cohort_size}",
@@ -571,6 +577,133 @@ def snapshot_auto_label_events(session: Session, selected_ids: set[UUID]) -> set
     return {row[0] for row in _auto_label_event_rows(session, selected_ids)}
 
 
+_TEMPORAL_SUCCESS = {
+    "hint_created": "temporal_hint",
+    "calendar_first_match": "calendar_match",
+    "hint_merged": "hint_merged",
+    "already_evidenced": "already_evidenced",
+}
+
+
+def _temporal_event_rows(session: Session, selected_ids: set[UUID]):
+    from app.db.models import AITrace, AITraceEvent
+
+    return list(
+        session.execute(
+            select(AITraceEvent.id, AITraceEvent.metadata_, AITrace.object_id)
+            .join(AITrace, AITrace.id == AITraceEvent.trace_id)
+            .where(
+                AITraceEvent.event_type == "temporal_signal_result",
+                AITrace.object_id.in_(selected_ids),
+            )
+            .order_by(AITraceEvent.created_at, AITraceEvent.id)
+        )
+    )
+
+
+def snapshot_temporal_events(session: Session, selected_ids: set[UUID]) -> set[UUID]:
+    return {row[0] for row in _temporal_event_rows(session, selected_ids)}
+
+
+def _participation_label(session: Session, metadata: dict) -> str:
+    raw_hint = metadata.get("chosen_hint_id")
+    if not raw_hint:
+        return "none"
+    try:
+        hint = session.get(Object, UUID(str(raw_hint)))
+    except (TypeError, ValueError):
+        return "none"
+    if hint is None or not isinstance(hint.metadata_, dict):
+        return "none"
+    value = str(hint.metadata_.get("participation") or "none")
+    if value in {"expected", "possible", "none"}:
+        return value
+    return "none"
+
+
+def _already_evidenced_anchor_present(session: Session, source_id: UUID, metadata: dict) -> bool:
+    from app.db.models import Edge
+    from app.domain.temporal_hint import EDGE_TYPE_TEMPORAL_EVIDENCE
+    from app.services.temporal_signals_service import (
+        evidence_edge_is_active,
+        source_extraction_signature,
+    )
+
+    raw = metadata.get("chosen_hint_id") or metadata.get("chosen_calendar_id")
+    if not raw:
+        return False
+    try:
+        anchor_id = UUID(str(raw))
+    except (TypeError, ValueError):
+        return False
+    anchor = session.get(Object, anchor_id)
+    source = session.get(Object, source_id)
+    if anchor is None or source is None or anchor.deleted_at is not None:
+        return False
+    signature = source_extraction_signature(source)
+    edges = session.scalars(
+        select(Edge).where(
+            Edge.source_id == anchor.id,
+            Edge.target_id == source.id,
+            Edge.type == EDGE_TYPE_TEMPORAL_EVIDENCE,
+        )
+    )
+    for edge in edges:
+        if not evidence_edge_is_active(edge):
+            continue
+        recorded = str((edge.metadata_ or {}).get("source_signature") or "")
+        if recorded == signature:
+            return True
+    return False
+
+
+def temporal_cohort_outcome(
+    session: Session,
+    selected_ids: set[UUID],
+    baseline_ids: set[UUID],
+) -> tuple[bool, str, str]:
+    """Return PASS only for a new successful temporal audit on a selected source."""
+    for event_id, metadata, object_id in _temporal_event_rows(session, selected_ids):
+        if event_id in baseline_ids or object_id not in selected_ids:
+            continue
+        if not isinstance(metadata, dict) or metadata.get("stale") is True:
+            continue
+        mapped = _TEMPORAL_SUCCESS.get(str(metadata.get("result_class") or ""))
+        if mapped is None:
+            continue
+        if mapped == "already_evidenced" and not _already_evidenced_anchor_present(
+            session, object_id, metadata
+        ):
+            continue
+        return True, _participation_label(session, metadata), mapped
+    return False, "none", "none"
+
+
+def proposed_marker_correlation(
+    session: Session,
+    *,
+    user_id: UUID,
+    selected_ids: set[UUID],
+    task_id: UUID,
+    known_edge_ids: set[UUID],
+) -> bool:
+    from app.db.models import Edge
+    from app.services.correlation_constants import CORRELATION_ALLOWED_TYPES
+
+    edges = session.scalars(select(Edge).where(Edge.user_id == user_id))
+    for edge in edges:
+        if edge.id in known_edge_ids:
+            continue
+        if (
+            edge.source_id in selected_ids
+            and edge.target_id == task_id
+            and edge.type in CORRELATION_ALLOWED_TYPES
+            and edge.state == "proposed"
+        ):
+            return True
+    return False
+
+
 def _auto_label_evidence(
     session: Session,
     selected_ids: set[UUID],
@@ -607,9 +740,12 @@ def _artifact_ids(session: Session, cohort: Cohort) -> frozenset[tuple[str, UUID
 
 
 def _outcome_proofs(
-    session: Session, cohort: Cohort, baseline: frozenset[tuple[str, UUID]]
+    session: Session,
+    cohort: Cohort,
+    baseline: frozenset[tuple[str, UUID]],
+    temporal_baseline: set[UUID],
 ) -> dict:
-    from app.db.models import Edge, Representation
+    from app.db.models import Representation
     from app.llm.embedding_text import embedding_input_signature
     from app.services.context_service import ContextService
     from app.services.embedding_index import object_has_current_embedding_provenance
@@ -623,29 +759,15 @@ def _outcome_proofs(
         if not object_has_current_embedding_provenance(obj, embedding_input_signature(obj)):
             embedding_ok = False
     new_ids = _artifact_ids(session, cohort) - baseline
-    hint_ids = {item_id for kind, item_id in new_ids if kind == "hint"}
-    hints = list(session.scalars(select(Object).where(Object.id.in_(hint_ids)))) if hint_ids else []
-    matched = []
-    for hint in hints:
-        evidence = str((hint.metadata_ or {}).get("primary_evidence_object_id") or "")
-        if evidence in {str(item) for item in selected}:
-            matched.append(hint)
-    participation = "none"
-    result = "none"
-    if matched:
-        participation = str((matched[0].metadata_ or {}).get("participation") or "none")
-        result = "temporal_hint"
-    edge_ids = {item_id for kind, item_id in new_ids if kind == "edge"}
-    linked = False
-    if edge_ids:
-        for edge in session.scalars(select(Edge).where(Edge.id.in_(edge_ids))):
-            if (
-                edge.source_id in selected
-                and edge.target_id == cohort.task_id
-                and edge.type == "related_to"
-                and edge.state == "proposed"
-            ):
-                linked = True
+    temporal, participation, result = temporal_cohort_outcome(session, selected, temporal_baseline)
+    known_edges = {item_id for kind, item_id in baseline if kind == "edge"}
+    linked = proposed_marker_correlation(
+        session,
+        user_id=cohort.user_id,
+        selected_ids=selected,
+        task_id=cohort.task_id,
+        known_edge_ids=known_edges,
+    )
     summary_ids = {item_id for kind, item_id in new_ids if kind == "summary"}
     summary_ok = False
     if summary_ids:
@@ -686,10 +808,8 @@ def _outcome_proofs(
     )
     return {
         "embedding": embedding_ok,
-        "temporal": bool(matched),
-        "temporal_participation": participation
-        if participation in {"expected", "possible", "none"}
-        else "none",
+        "temporal": temporal,
+        "temporal_participation": participation,
         "temporal_result": result,
         "correlation": linked,
         "summary": summary_ok,
@@ -745,6 +865,7 @@ def run_acceptance(
     approved = prove_summary_cohort(session, cohort)
     selected_ids = {obj.id for obj in cohort.messages}
     auto_label_baseline = snapshot_auto_label_events(session, selected_ids)
+    temporal_baseline = snapshot_temporal_events(session, selected_ids)
     artifact_baseline = _artifact_ids(session, cohort)
     if on_ready is not None:
         on_ready()
@@ -780,7 +901,7 @@ def run_acceptance(
                     _fail_selected(session, cohort)
                     raise HarnessBlocked(ABORTED) from None
         events, assignments = _auto_label_evidence(session, selected_ids, auto_label_baseline)
-        outcomes = _outcome_proofs(session, cohort, artifact_baseline)
+        outcomes = _outcome_proofs(session, cohort, artifact_baseline, temporal_baseline)
         summary_jobs = [
             job
             for job in _selected_jobs(session, cohort)
