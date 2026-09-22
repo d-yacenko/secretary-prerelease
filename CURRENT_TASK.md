@@ -1,144 +1,97 @@
-# Current task — Final one-shot container startup hardening for Telegram rehearsal
+# Current task — Execute one actual production synthetic Telegram ML rehearsal
 
-## Context
+## Accepted implementation
 
-Second authorized wrapper invocation reached the one-shot container launch and returned:
+One-shot startup fix accepted at:
 
-`REHEARSAL_REMOTE_BLOCKED=oneshot_failed`
+`659d49d16c36370f4fab1884b4805a6cedb1a8e4`
 
-No retry is authorized in this task.
+Production runtime/ref remains:
 
-Static review found a deterministic container-layout defect:
+`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-- production backend image has `WORKDIR /app`;
-- application package is copied to `/app/app`;
-- normal API/worker run from the canonical `/app` import root;
-- remote wrapper mounts the streamed helper at
-  `/opt/rehearsal/telegram_production_rehearsal.py`;
-- it executes
-  `python3 /opt/rehearsal/telegram_production_rehearsal.py`;
-- direct script execution makes the script directory the primary Python import root instead of the canonical `/app` layout;
-- therefore a top-level `from app...` failure can occur before helper `main()` and produce stderr-only exit, which the outer remote program maps to `oneshot_failed`.
+Alembic:
 
-The helper imports themselves were checked against exact production release
-`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`; all named symbols exist.
+`0046`
 
-## Goal
+Long-running production API/worker Telegram AI must remain false.
 
-Make the one-shot container start from the exact production import layout and eliminate the next predictable provider-configuration false failure before another live attempt.
+The previous wrapper failures occurred before helper business execution and created no rehearsal synthetic state.
 
-CODE/TEST ONLY. Do not execute production rehearsal.
+## Authorized run
 
-## Required correction A — canonical import root
+Exactly one actual live rehearsal remains authorized with run id:
 
-Change the isolated one-shot execution so the reviewed helper is mounted/executed from `/app`, for example:
+`tgprod0922a`
 
-- bind source helper to a unique read-only destination under `/app`, and
-- execute `python3 /app/<rehearsal-helper>.py ...`.
+Execute exactly once:
 
-Requirements:
-- `sys.path[0]` must be `/app` for the helper process;
-- do not overwrite any existing production module/file;
-- use a unique rehearsal-only filename;
-- mount remains read-only;
-- no Docker socket;
-- production checkout remains untouched;
-- no second deploy.
+```bash
+cd ~/work/secretary-prerelease
+git switch main
+git pull --ff-only
+git fetch --prune origin
+python3 ops/production/telegram_production_rehearsal_remote.py --run-id tgprod0922a
+```
 
-Do not solve this by adding a broad arbitrary PYTHONPATH inherited by long-running services. The change is one-shot only.
+No deploy, direct SSH, retry wrapper, or alternate run id.
 
-## Required correction B — provider-config preflight
+## Expected startup
 
-The rehearsal creates a separate synthetic user. Real provider resolution for that user can use the deployment OpenAI fallback when no per-user credential exists.
+The live child must first emit:
 
-Before synthetic DB writes, the remote host/container path must prove only the boolean condition:
-
-`OPENAI_API_KEY is non-empty in the one-shot production environment`
-
-Requirements:
-- never print the key or its length/hash/prefix;
-- emit only a fixed sanitized block marker such as
-  `REHEARSAL_REMOTE_BLOCKED=provider_config`
-  if absent;
-- do not copy/decrypt another user's credential;
-- do not mutate credentials;
-- long-running service env remains unchanged.
-
-If deployment fallback is absent, STOP rather than allowing the synthetic user to fail deep inside a paid-provider handler.
-
-## Required correction C — startup protocol
-
-Add a one-shot startup marker emitted only after:
-- Python successfully imports the helper and backend `app` package;
-- live confirmation is present;
-- long-running AI false values are present.
-
-Example:
 `REHEARSAL_STARTUP=PASS`
 
-It must contain no secrets.
+If deployment OpenAI fallback is absent, expected terminal output is:
 
-If startup/import fails before business execution, remote wrapper must still produce a fixed sanitized marker rather than raw stderr.
+`REHEARSAL_REMOTE_BLOCKED=provider_config`
 
-## Required regressions
+before any synthetic fixture creation.
 
-At minimum prove:
+## Expected successful report
 
-1. one-shot helper destination is under `/app` and is read-only;
-2. command executes the helper from `/app`;
-3. generated/constructed one-shot environment does not modify long-running services;
-4. deployment OpenAI fallback present => startup may proceed;
-5. deployment OpenAI fallback absent => fixed `provider_config` block before fixture creation;
-6. no credential value appears in stdout;
-7. helper startup/import success emits `REHEARSAL_STARTUP=PASS`;
-8. simulated import/startup failure becomes fixed sanitized marker;
-9. all existing remote-program/Telegram-transport/failure-cleanup tests remain green;
-10. fake local rehearsal remains green.
+A successful live rehearsal must include:
 
-Prefer an execution-level test that reproduces the production image import layout (`/app/app` plus helper under its intended destination) instead of only inspecting command strings.
+- `REHEARSAL_STARTUP=PASS`
+- `INBOX_ELIGIBLE=PASS`
+- `STACK_GROUPED=PASS`
+- `EMBEDDING=PASS`
+- `AUTO_LABEL=PASS`
+- `TEMPORAL=PASS`
+- `TEMPORAL_PARTICIPATION=expected`
+- `CORRELATION=PASS`
+- `SUMMARY=PASS`
+- `CONTEXT_VISIBLE=PASS`
+- `IDEMPOTENT=PASS`
+- `ENV_UNCHANGED=PASS`
+- `PROCESS_LOCAL_AI=true`
+- `LONG_RUNNING_API_AI=false`
+- `LONG_RUNNING_WORKER_AI=false`
+- `TELEGRAM_TRANSPORT_CALLS=0`
+- `DANGLING_JOBS=0`
+- `PROVIDERS=live`
+- `LIVE_REHEARSAL_EXECUTED=1`
 
-## Production facts to preserve
+Synthetic artifacts are intentionally retained for audit.
 
-- production runtime/ref:
-  `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`;
-- Alembic 0046;
-- long-running API/worker Telegram AI=false;
+## Failure handling
+
+On any:
+- `REHEARSAL_REMOTE_BLOCKED=...`
+- `REHEARSAL_REFUSED=...`
+- `REHEARSAL_FAILED=...`
+
+do not retry, do not use ad-hoc SSH, do not alter production, and return the complete sanitized stdout.
+
+## Hard constraints
+
+- no real Telegram content;
+- no Telegram transport/session decrypt;
+- no production .env mutation;
+- no global/service AI=true;
+- no API/worker restart/recreate;
 - no deploy/ref movement;
-- no restart/recreate;
-- no Telegram transport;
-- no production env mutation.
-
-## Authorization
-
-AUTHORIZED:
-- local wrapper/helper/tests correction;
-- update PROJECT_STATE.md;
-- commit/push canonical main.
-
-NOT AUTHORIZED:
-- live rehearsal;
-- production SSH;
-- deploy/ref movement;
-- provider calls;
-- synthetic DB writes;
-- credential mutation/copy;
-- Telegram calls.
-
-## Required report
-
-Return:
-- commit SHA;
-- exact import-root correction;
-- provider-config boolean preflight;
-- startup protocol;
-- execution-level import-layout test;
-- focused tests / py_compile / Ruff / diff-check;
-- live rehearsal executed=0.
-
-Final marker:
-
-`TELEGRAM_REHEARSAL_ONESHOT_STARTUP_READY`
-
-Then STOP.
+- no migration;
+- no cleanup.
 
 `CURRENT_TASK.md` is the source of active authorization.
