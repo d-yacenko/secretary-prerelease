@@ -426,31 +426,31 @@ def test_transport_and_session_decrypt_are_unreachable() -> None:
             store.TelegramMtprotoAccountStore.decrypt_session(object(), object())
 
 
-def test_oneshot_does_not_enable_global_ai_or_synthetic_helper() -> None:
-    command = remote.oneshot_compose_command()
+def test_acceptance_exec_stays_inside_the_running_api_container() -> None:
+    command = remote.acceptance_exec_command()
     joined = " ".join(command)
-    assert remote.ONESHOT_HELPER_DEST == "/app/telegram_self_authored_e2e.py"
-    assert command[command.index("python3") :] == [
+    assert command[command.index("exec") :] == [
+        "exec",
+        "-T",
+        "-w",
+        "/app",
+        "-e",
+        "SELF_E2E_CONFIRM=reviewed",
+        "-e",
+        "REHEARSAL_LONG_RUNNING_API_AI=false",
+        "-e",
+        "REHEARSAL_LONG_RUNNING_WORKER_AI=false",
+        "api",
         "python3",
-        "/app/telegram_self_authored_e2e_bootstrap.py",
+        "-B",
+        "-",
     ]
-    assert f"{remote.ONESHOT_HELPER_DEST}:ro" in joined
-    assert f"{remote.ONESHOT_BOOTSTRAP_DEST}:ro" in joined
-    assert ":ro" in joined
+    for forbidden in ("run", "create", "up", "build", "pull", "--build", "--pull", "--no-build"):
+        assert forbidden not in command
+    assert ":ro" not in joined
     assert "TELEGRAM_MTPROTO_AI_ENABLED=true" not in command
     assert "telegram_production_rehearsal.py" not in joined
-    assert "--no-build" not in command
-    assert "--build" not in command
-    run_at = command.index("run")
-    api_at = command.index("api")
-    pull_at = command.index("--pull")
-    assert command[pull_at : pull_at + 2] == ["--pull", "never"]
-    assert run_at < pull_at < api_at
-    assert "--rm" in command[run_at:api_at]
-    assert "--no-deps" in command[run_at:api_at]
-    assert "up" not in command
     assert "docker.sock" not in joined
-    assert "SELF_E2E_CONFIRM=reviewed" in command
 
 
 def test_malformed_marker_metadata_is_blocked(db_session) -> None:
@@ -846,17 +846,12 @@ def fake_run(cmd, **_kwargs):
             ("remote", "get-url", "origin"): ORIGIN,
         }
         return Proc(0, answers[tuple(cmd[1:])] + "\\n")
-    if "exec" in cmd:
+    if "printenv" in cmd:
         return Proc(0, "false\\n")
-    if "ps" in cmd:
-        if MODE == "missing_image":
-            return Proc(0, "")
-        return Proc(0, "abc123def456\\n")
-    if "inspect" in cmd:
-        if MODE == "bad_image":
-            return Proc(1, "sk-secret docker error\\n")
-        return Proc(0, "sha256:0123456789abcdef\\n")
-    if "run" in cmd:
+    if cmd[-3:] == ["python3", "-B", "-"]:
+        forbidden = {"run", "create", "up", "build", "pull", "--build", "--pull"}
+        if forbidden.intersection(cmd):
+            raise AssertionError(cmd)
         if MODE == "oneshot":
             return Proc(1, "Traceback sk-secret ModuleNotFoundError")
         if MODE == "compile":
@@ -913,28 +908,26 @@ def _run_generated(program: str, *, mode: str):
 
 
 def _run_bootstrap(helper_source: str):
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        helper = root / "helper.py"
-        helper.write_text(helper_source, encoding="utf-8")
-        script = root / "bootstrap.py"
-        script.write_text(remote.oneshot_bootstrap_source(str(helper)), encoding="utf-8")
-        return __import__("subprocess").run(
-            [sys.executable, str(script)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+    program = remote.acceptance_bootstrap_source(helper_source)
+    return __import__("subprocess").run(
+        [sys.executable, "-B", "-"],
+        input=program,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def test_bootstrap_marker_precedes_helper_load() -> None:
-    source = remote.oneshot_bootstrap_source()
+    source = remote.acceptance_bootstrap_source("def main(argv):\n    return 0\n")
     assert "import app" not in source
     assert "from app" not in source
+    assert "write_text" not in source
+    assert "open(" not in source
     result = _run_bootstrap(
         "import sys\n"
+        "if __name__ == '__main__':\n"
+        "    raise RuntimeError('sk-secret named main')\n"
         "sys.stdout.write('HELPER_IMPORT\\n')\n"
         "def main(argv):\n"
         "    sys.stdout.write('HELPER_MAIN %s\\n' % (argv,))\n"
@@ -1125,45 +1118,20 @@ def test_checkout_ref_host_key_and_long_running_guards_remain() -> None:
     assert remote.PRODUCTION_RELEASE in program
 
 
-def test_api_image_precondition_requires_a_present_image_id() -> None:
-    assert remote.present_image_id("sha256:0123456789abcdef\n", 0) == "sha256:0123456789abcdef"
-    assert remote.present_image_id("", 0) is None
-    assert remote.present_image_id("   \n", 0) is None
-    assert remote.present_image_id("sha256:0123456789abcdef\n", 1) is None
-    assert remote.present_image_id("not-an-image\n", 0) is None
-    assert remote.present_image_id("sha256:abc\nsha256:def\n", 0) is None
-    program = remote.build_remote_program("def main(argv):\n    return 0\n")
-    assert "--no-build" not in program
-    assert "--build" not in program
-    assert '"--pull", "never"' in program or "'--pull', 'never'" in program
-    missing = _run_generated(program, mode="missing_image")
-    bad = _run_generated(program, mode="bad_image")
-    assert missing.returncode == 2
-    assert missing.stdout == f"SELF_E2E_REMOTE_BLOCKED={remote.IMAGE_MISSING}\n"
-    assert bad.returncode == 2
-    assert bad.stdout == f"SELF_E2E_REMOTE_BLOCKED={remote.IMAGE_MISSING}\n"
-    assert "sk-secret" not in missing.stdout
-    assert "sk-secret" not in bad.stdout
-    assert "Traceback" not in missing.stdout
-    assert "Traceback" not in bad.stdout
-    assert "docker" not in missing.stdout
-
-
 def test_generated_remote_program_reaches_oneshot_and_sanitizes_failure() -> None:
-    written = Path("/tmp/telegram_self_authored_e2e.py")
-    bootstrap = Path("/tmp/telegram_self_authored_e2e_bootstrap.py")
     program = remote.build_remote_program("print('helper')\n")
-    try:
-        ok = _run_generated(program, mode="ok")
-        failed = _run_generated(program, mode="oneshot")
-        raised = _run_generated(program, mode="raise")
-        compiled = _run_generated(program, mode="compile")
-        harness_owned = _run_generated(program, mode="harness")
-        startup_only = _run_generated(program, mode="startup")
-        harness_failed = _run_generated(program, mode="failed")
-    finally:
-        written.unlink(missing_ok=True)
-        bootstrap.unlink(missing_ok=True)
+    assert "write_text" not in program
+    assert "/tmp/telegram_self_authored_e2e" not in program
+    assert "input=STDIN_PROGRAM" in program
+    for forbidden in ("--build", "--pull", "--no-build", '"run"', "'run'"):
+        assert forbidden not in program
+    ok = _run_generated(program, mode="ok")
+    failed = _run_generated(program, mode="oneshot")
+    raised = _run_generated(program, mode="raise")
+    compiled = _run_generated(program, mode="compile")
+    harness_owned = _run_generated(program, mode="harness")
+    startup_only = _run_generated(program, mode="startup")
+    harness_failed = _run_generated(program, mode="failed")
     assert ok.returncode == 0
     assert ok.stdout == "SELF_E2E_STARTUP=imported\nSELF_AUTHORED=PASS\nEMBEDDING=PASS\n"
     assert "NameError" not in ok.stderr

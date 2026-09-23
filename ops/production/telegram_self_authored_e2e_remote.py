@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Stream the self-authored E2E harness into an isolated production one-shot.
+"""Run the self-authored E2E harness inside the already-running API container.
 
-The container inherits the production Telegram AI flag. The harness sets
-process-local true only after its privacy proofs. This wrapper does not
-deploy, recreate, restart, or mutate the production checkout.
+The exec process receives only the acceptance environment overrides. The
+harness sets process-local true only after its privacy proofs. This wrapper
+does not create a container, build or pull an image, or write into the
+production checkout or container filesystem.
 """
 
 from __future__ import annotations
@@ -28,19 +29,12 @@ CANONICAL_ORIGIN = "https://github.com/d-yacenko/secretary-prerelease.git"
 PRODUCTION_RELEASE = "8ad52f0653f9f90e1932c49532dc4f993ea1a9cc"
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 TRUE_FLAGS = {"1", "true", "yes", "on"}
-ONESHOT_HELPER_NAME = "telegram_self_authored_e2e.py"
-ONESHOT_HELPER_DEST = f"/app/{ONESHOT_HELPER_NAME}"
-HOST_HELPER_PATH = f"/tmp/{ONESHOT_HELPER_NAME}"
-ONESHOT_BOOTSTRAP_NAME = "telegram_self_authored_e2e_bootstrap.py"
-ONESHOT_BOOTSTRAP_DEST = f"/app/{ONESHOT_BOOTSTRAP_NAME}"
-HOST_BOOTSTRAP_PATH = f"/tmp/{ONESHOT_BOOTSTRAP_NAME}"
 STARTUP_BOOTSTRAP = "SELF_E2E_STARTUP=bootstrap"
 STARTUP_COMPILED = "SELF_E2E_STARTUP=compiled"
 STARTUP_IMPORTED = "SELF_E2E_STARTUP=imported"
 COMPILE_FAILED = "compile_failed"
 IMPORT_FAILED = "import_failed"
 HARNESS_PROTOCOL = "harness_protocol"
-IMAGE_MISSING = "image_missing"
 GitRunner = Callable[[list[str]], str]
 
 
@@ -165,32 +159,6 @@ def terminal_harness_outcome(output: str) -> bool:
     return False
 
 
-def _hex_token(token: str, *, minimum: int) -> bool:
-    return len(token) >= minimum and all(char in "0123456789abcdef" for char in token.lower())
-
-
-def container_id_token(stdout: str, returncode: int) -> str | None:
-    if returncode != 0:
-        return None
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if len(lines) != 1 or not _hex_token(lines[0], minimum=12):
-        return None
-    return lines[0]
-
-
-def present_image_id(stdout: str, returncode: int) -> str | None:
-    if returncode != 0:
-        return None
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if len(lines) != 1:
-        return None
-    token = lines[0]
-    digest = token.removeprefix("sha256:")
-    if not _hex_token(digest, minimum=12):
-        return None
-    return token
-
-
 def classify_child_output(output: str, returncode: int) -> tuple[str, int]:
     if terminal_harness_outcome(output):
         return output, returncode
@@ -199,15 +167,16 @@ def classify_child_output(output: str, returncode: int) -> tuple[str, int]:
     return "SELF_E2E_REMOTE_BLOCKED=oneshot_failed\n", 1
 
 
-def oneshot_bootstrap_source(helper_path: str = ONESHOT_HELPER_DEST) -> str:
-    """Stdlib-only child entrypoint. It does not import application code itself."""
-    return f"""import importlib.util
+def acceptance_bootstrap_source(helper_source: str) -> str:
+    """Stdlib-only stdin entrypoint. It compiles and execs the helper in memory."""
+    encoded = base64.b64encode(helper_source.encode("utf-8")).decode("ascii")
+    return f"""import base64
 import io
 import sys
+import types
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 
-HELPER = {helper_path!r}
+HELPER_B64 = {encoded!r}
 
 
 def _emit(line):
@@ -231,20 +200,17 @@ def _terminal(text):
 
 _emit({STARTUP_BOOTSTRAP!r})
 try:
-    compiled = compile(Path(HELPER).read_text(encoding="utf-8"), "<helper>", "exec")
+    compiled = compile(base64.b64decode(HELPER_B64).decode("utf-8"), "<helper>", "exec")
 except Exception:
     _blocked({COMPILE_FAILED!r})
-del compiled
 _emit({STARTUP_COMPILED!r})
 imported = False
 try:
-    spec = importlib.util.spec_from_file_location("telegram_self_authored_e2e_helper", HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    if not callable(getattr(module, "main", None)):
+    module = types.ModuleType("telegram_self_authored_e2e_helper")
+    module.__name__ = "telegram_self_authored_e2e_helper"
+    sys.modules[module.__name__] = module
+    exec(compiled, module.__dict__)
+    if module.__name__ == "__main__" or not callable(getattr(module, "main", None)):
         raise RuntimeError
     imported = True
 except BaseException:
@@ -270,10 +236,7 @@ _blocked({HARNESS_PROTOCOL!r})
 """
 
 
-def oneshot_compose_command(
-    helper_path: str = HOST_HELPER_PATH,
-    bootstrap_path: str = HOST_BOOTSTRAP_PATH,
-) -> list[str]:
+def acceptance_exec_command() -> list[str]:
     return [
         "docker",
         "compose",
@@ -283,31 +246,26 @@ def oneshot_compose_command(
         "infra/compose.yaml",
         "-f",
         "infra/compose.deploy.yaml",
-        "run",
-        "--rm",
-        "--no-deps",
-        "--pull",
-        "never",
+        "exec",
+        "-T",
+        "-w",
+        "/app",
         "-e",
         "SELF_E2E_CONFIRM=reviewed",
         "-e",
         "REHEARSAL_LONG_RUNNING_API_AI=false",
         "-e",
         "REHEARSAL_LONG_RUNNING_WORKER_AI=false",
-        "-v",
-        f"{helper_path}:{ONESHOT_HELPER_DEST}:ro",
-        "-v",
-        f"{bootstrap_path}:{ONESHOT_BOOTSTRAP_DEST}:ro",
         "api",
         "python3",
-        ONESHOT_BOOTSTRAP_DEST,
+        "-B",
+        "-",
     ]
 
 
 def build_remote_program(helper_source: str) -> str:
-    encoded = base64.b64encode(helper_source.encode("utf-8")).decode("ascii")
-    command = oneshot_compose_command()
-    bootstrap = oneshot_bootstrap_source()
+    command = acceptance_exec_command()
+    stdin_program = acceptance_bootstrap_source(helper_source)
     logic = (
         f"TRUE_FLAGS = {tuple(sorted(TRUE_FLAGS))!r}\n"
         + inspect.getsource(_flag_enabled)
@@ -317,25 +275,14 @@ def build_remote_program(helper_source: str) -> str:
         + inspect.getsource(terminal_harness_outcome)
         + "\n"
         + inspect.getsource(classify_child_output)
-        + "\n"
-        + inspect.getsource(_hex_token)
-        + "\n"
-        + inspect.getsource(container_id_token)
-        + "\n"
-        + inspect.getsource(present_image_id)
     )
-    return f"""import base64
-import subprocess
+    return f"""import subprocess
 import sys
-from pathlib import Path
 
 {logic}
 RELEASE = {PRODUCTION_RELEASE!r}
-HELPER_PATH = {HOST_HELPER_PATH!r}
-BOOTSTRAP_PATH = {HOST_BOOTSTRAP_PATH!r}
-BOOTSTRAP_TEXT = {bootstrap!r}
-ONESHOT = {command!r}
-HELPER_B64 = {encoded!r}
+EXEC = {command!r}
+STDIN_PROGRAM = {stdin_program!r}
 CANONICAL_ORIGIN = {CANONICAL_ORIGIN!r}
 
 
@@ -382,34 +329,14 @@ try:
     if reason:
         sys.stdout.write(f"SELF_E2E_REMOTE_BLOCKED={{reason}}\\n")
         raise SystemExit(2)
-    containers = subprocess.run(
-        [
-            "docker", "compose", "--env-file", "/opt/secretary/.env",
-            "-f", "infra/compose.yaml", "-f", "infra/compose.deploy.yaml",
-            "ps", "-q", "api",
-        ],
+    proc = subprocess.run(
+        EXEC,
+        input=STDIN_PROGRAM,
         cwd="/opt/secretary",
         text=True,
         capture_output=True,
         check=False,
     )
-    container_id = container_id_token(containers.stdout, containers.returncode)
-    image_id = None
-    if container_id:
-        inspected = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Image}}", container_id],
-            cwd="/opt/secretary",
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        image_id = present_image_id(inspected.stdout, inspected.returncode)
-    if not image_id:
-        sys.stdout.write("SELF_E2E_REMOTE_BLOCKED=image_missing\\n")
-        raise SystemExit(2)
-    Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
-    Path(BOOTSTRAP_PATH).write_text(BOOTSTRAP_TEXT, encoding="utf-8")
-    proc = subprocess.run(ONESHOT, cwd="/opt/secretary", text=True, capture_output=True, check=False)
     output, code = classify_child_output(proc.stdout, proc.returncode)
     sys.stdout.write(output)
     raise SystemExit(code)
