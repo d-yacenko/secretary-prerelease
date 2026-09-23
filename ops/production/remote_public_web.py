@@ -105,11 +105,68 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def load_pages(repository: Path) -> tuple[dict[str, bytes], dict[str, str]]:
+TRACKED_STATUS_ARGS = ("status", "--porcelain", "--untracked-files=no")
+SOURCE_PATHS = tuple(PAGE_FILES.values())
+
+
+def require_tracked_worktree_clean(porcelain: str) -> None:
+    if porcelain.strip():
+        raise PublicWebError("tracked worktree is dirty")
+
+
+def git_blob_id(data: bytes) -> str:
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
+
+
+def load_release_pages(
+    release_sha: str, *, read_blob, blob_id
+) -> tuple[dict[str, bytes], dict[str, str]]:
     pages: dict[str, bytes] = {}
     for target, source in PAGE_FILES.items():
-        pages[target] = (repository / source).read_bytes()
+        try:
+            data = read_blob(release_sha, source)
+            oid = blob_id(release_sha, source)
+        except PublicWebError:
+            raise
+        except Exception as exc:
+            raise PublicWebError("branding source object is missing") from exc
+        if not isinstance(data, bytes) or not isinstance(oid, str) or not oid:
+            raise PublicWebError("branding source object is missing")
+        if git_blob_id(data) != oid:
+            raise PublicWebError("branding source object mismatch")
+        pages[target] = data
     return pages, page_manifest(pages)
+
+
+def read_release_blob(release_sha: str, path: str) -> bytes:
+    if path not in SOURCE_PATHS:
+        raise PublicWebError("unexpected branding path")
+    spec = f"{release_sha}:{path}"
+    kind = _git_text(["cat-file", "-t", spec])
+    if kind != "blob":
+        raise PublicWebError("branding source object is missing")
+    return _git_bytes(["cat-file", "blob", spec])
+
+
+def release_blob_id(release_sha: str, path: str) -> str:
+    if path not in SOURCE_PATHS:
+        raise PublicWebError("unexpected branding path")
+    return _git_text(["rev-parse", f"{release_sha}:{path}"])
+
+
+def _git_text(args: list[str]) -> str:
+    proc = subprocess.run(["git", *args], capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise PublicWebError("branding source object is missing")
+    return proc.stdout.decode().strip()
+
+
+def _git_bytes(args: list[str]) -> bytes:
+    proc = subprocess.run(["git", *args], capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise PublicWebError("branding source object is missing")
+    return proc.stdout
 
 
 def page_manifest(pages: dict[str, bytes]) -> dict[str, str]:
@@ -404,7 +461,10 @@ def main() -> int:
     require_running(api_id, "api")
     require_running(worker_id, "worker")
     before = snapshot(db_id, api_id, worker_id)
-    pages, manifest = load_pages(REPOSITORY_PATH)
+    require_tracked_worktree_clean(git(*TRACKED_STATUS_ARGS))
+    pages, manifest = load_release_pages(
+        release_sha, read_blob=read_release_blob, blob_id=release_blob_id
+    )
 
     def identity_after() -> None:
         require_identities_unchanged(
@@ -413,7 +473,7 @@ def main() -> int:
         )
 
     def verify() -> None:
-        observed = {url: fetch_public(url) for url, _status, _rel in VERIFY_URLS}
+        observed = {url: fetch_public(url) for url, *_ignored in VERIFY_URLS}
         verify_branding_responses(observed, pages)
 
     publish_branding_files(

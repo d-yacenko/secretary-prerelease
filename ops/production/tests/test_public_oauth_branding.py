@@ -65,10 +65,20 @@ class BrandingPagesTest(unittest.TestCase):
             self.assertNotIn("fonts.googleapis", text)
 
     def test_repository_pages_map_to_nginx_targets(self):
-        pages, manifest = remote.load_pages(ROOT)
+        blobs = {source: (ROOT / source).read_bytes() for source in remote.SOURCE_PATHS}
+
+        def read_blob(_release, source):
+            return blobs[source]
+
+        def blob_id(_release, source):
+            return remote.git_blob_id(blobs[source])
+
+        pages, manifest = remote.load_release_pages(
+            RELEASE, read_blob=read_blob, blob_id=blob_id
+        )
         self.assertEqual(set(pages), set(remote.OWNED_PATHS))
         self.assertEqual(
-            pages["privacy/index.html"], (PUBLIC / "privacy.html").read_bytes()
+            pages["privacy/index.html"], blobs["infra/public/privacy.html"]
         )
         self.assertEqual(
             manifest["terms/index.html"], remote.sha256_bytes(pages["terms/index.html"])
@@ -275,6 +285,55 @@ class PublisherPolicyTest(unittest.TestCase):
         self.assertEqual(sentinel.read_bytes(), b"do-not-read")
         self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
         self.assertFalse((root / "terms").exists())
+
+    def test_dirty_tracked_source_is_rejected_before_write(self):
+        root = Path(self._tmp())
+        (root / "index.html").write_bytes(b"keep-home")
+        with self.assertRaises(remote.PublicWebError) as caught:
+            remote.require_tracked_worktree_clean(" M infra/public/index.html\n")
+            self._publish(root, _pages())
+        self.assertNotIn("index.html", str(caught.exception))
+        self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
+        self.assertFalse((root / "privacy").exists())
+
+    def test_dirty_unrelated_tracked_file_is_rejected_before_write(self):
+        root = Path(self._tmp())
+        (root / "index.html").write_bytes(b"keep-home")
+        with self.assertRaises(remote.PublicWebError) as caught:
+            remote.require_tracked_worktree_clean(" D backend/app/main.py\n")
+            self._publish(root, _pages())
+        self.assertNotIn("main.py", str(caught.exception))
+        self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
+        self.assertFalse((root / "terms").exists())
+
+    def test_untracked_files_are_outside_the_clean_check(self):
+        remote.require_tracked_worktree_clean("")
+        self.assertEqual(
+            remote.TRACKED_STATUS_ARGS,
+            ("status", "--porcelain", "--untracked-files=no"),
+        )
+
+    def test_release_object_mismatch_or_missing_source_writes_nothing(self):
+        root = Path(self._tmp())
+        (root / "index.html").write_bytes(b"keep-home")
+        blobs = {source: b"page" for source in remote.SOURCE_PATHS}
+
+        def read_blob(_release, source):
+            return blobs[source]
+
+        def wrong_id(_release, _source):
+            return "a" * 40
+
+        with self.assertRaises(remote.PublicWebError):
+            remote.load_release_pages(RELEASE, read_blob=read_blob, blob_id=wrong_id)
+        self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
+
+        def missing(_release, _source):
+            raise remote.PublicWebError("branding source object is missing")
+
+        with self.assertRaises(remote.PublicWebError):
+            remote.load_release_pages(RELEASE, read_blob=missing, blob_id=wrong_id)
+        self.assertFalse((root / "privacy").exists())
 
     def test_publisher_does_not_mutate_nginx_or_compose(self):
         source = (OPS / "remote_public_web.py").read_text(encoding="utf-8")
