@@ -1,16 +1,26 @@
-# Current task — Replace Telegram E2E one-shot create path with exec-in-running-api
+# Current task — Suppress helper import-time output in Telegram E2E bootstrap
 
 ## Architect review
 
 Commit:
 
-`7d571f410a31e4fc322f90ae0ac5e976b300b4fb`
+`88e9055d901a931f4df2dc66b6e8b5a1011d8142`
 
-correctly removes the unsupported `docker compose run --no-build` option and adds useful image diagnostics, but it is NOT accepted as live-ready.
+correctly replaces the acceptance container-create path with stdin-fed `docker compose exec -T -w /app ... api python3 -B -` inside the already-running production API container.
 
-Reason: for `docker compose run`, omitting `--build` does not establish a hard no-build guarantee. Current Compose internals still construct build options for the run/create path when a service has a `build:` definition, while `run` exposes no public `--no-build` flag. `--pull never` prevents pulls only; it does not prove that the create path cannot build. The current running-container image-id precondition also does not force `compose run api` to use that exact image id.
+The exec/container/build/pull/filesystem contract is accepted.
 
-No new live E2E is authorized.
+One privacy blocker remains before live readiness.
+
+The in-memory helper import currently executes:
+
+`exec(compiled, module.__dict__)`
+
+without redirecting helper stdout. Therefore top-level helper code can emit arbitrary stdout before the harness terminal protocol owns the output. The focused test currently demonstrates this by expecting `HELPER_IMPORT` in public stdout.
+
+That violates the fail-closed requirement that partial/nonterminal helper output, credentials, provider responses, Telegram content, traceback, and exception details are never surfaced.
+
+No live E2E is authorized.
 
 Production runtime remains:
 
@@ -24,70 +34,38 @@ Long-running Telegram AI remains false.
 
 ## Authorized work
 
-Code/test-only correction of the self-authored E2E remote execution path.
+Code/test-only correction in the stdin bootstrap.
 
-Replace the one-shot container creation path with a separate Python process executed inside the already-running production `api` container.
-
-Use the canonical Compose files and an exec command equivalent to:
-
-```text
-docker compose --env-file /opt/secretary/.env \
-  -f infra/compose.yaml \
-  -f infra/compose.deploy.yaml \
-  exec -T \
-  -w /app \
-  -e SELF_E2E_CONFIRM=reviewed \
-  -e REHEARSAL_LONG_RUNNING_API_AI=false \
-  -e REHEARSAL_LONG_RUNNING_WORKER_AI=false \
-  api python3 -B -
-```
-
-The exact option ordering may follow Compose CLI requirements, but the resulting operation must be `exec`, not `run`, `create`, `up`, or `build`.
-
-### Bootstrap requirements
-
-- Feed the acceptance bootstrap through stdin.
-- Embed the helper source in the stdin program; do not write helper/bootstrap files into the production checkout or container filesystem.
-- Before helper execution, bootstrap code must use Python standard library only.
-- Emit the existing startup protocol:
-  - `SELF_E2E_STARTUP=bootstrap`
-  - `SELF_E2E_STARTUP=compiled`
-  - `SELF_E2E_STARTUP=imported`
-- Compile the helper source in memory.
-- Execute it in an isolated synthetic module namespace with `__name__` not equal to `"__main__"`.
-- Call helper `main(["--live"])` exactly once.
-- Preserve fixed sanitized `compile_failed`, `import_failed`, and `harness_protocol` behavior.
-- Preserve propagation of legitimate `SELF_E2E_BLOCKED=...`, `SELF_E2E_FAILED=...`, and complete success output containing the exact `SELF_AUTHORED=PASS` line.
-- Suppress raw stderr, traceback, exception text, partial nonterminal helper output, credentials, provider responses, and Telegram content.
-
-### Safety requirements
-
-The exec process inherits the already-running container environment. The three `-e` overrides above apply only to the exec process.
-
-Keep the existing explicit probes proving long-running API and worker `TELEGRAM_MTPROTO_AI_ENABLED` are false before acceptance starts.
-
-Do not set global/container `TELEGRAM_MTPROTO_AI_ENABLED=true`.
-
-Remove the now-unneeded one-shot image-resolution/build/pull logic and temporary `/tmp` helper/bootstrap file writes if they are no longer used.
-
-The acceptance path must contain no Docker image build, pull, create, run, restart, or recreate operation.
+1. Execute the compiled helper module under redirected stdout and stderr.
+2. Discard all helper top-level/import-time stdout and stderr, whether import succeeds or fails.
+3. Keep bootstrap-owned markers outside that redirection:
+   - `SELF_E2E_STARTUP=bootstrap`
+   - `SELF_E2E_STARTUP=compiled`
+   - `SELF_E2E_STARTUP=imported`
+   - fixed `compile_failed`
+   - fixed `import_failed`
+4. Only after a successful import and `SELF_E2E_STARTUP=imported` may helper `main(["--live"])` run under the existing captured-output protocol.
+5. Preserve existing terminal propagation:
+   - legitimate `SELF_E2E_BLOCKED=...`;
+   - legitimate `SELF_E2E_FAILED=...`;
+   - complete success output containing exact `SELF_AUTHORED=PASS`.
+6. Preserve `harness_protocol` fail-closed behavior for exception/nonterminal main results.
+7. Do not surface raw stderr, traceback, exception messages, import-time stdout, partial helper output, credentials, provider responses, or Telegram content.
+8. Do not alter the accepted `docker compose exec` command, ref/origin/host-key/long-running-AI guards, or process-local AI semantics.
 
 ## Required tests
 
 Add/update focused tests proving at least:
 
-1. the acceptance command uses `docker compose exec`, not `run`, `create`, `up`, or `build`;
-2. it contains `-T`, `-w /app`, the three required exec-only env overrides, service `api`, and `python3 -B -`;
-3. there is no `--build`, `--pull`, helper volume mount, or one-shot container creation path;
-4. bootstrap/helper source is passed via stdin and no helper/bootstrap file is written to remote/container filesystem;
-5. bootstrap marker precedes helper execution;
-6. syntax failure -> fixed `compile_failed`;
-7. top-level helper execution/import failure -> fixed `import_failed`;
-8. helper `main(["--live"])` is called exactly once;
-9. legitimate BLOCKED/FAILED/success output and exit code propagation remain correct;
-10. exception/nonterminal result -> fixed `harness_protocol`;
-11. raw stderr/traceback/secret fixture text is never surfaced;
-12. checkout/ref/origin/host-key/long-running-AI guards remain unchanged.
+1. top-level helper stdout is not present in public stdout;
+2. top-level helper stderr is not present in public stderr or stdout;
+3. import-time code that prints a secret fixture and then raises returns only startup markers plus fixed `import_failed`, without the fixture text;
+4. successful import still emits `SELF_E2E_STARTUP=imported`;
+5. helper `main(["--live"])` is called exactly once after import;
+6. legitimate BLOCKED/FAILED/PASS main output still propagates with the correct exit code;
+7. exception/nonterminal main output still becomes fixed `harness_protocol`;
+8. exec command remains `docker compose exec -T -w /app ... api python3 -B -`;
+9. no run/create/up/build/pull path and no filesystem writes reappear.
 
 No test may invoke real Docker, SSH, Telegram, providers, or production DB.
 
