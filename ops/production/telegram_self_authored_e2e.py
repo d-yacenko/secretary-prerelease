@@ -103,8 +103,8 @@ def load_marker_objects(session: Session) -> list[Object]:
     )
 
 
-def message_identity_block(obj: Object, account: TelegramMtprotoAccount | None) -> str | None:
-    """Return a block code. Direction alone never proves self-authorship."""
+def self_authored_block(obj: Object, account: TelegramMtprotoAccount | None) -> str | None:
+    """Return a block code. The E2E marker is not part of self-authorship."""
     if not is_canonical_telegram_mtproto_object(obj):
         return "canonical"
     meta = _meta(obj)
@@ -123,6 +123,14 @@ def message_identity_block(obj: Object, account: TelegramMtprotoAccount | None) 
         return "identity"
     if sender != owner:
         return "sender"
+    return None
+
+
+def message_identity_block(obj: Object, account: TelegramMtprotoAccount | None) -> str | None:
+    """Selected E2E messages must be self-authored and carry the marker."""
+    reason = self_authored_block(obj, account)
+    if reason:
+        return reason
     if MARKER not in (obj.body or "") and MARKER not in (obj.title or ""):
         return "marker"
     return None
@@ -235,7 +243,7 @@ def prove_summary_cohort(session: Session, cohort: Cohort) -> frozenset[UUID]:
     for group in covered:
         members = [obj for obj in objects if obj.id in group.object_ids]
         for obj in members:
-            if obj.provider == TELEGRAM_PROVIDER and message_identity_block(obj, cohort.account):
+            if obj.provider == TELEGRAM_PROVIDER and self_authored_block(obj, cohort.account):
                 raise HarnessBlocked("summary_cohort")
             if is_canonical_telegram_mtproto_object(obj):
                 approved.add(obj.id)

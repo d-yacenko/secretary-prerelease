@@ -237,6 +237,130 @@ def test_inactive_scope_is_rejected(db_session) -> None:
     assert settings.telegram_mtproto_ai_enabled is False
 
 
+def test_selected_marker_messages_still_require_the_marker(db_session) -> None:
+    user, account = _user(db_session)
+    task = _task(db_session, user)
+    base = datetime(2026, 9, 22, 8, 0, tzinfo=UTC)
+    first = _message(db_session, user, account, 4242, body="outbound without marker", when=base)
+    second = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        body="second outbound without marker",
+        when=base + timedelta(minutes=1),
+    )
+    assert harness.self_authored_block(first, account) is None
+    assert harness.message_identity_block(first, account) == "marker"
+    with pytest.raises(harness.HarnessBlocked, match="marker"):
+        harness.prove_cohort(db_session, [first, second, task])
+    assert settings.telegram_mtproto_ai_enabled is False
+
+
+def test_self_authored_non_marker_neighbor_is_approved_for_summary(db_session) -> None:
+    user, account = _user(db_session)
+    _task(db_session, user)
+    base = datetime(2026, 9, 22, 8, 0, tzinfo=UTC)
+    _pair(db_session, user, account)
+    neighbor = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        body="self authored outbound without the marker",
+        when=base + timedelta(minutes=2),
+    )
+    cohort = harness.prove_cohort(db_session, harness.load_marker_objects(db_session))
+    approved = harness.prove_summary_cohort(db_session, cohort)
+    assert neighbor.id in approved
+    assert harness.MARKER not in (neighbor.body or "")
+    assert settings.telegram_mtproto_ai_enabled is False
+
+
+def _outside_burst(obj: Object, base: datetime) -> None:
+    obj.occurred_at = base - timedelta(days=2)
+    obj.body = "cleared"
+
+
+def test_summary_neighbors_still_fail_closed_without_self_authorship(db_session) -> None:
+    user, account = _user(db_session)
+    _task(db_session, user)
+    base = datetime(2026, 9, 22, 8, 0, tzinfo=UTC)
+    _pair(db_session, user, account)
+
+    def prove():
+        return harness.prove_summary_cohort(
+            db_session, harness.prove_cohort(db_session, harness.load_marker_objects(db_session))
+        )
+
+    foreign = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        body="outbound from someone else",
+        sender=99,
+        when=base + timedelta(minutes=2),
+    )
+    assert harness.self_authored_block(foreign, account) == "sender"
+    with pytest.raises(harness.HarnessBlocked, match="summary_cohort"):
+        prove()
+    _outside_burst(foreign, base)
+    unknown = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        body="unknown direction",
+        when=base + timedelta(minutes=2),
+    )
+    unknown.metadata_ = {**unknown.metadata_, "direction": "sideways"}
+    db_session.flush()
+    assert harness.self_authored_block(unknown, account) == "identity"
+    with pytest.raises(harness.HarnessBlocked, match="summary_cohort"):
+        prove()
+    _outside_burst(unknown, base)
+    missing_sender = _message(
+        db_session,
+        user,
+        account,
+        4242,
+        body="missing sender",
+        when=base + timedelta(minutes=2),
+    )
+    missing_sender.metadata_ = {
+        key: value for key, value in missing_sender.metadata_.items() if key != "sender_peer_id"
+    }
+    db_session.flush()
+    assert harness.self_authored_block(missing_sender, account) == "identity"
+    with pytest.raises(harness.HarnessBlocked, match="summary_cohort"):
+        prove()
+    _outside_burst(missing_sender, base)
+    legacy = Object(
+        user_id=user.id,
+        kind="chat_message",
+        origin="source",
+        state="observed",
+        provider="telegram",
+        title="legacy",
+        body="bot history",
+        occurred_at=base + timedelta(minutes=3),
+        metadata_={
+            "transport": "bot",
+            "account_id": str(account.id),
+            "peer_id": 4242,
+            "direction": "outbound",
+            "sender_peer_id": account.telegram_user_id,
+        },
+    )
+    db_session.add(legacy)
+    db_session.flush()
+    assert harness.self_authored_block(legacy, account) == "canonical"
+    approved = prove()
+    assert legacy.id not in approved
+    assert settings.telegram_mtproto_ai_enabled is False
+
+
 def test_third_party_summary_message_blocks_before_provider_call(db_session, monkeypatch) -> None:
     user, account = _user(db_session)
     _task(db_session, user)
