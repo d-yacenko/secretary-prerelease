@@ -1,35 +1,27 @@
-# Current task — Execute exactly one new live self-authored Telegram E2E
+# Current task — Separate Telegram marker identity from summary self-authorship proof
 
-## Human authorization
+## Live result
 
-Explicit human authorization received for exactly one new live production self-authored Telegram E2E to verify the complete Telegram downstream pipeline.
+Exactly one authorized live self-authored Telegram E2E was executed.
 
-Use the existing real production marker:
+Sanitized stdout:
 
-`TG_SELF_E2E_0922A`
+```text
+SELF_E2E_STARTUP=bootstrap
+SELF_E2E_STARTUP=compiled
+SELF_E2E_STARTUP=imported
+SELF_E2E_BLOCKED=summary_cohort
+```
 
-Use real production ML/LLM providers.
+Exit status:
 
-Long-running Telegram AI for the production API and worker must remain false.
+`2`
 
-This authorization permits exactly one invocation of the canonical remote wrapper.
+The attempt is consumed. No retry is authorized.
 
-## Accepted acceptance path
+The accepted `docker compose exec` bootstrap path worked through helper import. The block occurred inside `prove_summary_cohort()`, before process-local Telegram AI was enabled and before any provider call.
 
-Architect-accepted live-ready wrapper/privacy baseline:
-
-`a4c5225550aa56b204043380a02280507f9a9976`
-
-Accepted execution contract:
-
-- acceptance runs only as a separate `docker compose exec -T -w /app ... api python3 -B -` process inside the already-running production API container;
-- helper/bootstrap are passed through stdin and executed in memory;
-- no acceptance-path run/create/up/build/pull/restart/recreate;
-- no helper/bootstrap filesystem writes;
-- helper import-time stdout/stderr are discarded;
-- terminal harness protocol remains fail-closed.
-
-Production runtime/ref remains:
+Production runtime remains:
 
 `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
@@ -37,96 +29,86 @@ Alembic:
 
 `0046`
 
-## Exact authorized invocation
+Long-running API/worker Telegram AI remains false.
 
-Execute exactly once from the canonical local checkout:
+## Root-cause correction
 
-```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin
-python3 ops/production/telegram_self_authored_e2e_remote.py
-```
+The helper currently uses `message_identity_block()` for two different purposes:
 
-No alternate command.
-No direct SSH.
-No manual Docker/Compose command.
-No second invocation.
+1. proving that selected E2E marker messages are canonical self-authored MTProto objects;
+2. proving that every Telegram object included in a covered summary conversation group is safe/self-authored.
 
-## Required success report
+That predicate also requires the E2E marker text to be present.
 
-A successful run must exit 0 and include at least:
+Therefore a canonical outbound self-authored Telegram neighbor in the same conversation burst, but without `TG_SELF_E2E_0922A`, is incorrectly treated as unsafe and causes `SELF_E2E_BLOCKED=summary_cohort`.
 
-- `SELF_E2E_STARTUP=bootstrap`
-- `SELF_E2E_STARTUP=compiled`
-- `SELF_E2E_STARTUP=imported`
-- `SELF_AUTHORED=PASS`
-- `SUMMARY_COHORT_SELF_AUTHORED=PASS`
-- `EMBEDDING=PASS`
-- `AUTO_LABEL_EXECUTED=PASS`
-- `TEMPORAL=PASS`
-- `CORRELATION=PASS`
-- `SUMMARY=PASS`
-- `CONTEXT_VISIBLE=PASS`
-- `RETRIEVAL_VISIBLE=PASS`
-- `IDEMPOTENT=PASS`
-- `DANGLING_SELECTED_JOBS=0`
-- `TELEGRAM_TRANSPORT_CALLS=0`
-- `PROCESS_LOCAL_AI=true`
-- `ENV_UNCHANGED=PASS`
-- `LONG_RUNNING_API_AI=false`
-- `LONG_RUNNING_WORKER_AI=false`
-- `PROVIDERS=live`
-- `LIVE_EXECUTION=1`
+The existing tests cover a third-party inbound neighbor but do not cover a self-authored outbound non-marker neighbor.
 
-`AUTO_LABEL_ASSIGNMENTS=0` is allowed.
+## Authorized work
 
-Accepted temporal result forms remain:
+Code/test-only.
 
-- `temporal_hint`
-- `calendar_match`
-- `hint_merged`
-- `already_evidenced`
+Refactor the helper so marker membership and self-authorship are separate proofs.
 
-## Failure handling
+### Required semantics
 
-On any of:
+Create or equivalent narrowly-scoped logic with these semantics:
 
-- any `SELF_E2E_REMOTE_BLOCKED=...`;
-- any `SELF_E2E_BLOCKED=...`;
-- any `SELF_E2E_FAILED=...`;
-- nonzero exit;
-- zero exit without the complete required PASS report;
+- a base self-authorship proof for Telegram summary/correlation members must require:
+  - canonical Telegram MTProto object;
+  - matching selected account id;
+  - `direction == "outbound"`;
+  - non-empty `sender_peer_id`;
+  - non-empty account `telegram_user_id`;
+  - sender id exactly equals the connected account Telegram user id;
+- it must NOT require the E2E marker text;
+- the selected marker cohort proof must additionally require `TG_SELF_E2E_0922A` in title or body;
+- `prove_cohort()` must continue requiring the marker for every selected E2E message;
+- `prove_summary_cohort()` must use only the base canonical self-authorship proof for Telegram members of covered groups;
+- any inbound, unknown direction, wrong sender, wrong account, noncanonical/legacy Telegram object, or missing identity data in a covered group must still fail closed before any provider call;
+- third-party message regression behavior must remain blocked;
+- no provider/privacy guard may be weakened.
 
-STOP.
+Do not broaden the cohort to other peers/accounts/users.
 
-Do not retry.
-Do not repair production.
-Do not run direct SSH.
-Do not run manual Docker/Compose.
-Do not bypass provider/privacy guards.
-Do not deploy/restart/recreate.
-Do not change production env.
-Do not move production refs.
+Do not change the accepted remote/bootstrap `docker compose exec` path.
 
-Return to Architect:
+## Required tests
 
-- complete sanitized stdout;
-- exact exit status.
+Add focused tests proving at least:
 
-## Hard constraints
+1. selected marker messages still require the marker;
+2. a canonical outbound self-authored message in the same account/peer/conversation burst WITHOUT the marker does not cause `summary_cohort`;
+3. that non-marker self-authored member can be included in the approved summary privacy set;
+4. an inbound third-party neighbor still causes `summary_cohort` before any embedding/summarization/correlation provider call;
+5. an outbound object with sender id different from `account.telegram_user_id` still blocks;
+6. unknown/missing direction or sender identity still blocks;
+7. legacy/noncanonical Telegram objects do not become approved;
+8. no global Telegram AI enablement occurs while proving the cohort;
+9. existing live/privacy, correlation, temporal, idempotency, transport/session, and remote-wrapper tests remain green.
 
-- long-running API Telegram AI=false;
-- long-running worker Telegram AI=false;
-- no Telegram transport calls;
-- no session decrypt;
-- no catch-up/backlog;
-- no synthetic object insertion;
-- no deploy/ref movement;
-- no migration;
-- no production .env change.
+If useful for future diagnostics, internal tests may assert the precise base block reason, but public live output must remain sanitized and must not expose Telegram content, ids, credentials, provider responses, tracebacks, or raw exceptions.
 
-This task authorizes exactly one invocation only.
+Run focused tests, `py_compile`, Ruff check/format, and `git diff --check`.
 
-`CURRENT_TASK.md` is the source of active authorization.
+## Hard stop
+
+No production SSH.
+No production Docker/Compose.
+No remote wrapper execution.
+No live E2E.
+No provider calls.
+No Telegram transport/session access.
+No production DB writes.
+No deploy/restart/recreate.
+No production env changes.
+No production ref movement.
+
+When complete:
+
+- update `PROJECT_STATE.md` factually;
+- commit and push;
+- report SHA and checks;
+- STOP.
+
+A new live attempt requires fresh Architect review and new explicit human authorization.
