@@ -40,6 +40,7 @@ STARTUP_IMPORTED = "SELF_E2E_STARTUP=imported"
 COMPILE_FAILED = "compile_failed"
 IMPORT_FAILED = "import_failed"
 HARNESS_PROTOCOL = "harness_protocol"
+IMAGE_MISSING = "image_missing"
 GitRunner = Callable[[list[str]], str]
 
 
@@ -164,6 +165,32 @@ def terminal_harness_outcome(output: str) -> bool:
     return False
 
 
+def _hex_token(token: str, *, minimum: int) -> bool:
+    return len(token) >= minimum and all(char in "0123456789abcdef" for char in token.lower())
+
+
+def container_id_token(stdout: str, returncode: int) -> str | None:
+    if returncode != 0:
+        return None
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if len(lines) != 1 or not _hex_token(lines[0], minimum=12):
+        return None
+    return lines[0]
+
+
+def present_image_id(stdout: str, returncode: int) -> str | None:
+    if returncode != 0:
+        return None
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return None
+    token = lines[0]
+    digest = token.removeprefix("sha256:")
+    if not _hex_token(digest, minimum=12):
+        return None
+    return token
+
+
 def classify_child_output(output: str, returncode: int) -> tuple[str, int]:
     if terminal_harness_outcome(output):
         return output, returncode
@@ -259,7 +286,8 @@ def oneshot_compose_command(
         "run",
         "--rm",
         "--no-deps",
-        "--no-build",
+        "--pull",
+        "never",
         "-e",
         "SELF_E2E_CONFIRM=reviewed",
         "-e",
@@ -289,6 +317,12 @@ def build_remote_program(helper_source: str) -> str:
         + inspect.getsource(terminal_harness_outcome)
         + "\n"
         + inspect.getsource(classify_child_output)
+        + "\n"
+        + inspect.getsource(_hex_token)
+        + "\n"
+        + inspect.getsource(container_id_token)
+        + "\n"
+        + inspect.getsource(present_image_id)
     )
     return f"""import base64
 import subprocess
@@ -347,6 +381,31 @@ try:
     reason = assess_remote_state(head, porcelain, service_flag("api"), service_flag("worker"), RELEASE)
     if reason:
         sys.stdout.write(f"SELF_E2E_REMOTE_BLOCKED={{reason}}\\n")
+        raise SystemExit(2)
+    containers = subprocess.run(
+        [
+            "docker", "compose", "--env-file", "/opt/secretary/.env",
+            "-f", "infra/compose.yaml", "-f", "infra/compose.deploy.yaml",
+            "ps", "-q", "api",
+        ],
+        cwd="/opt/secretary",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    container_id = container_id_token(containers.stdout, containers.returncode)
+    image_id = None
+    if container_id:
+        inspected = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Image}}", container_id],
+            cwd="/opt/secretary",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        image_id = present_image_id(inspected.stdout, inspected.returncode)
+    if not image_id:
+        sys.stdout.write("SELF_E2E_REMOTE_BLOCKED=image_missing\\n")
         raise SystemExit(2)
     Path(HELPER_PATH).write_text(base64.b64decode(HELPER_B64).decode("utf-8"), encoding="utf-8")
     Path(BOOTSTRAP_PATH).write_text(BOOTSTRAP_TEXT, encoding="utf-8")

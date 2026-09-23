@@ -439,7 +439,15 @@ def test_oneshot_does_not_enable_global_ai_or_synthetic_helper() -> None:
     assert ":ro" in joined
     assert "TELEGRAM_MTPROTO_AI_ENABLED=true" not in command
     assert "telegram_production_rehearsal.py" not in joined
-    assert "--no-deps" in command
+    assert "--no-build" not in command
+    assert "--build" not in command
+    run_at = command.index("run")
+    api_at = command.index("api")
+    pull_at = command.index("--pull")
+    assert command[pull_at : pull_at + 2] == ["--pull", "never"]
+    assert run_at < pull_at < api_at
+    assert "--rm" in command[run_at:api_at]
+    assert "--no-deps" in command[run_at:api_at]
     assert "up" not in command
     assert "docker.sock" not in joined
     assert "SELF_E2E_CONFIRM=reviewed" in command
@@ -840,6 +848,14 @@ def fake_run(cmd, **_kwargs):
         return Proc(0, answers[tuple(cmd[1:])] + "\\n")
     if "exec" in cmd:
         return Proc(0, "false\\n")
+    if "ps" in cmd:
+        if MODE == "missing_image":
+            return Proc(0, "")
+        return Proc(0, "abc123def456\\n")
+    if "inspect" in cmd:
+        if MODE == "bad_image":
+            return Proc(1, "sk-secret docker error\\n")
+        return Proc(0, "sha256:0123456789abcdef\\n")
     if "run" in cmd:
         if MODE == "oneshot":
             return Proc(1, "Traceback sk-secret ModuleNotFoundError")
@@ -1107,6 +1123,30 @@ def test_checkout_ref_host_key_and_long_running_guards_remain() -> None:
     assert "SELF_E2E_REMOTE_BLOCKED=long_running_probe" in program
     assert "TELEGRAM_MTPROTO_AI_ENABLED=true" not in program
     assert remote.PRODUCTION_RELEASE in program
+
+
+def test_api_image_precondition_requires_a_present_image_id() -> None:
+    assert remote.present_image_id("sha256:0123456789abcdef\n", 0) == "sha256:0123456789abcdef"
+    assert remote.present_image_id("", 0) is None
+    assert remote.present_image_id("   \n", 0) is None
+    assert remote.present_image_id("sha256:0123456789abcdef\n", 1) is None
+    assert remote.present_image_id("not-an-image\n", 0) is None
+    assert remote.present_image_id("sha256:abc\nsha256:def\n", 0) is None
+    program = remote.build_remote_program("def main(argv):\n    return 0\n")
+    assert "--no-build" not in program
+    assert "--build" not in program
+    assert '"--pull", "never"' in program or "'--pull', 'never'" in program
+    missing = _run_generated(program, mode="missing_image")
+    bad = _run_generated(program, mode="bad_image")
+    assert missing.returncode == 2
+    assert missing.stdout == f"SELF_E2E_REMOTE_BLOCKED={remote.IMAGE_MISSING}\n"
+    assert bad.returncode == 2
+    assert bad.stdout == f"SELF_E2E_REMOTE_BLOCKED={remote.IMAGE_MISSING}\n"
+    assert "sk-secret" not in missing.stdout
+    assert "sk-secret" not in bad.stdout
+    assert "Traceback" not in missing.stdout
+    assert "Traceback" not in bad.stdout
+    assert "docker" not in missing.stdout
 
 
 def test_generated_remote_program_reaches_oneshot_and_sanitizes_failure() -> None:
