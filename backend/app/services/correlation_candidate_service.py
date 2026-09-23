@@ -1,6 +1,6 @@
 """Bounded correlation candidate generation."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
 from app.services.correlation_constants import (
     CANDIDATE_MAX_EXACT_THREAD,
     CANDIDATE_MAX_PARTICIPANT_TIME,
@@ -116,7 +117,7 @@ class CorrelationCandidateService:
             return False
         if is_object_hidden_from_active_reads(obj):
             return False
-        return True
+        return telegram_mtproto_ai_eligible(self._session, obj)
 
     def _to_candidate(
         self,

@@ -304,7 +304,11 @@ def enqueue_extract_temporal_signal(
     elif not is_temporal_signals_enabled(session, user_id):
         return
     obj = session.scalar(select(Object).where(Object.id == object_id, Object.user_id == user_id))
-    if obj is None or not object_is_temporal_source_eligible(obj):
+    if (
+        obj is None
+        or not telegram_mtproto_ai_eligible(session, obj)
+        or not object_is_temporal_source_eligible(obj)
+    ):
         return
     signature = source_extraction_signature(obj)
     extra = {
@@ -345,7 +349,11 @@ def enqueue_reconcile_temporal_hints(
     elif not is_temporal_signals_enabled(session, user_id):
         return
     obj = session.scalar(select(Object).where(Object.id == object_id, Object.user_id == user_id))
-    if obj is None or not object_is_calendar_reconcile_eligible(obj):
+    if (
+        obj is None
+        or not telegram_mtproto_ai_eligible(session, obj)
+        or not object_is_calendar_reconcile_eligible(obj)
+    ):
         return
     signature = calendar_event_signature(obj)
     extra = {"event_signature": signature}
