@@ -1,93 +1,72 @@
-# Current task — AUTHORIZED production deploy of Quick UX bugfix pack
+# Current task — HOLD after Quick UX bugfix production deployment
 
-## Human authorization
+## Production status
 
-Human explicitly authorized deployment of exact commit:
-
-`2a5d76ae80d53c13a6581852ef1a0362ad1a3e38`
-
-to production.
-
-This authorization is ONLY for the normal schema-neutral application deploy described below.
-
-## Exact release parameters
-
-Release SHA:
+Production runtime/ref:
 
 `2a5d76ae80d53c13a6581852ef1a0362ad1a3e38`
 
-Rollback SHA:
+Deployment status:
 
-`d22c6cf78945c8f92934a46431b2bcc1887fd8c8`
+PASS.
 
-Expected Alembic:
+Deployment evidence:
+- `RELEASE_HEAD=2a5d76ae80d53c13a6581852ef1a0362ad1a3e38`
+- `HEALTH=PASS`
+- `ALEMBIC=0046`
+- `DB_CONTAINER_UNCHANGED=true`
+- `DB_VOLUME_UNCHANGED=true`
+- `ENV_FILE_UNCHANGED=true`
+- `API_RECREATED=true`
+- `WORKER_RECREATED=true`
+- `DEPLOYMENT=PASS`
+- exit status 0;
+- stderr empty;
+- rollback `d22c6cf78945c8f92934a46431b2bcc1887fd8c8` not used.
 
-`0046`
+## Live behavior
 
-Canonical `production` ref has already been fast-forwarded non-force to the exact release SHA.
+The deployed Quick UX bugfix pack includes:
+- Google OAuth refresh diagnostics with safe provider error codes such as `invalid_grant`;
+- existing automatic access-token refresh preserved;
+- hands-free Assistant failures remain visibly errored and emit one local failure cue;
+- desktop Inbox source cards expose a trash quick action using the existing delete semantics;
+- provenance-safe `secretary://object/<uuid>` Assistant citations open exact validated Secretary objects;
+- external http/https links remain external.
 
-The release is schema-neutral relative to rollback:
-- no Alembic migration file changes;
-- expected DB schema remains 0046.
+## Google OAuth operational state
 
-## Required execution
+The deployment does NOT repair an already expired/revoked Google refresh token.
 
-Bootstrap exactly per `docs/executor_bootstrap.md`.
+If the Google OAuth project is still in Publishing status `Testing`, continuous Gmail/Calendar/Drive authorization is not expected to persist for these scopes.
 
-Then execute the normal production deployment only through:
+The next Google recovery steps are separate operator actions:
+1. inspect Google Cloud OAuth publishing mode;
+2. if appropriate, change from `Testing` to `In Production` (or appropriate Internal mode);
+3. perform one fresh Google OAuth authorization in Secretary;
+4. verify Gmail and Google Calendar sync recover.
 
-```bash
-python3 ops/production/deploy.py \
-  --release-sha 2a5d76ae80d53c13a6581852ef1a0362ad1a3e38 \
-  --rollback-sha d22c6cf78945c8f92934a46431b2bcc1887fd8c8 \
-  --expected-alembic 0046
-```
+None of those actions is authorized by this HOLD.
 
-Do not substitute another deploy path.
+## Deferred backlog
 
-## Acceptance requirements
+Still deferred:
+- cross-provider temporal `already_evidenced` / idempotency nuance;
+- eventual historical cleanup/compaction of `PROJECT_STATE.md`.
 
-Report the sanitized terminal deployment evidence from the harness, including:
-- RELEASE_HEAD
-- HEALTH
-- ALEMBIC
-- DB_CONTAINER_UNCHANGED
-- DB_VOLUME_UNCHANGED
-- ENV_FILE_UNCHANGED
-- API_RECREATED
-- WORKER_RECREATED
-- DEPLOYMENT
-- exit status
-- whether rollback was used
+## Authorization state
 
-Expected success:
-- release head = exact authorized SHA;
-- health PASS;
-- Alembic 0046;
-- DB container unchanged;
-- DB volume unchanged;
-- .env unchanged;
-- API recreated;
-- worker recreated;
-- deployment PASS;
-- rollback unused.
+No further production or provider work is currently authorized.
 
-## Authorization boundaries
+Do not:
+- move refs;
+- deploy/restart/recreate;
+- change production env;
+- change Google Cloud OAuth publishing status;
+- perform real Google OAuth reauthorization;
+- run provider diagnostics/calls;
+- change `TELEGRAM_MTPROTO_AI_ENABLED`;
+- run direct production SSH/manual Docker/Compose;
+- perform production DB writes.
 
-This deploy does NOT authorize:
-- changing Google Cloud OAuth publishing status;
-- real Google OAuth reauthorization;
-- provider calls/diagnostics;
-- changing TELEGRAM_MTPROTO_AI_ENABLED;
-- changing production env;
-- direct SSH;
-- direct/manual Docker or Compose;
-- DB writes outside the deploy harness;
-- schema migration;
-- any follow-up repair if the harness fails.
-
-If any preflight/invariant fails, STOP and report the sanitized blocker.
-
-If the deploy succeeds, update `PROJECT_STATE.md` with factual deployment evidence, commit + push, and STOP.
-
-Google OAuth publishing-mode correction and one-time Google reconnect remain separate human/operator steps after deployment.
+STOP and await the next explicit human task/authorization.
