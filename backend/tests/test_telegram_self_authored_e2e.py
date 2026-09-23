@@ -928,7 +928,8 @@ def test_bootstrap_marker_precedes_helper_load() -> None:
         "import sys\n"
         "if __name__ == '__main__':\n"
         "    raise RuntimeError('sk-secret named main')\n"
-        "sys.stdout.write('HELPER_IMPORT\\n')\n"
+        "sys.stdout.write('sk-secret HELPER_IMPORT\\n')\n"
+        "sys.stderr.write('sk-secret HELPER_IMPORT stderr\\n')\n"
         "def main(argv):\n"
         "    sys.stdout.write('HELPER_MAIN %s\\n' % (argv,))\n"
         "    sys.stdout.write('SELF_AUTHORED=PASS\\n')\n"
@@ -938,11 +939,14 @@ def test_bootstrap_marker_precedes_helper_load() -> None:
     assert result.stdout.splitlines() == [
         remote.STARTUP_BOOTSTRAP,
         remote.STARTUP_COMPILED,
-        "HELPER_IMPORT",
         remote.STARTUP_IMPORTED,
         "HELPER_MAIN ['--live']",
         "SELF_AUTHORED=PASS",
     ]
+    assert "HELPER_IMPORT" not in result.stdout
+    assert "HELPER_IMPORT" not in result.stderr
+    assert "sk-secret" not in result.stdout
+    assert "sk-secret" not in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -963,6 +967,9 @@ def test_bootstrap_compile_failure_does_not_enter_main() -> None:
 
 def test_bootstrap_import_failure_does_not_enter_main() -> None:
     result = _run_bootstrap(
+        "import sys\n"
+        "sys.stdout.write('sk-secret import stdout\\n')\n"
+        "sys.stderr.write('sk-secret import stderr\\n')\n"
         'raise RuntimeError("sk-secret traceback payload")\n'
         "def main(argv):\n"
         "    raise AssertionError('main entered')\n"

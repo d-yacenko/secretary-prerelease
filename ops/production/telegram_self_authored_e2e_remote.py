@@ -209,7 +209,8 @@ try:
     module = types.ModuleType("telegram_self_authored_e2e_helper")
     module.__name__ = "telegram_self_authored_e2e_helper"
     sys.modules[module.__name__] = module
-    exec(compiled, module.__dict__)
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        exec(compiled, module.__dict__)
     if module.__name__ == "__main__" or not callable(getattr(module, "main", None)):
         raise RuntimeError
     imported = True
