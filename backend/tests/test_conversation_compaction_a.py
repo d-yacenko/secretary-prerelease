@@ -10,7 +10,8 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import Job, Object, Representation
+from app.core.config import settings
+from app.db.models import Job, Object, Representation, User
 from app.jobs.constants import (
     JOB_STATUS_FAILED,
     JOB_STATUS_PENDING,
@@ -118,7 +119,9 @@ def _yandex(db_session, title, when, *, sender, recipients, headers, folder="INB
     )
 
 
-def _telegram(db_session, title, when, chat_id, *, sender="u1", name="BrainTor", account="tg-1", body=None):
+def _telegram(
+    db_session, title, when, chat_id, *, sender="u1", name="BrainTor", account="tg-1", body=None, user_id=None
+):
     return _base(
         db_session,
         kind="chat_message",
@@ -126,6 +129,7 @@ def _telegram(db_session, title, when, chat_id, *, sender="u1", name="BrainTor",
         title=title,
         when=when,
         body=body,
+        user_id=user_id,
         metadata={
             "account_id": account,
             "chat_id": chat_id,
@@ -492,7 +496,8 @@ def test_stale_summary_rejected_and_fallback_used(db_session: Session) -> None:
     assert "сообщений" in stale[0].stack.fallback_summary
 
 
-def test_failed_summary_job_cooldown_then_retry(db_session: Session) -> None:
+def test_failed_summary_job_cooldown_then_retry(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
     t0 = datetime(2026, 9, 15, 16, tzinfo=UTC)
     rows = [_telegram(db_session, f"r{i}", t0 + timedelta(seconds=i), "retry") for i in range(2)]
     stack = group_inbox_conversation_items(_newest_first(rows))[0].stack
@@ -532,7 +537,8 @@ def test_failed_summary_job_cooldown_then_retry(db_session: Session) -> None:
     assert third.id == job.id
 
 
-def test_summary_generation_writes_representation(db_session: Session) -> None:
+def test_summary_generation_writes_representation(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
     t0 = datetime(2026, 9, 15, 16, tzinfo=UTC)
     rows = [_telegram(db_session, f"g{i}", t0 + timedelta(seconds=i), "gen", body="хосты для экшенов") for i in range(2)]
     ordered = list(reversed(_newest_first(rows)))
@@ -551,7 +557,8 @@ def test_summary_generation_writes_representation(db_session: Session) -> None:
     assert stored.metadata_["stack_fingerprint"] == stack.fingerprint
 
 
-def test_empty_summary_is_retryable_failure_not_done(db_session: Session) -> None:
+def test_empty_summary_is_retryable_failure_not_done(db_session: Session, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
     t0 = datetime(2026, 9, 15, 16, tzinfo=UTC)
     rows = [
         _telegram(db_session, f"e{i}", t0 + timedelta(seconds=i), "empty", body="хосты")
@@ -650,7 +657,7 @@ def test_overlay_exact_coverage(db_session: Session) -> None:
 
 
 def test_inbox_api_keeps_flat_feed_and_optional_overlay(auth_client, db_session: Session) -> None:
-    t0 = datetime(2026, 9, 15, 16, tzinfo=UTC)
+    t0 = datetime.now(UTC)
     rows = [_telegram(db_session, f"api{i}", t0 + timedelta(seconds=i), "api-chat") for i in range(4)]
     db_session.flush()
     first = auth_client.get("/inbox", params={"recent_limit": 2})
@@ -679,8 +686,11 @@ def test_inbox_api_keeps_flat_feed_and_optional_overlay(auth_client, db_session:
 
 
 def test_inspect_limit_one_uses_global_conversation_count(db_session: Session) -> None:
+    user = User(id=uuid.uuid4(), display_name="inspect-count")
+    db_session.add(user)
+    db_session.flush()
     t0 = datetime(2026, 9, 15, 10, tzinfo=UTC)
-    anchor = _telegram(db_session, "anchor", t0, "anchor-chat")
+    anchor = _telegram(db_session, "anchor", t0, "anchor-chat", user_id=user.id)
     sizes = [9, 7, 5, 5, 4, 2]
     n = 0
     for index, size in enumerate(sizes):
@@ -692,10 +702,11 @@ def test_inspect_limit_one_uses_global_conversation_count(db_session: Session) -
                 t0 + timedelta(minutes=1, seconds=n),
                 f"conv-{index}",
                 name=f"Chat{index}",
+                user_id=user.id,
             )
-    InboxReviewMarkerService(db_session, BOOTSTRAP_USER_ID).set_marker(anchor.id)
+    InboxReviewMarkerService(db_session, user.id).set_marker(anchor.id)
     db_session.flush()
-    page = DomainToolService(db_session, BOOTSTRAP_USER_ID, None).list_inbox_since_review_marker(
+    page = DomainToolService(db_session, user.id, None).list_inbox_since_review_marker(
         ListInboxSinceReviewMarkerInput(purpose="inspect", limit=1)
     )
     assert page.total_count == 32
@@ -706,13 +717,16 @@ def test_inspect_limit_one_uses_global_conversation_count(db_session: Session) -
 
 
 def test_split_pages_count_as_one_global_conversation(db_session: Session) -> None:
-    t0 = datetime(2026, 9, 15, 11, tzinfo=UTC)
-    anchor = _telegram(db_session, "anchor", t0, "split-anchor")
-    for i in range(5):
-        _telegram(db_session, f"same {i}", t0 + timedelta(minutes=1, seconds=i), "one-chat")
-    InboxReviewMarkerService(db_session, BOOTSTRAP_USER_ID).set_marker(anchor.id)
+    user = User(id=uuid.uuid4(), display_name="split-count")
+    db_session.add(user)
     db_session.flush()
-    tools = DomainToolService(db_session, BOOTSTRAP_USER_ID, None)
+    t0 = datetime(2026, 9, 15, 11, tzinfo=UTC)
+    anchor = _telegram(db_session, "anchor", t0, "split-anchor", user_id=user.id)
+    for i in range(5):
+        _telegram(db_session, f"same {i}", t0 + timedelta(minutes=1, seconds=i), "one-chat", user_id=user.id)
+    InboxReviewMarkerService(db_session, user.id).set_marker(anchor.id)
+    db_session.flush()
+    tools = DomainToolService(db_session, user.id, None)
     first = tools.list_inbox_since_review_marker(
         ListInboxSinceReviewMarkerInput(purpose="review", limit=2)
     )

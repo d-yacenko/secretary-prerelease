@@ -517,6 +517,74 @@ def test_false_catchup_stays_zero_and_true_catchup_still_runs(db_session, monkey
     assert sync._enqueue_embedding_catchup(user.id, account.id) == 0
 
 
+def test_false_true_false_transition_keeps_true_mode_scope_policy(db_session, monkeypatch) -> None:
+    user = _user(db_session)
+    account = _account(db_session, user)
+    _selection(db_session, account, active=True)
+    inactive_user = _user(db_session)
+    inactive_account = _account(db_session, inactive_user, telegram_user_id=_OWNER_ID + 21)
+    _selection(db_session, inactive_account, active=False)
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
+    materializer = TelegramObjectMaterializer(db_session)
+    created = materializer.upsert_mtproto_message(
+        user_id=user.id,
+        normalized=_normalized(
+            account, direction="outbound", sender=str(_OWNER_ID), body="outbound transition phrase"
+        ),
+    )
+    inbound_result = materializer.upsert_mtproto_message(
+        user_id=user.id,
+        normalized=_normalized(
+            account, direction="inbound", sender="900", body="inbound transition phrase"
+        ),
+    )
+    foreign_result = materializer.upsert_mtproto_message(
+        user_id=user.id,
+        normalized=_normalized(
+            account, direction="outbound", sender="900", body="foreign transition phrase"
+        ),
+    )
+    inactive = _object(db_session, inactive_user, inactive_account, title="inactive transition")
+    outbound = created.obj
+    inbound = inbound_result.obj
+    foreign = foreign_result.obj
+    before = {item.id: dict(item.metadata_) for item in (outbound, inbound, foreign, inactive)}
+    assert created.jobs_enqueued == 1
+    assert inbound_result.jobs_enqueued == 0
+    assert foreign_result.jobs_enqueued == 0
+    assert _surfaces(db_session, outbound) is True
+    assert _surfaces(db_session, inbound) is False
+    assert _surfaces(db_session, foreign) is False
+    sync = TelegramMtprotoRecurringSyncService.__new__(TelegramMtprotoRecurringSyncService)
+    sync._session = db_session
+    assert sync._enqueue_embedding_catchup(user.id, account.id) == 0
+
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    assert _surfaces(db_session, outbound) is True
+    assert _surfaces(db_session, inbound) is True
+    assert _surfaces(db_session, foreign) is True
+    assert _surfaces(db_session, inactive) is False
+    inbound_context = ContextService(db_session, user.id).build_context(object_id=inbound.id)
+    outbound_context = ContextService(db_session, user.id).build_context(object_id=outbound.id)
+    assert inbound.id in {item.object_id for item in inbound_context.items}
+    assert outbound.id in {item.object_id for item in outbound_context.items}
+    inbound_hits = SearchService(db_session, user.id).search("inbound transition phrase")
+    outbound_hits = SearchService(db_session, user.id).search("outbound transition phrase")
+    assert inbound.id in {item.id for item in inbound_hits}
+    assert outbound.id in {item.id for item in outbound_hits}
+    assert sync._enqueue_embedding_catchup(user.id, account.id) == 2
+    assert sync._enqueue_embedding_catchup(user.id, account.id) == 0
+
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
+    assert _surfaces(db_session, outbound) is True
+    assert _surfaces(db_session, inbound) is False
+    assert _surfaces(db_session, foreign) is False
+    hidden = SearchService(db_session, user.id).search("inbound transition phrase")
+    assert inbound.id not in {item.id for item in hidden}
+    for item in (outbound, inbound, foreign, inactive):
+        assert item.metadata_ == before[item.id]
+
+
 def test_production_policy_has_no_marker_harness_or_transport() -> None:
     source = (
         Path(__file__).resolve().parents[1] / "app" / "domain" / "telegram_mtproto_ai.py"

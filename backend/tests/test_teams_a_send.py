@@ -248,7 +248,7 @@ def test_approve_compose_and_reply_write_once(db_session, teams_settings) -> Non
     assert outbound is not None
     assert outbound.metadata_["direction"] == "outbound"
     feed = RecentSourceService(db_session, user.id).list_page()
-    assert outbound.id not in {item.id for item in feed.items}
+    assert outbound.id in {item.id for item in feed.items}
 
     replied = service.prepare_send_message(
         SendMessageInput(body="ответ", reply_to_object_id=inbound.id)

@@ -465,7 +465,7 @@ def test_overlap_repoll_is_idempotent(db_session, teams_settings) -> None:
     assert len(objects) == 1
 
 
-def test_own_user_outbound_materialized_but_excluded_from_inbox(db_session, teams_settings) -> None:
+def test_own_user_outbound_is_visible_in_inbox_with_inbound(db_session, teams_settings) -> None:
     user = _user(db_session)
     floor = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
     account = _connect_account(db_session, teams_settings, user.id, sync_start=floor)
@@ -497,7 +497,7 @@ def test_own_user_outbound_materialized_but_excluded_from_inbox(db_session, team
     feed = RecentSourceService(db_session, user.id).list_page()
     ids = {item.id for item in feed.items}
     assert inbound.id in ids
-    assert own.id not in ids
+    assert own.id in ids
 
 
 def test_teams_is_temporal_eligible_a(db_session, teams_settings) -> None:

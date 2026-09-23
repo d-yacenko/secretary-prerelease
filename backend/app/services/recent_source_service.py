@@ -236,14 +236,6 @@ class RecentSourceService:
             model.kind != "task",
         )
 
-    def _not_outbound_chat_clause(self, model=Object) -> object:
-        direction = model.metadata_["direction"].as_string()
-        return ~and_(
-            model.provider.in_(("telegram", "teams")),
-            model.kind == "chat_message",
-            direction == "outbound",
-        )
-
     def _base_eligible_filters(self, model=Object) -> object:
         return and_(
             model.user_id == self._user_id,
@@ -253,7 +245,6 @@ class RecentSourceService:
             or_(model.status.is_(None), model.status != "deleted"),
             self._gmail_feed_eligible_clause(model),
             self._not_child_email_attachment_clause(model),
-            self._not_outbound_chat_clause(model),
             telegram_mtproto_active_object_predicate(model),
         )
 
