@@ -1,121 +1,76 @@
-# Current task — Execute exactly one replacement live self-authored Telegram E2E
+# Current task — Fix invalid Docker Compose one-shot option
 
-## Human authorization
+## Root cause
 
-Explicit authorization received for exactly one replacement live production self-authored Telegram E2E using:
+The second explicitly authorized replacement live self-authored Telegram E2E was executed exactly once and returned:
 
-`TG_SELF_E2E_0922A`
+```text
+SELF_E2E_REMOTE_BLOCKED=oneshot_failed
+```
 
-with real production ML/LLM providers while long-running Telegram AI remains false.
+Exit status: `1`.
 
-The previous authorization was consumed by the earlier startup-only `oneshot_failed` attempt. This is one new replacement authorization and permits exactly one invocation.
+No retry, direct SSH, manual Docker command, or correction was performed.
 
-## Accepted harness and wrapper
+Architect review localized the failure before the first Python bootstrap marker. The canonical wrapper currently invokes:
 
-Accepted self-authored E2E harness baseline:
+`docker compose run ... --no-build ...`
 
-`00a653a11f44f4122fb2689cbbffb06c133049e3`
+Official Docker Compose `run` supports `--build`, `--no-deps`, `--rm`, `--pull`, env/volume options, etc., but not `--no-build`. Therefore Compose can reject the command during CLI parsing before creating the one-shot container. Because child stderr is intentionally suppressed, that failure collapses to `SELF_E2E_REMOTE_BLOCKED=oneshot_failed`.
 
-Accepted startup/protocol hardening:
+This explains both observed startup-only live failures without implicating Telegram, ML/LLM providers, the helper import path, or the downstream pipeline.
 
-`4fc6ff3b12f5e393be2ce3a46ab9b78b4280d86c`
+The replacement live authorization is consumed. No further live run is authorized.
 
-Current canonical `main` contains those changes plus architect state/task commits.
-
-Production runtime/ref remains:
+Production runtime remains:
 
 `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-Alembic:
+Alembic remains:
 
 `0046`
 
-## Exact authorized invocation
+Long-running Telegram AI remains false.
 
-Execute exactly once from the canonical local checkout:
+## Authorized work
 
-```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin
-python3 ops/production/telegram_self_authored_e2e_remote.py
-```
+Code/test-only correction in `ops/production/telegram_self_authored_e2e_remote.py` and focused tests.
 
-No alternate run.
-No direct SSH.
-No manual container command.
-No second invocation without Architect review and new human authorization.
+1. Remove the unsupported `--no-build` option from the `docker compose run` command.
+2. Preserve `--rm` and `--no-deps`.
+3. Do not add `--build`.
+4. Prefer adding `--pull never` to the one-shot command, since it is supported by `docker compose run`, so the acceptance path cannot pull a new image.
+5. Add a read-only precondition in the generated remote program that verifies the existing production `api` service image is resolvable/present before the one-shot. If the image is not present/resolvable, fail closed with a fixed sanitized blocker such as `SELF_E2E_REMOTE_BLOCKED=image_missing`; do not build or pull.
+6. Preserve all existing production-ref/worktree/origin/host-key/long-running-AI/startup/import/harness-protocol privacy guards.
+7. Continue suppressing raw Docker stderr, tracebacks, env values, credentials, provider output, and Telegram content.
 
-## Expected success report
+## Tests
 
-A successful run must be non-empty and include at least:
+Add focused tests proving:
 
-- `SELF_E2E_STARTUP=bootstrap`
-- `SELF_E2E_STARTUP=compiled`
-- `SELF_E2E_STARTUP=imported`
-- `SELF_AUTHORED=PASS`
-- `SUMMARY_COHORT_SELF_AUTHORED=PASS`
-- `EMBEDDING=PASS`
-- `AUTO_LABEL_EXECUTED=PASS`
-- `TEMPORAL=PASS`
-- `CORRELATION=PASS`
-- `SUMMARY=PASS`
-- `CONTEXT_VISIBLE=PASS`
-- `RETRIEVAL_VISIBLE=PASS`
-- `IDEMPOTENT=PASS`
-- `DANGLING_SELECTED_JOBS=0`
-- `TELEGRAM_TRANSPORT_CALLS=0`
-- `PROCESS_LOCAL_AI=true`
-- `ENV_UNCHANGED=PASS`
-- `LONG_RUNNING_API_AI=false`
-- `LONG_RUNNING_WORKER_AI=false`
-- `PROVIDERS=live`
-- `LIVE_EXECUTION=1`
+- generated `docker compose run` contains no `--no-build`;
+- it contains no `--build`;
+- it retains `--rm` and `--no-deps`;
+- if used, `--pull never` is present in the correct command position;
+- existing image precondition succeeds only with a non-empty image id and otherwise emits only the fixed sanitized blocker;
+- no test invokes real Docker, SSH, Telegram, providers, or production DB;
+- existing startup/compile/import/harness-protocol tests remain green.
 
-`AUTO_LABEL_ASSIGNMENTS=0` is allowed.
+Run focused tests, `py_compile`, Ruff check/format, and `git diff --check`.
 
-Accepted temporal result forms remain:
+## Hard stop
 
-- `temporal_hint`
-- `calendar_match`
-- `hint_merged`
-- `already_evidenced`
+No production SSH.
+No production Docker.
+No remote wrapper execution.
+No live E2E.
+No provider calls.
+No Telegram transport/session access.
+No production DB writes.
+No deploy/restart/recreate.
+No production env changes.
+No production ref movement.
 
-## Failure handling
+When complete, update `PROJECT_STATE.md` factually, commit and push, report SHA/checks, then STOP.
 
-On any of:
-
-- `SELF_E2E_REMOTE_BLOCKED=oneshot_failed`
-- `SELF_E2E_REMOTE_BLOCKED=compile_failed`
-- `SELF_E2E_REMOTE_BLOCKED=import_failed`
-- `SELF_E2E_REMOTE_BLOCKED=harness_protocol`
-- any other `SELF_E2E_REMOTE_BLOCKED=...`
-- `SELF_E2E_BLOCKED=...`
-- `SELF_E2E_FAILED=...`
-- nonzero exit with incomplete report
-- zero exit without the complete required PASS report
-
-STOP.
-
-Do not retry.
-Do not run direct SSH.
-Do not inspect or bypass provider/privacy guards.
-Do not deploy/restart/recreate services.
-Do not change production env.
-Return the complete sanitized stdout and exit status to Architect.
-
-## Hard constraints
-
-- long-running API/worker Telegram AI=false;
-- no Telegram transport calls;
-- no session decrypt;
-- no catch-up/backlog;
-- no synthetic object insertion;
-- no deploy/ref movement;
-- no migration;
-- no production .env change.
-
-This task authorizes exactly one invocation only.
-
-`CURRENT_TASK.md` is the source of active authorization.
+A new live attempt requires separate Architect review and new explicit human authorization.
