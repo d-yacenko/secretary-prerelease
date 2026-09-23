@@ -12,7 +12,9 @@ Continuous real use requires the OAuth client’s Publishing status to be **In P
 
 Public distribution that uses sensitive or restricted scopes may also require Google’s verification and security review. That review is not performed by Secretary.
 
-After a successful production rollout of the public branding site, set these Google OAuth consent-screen values:
+The branding pages stay in `infra/public/`. The retired Caddy `public_web` service is not the publisher. A later authorized rollout copies those pages into the existing nginx static root as `index.html`, `privacy/index.html`, and `terms/index.html`. It does not edit or reload nginx and does not change `/secretary/`.
+
+After that rollout has succeeded, set these Google OAuth consent-screen values:
 
 - Application home page: `https://web-itx.duckdns.org/`
 - Application privacy policy: `https://web-itx.duckdns.org/privacy`

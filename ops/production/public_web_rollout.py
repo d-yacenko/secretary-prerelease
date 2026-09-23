@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed public branding-site rollout.
+"""Fail-closed publisher for the nginx static branding pages.
 
 Run later from a canonical, clean, up-to-date local main. This task does not
-execute it. It reuses target.json and never discovers a host.
+execute it. It reuses target.json and never discovers a host. It does not
+start a container or change nginx.
 """
 
 from __future__ import annotations
