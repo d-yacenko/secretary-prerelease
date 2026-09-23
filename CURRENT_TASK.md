@@ -1,74 +1,125 @@
-# Current task — Final public_web existence-state correction
+# Current task — HOLD after public OAuth branding site acceptance
 
-## Architect review
+## Architect acceptance
 
 Commit:
 
-`157fbbbd7545192cd65639426becea90999e1ef7`
+`3930c4b4c026a2e1fc9acb31c0d8fea1b9422b5c`
 
-successfully fixes the previously identified HTTPS retry and first-rollout cleanup defect.
+is ACCEPTED / DEPLOY-READY / NOT DEPLOYED.
 
-One final narrow correctness issue remains before the rollout helper is accepted.
+Current production runtime/ref remains:
 
-No production work is authorized.
+`2a5d76ae80d53c13a6581852ef1a0362ad1a3e38`
 
-## Blocking defect
+Alembic remains:
 
-`remote_public_web.py` currently determines:
+`0046`
 
-`existed_before = bool(service_id("public_web", required=False))`
+No migration files changed.
 
-and `service_id()` uses:
+## Accepted public branding surface
 
-`docker compose ps -q public_web`
+Target public hostname:
 
-Docker Compose `ps` shows only running containers by default. A previously-created but stopped `public_web` container therefore appears absent.
+`web-itx.duckdns.org`
 
-That violates the required update contract:
-- if `public_web` existed before the rollout, a failed update must NOT automatically remove it;
-- "existed before" includes a stopped/exited Compose container, not only a running one.
+Accepted URLs after rollout:
+- `https://web-itx.duckdns.org/`
+- `https://web-itx.duckdns.org/privacy`
+- `https://web-itx.duckdns.org/terms`
 
-## Required correction
+Accepted architecture:
+- static pages live in `infra/public/`;
+- Caddy serves only the public branding pages;
+- no Secretary API reverse proxy is exposed through Caddy;
+- unrelated paths return 404;
+- `public_web` uses pinned `caddy:2.10.2`;
+- only host TCP 80/443 are published;
+- no Secretary secret environment and no DB dependency;
+- Caddy data/config persist in named volumes.
 
-Code/test-only, no architecture changes.
+## Accepted page content
 
-1. Add a dedicated existence check for `public_web` that includes stopped/exited containers, e.g. using the Compose equivalent of:
-   - `docker compose ps --all -q public_web`
-   or another deterministic all-state query.
+Homepage:
+- identifies Personal Secretary;
+- explains self-hosted/personal productivity use;
+- discloses Gmail, Google Calendar, and Google Drive access and purposes;
+- links Privacy Policy and Terms.
 
-2. Use that all-state existence result ONLY to decide `existed_before`.
+Privacy:
+- discloses Google data categories and purposes;
+- states imported source data may be stored by Secretary;
+- states OAuth credentials/tokens are encrypted at rest;
+- states Google user data is not sold or used for advertising;
+- discloses relevant data may be sent to the configured AI provider when AI features are enabled;
+- explains Google access revocation and that already imported data may remain until removed;
+- avoids fabricated retention/deletion guarantees.
 
-3. Keep the post-start validation strict:
-   - after `up`, `public_web` must have a running container id;
-   - `require_running()` remains required.
+Terms:
+- appropriate for the prerelease/self-hosted product;
+- no fabricated company identity.
 
-4. Preserve all already-correct behavior from `157fbbbd...`:
-   - bounded 45-second HTTPS readiness polling;
-   - temporary connection/TLS failures retry;
-   - no insecure TLS flags;
-   - any failed first rollout cleans up only newly-created `public_web`;
-   - a pre-existing service is not removed after failed update;
-   - db/api/worker/.env remain untouched.
+## Accepted rollout helper
 
-## Required tests
+Dedicated rollout entrypoint:
+`ops/production/public_web_rollout.py`
 
-Add deterministic regression proving:
-- running pre-existing public_web => existed_before true;
-- stopped/exited pre-existing public_web => existed_before true;
-- no public_web container in any state => false;
-- stopped pre-existing public_web + failed verification => no automatic stop/rm cleanup;
-- post-start running check still fails if no running public_web container exists.
+Remote helper:
+`ops/production/remote_public_web.py`
 
-Run focused tests, py_compile, Ruff check/format, compose config validation as relevant, and git diff --check.
+Accepted safety properties:
+- canonical clean up-to-date main required;
+- exact authorized release SHA required;
+- production checkout and origin/production must equal exact release;
+- pinned host-key/target contract reused;
+- DB/API/worker/API-health verified before mutation;
+- only `public_web` may be changed;
+- db/api/worker/.env identities must remain unchanged;
+- first rollout fails closed if ports 80/443 are already occupied;
+- temporary HTTPS/TLS startup failures are retried within a bounded 45-second window;
+- no insecure TLS bypass;
+- first-rollout post-start failure cleans up only newly-created `public_web`;
+- pre-existing `public_web`, including stopped/exited containers, is preserved on failed update;
+- pre-existing detection uses all-state Compose lookup;
+- post-start validation remains running-only and requires a running container;
+- successful rollout verifies homepage/privacy/terms = 200 and unrelated path = 404;
+- Git refs are not moved by the helper.
 
-Update PROJECT_STATE.md factually, commit + push, report exact SHA, STOP.
+## Verification reported on exact accepted commit
 
-## Production boundary
+- focused tests: 24 passed;
+- `py_compile`: passed;
+- Ruff check: passed;
+- Ruff format --check: passed;
+- `docker compose config --quiet`: passed;
+- `git diff --check`: clean;
+- migration files changed: none.
 
-No production SSH.
-No public_web start.
-No deploy.
-No production ref movement.
-No DNS/firewall mutation.
-No Google Cloud mutation.
-No OAuth reauthorization.
+## Next operational step
+
+A live first rollout of `public_web` is a separate production action and requires explicit human authorization.
+
+After successful rollout, the Google OAuth branding fields can be set to:
+- Application home page: `https://web-itx.duckdns.org/`
+- Application privacy policy: `https://web-itx.duckdns.org/privacy`
+- Application terms of service: `https://web-itx.duckdns.org/terms`
+
+Google Cloud Publishing status change and fresh Google OAuth authorization remain separate operator actions after the site is live.
+
+## Authorization state
+
+No production/public_web/Google Cloud/OAuth action is currently authorized.
+
+Do not:
+- move production ref;
+- run public_web rollout;
+- deploy/restart/recreate;
+- change ports/firewall/DNS;
+- change Google Cloud OAuth settings;
+- perform Google OAuth reauthorization;
+- run direct production SSH/manual Docker/Compose;
+- change production env;
+- perform production DB writes.
+
+STOP and await explicit human authorization.
