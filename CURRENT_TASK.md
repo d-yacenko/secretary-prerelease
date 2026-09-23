@@ -1,77 +1,111 @@
-# Current task — Await explicit deploy authorization for self-authored Telegram normal pipeline
+# Current task — Deploy accepted self-authored Telegram normal-pipeline policy
 
-## Architect acceptance
+## Human authorization
 
-Commit:
+Human explicitly authorized production deployment of exact commit:
 
 `681c0e04df5881124ab8d72a4c05e5a2c7977296`
 
-is ACCEPTED / DEPLOY-READY / NOT DEPLOYED.
+for subsequent live verification of the normal Telegram pipeline.
 
-Verified production policy:
+This authorization covers only the normal schema-neutral deployment of that exact release.
 
-- global `TELEGRAM_MTPROTO_AI_ENABLED=false` remains the production default;
-- non-Telegram behavior is unchanged;
-- while global false, every `provider=telegram` object is AI-ineligible except the narrow proven self-authored canonical MTProto exception;
-- the exception requires:
-  - kind == `chat_message`;
-  - transport == `mtproto`;
-  - account owned by the same application user;
-  - peer in `scope_active=true`;
-  - direction == `outbound`;
-  - non-empty `sender_peer_id`;
-  - non-null account `telegram_user_id`;
-  - sender_peer_id == account.telegram_user_id;
-- inbound, foreign sender, wrong/malformed account, inactive scope, missing/unknown identity, legacy Bot transport, unknown transport, and non-chat Telegram remain fail-closed;
-- Python eligibility, SQLAlchemy predicate, and raw SQL fragment are aligned;
-- direct context access cannot bypass the false-mode Telegram gate;
-- normal Telegram materialization may enqueue the ordinary embedding entrypoint for a newly created/semantically updated self-authored message;
-- ordinary worker/downstream/retrieval surfaces continue to use the central eligibility policy;
-- global-false recurring Telegram embedding catch-up remains zero, so historical backlog is not activated;
-- global-true behavior remains unchanged;
-- production policy has no E2E marker/harness dependency.
+It does NOT authorize:
+- running the old Telegram E2E harness;
+- manually sending/provider-driving Telegram messages on behalf of the human;
+- direct production SSH;
+- manual Docker/Compose;
+- changing production environment variables;
+- setting `TELEGRAM_MTPROTO_AI_ENABLED=true`;
+- manual job enqueue;
+- historical catch-up/backlog;
+- provider diagnostics;
+- any code change.
 
-Verification reported on exact commit:
+The canonical `production` branch has been fast-forwarded non-force to the exact authorized release SHA before this task.
 
-- Telegram policy/Q1/full-pipeline/C1A/C1B/C2A focused suite: 92 passed;
-- `py_compile`: passed;
-- Ruff check on changed files: passed;
-- Ruff format --check on policy module/policy test: passed;
-- `git diff --check`: clean.
+## Exact deployment parameters
 
-## Intended live verification after deployment
+Release SHA:
 
-The next live verification is NOT the old E2E harness.
+`681c0e04df5881124ab8d72a4c05e5a2c7977296`
 
-After an explicitly authorized normal deployment of the accepted commit, the human will send a brand-new ordinary Telegram message from the connected Telegram account in an active-scope chat.
+Rollback SHA / current production runtime:
 
-Expected normal behavior:
+`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-1. MTProto sync/materializer stores the real message.
-2. Because it is canonical + outbound + self-authored + active-scope, the normal materializer enqueues the ordinary AI pipeline.
-3. Existing worker handlers process normal embedding/downstream jobs.
-4. Inbound/foreign Telegram messages remain excluded while global Telegram AI stays false.
-5. No historical catch-up/backlog is activated merely by this policy.
-6. Verification should inspect normal DB/job/audit/result evidence, not run `telegram_self_authored_e2e_remote.py`.
+Expected Alembic:
 
-## Authorization state
+`0046`
 
-NO deployment is currently authorized.
-NO production SSH/Docker/Compose is authorized.
-NO live Telegram acceptance action by Executor is authorized.
-NO provider diagnostic/manual pipeline execution is authorized.
+This is a schema-neutral application-only release.
 
-Do not:
-- deploy;
-- move production refs;
-- restart/recreate services;
-- change production env;
-- set `TELEGRAM_MTPROTO_AI_ENABLED=true`;
-- run the old E2E harness;
-- manually enqueue Telegram AI jobs;
-- process historical Telegram backlog;
-- run direct SSH or manual Docker/Compose.
+## Required execution
 
-STOP and wait for explicit human authorization for deployment.
+Use the normal committed deployment harness only.
 
-After deploy authorization is received, Architect must create a separate exact deploy task. Live normal-message verification remains a separate controlled step after successful deploy.
+From the canonical clean local checkout:
+
+```bash
+cd ~/work/secretary-prerelease
+git switch main
+git pull --ff-only
+git fetch --prune origin main production
+python3 ops/production/deploy.py \
+  --release-sha 681c0e04df5881124ab8d72a4c05e5a2c7977296 \
+  --rollback-sha 8ad52f0653f9f90e1932c49532dc4f993ea1a9cc \
+  --expected-alembic 0046
+```
+
+Do not substitute any other deploy path.
+Do not use direct SSH or manual Docker/Compose.
+
+## Expected success evidence
+
+Successful deployment must report:
+
+- `RELEASE_HEAD=681c0e04df5881124ab8d72a4c05e5a2c7977296`
+- `HEALTH=PASS`
+- `ALEMBIC=0046`
+- `DB_CONTAINER_UNCHANGED=true`
+- `DB_VOLUME_UNCHANGED=true`
+- `ENV_FILE_UNCHANGED=true`
+- `API_RECREATED=true`
+- `WORKER_RECREATED=true`
+- `DEPLOYMENT=PASS`
+
+The harness may automatically rollback to exact `8ad52f0653f9f90e1932c49532dc4f993ea1a9cc` if a post-recreate invariant fails.
+
+## Failure handling
+
+On any:
+- `DEPLOYMENT_BLOCKED=...`;
+- `DEPLOYMENT=FAILED:...`;
+- nonzero exit;
+- `ROLLBACK=FAILED`;
+- missing required success evidence;
+
+STOP.
+
+Do not repair production.
+Do not retry deployment.
+Do not run direct SSH.
+Do not run manual Docker/Compose.
+Do not change env.
+Do not move refs again.
+
+Return complete sanitized deploy stdout/stderr and exact exit status.
+
+## Post-deploy boundary
+
+Even after `DEPLOYMENT=PASS`, STOP.
+
+Do not run the old E2E harness.
+Do not manually invoke Telegram sync.
+Do not enqueue jobs.
+Do not perform provider diagnostics.
+Do not change the global Telegram AI flag.
+
+The intended next live acceptance is a brand-new ordinary Telegram message sent by the human from the connected Telegram account in an active-scope chat, followed by separately authorized/read-only inspection of the normal backend pipeline evidence.
+
+Update `PROJECT_STATE.md` factually with deployment result only, then STOP.
