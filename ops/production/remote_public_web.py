@@ -32,12 +32,17 @@ PAGE_FILES = {
 OWNED_PATHS = tuple(PAGE_FILES)
 CREATED_DIRECTORIES = ("privacy", "terms")
 VERIFY_URLS = (
-    (f"https://{BRANDING_HOST}/", 200, "index.html"),
-    (f"https://{BRANDING_HOST}/privacy", 200, "privacy/index.html"),
-    (f"https://{BRANDING_HOST}/privacy/", 200, "privacy/index.html"),
-    (f"https://{BRANDING_HOST}/terms", 200, "terms/index.html"),
-    (f"https://{BRANDING_HOST}/terms/", 200, "terms/index.html"),
-    (f"https://{BRANDING_HOST}/not-a-branding-page", 404, None),
+    (f"https://{BRANDING_HOST}/", 200, "index.html", None),
+    (f"https://{BRANDING_HOST}/privacy/", 200, "privacy/index.html", None),
+    (f"https://{BRANDING_HOST}/terms/", 200, "terms/index.html", None),
+    (
+        f"https://{BRANDING_HOST}/privacy",
+        301,
+        None,
+        f"https://{BRANDING_HOST}/privacy/",
+    ),
+    (f"https://{BRANDING_HOST}/terms", 301, None, f"https://{BRANDING_HOST}/terms/"),
+    (f"https://{BRANDING_HOST}/not-a-branding-page", 404, None, None),
 )
 COMPOSE = [
     "docker",
@@ -120,16 +125,32 @@ def require_page_manifest(pages: dict[str, bytes], manifest: dict[str, str]) -> 
 
 
 def verify_branding_responses(
-    observed: dict[str, tuple[int, bytes]], pages: dict[str, bytes]
+    observed: dict[str, tuple[int, bytes, str]], pages: dict[str, bytes]
 ) -> None:
-    for url, status, rel in VERIFY_URLS:
+    for url, status, rel, location in VERIFY_URLS:
         got = observed.get(url)
         if got is None or got[0] != status:
             raise PublicWebError("public page verification failed")
-        if rel is None:
-            continue
-        if sha256_bytes(got[1]) != sha256_bytes(pages[rel]):
+        if rel is not None and sha256_bytes(got[1]) != sha256_bytes(pages[rel]):
             raise PublicWebError("public page verification failed")
+        if location is not None and got[2] != location:
+            raise PublicWebError("public page verification failed")
+
+
+def require_static_root(root: Path) -> None:
+    if os.path.islink(root) or not root.is_dir():
+        raise PublicWebError("static root is not a real directory")
+    if root.resolve() != STATIC_ROOT:
+        raise PublicWebError("static root resolved path is not the authorized root")
+
+
+def require_existing_parents(root: Path) -> None:
+    for name in CREATED_DIRECTORIES:
+        directory = root / name
+        if not os.path.lexists(directory):
+            continue
+        if os.path.islink(directory) or not directory.is_dir():
+            raise PublicWebError("branding parent is not a real directory")
 
 
 def _owned_path(root: Path, relative: str) -> Path:
@@ -205,7 +226,11 @@ def publish_branding_files(
     identity_after,
 ) -> None:
     require_page_manifest(pages, manifest)
-    root = root.resolve()
+    if os.path.islink(root) or not root.is_dir():
+        raise PublicWebError("static root is not a real directory")
+    if root.resolve() == STATIC_ROOT or root == STATIC_ROOT:
+        require_static_root(root)
+    require_existing_parents(root)
     snapshots = {rel: _snapshot(_owned_path(root, rel)) for rel in OWNED_PATHS}
     template = snapshots["index.html"]
     if template.existed:
@@ -332,24 +357,25 @@ def require_health(url: str) -> None:
         raise PublicWebError("production API health check failed")
 
 
-def fetch_public(url: str) -> tuple[int, bytes]:
+def fetch_public(url: str) -> tuple[int, bytes, str]:
     with tempfile.NamedTemporaryFile() as handle:
-        code = run(
+        payload = run(
             [
                 "curl",
                 "-sS",
                 "-o",
                 handle.name,
                 "-w",
-                "%{http_code}",
+                "%{http_code} %{redirect_url}",
                 "--max-time",
                 "20",
                 url,
             ]
         )
+        code, _, location = payload.partition(" ")
         if not code.isdigit():
             raise PublicWebError("public page verification failed")
-        return int(code), Path(handle.name).read_bytes()
+        return int(code), Path(handle.name).read_bytes(), location.strip()
 
 
 def main() -> int:
@@ -400,9 +426,9 @@ def main() -> int:
     print("API_CONTAINER_UNCHANGED=true")
     print("WORKER_CONTAINER_UNCHANGED=true")
     print("PUBLIC_HOME=200")
-    print("PUBLIC_PRIVACY=200")
+    print("PUBLIC_PRIVACY=301")
     print("PUBLIC_PRIVACY_SLASH=200")
-    print("PUBLIC_TERMS=200")
+    print("PUBLIC_TERMS=301")
     print("PUBLIC_TERMS_SLASH=200")
     print("PUBLIC_UNRELATED=404")
     print("PUBLIC_WEB=PASS")

@@ -17,7 +17,7 @@ The branding pages stay in `infra/public/`. The retired Caddy `public_web` servi
 After that rollout has succeeded, set these Google OAuth consent-screen values:
 
 - Application home page: `https://web-itx.duckdns.org/`
-- Application privacy policy: `https://web-itx.duckdns.org/privacy`
-- Application terms of service: `https://web-itx.duckdns.org/terms`
+- Application privacy policy: `https://web-itx.duckdns.org/privacy/`
+- Application terms of service: `https://web-itx.duckdns.org/terms/`
 
 Google Cloud Publishing status remains an operator action. Google may also require domain ownership verification in Google Search Console. After the operator moves the client from Testing to In Production, the currently expired Google refresh token still requires one fresh Secretary OAuth authorization.

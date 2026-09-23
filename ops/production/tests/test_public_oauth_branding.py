@@ -41,8 +41,8 @@ class BrandingPagesTest(unittest.TestCase):
         self.assertIn("Personal Secretary", page)
         self.assertIn("self-hosted", page)
         self.assertIn("unified inbox", page)
-        self.assertIn('href="/privacy"', page)
-        self.assertIn('href="/terms"', page)
+        self.assertIn('href="/privacy/"', page)
+        self.assertIn('href="/terms/"', page)
         self.assertIn("Gmail", page)
         self.assertIn("Google Calendar", page)
         self.assertIn("Google Drive", page)
@@ -73,6 +73,9 @@ class BrandingPagesTest(unittest.TestCase):
         self.assertEqual(
             manifest["terms/index.html"], remote.sha256_bytes(pages["terms/index.html"])
         )
+        docs = (ROOT / "docs" / "google_oauth.md").read_text(encoding="utf-8")
+        self.assertIn("https://web-itx.duckdns.org/privacy/", docs)
+        self.assertIn("https://web-itx.duckdns.org/terms/", docs)
 
 
 class ComposeRetirementTest(unittest.TestCase):
@@ -93,6 +96,7 @@ class PublisherPolicyTest(unittest.TestCase):
             branch="main",
             head=RELEASE,
             origin_main=RELEASE,
+            release_sha=RELEASE,
         )
         with self.assertRaises(local.PublicWebError):
             local.assess_local_checkout(
@@ -101,6 +105,17 @@ class PublisherPolicyTest(unittest.TestCase):
                 branch="main",
                 head=RELEASE,
                 origin_main=RELEASE,
+                release_sha=RELEASE,
+            )
+        newer = "b" * 40
+        with self.assertRaises(local.PublicWebError):
+            local.assess_local_checkout(
+                origin=ORIGIN,
+                porcelain="",
+                branch="main",
+                head=newer,
+                origin_main=newer,
+                release_sha=RELEASE,
             )
         remote.require_remote_release(
             repository_path="/opt/secretary",
@@ -223,22 +238,51 @@ class PublisherPolicyTest(unittest.TestCase):
         self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
         self.assertFalse((root / "privacy").exists())
 
-    def test_slash_and_plain_privacy_terms_share_page_hash(self):
+    def test_slash_urls_match_hash_and_plain_urls_redirect(self):
         pages = _pages()
         observed = {}
-        for url, status, rel in remote.VERIFY_URLS:
+        for url, status, rel, location in remote.VERIFY_URLS:
             body = b"" if rel is None else pages[rel]
-            observed[url] = (status, body)
+            observed[url] = (status, body, location or "")
         remote.verify_branding_responses(observed, pages)
-        observed[f"https://{remote.BRANDING_HOST}/privacy/"] = (200, b"other")
+        privacy = f"https://{remote.BRANDING_HOST}/privacy"
+        observed[privacy] = (301, b"", "https://evil.example/privacy/")
         with self.assertRaises(remote.PublicWebError):
             remote.verify_branding_responses(observed, pages)
+        observed[privacy] = (200, pages["privacy/index.html"], "")
+        with self.assertRaises(remote.PublicWebError):
+            remote.verify_branding_responses(observed, pages)
+
+    def test_symlinked_static_root_is_rejected(self):
+        real = Path(self._tmp())
+        (real / "index.html").write_bytes(b"keep-home")
+        link = Path(self._tmp()) / "linked-root"
+        link.symlink_to(real, target_is_directory=True)
+        with self.assertRaises(remote.PublicWebError):
+            self._publish(link, _pages())
+        self.assertEqual((real / "index.html").read_bytes(), b"keep-home")
+        self.assertFalse((real / "privacy").exists())
+
+    def test_symlinked_privacy_parent_is_rejected_before_read(self):
+        root = Path(self._tmp())
+        (root / "index.html").write_bytes(b"keep-home")
+        outside = Path(self._tmp())
+        sentinel = outside / "index.html"
+        sentinel.write_bytes(b"do-not-read")
+        (root / "privacy").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(remote.PublicWebError):
+            self._publish(root, _pages())
+        self.assertEqual(sentinel.read_bytes(), b"do-not-read")
+        self.assertEqual((root / "index.html").read_bytes(), b"keep-home")
+        self.assertFalse((root / "terms").exists())
 
     def test_publisher_does_not_mutate_nginx_or_compose(self):
         source = (OPS / "remote_public_web.py").read_text(encoding="utf-8")
         self.assertNotIn("nginx", source)
         self.assertNotIn("systemctl", source)
         self.assertNotIn("--insecure", source)
+        self.assertNotIn("--location", source)
+        self.assertNotRegex(source, r"(^|\s)-L(\s|$)")
         self.assertNotRegex(source, r"(^|\s)-k(\s|$)")
         with self.assertRaises(remote.PublicWebError):
             remote.compose("up", "-d", "public_web")

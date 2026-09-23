@@ -37,6 +37,7 @@ def assess_local_checkout(
     branch: str,
     head: str,
     origin_main: str,
+    release_sha: str,
 ) -> None:
     if origin != CANONICAL_ORIGIN:
         raise PublicWebError("local rollout checkout has the wrong Git origin")
@@ -48,6 +49,8 @@ def assess_local_checkout(
         raise PublicWebError(
             "local main is stale; fast-forward it to origin/main first"
         )
+    if head != release_sha:
+        raise PublicWebError("local HEAD does not equal authorized release")
 
 
 def load_target(data: dict) -> dict:
@@ -165,15 +168,16 @@ def main() -> int:
         origin_main = _run_local(
             ["git", "-C", str(REPOSITORY_ROOT), "rev-parse", "origin/main"]
         )
+        release_sha = validate_sha(args.release_sha)
         assess_local_checkout(
             origin=origin,
             porcelain=porcelain,
             branch=branch,
             head=head,
             origin_main=origin_main,
+            release_sha=release_sha,
         )
         target = load_target(json.loads(TARGET_FILE.read_text(encoding="utf-8")))
-        release_sha = validate_sha(args.release_sha)
         _run_local(
             [
                 "git",
