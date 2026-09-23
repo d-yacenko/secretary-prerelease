@@ -47,6 +47,18 @@ class BrandingPagesTest(unittest.TestCase):
         self.assertIn("Google Calendar", page)
         self.assertIn("Google Drive", page)
 
+    def test_homepage_has_exact_search_console_verification(self):
+        token = "hTkY_ZxfZrzsygn-3oU4wxH6zraiRWo28hGXZF_U1Is"
+        home = (PUBLIC / "index.html").read_text(encoding="utf-8")
+        tags = re.findall(
+            r'<meta\s+name="google-site-verification"\s+content="([^"]*)"\s*/>',
+            home,
+        )
+        self.assertEqual(tags, [token])
+        for name in ("privacy.html", "terms.html"):
+            page = (PUBLIC / name).read_text(encoding="utf-8")
+            self.assertNotIn("google-site-verification", page)
+
     def test_privacy_discloses_google_data_and_ai_provider(self):
         page = (PUBLIC / "privacy.html").read_text(encoding="utf-8")
         self.assertIn("Gmail", page)
