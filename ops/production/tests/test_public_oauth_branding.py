@@ -3,6 +3,7 @@
 import importlib.util
 import re
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -182,6 +183,214 @@ class RolloutPolicyTest(unittest.TestCase):
         self.assertNotIn("update-ref", source)
         self.assertNotIn("compose down", source)
         self.assertNotRegex(source, r"open\(\s*ENV_FILE")
+
+
+class ReadinessAndCleanupTest(unittest.TestCase):
+    def _clock(self):
+        state = {"now": 0.0, "sleeps": []}
+
+        def monotonic():
+            return state["now"]
+
+        def sleep(seconds):
+            self.assertGreater(seconds, 0)
+            state["sleeps"].append(seconds)
+            state["now"] += seconds
+
+        return state, monotonic, sleep
+
+    def test_transient_tls_failure_waits_then_succeeds(self):
+        state, monotonic, sleep = self._clock()
+        probes = {"count": 0}
+
+        def probe():
+            probes["count"] += 1
+            if probes["count"] == 1:
+                raise remote.PublicWebError("curl: (35) TLS connect error")
+            return dict(remote.PUBLIC_URLS)
+
+        statuses = remote.collect_statuses(
+            probe=probe, sleep=sleep, monotonic=monotonic
+        )
+        self.assertEqual(statuses, dict(remote.PUBLIC_URLS))
+        self.assertEqual(probes["count"], 2)
+        self.assertEqual(state["sleeps"], [remote.READINESS_INTERVAL_SECONDS])
+        self.assertLess(state["now"], remote.READINESS_TIMEOUT_SECONDS)
+
+    def test_persistent_probe_failure_reaches_bounded_deadline(self):
+        state, monotonic, sleep = self._clock()
+
+        def probe():
+            raise remote.PublicWebError("curl: (7) connection refused")
+
+        with self.assertRaises(remote.PublicWebError):
+            remote.collect_statuses(probe=probe, sleep=sleep, monotonic=monotonic)
+        self.assertGreaterEqual(state["now"], remote.READINESS_TIMEOUT_SECONDS)
+        self.assertGreater(len(state["sleeps"]), 1)
+        self.assertAlmostEqual(
+            sum(state["sleeps"]), remote.READINESS_TIMEOUT_SECONDS, places=6
+        )
+
+    def _before(self):
+        return {
+            "db_container": "db1",
+            "db_volume": "volume1",
+            "env_checksum": "abc",
+            "api_container": "api1",
+            "worker_container": "worker1",
+        }
+
+    def _run_rollout(
+        self,
+        *,
+        existed_before,
+        snapshot=None,
+        service_id=None,
+        require_running=None,
+        collect=None,
+    ):
+        calls = []
+        before = self._before()
+        caught = []
+
+        def compose(*args):
+            calls.append(args)
+            if any(name in args for name in ("db", "api", "worker")) and args[:1] != (
+                "ps",
+            ):
+                raise AssertionError(args)
+            return ""
+
+        def default_service_id(name, *, required):
+            if name == "public_web" and required:
+                return "public1"
+            return f"{name}1"
+
+        try:
+            with (
+                unittest.mock.patch.object(remote, "compose", compose),
+                unittest.mock.patch.object(
+                    remote, "snapshot", snapshot or (lambda *args: dict(before))
+                ),
+                unittest.mock.patch.object(
+                    remote, "service_id", service_id or default_service_id
+                ),
+                unittest.mock.patch.object(
+                    remote, "require_running", require_running or (lambda *args: None)
+                ),
+                unittest.mock.patch.object(
+                    remote,
+                    "collect_statuses",
+                    collect or (lambda **kwargs: dict(remote.PUBLIC_URLS)),
+                ),
+            ):
+                remote.rollout_public_web(existed_before=existed_before, before=before)
+        except remote.PublicWebError as exc:
+            caught.append(exc)
+        return calls, caught
+
+    def test_first_rollout_persistent_verification_failure_removes_public_web(self):
+        def collect(**kwargs):
+            raise remote.PublicWebError("public page verification failed")
+
+        calls, caught = self._run_rollout(existed_before=False, collect=collect)
+        self.assertEqual(len(caught), 1)
+        self.assertIn(remote.PUBLIC_WEB_UP, calls)
+        self.assertIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertIn(remote.PUBLIC_WEB_RM, calls)
+        self.assertNotIn("-v", remote.PUBLIC_WEB_RM)
+
+    def test_first_rollout_identity_failure_removes_public_web(self):
+        before = self._before()
+        changed = dict(before)
+        changed["api_container"] = "api-recreated"
+
+        calls, caught = self._run_rollout(
+            existed_before=False, snapshot=lambda *args: changed
+        )
+        self.assertEqual(len(caught), 1)
+        self.assertIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertIn(remote.PUBLIC_WEB_RM, calls)
+        self.assertNotIn(("stop", "api"), calls)
+        self.assertNotIn(("stop", "db"), calls)
+        self.assertNotIn(("stop", "worker"), calls)
+
+    def test_first_rollout_missing_public_web_removes_public_web(self):
+        def service_id(name, *, required):
+            if name == "public_web":
+                raise remote.PublicWebError("production service missing: public_web")
+            return f"{name}1"
+
+        calls, caught = self._run_rollout(existed_before=False, service_id=service_id)
+        self.assertEqual(len(caught), 1)
+        self.assertIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertIn(remote.PUBLIC_WEB_RM, calls)
+
+    def test_first_rollout_not_running_removes_public_web(self):
+        def require_running(container_id, service_name):
+            raise remote.PublicWebError(
+                "production public_web container is not running"
+            )
+
+        calls, caught = self._run_rollout(
+            existed_before=False, require_running=require_running
+        )
+        self.assertEqual(len(caught), 1)
+        self.assertIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertIn(remote.PUBLIC_WEB_RM, calls)
+
+    def test_preexisting_public_web_failed_verification_is_not_removed(self):
+        def collect(**kwargs):
+            raise remote.PublicWebError("public page verification failed")
+
+        calls, caught = self._run_rollout(existed_before=True, collect=collect)
+        self.assertEqual(len(caught), 1)
+        self.assertIn(remote.PUBLIC_WEB_UP, calls)
+        self.assertNotIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertNotIn(remote.PUBLIC_WEB_RM, calls)
+
+    def test_first_rollout_unexpected_exception_removes_public_web(self):
+        def collect(**kwargs):
+            raise RuntimeError("verification probe crashed")
+
+        calls = []
+        before = self._before()
+
+        def compose(*args):
+            calls.append(args)
+            return ""
+
+        with (
+            self.assertRaises(RuntimeError),
+            unittest.mock.patch.object(remote, "compose", compose),
+            unittest.mock.patch.object(remote, "snapshot", lambda *args: dict(before)),
+            unittest.mock.patch.object(
+                remote, "service_id", lambda name, *, required: name
+            ),
+            unittest.mock.patch.object(remote, "require_running", lambda *args: None),
+            unittest.mock.patch.object(remote, "collect_statuses", collect),
+        ):
+            remote.rollout_public_web(existed_before=False, before=before)
+        self.assertIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertIn(remote.PUBLIC_WEB_RM, calls)
+
+    def test_cleanup_cannot_target_db_api_or_worker(self):
+        for args in (
+            ("stop", "db"),
+            ("rm", "-sf", "api"),
+            ("up", "-d", "--force-recreate", "worker"),
+            ("down",),
+        ):
+            with self.assertRaises(remote.PublicWebError):
+                remote.compose(*args)
+        self.assertEqual(remote.PUBLIC_WEB_STOP, ("stop", "public_web"))
+        self.assertEqual(remote.PUBLIC_WEB_RM, ("rm", "-sf", "public_web"))
+
+    def test_https_probe_does_not_bypass_tls(self):
+        source = (OPS / "remote_public_web.py").read_text(encoding="utf-8")
+        self.assertNotIn("--insecure", source)
+        self.assertNotRegex(source, r"(^|\s)-k(\s|$)")
+        self.assertNotIn("curl -k", source)
 
 
 if __name__ == "__main__":

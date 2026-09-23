@@ -29,6 +29,11 @@ COMPOSE = [
     "infra/compose.deploy.yaml",
 ]
 PUBLIC_WEB_UP = ("up", "-d", "--no-deps", "--force-recreate", "public_web")
+PUBLIC_WEB_STOP = ("stop", "public_web")
+PUBLIC_WEB_RM = ("rm", "-sf", "public_web")
+READINESS_TIMEOUT_SECONDS = 45
+READINESS_INTERVAL_SECONDS = 3
+MUTATING_COMPOSE = {"up", "stop", "rm", "down", "restart", "kill", "pause", "unpause"}
 IDENTITY_KEYS = (
     "db_container",
     "db_volume",
@@ -116,8 +121,11 @@ def git(*args: str) -> str:
 
 
 def compose(*args: str) -> str:
-    if args[:1] == ("up",) and args[-1:] != ("public_web",):
-        raise PublicWebError("public web rollout may start only public_web")
+    if args and args[0] in MUTATING_COMPOSE:
+        if any(name in args for name in ("db", "api", "worker")):
+            raise PublicWebError("public web rollout must not touch db, api, or worker")
+        if "public_web" not in args:
+            raise PublicWebError("public web rollout may change only public_web")
     return run([*COMPOSE, *args])
 
 
@@ -215,23 +223,54 @@ def http_status(url: str) -> int:
     return int(code)
 
 
-def collect_statuses() -> dict[str, int]:
-    deadline = time.monotonic() + 45
-    last: dict[str, int] = {}
+def probe_public_statuses() -> dict[str, int]:
+    return {url: http_status(url) for url in PUBLIC_URLS}
+
+
+def collect_statuses(
+    *,
+    probe=None,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+    timeout_seconds: float = READINESS_TIMEOUT_SECONDS,
+    interval_seconds: float = READINESS_INTERVAL_SECONDS,
+) -> dict[str, int]:
+    if probe is None:
+        probe = probe_public_statuses
+    deadline = monotonic() + timeout_seconds
     while True:
-        last = {url: http_status(url) for url in PUBLIC_URLS}
         try:
-            require_public_statuses(last)
-            return last
-        except PublicWebError:
-            if time.monotonic() >= deadline:
-                return last
-            time.sleep(3)
+            statuses = probe()
+            require_public_statuses(statuses)
+            return statuses
+        except PublicWebError as exc:
+            now = monotonic()
+            if now >= deadline:
+                raise PublicWebError("public page verification failed") from exc
+            sleep(min(interval_seconds, deadline - now))
 
 
 def remove_public_web() -> None:
-    compose("stop", "public_web")
-    compose("rm", "-sf", "public_web")
+    compose(*PUBLIC_WEB_STOP)
+    compose(*PUBLIC_WEB_RM)
+
+
+def rollout_public_web(*, existed_before: bool, before: dict[str, str]) -> None:
+    try:
+        compose(*PUBLIC_WEB_UP)
+        after = snapshot(
+            service_id("db", required=True),
+            service_id("api", required=True),
+            service_id("worker", required=True),
+        )
+        require_identities_unchanged(before, after)
+        public_id = service_id("public_web", required=True)
+        require_running(public_id, "public_web")
+        collect_statuses()
+    except Exception:
+        if must_remove_new_public_web(existed_before=existed_before, verified=False):
+            remove_public_web()
+        raise
 
 
 def main() -> int:
@@ -269,25 +308,7 @@ def main() -> int:
         service_exists=existed_before, listeners=listeners
     )
 
-    compose(*PUBLIC_WEB_UP)
-    after_ids = (
-        service_id("db", required=True),
-        service_id("api", required=True),
-        service_id("worker", required=True),
-    )
-    after = snapshot(*after_ids)
-    require_identities_unchanged(before, after)
-    if not service_id("public_web", required=True):
-        raise PublicWebError("public_web is not running")
-    require_running(service_id("public_web", required=True), "public_web")
-
-    statuses = collect_statuses()
-    try:
-        require_public_statuses(statuses)
-    except PublicWebError:
-        if must_remove_new_public_web(existed_before=existed_before, verified=False):
-            remove_public_web()
-        raise
+    rollout_public_web(existed_before=existed_before, before=before)
 
     print("PUBLIC_WEB_HEALTH=PASS")
     print("DB_CONTAINER_UNCHANGED=true")
