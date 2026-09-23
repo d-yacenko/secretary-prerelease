@@ -28,11 +28,7 @@ class ObjectActionButton extends StatelessWidget {
         ),
       );
     }
-    return IconButton(
-      tooltip: label,
-      onPressed: onPressed,
-      icon: Icon(icon),
-    );
+    return IconButton(tooltip: label, onPressed: onPressed, icon: Icon(icon));
   }
 }
 
@@ -61,6 +57,21 @@ class OpenInGraphAction extends StatelessWidget {
     return ObjectActionButton(
       icon: Icons.hub_outlined,
       label: 'Открыть в графе',
+      onPressed: onPressed,
+    );
+  }
+}
+
+class DeleteObjectAction extends StatelessWidget {
+  const DeleteObjectAction({super.key, required this.onPressed});
+
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ObjectActionButton(
+      icon: Icons.delete_outline,
+      label: 'Удалить',
       onPressed: onPressed,
     );
   }

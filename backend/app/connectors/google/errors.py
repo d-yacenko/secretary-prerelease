@@ -1,6 +1,9 @@
+import re
 from typing import Literal
 
 import httpx
+
+_OAUTH_ERROR_CODE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 GoogleSyncFailureKind = Literal[
     "transient",
@@ -22,6 +25,13 @@ class GoogleConfigurationError(GoogleConnectorError):
     pass
 
 
+def sanitize_oauth_error_code(value: object) -> str | None:
+    """Keep only a short provider OAuth error code. Never keep tokens or bodies."""
+    if not isinstance(value, str) or not _OAUTH_ERROR_CODE.fullmatch(value):
+        return None
+    return value
+
+
 class GoogleOAuthError(GoogleConnectorError):
     def __init__(
         self,
@@ -30,10 +40,12 @@ class GoogleOAuthError(GoogleConnectorError):
         status_code: int | None = None,
         retryable: bool = False,
         retry_after_seconds: int | None = None,
+        oauth_error: str | None = None,
     ) -> None:
         self.status_code = status_code
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
+        self.oauth_error = sanitize_oauth_error_code(oauth_error)
         super().__init__(message)
 
 

@@ -116,6 +116,10 @@ List<SourceSyncStatusOut> sourceSyncErrorRows(List<SourceSyncStatusOut> rows) =>
 String? sourceSyncActionGuidance(SourceSyncStatusOut row) {
   switch (row.errorKind) {
     case 'authentication':
+      if (row.provider == 'gmail' || row.provider == 'google_calendar') {
+        return 'Переподключите аккаунт Google. Access token обновляется автоматически; '
+            'если авторизация больше не действует, нужна новая авторизация в настройках.';
+      }
       if (row.provider == 'yandex_mail') {
         return 'Проверьте пароль приложения для Яндекс Почты и переподключите аккаунт.';
       }
@@ -192,10 +196,7 @@ class SourceSyncTransientList extends StatelessWidget {
 }
 
 class SourceSyncErrorList extends StatelessWidget {
-  const SourceSyncErrorList({
-    super.key,
-    required this.errorRows,
-  });
+  const SourceSyncErrorList({super.key, required this.errorRows});
 
   final List<SourceSyncStatusOut> errorRows;
 

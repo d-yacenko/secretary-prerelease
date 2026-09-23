@@ -13,6 +13,10 @@ from app.ai_audit.context import ai_trace_session
 from app.api.schemas import NotificationOut
 from app.assistant.action_plan_history import build_terminal_action_plan_history_events
 from app.assistant.canonical_uri import sanitize_canonical_uri_for_assistant
+from app.assistant.citations import (
+    extract_cited_object_ids,
+    neutralize_unproven_citations,
+)
 from app.assistant.constants import (
     DEFAULT_ASSISTANT_MAX_ROUNDS,
     MAX_ACTION_PLAN_FINALIZATION_CONTEXT_CHARS,
@@ -24,8 +28,8 @@ from app.assistant.constants import (
     MAX_ASSISTANT_TOOL_CALLS_PER_TURN,
     MAX_UI_CONTEXT_CHARS,
 )
-from app.assistant.inbox_review_progress import InboxReviewReceipt
 from app.assistant.inbox_review_intent import inbox_review_purpose_for_utterance
+from app.assistant.inbox_review_progress import InboxReviewReceipt
 from app.assistant.reference_ids import cap_reference_candidate_ids, dedupe_preserve_order
 from app.assistant.session import run_assistant_tool
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
@@ -258,18 +262,26 @@ class AssistantService:
         telemetry.openai_max_output_tokens = provider_result.openai_max_output_tokens
         telemetry.log_turn()
 
-        candidate_ids = cap_reference_candidate_ids(
+        exposed_ids = set(tool_budget.seen_object_ids) | set(tool_budget.pending_seen_object_ids)
+        cited_ids = [
+            object_id
+            for object_id in extract_cited_object_ids(provider_result.answer)
+            if object_id in exposed_ids
+        ]
+        answer = neutralize_unproven_citations(provider_result.answer, set(cited_ids))
+        generic_ids = cap_reference_candidate_ids(
             dedupe_preserve_order(provider_result.candidate_object_ids),
             validated_context_ids,
             MAX_ASSISTANT_REFERENCES,
         )
+        candidate_ids = dedupe_preserve_order(cited_ids + generic_ids)
         affected_ids = dedupe_preserve_order(provider_result.affected_object_ids)
 
         references = self._serialize_references(candidate_ids)
         affected_objects = self._serialize_affected(affected_ids)
         pending_action_plan = self._persist_staged_action_plan(tool_budget.staged_actions)
         return AssistantMessageResult(
-            answer=provider_result.answer,
+            answer=answer,
             references=references,
             affected_objects=affected_objects,
             pending_action_plan=pending_action_plan,

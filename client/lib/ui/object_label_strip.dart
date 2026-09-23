@@ -24,11 +24,11 @@ class ObjectLabelStrip extends StatelessWidget {
     final overflow = labels.length - visible.length;
     final scheme = Theme.of(context).colorScheme;
     final style = Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: scheme.onSurfaceVariant,
-          fontWeight: FontWeight.w500,
-          height: 1.1,
-          fontSize: 11,
-        );
+      color: scheme.onSurfaceVariant,
+      fontWeight: FontWeight.w500,
+      height: 1.1,
+      fontSize: 11,
+    );
     return Wrap(
       spacing: 4,
       runSpacing: 2,
@@ -43,7 +43,9 @@ class ObjectLabelStrip extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: 180),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+                    color: scheme.surfaceContainerHighest.withValues(
+                      alpha: 0.7,
+                    ),
                     borderRadius: BorderRadius.circular(3),
                     border: Border.all(color: scheme.outlineVariant),
                   ),
@@ -128,10 +130,7 @@ class ObjectMetaActionRow extends StatelessWidget {
           spacing: AppSpacing.xs,
           runSpacing: 2,
           crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            ...actions,
-            if (labelStrip != null) labelStrip,
-          ],
+          children: [...actions, if (labelStrip != null) labelStrip],
         ),
       );
     }
@@ -141,19 +140,18 @@ class ObjectMetaActionRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (actions.isNotEmpty)
-            Wrap(
-              spacing: AppSpacing.xs,
-              runSpacing: 2,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: actions,
+            Flexible(
+              child: Wrap(
+                spacing: AppSpacing.xs,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: actions,
+              ),
             ),
           if (labelStrip != null) ...[
             if (actions.isNotEmpty) const SizedBox(width: AppSpacing.sm),
             Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: labelStrip,
-              ),
+              child: Align(alignment: Alignment.centerRight, child: labelStrip),
             ),
           ],
         ],

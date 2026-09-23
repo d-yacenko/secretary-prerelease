@@ -89,6 +89,7 @@ class GoogleOAuthService:
                     if retryable
                     else None
                 ),
+                oauth_error=error_code,
             )
         payload = response.json()
         if "access_token" not in payload:

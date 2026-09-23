@@ -99,6 +99,30 @@ void main() {
     },
   );
 
+  test(
+    'google authentication asks to reconnect without claiming testing expiry',
+    () {
+      for (final provider in ['gmail', 'google_calendar']) {
+        final row = errorRow(
+          provider: provider,
+          lastError:
+              'Google authentication failed (invalid_grant). Reconnect the Google account.',
+          errorKind: 'authentication',
+        );
+        final guidance = sourceSyncActionGuidance(row)!;
+        expect(guidance, contains('Переподключите аккаунт Google'));
+        expect(guidance, contains('автоматически'));
+        expect(guidance, isNot(contains('7')));
+        expect(guidance, isNot(contains('Testing')));
+        expect(sourceSyncSafeErrorReason(row), contains('invalid_grant'));
+        expect(
+          sourceSyncSafeErrorReason(row),
+          isNot(contains('refresh_token')),
+        );
+      }
+    },
+  );
+
   test('typed authentication failure renders credential guidance', () {
     final row = errorRow(provider: 'yandex_mail', errorKind: 'authentication');
     expect(sourceSyncErrorRows([row]), [row]);

@@ -17,6 +17,9 @@ abstract class VoiceLocalFeedback {
 
   Future<void> playStop();
 
+  /// One local failure cue. Must not loop or call a provider.
+  Future<void> playError();
+
   /// Release any media audio focus before the microphone starts.
   Future<void> releasePlayback();
 
@@ -36,6 +39,9 @@ class NoopVoiceLocalFeedback implements VoiceLocalFeedback {
   Future<void> playStop() async {}
 
   @override
+  Future<void> playError() async {}
+
+  @override
   Future<void> releasePlayback() async {}
 
   @override
@@ -49,6 +55,7 @@ class RecordingVoiceLocalFeedback implements VoiceLocalFeedback {
   int ackCount = 0;
   int readyCount = 0;
   int stopCount = 0;
+  int errorCount = 0;
   int releaseCount = 0;
   final List<String> mediaWhileRecording = <String>[];
   final List<String> sequence = <String>[];
@@ -76,6 +83,12 @@ class RecordingVoiceLocalFeedback implements VoiceLocalFeedback {
   Future<void> playStop() async {
     stopCount += 1;
     _noteMedia('stop');
+  }
+
+  @override
+  Future<void> playError() async {
+    errorCount += 1;
+    sequence.add('error');
   }
 
   @override
@@ -115,6 +128,13 @@ class AssetVoiceLocalFeedback implements VoiceLocalFeedback {
   @override
   Future<void> playStop() async {
     await _play('sounds/voice_stop.wav');
+  }
+
+  @override
+  Future<void> playError() async {
+    try {
+      await SystemSound.play(SystemSoundType.alert);
+    } catch (_) {}
   }
 
   @override

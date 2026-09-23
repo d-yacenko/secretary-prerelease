@@ -261,6 +261,7 @@ class AssistantController extends ChangeNotifier {
   bool _planNarrationInProgress = false;
   bool _speakingOverlay = false;
   String? _speechErrorMessage;
+  bool _assistantTurnVoiceError = false;
   bool _confirmationInFlight = false;
   InboxReviewReceipt? _pendingInboxReviewReceipt;
   String? _boundVoiceApprovalPlanId;
@@ -272,7 +273,7 @@ class AssistantController extends ChangeNotifier {
   bool get voiceApprovalArmed => _voiceApprovalArmed;
 
   AssistantVoiceState get voiceState {
-    if (_speechErrorMessage != null) {
+    if (_speechErrorMessage != null || _assistantTurnVoiceError) {
       return AssistantVoiceState.error;
     }
     if (_speakingOverlay || _speech.isSpeaking) {
@@ -298,7 +299,9 @@ class AssistantController extends ChangeNotifier {
   }
 
   String? get voiceErrorMessage =>
-      _speechErrorMessage ?? _voice.voiceErrorMessage;
+      _speechErrorMessage ??
+      _voice.voiceErrorMessage ??
+      (_assistantTurnVoiceError ? errorMessage : null);
 
   List<AssistantChatMessage> get messages => List.unmodifiable(_messages);
   AssistantContextRef? get objectContext => _objectContext;
@@ -424,6 +427,7 @@ class AssistantController extends ChangeNotifier {
       );
       _bindVoiceApprovalForPlan(response.pendingActionPlan);
       _pendingRetryMessage = null;
+      _assistantTurnVoiceError = false;
       sendState = AssistantSendState.idle;
       notifyListeners();
       _pendingInboxReviewReceipt =
@@ -454,18 +458,28 @@ class AssistantController extends ChangeNotifier {
       sendState = AssistantSendState.error;
       errorMessage = e.message;
       _authController.handleAuthenticationFailure();
-      notifyListeners();
+      await _noteAssistantTurnFailure();
     } on NetworkException catch (e) {
       _pendingRetryMessage = trimmed;
       sendState = AssistantSendState.error;
       errorMessage = e.message;
-      notifyListeners();
+      await _noteAssistantTurnFailure();
     } on ApiException catch (e) {
       _pendingRetryMessage = trimmed;
       sendState = AssistantSendState.error;
       errorMessage = localOpenAiDailyBudgetMessage(e) ?? e.message;
-      notifyListeners();
+      await _noteAssistantTurnFailure();
     }
+  }
+
+  Future<void> _noteAssistantTurnFailure() async {
+    if (_turnSource.isVoiceInput) {
+      _assistantTurnVoiceError = true;
+      notifyListeners();
+      await _feedback.playError();
+      return;
+    }
+    notifyListeners();
   }
 
   Future<void> approveActionPlanAt(
@@ -1058,6 +1072,7 @@ class AssistantController extends ChangeNotifier {
 
   void clearVoiceError() {
     _speechErrorMessage = null;
+    _assistantTurnVoiceError = false;
     _voice.clearError();
     notifyListeners();
   }
@@ -1077,6 +1092,7 @@ class AssistantController extends ChangeNotifier {
 
   void _beginTurn(VoiceInvocationSource source) {
     _discardPendingInboxReviewCompletion();
+    _assistantTurnVoiceError = false;
     _turnSource = source;
     _voiceInputActive = source.isVoiceInput;
     _autoSpeechAllowed =
@@ -1106,6 +1122,7 @@ class AssistantController extends ChangeNotifier {
     _planNarrationInProgress = false;
     _speakingOverlay = false;
     _speechErrorMessage = null;
+    _assistantTurnVoiceError = false;
     _confirmationInFlight = false;
     _clearVoiceApprovalBinding();
     _discardPendingInboxReviewCompletion();

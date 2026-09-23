@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.connectors.google.api_errors import format_google_api_error
-from app.connectors.google.errors import GoogleApiError, GoogleConnectorError
+from app.connectors.google.errors import GoogleApiError, GoogleConnectorError, GoogleOAuthError
 from app.connectors.teams.errors import TeamsRateLimitedError, TeamsReconnectRequiredError
 from app.connectors.telegram.mtproto_errors import TelegramMtprotoError
 from app.connectors.yandex.caldav_api_errors import format_yandex_caldav_error
@@ -58,7 +58,23 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def format_google_oauth_error(error: GoogleOAuthError) -> str:
+    code = error.oauth_error
+    if error.retryable:
+        text = "failed to refresh access token"
+        if code:
+            text = f"{text} ({code})"
+        return text[:MAX_LAST_ERROR_LENGTH]
+    if code:
+        text = f"Google authentication failed ({code}). Reconnect the Google account."
+        return text[:MAX_LAST_ERROR_LENGTH]
+    message = error.message.strip() or "Google authentication failed. Reconnect the Google account."
+    return message.splitlines()[0][:MAX_LAST_ERROR_LENGTH]
+
+
 def sanitize_job_error(exc: BaseException) -> str:
+    if isinstance(exc, GoogleOAuthError):
+        return format_google_oauth_error(exc)
     if isinstance(exc, GoogleApiError):
         return format_google_api_error(exc)
     if isinstance(exc, TelegramMtprotoError):

@@ -1931,3 +1931,56 @@ def user_b_id(db_session) -> uuid.UUID:
     db_session.add(User(id=user_id, display_name="User B"))
     db_session.flush()
     return user_id
+
+
+def test_exact_citations_survive_generic_cap_and_reject_unseen(
+    db_session, fake_embedding_service, user_b_id
+) -> None:
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    owned = [
+        graph.create_object(ObjectCreate(kind="email", title=f"cited-mail-{index}", origin="source"))
+        for index in range(9)
+    ]
+    exact = owned[-1]
+    other = GraphService(db_session, user_b_id, fake_embedding_service)
+    foreign = other.create_object(
+        ObjectCreate(kind="email", title="foreign-mail", origin="source")
+    )
+    invented = uuid.uuid4()
+    db_session.flush()
+
+    class CitingProvider(FakeAssistantProvider):
+        def run(self, message, history, ui_context, reference_datetime, timezone, tool_runner):
+            tool_runner("get_object", {"object_id": str(exact.id)})
+            tool_runner("get_object", {"object_id": str(exact.id)})
+            return AssistantProviderResult(
+                answer=(
+                    f"A [Открыть письмо](secretary://object/{exact.id}) "
+                    f"and again [Открыть письмо](secretary://object/{exact.id}) "
+                    f"[чужое](secretary://object/{foreign.id}) "
+                    f"[выдуманное](secretary://object/{invented}) "
+                    "https://example.com/leave-external"
+                ),
+                candidate_object_ids=[obj.id for obj in owned] + [foreign.id],
+                affected_object_ids=[],
+                store_false_used=True,
+            )
+
+    result = AssistantService(BOOTSTRAP_USER_ID, CitingProvider()).send_message(
+        message="find the mails",
+        history=[],
+    )
+    reference_ids = [item.object_id for item in result.references]
+    assert reference_ids[0] == exact.id
+    assert reference_ids.count(exact.id) == 1
+    assert foreign.id not in reference_ids
+    assert invented not in reference_ids
+    assert len([item for item in result.references if item.object_id != exact.id]) <= (
+        MAX_ASSISTANT_REFERENCES
+    )
+    assert f"secretary://object/{exact.id}" in result.answer
+    assert f"secretary://object/{foreign.id}" not in result.answer
+    assert f"secretary://object/{invented}" not in result.answer
+    assert "https://example.com/leave-external" in result.answer
+    assert "чужое" in result.answer
+    assert "выдуманное" in result.answer

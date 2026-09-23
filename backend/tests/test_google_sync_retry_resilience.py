@@ -24,7 +24,7 @@ from app.jobs.constants import (
     MAX_JOB_ATTEMPTS,
 )
 from app.jobs.recurring_job_finalization import finalize_recurring_job_failure
-from app.services.job_queue_service import JobQueueService, utcnow
+from app.services.job_queue_service import JobQueueService, sanitize_job_error, utcnow
 from app.services.source_status_service import (
     SourceStatusService,
     _ConnectedSourceAccount,
@@ -192,18 +192,33 @@ def test_google_oauth_refresh_transient_failure_is_retryable(tmp_path, status: i
 def test_google_oauth_refresh_invalid_grant_is_authentication(tmp_path) -> None:
     client_file = tmp_path / "client.json"
     client_file.write_text(
-        '{"web":{"client_id":"client","client_secret":"secret"}}',
+        '{"web":{"client_id":"client","client_secret":"client-secret-value"}}',
         encoding="utf-8",
     )
 
     class Client:
         def post(self, *args, **kwargs):
-            return httpx.Response(400, json={"error": "invalid_grant"})
+            assert kwargs["data"]["refresh_token"] == "refresh-token-value"
+            assert kwargs["data"]["client_secret"] == "client-secret-value"
+            return httpx.Response(
+                400,
+                json={
+                    "error": "invalid_grant",
+                    "error_description": "refresh-token-value client-secret-value leaked",
+                },
+            )
 
     service = GoogleOAuthService(str(client_file), "http://localhost/callback", http_client=Client())
     with pytest.raises(GoogleOAuthError) as exc_info:
-        service.refresh_access_token("refresh-token")
-    assert classify_google_sync_failure(exc_info.value) == ("authentication", False, None)
+        service.refresh_access_token("refresh-token-value")
+    error = exc_info.value
+    assert error.oauth_error == "invalid_grant"
+    assert classify_google_sync_failure(error) == ("authentication", False, None)
+    visible = sanitize_job_error(error)
+    assert visible == "Google authentication failed (invalid_grant). Reconnect the Google account."
+    assert "refresh-token-value" not in visible
+    assert "client-secret-value" not in visible
+    assert "leaked" not in visible
 
 
 def test_google_oauth_transient_failure_uses_recurring_short_retry(db_session) -> None:

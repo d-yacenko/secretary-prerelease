@@ -320,7 +320,25 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         ),
                         child: isUser
                             ? Text(message.content)
-                            : AssistantMessageBody(content: message.content),
+                            : AssistantMessageBody(
+                                content: message.content,
+                                openableObjectIds: {
+                                  for (final ref in message.references)
+                                    ref.objectId,
+                                },
+                                onOpenObject: (objectId) => openObjectDetail(
+                                  context,
+                                  objectId: objectId,
+                                  apiClient: widget.apiClient,
+                                  authController: widget.authController,
+                                  captureController: widget.captureController,
+                                  assistantController: widget.controller,
+                                  onAskSecretary: (object) {
+                                    widget.controller.setObjectContext(object);
+                                  },
+                                  bookmarkController: widget.bookmarkController,
+                                ),
+                              ),
                       ),
                       if (!isUser)
                         Align(

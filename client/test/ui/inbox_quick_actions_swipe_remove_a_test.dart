@@ -201,6 +201,7 @@ Widget pumpHarness(
   InboxHarness harness, {
   ObjectBookmarkController? bookmarkController,
   AuthController? authController,
+  bool desktopActions = false,
 }) {
   final apiClient = harness.apiClient;
   apiClient.configure(baseUrl: 'https://secretary.example', token: 't');
@@ -222,6 +223,8 @@ Widget pumpHarness(
           authController: auth,
         ),
         bookmarkController: bookmarkController,
+        onAskSecretary: desktopActions ? (_) {} : null,
+        onShowInGraph: desktopActions ? (_) {} : null,
       ),
     ),
   );
@@ -274,12 +277,15 @@ void main() {
     expect(inboxUsesSwipeToRemove(TargetPlatform.macOS), isFalse);
   });
 
-  test('review rail is available on Android and Linux without enabling swipe', () {
-    expect(inboxUsesReviewRail(TargetPlatform.android), isTrue);
-    expect(inboxUsesReviewRail(TargetPlatform.linux), isTrue);
-    expect(inboxUsesTouchReviewRail(TargetPlatform.linux), isFalse);
-    expect(inboxUsesSwipeToRemove(TargetPlatform.linux), isFalse);
-  });
+  test(
+    'review rail is available on Android and Linux without enabling swipe',
+    () {
+      expect(inboxUsesReviewRail(TargetPlatform.android), isTrue);
+      expect(inboxUsesReviewRail(TargetPlatform.linux), isTrue);
+      expect(inboxUsesTouchReviewRail(TargetPlatform.linux), isFalse);
+      expect(inboxUsesSwipeToRemove(TargetPlatform.linux), isFalse);
+    },
+  );
 
   test('activation threshold is usable on phone and tablet widths', () {
     expect(inboxSwipeRemoveDismissThreshold(324), closeTo(96 / 324, 0.001));
@@ -840,6 +846,124 @@ void main() {
         expect(harness.putAfter, 'c');
         expect(harness.deleteCalls, 0);
         expect(find.byType(AlertDialog), findsNothing);
+      },
+    );
+  });
+
+  testWidgets(
+    'Linux trash follows Ask Secretary and Graph and deletes locally',
+    (tester) async {
+      await withPlatform(
+        tester,
+        platform: TargetPlatform.linux,
+        size: const Size(800, 900),
+        body: () async {
+          final harness = InboxHarness();
+          await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+          await tester.pumpAndSettle();
+          final trash = find.byKey(const Key('inbox_card_delete_b'));
+          final card = find
+              .ancestor(of: trash, matching: find.byType(Card))
+              .first;
+          final ask = tester.getCenter(
+            find.descendant(
+              of: card,
+              matching: find.text('Спросить секретаря'),
+            ),
+          );
+          final graph = tester.getCenter(
+            find.descendant(of: card, matching: find.text('Открыть в графе')),
+          );
+          final trashCenter = tester.getCenter(trash);
+          int visualOrder(Offset left, Offset right) {
+            final dy = left.dy.compareTo(right.dy);
+            return dy != 0 ? dy : left.dx.compareTo(right.dx);
+          }
+
+          expect(visualOrder(ask, graph), lessThan(0));
+          expect(visualOrder(graph, trashCenter), lessThan(0));
+          final inboxCalls = harness.inboxCalls;
+          await tester.tap(find.byKey(const Key('inbox_card_delete_b')));
+          await tester.pumpAndSettle();
+          expect(harness.deleteCalls, 1);
+          expect(harness.deletedIds, ['b']);
+          expect(find.text('Card B'), findsNothing);
+          expect(harness.inboxCalls, inboxCalls);
+          expect(find.byType(AlertDialog), findsNothing);
+        },
+      );
+    },
+  );
+
+  testWidgets(
+    'Linux trash keeps confirmation for notes and the card on failure',
+    (tester) async {
+      await withPlatform(
+        tester,
+        platform: TargetPlatform.linux,
+        size: const Size(800, 900),
+        body: () async {
+          final harness = InboxHarness(
+            sources: [
+              sourceRow(
+                id: 'n',
+                title: 'Note N',
+                kind: 'note',
+                provider: 'local',
+                feedAt: '2026-09-09T12:00:00Z',
+              ),
+            ],
+          );
+          await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('inbox_card_delete_n')));
+          await tester.pumpAndSettle();
+          expect(find.text('Удалить из Секретаря?'), findsWidgets);
+          expect(harness.deleteCalls, 0);
+          await tester.tap(find.widgetWithText(FilledButton, 'Удалить'));
+          await tester.pumpAndSettle();
+          expect(harness.deleteCalls, 1);
+          expect(find.text('Note N'), findsNothing);
+        },
+      );
+    },
+  );
+
+  testWidgets('Linux failed trash keeps the card', (tester) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.linux,
+      size: const Size(800, 900),
+      body: () async {
+        final failed = InboxHarness(
+          sources: [
+            sourceRow(id: 'a', title: 'Card A', feedAt: '2026-09-09T12:00:00Z'),
+          ],
+          deleteStatus: 500,
+        );
+        await tester.pumpWidget(pumpHarness(failed, desktopActions: true));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('inbox_card_delete_a')));
+        await tester.pumpAndSettle();
+        expect(find.text('Card A'), findsOneWidget);
+        expect(failed.deleteCalls, 1);
+      },
+    );
+  });
+
+  testWidgets('Android inbox keeps swipe and hides the desktop trash button', (
+    tester,
+  ) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.android,
+      size: const Size(360, 760),
+      body: () async {
+        final harness = InboxHarness();
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxSwipeToRemove), findsWidgets);
+        expect(find.byKey(const Key('inbox_card_delete_a')), findsNothing);
       },
     );
   });

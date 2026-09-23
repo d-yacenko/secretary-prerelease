@@ -764,6 +764,27 @@ class InboxScreenState extends State<InboxScreen> {
     });
   }
 
+  Future<void> _deleteInboxSource(InboxSourceObjectOut sourceObject) async {
+    final object = _secretaryObjectFromInboxSource(sourceObject);
+    final direct = objectSupportsDeliberateSwipeDeleteWithoutDialog(object);
+    final deleted = direct
+        ? await deleteObjectFromSecretary(
+            context,
+            object: object,
+            apiClient: widget.apiClient,
+            authController: widget.authController,
+          )
+        : await confirmAndDeleteObject(
+            context,
+            object: object,
+            apiClient: widget.apiClient,
+            authController: widget.authController,
+          );
+    if (deleted && mounted) {
+      _removeDeletedInboxObject(sourceObject.id);
+    }
+  }
+
   SecretaryObject _secretaryObjectFromInboxSource(
     InboxSourceObjectOut sourceObject,
   ) {
@@ -809,6 +830,9 @@ class InboxScreenState extends State<InboxScreen> {
       onShowInGraph: widget.onShowInGraph == null
           ? null
           : () => widget.onShowInGraph!(sourceObject.id),
+      onDelete: inboxUsesSwipeToRemove()
+          ? null
+          : () => _deleteInboxSource(sourceObject),
     );
   }
 
@@ -1647,6 +1671,7 @@ class _SourceObjectCard extends StatelessWidget {
     this.onOpenSource,
     this.onAskSecretary,
     this.onShowInGraph,
+    this.onDelete,
   });
 
   final InboxSourceObjectOut sourceObject;
@@ -1658,6 +1683,7 @@ class _SourceObjectCard extends StatelessWidget {
   final VoidCallback? onOpenSource;
   final VoidCallback? onAskSecretary;
   final VoidCallback? onShowInGraph;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1686,6 +1712,11 @@ class _SourceObjectCard extends StatelessWidget {
         ),
       if (onAskSecretary != null) AskSecretaryAction(onPressed: onAskSecretary),
       if (onShowInGraph != null) OpenInGraphAction(onPressed: onShowInGraph),
+      if (onDelete != null)
+        DeleteObjectAction(
+          key: Key('inbox_card_delete_${sourceObject.id}'),
+          onPressed: onDelete,
+        ),
     ];
     return ObjectBookmarkRibbon(
       color: bookmarkColor,
