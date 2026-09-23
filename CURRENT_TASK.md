@@ -1,26 +1,27 @@
-# Current task — Suppress helper import-time output in Telegram E2E bootstrap
+# Current task — Await explicit replacement live Telegram E2E authorization
 
-## Architect review
+## Architect acceptance
 
 Commit:
 
-`88e9055d901a931f4df2dc66b6e8b5a1011d8142`
+`a4c5225550aa56b204043380a02280507f9a9976`
 
-correctly replaces the acceptance container-create path with stdin-fed `docker compose exec -T -w /app ... api python3 -B -` inside the already-running production API container.
+is ACCEPTED.
 
-The exec/container/build/pull/filesystem contract is accepted.
+The self-authored Telegram production acceptance path is architect-reviewed as LIVE-READY / NOT EXECUTED.
 
-One privacy blocker remains before live readiness.
+Accepted contract:
 
-The in-memory helper import currently executes:
-
-`exec(compiled, module.__dict__)`
-
-without redirecting helper stdout. Therefore top-level helper code can emit arbitrary stdout before the harness terminal protocol owns the output. The focused test currently demonstrates this by expecting `HELPER_IMPORT` in public stdout.
-
-That violates the fail-closed requirement that partial/nonterminal helper output, credentials, provider responses, Telegram content, traceback, and exception details are never surfaced.
-
-No live E2E is authorized.
+- acceptance runs only as a separate `docker compose exec -T -w /app ... api python3 -B -` process inside the already-running production API container;
+- there is no acceptance-path `run`, `create`, `up`, `build`, `pull`, restart, recreate, helper mount, or helper/bootstrap filesystem write;
+- helper/bootstrap source is passed through stdin and compiled/executed in memory;
+- helper top-level/import-time stdout and stderr are discarded on success and failure;
+- only bootstrap-owned startup/fixed failure markers may appear before helper `main(["--live"])`;
+- helper `main(["--live"])` is called exactly once;
+- legitimate `SELF_E2E_BLOCKED=...`, `SELF_E2E_FAILED=...`, and success output containing exact `SELF_AUTHORED=PASS` remain terminal outcomes;
+- nonterminal post-import results fail closed as `SELF_E2E_REMOTE_BLOCKED=harness_protocol`;
+- checkout/ref/origin/host-key and long-running API/worker AI=false guards remain;
+- raw stderr, traceback, exception messages, partial nonterminal helper output, credentials, provider responses, and Telegram content are not forwarded.
 
 Production runtime remains:
 
@@ -32,58 +33,24 @@ Alembic remains:
 
 Long-running Telegram AI remains false.
 
-## Authorized work
+## Authorization state
 
-Code/test-only correction in the stdin bootstrap.
+NO live E2E is currently authorized.
 
-1. Execute the compiled helper module under redirected stdout and stderr.
-2. Discard all helper top-level/import-time stdout and stderr, whether import succeeds or fails.
-3. Keep bootstrap-owned markers outside that redirection:
-   - `SELF_E2E_STARTUP=bootstrap`
-   - `SELF_E2E_STARTUP=compiled`
-   - `SELF_E2E_STARTUP=imported`
-   - fixed `compile_failed`
-   - fixed `import_failed`
-4. Only after a successful import and `SELF_E2E_STARTUP=imported` may helper `main(["--live"])` run under the existing captured-output protocol.
-5. Preserve existing terminal propagation:
-   - legitimate `SELF_E2E_BLOCKED=...`;
-   - legitimate `SELF_E2E_FAILED=...`;
-   - complete success output containing exact `SELF_AUTHORED=PASS`.
-6. Preserve `harness_protocol` fail-closed behavior for exception/nonterminal main results.
-7. Do not surface raw stderr, traceback, exception messages, import-time stdout, partial helper output, credentials, provider responses, or Telegram content.
-8. Do not alter the accepted `docker compose exec` command, ref/origin/host-key/long-running-AI guards, or process-local AI semantics.
+Both prior live authorizations were consumed by pre-harness startup failures. Do not infer a new authorization from this acceptance.
 
-## Required tests
+Do not execute:
 
-Add/update focused tests proving at least:
+- production SSH;
+- production Docker/Compose;
+- the remote E2E wrapper;
+- provider calls;
+- Telegram transport/session access;
+- production DB writes;
+- deploy/restart/recreate;
+- production env changes;
+- production ref movement.
 
-1. top-level helper stdout is not present in public stdout;
-2. top-level helper stderr is not present in public stderr or stdout;
-3. import-time code that prints a secret fixture and then raises returns only startup markers plus fixed `import_failed`, without the fixture text;
-4. successful import still emits `SELF_E2E_STARTUP=imported`;
-5. helper `main(["--live"])` is called exactly once after import;
-6. legitimate BLOCKED/FAILED/PASS main output still propagates with the correct exit code;
-7. exception/nonterminal main output still becomes fixed `harness_protocol`;
-8. exec command remains `docker compose exec -T -w /app ... api python3 -B -`;
-9. no run/create/up/build/pull path and no filesystem writes reappear.
+STOP and wait for explicit human authorization for exactly one new replacement live self-authored Telegram E2E.
 
-No test may invoke real Docker, SSH, Telegram, providers, or production DB.
-
-Run focused tests, `py_compile`, Ruff check/format, and `git diff --check`.
-
-## Hard stop
-
-No production SSH.
-No production Docker.
-No remote wrapper execution.
-No live E2E.
-No provider calls.
-No Telegram transport/session access.
-No production DB writes.
-No deploy/restart/recreate.
-No production env changes.
-No production ref movement.
-
-When complete, update `PROJECT_STATE.md` factually, commit and push, report SHA/checks, then STOP.
-
-Any future live E2E requires separate Architect acceptance and new explicit human authorization.
+If such authorization is received, Architect must replace this file with the exact one-shot invocation and complete success/failure contract before Executor may run anything.
