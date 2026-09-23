@@ -11,7 +11,6 @@ from app.content_extraction.content_gating import filter_current_representations
 from app.db.models import Edge, Object, Representation
 from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.domain.telegram_mtproto_ai import (
-    is_canonical_telegram_mtproto_object,
     telegram_mtproto_ai_eligible,
     telegram_mtproto_ai_enabled,
     telegram_mtproto_ai_predicate,
@@ -129,8 +128,8 @@ class ContextService:
         if object_id is not None:
             target = self._graph.get_object(object_id)
             if (
-                is_canonical_telegram_mtproto_object(target)
-                and not telegram_mtproto_ai_enabled()
+                not telegram_mtproto_ai_enabled()
+                and target.provider == "telegram"
                 and not telegram_mtproto_ai_eligible(self._session, target)
             ):
                 raise NotFoundError("object", object_id)

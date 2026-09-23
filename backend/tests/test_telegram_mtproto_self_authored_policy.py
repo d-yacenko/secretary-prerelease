@@ -216,6 +216,30 @@ def test_global_false_allows_only_proven_self_authored_messages(db_session, monk
         metadata_={"transport": "bot"},
         occurred_at=datetime.now(UTC),
     )
+    unknown = Object(
+        user_id=user.id,
+        kind=TELEGRAM_KIND,
+        provider=TELEGRAM_PROVIDER,
+        external_id=f"unknown|{uuid4()}",
+        origin="source",
+        state="observed",
+        title="unknown transport",
+        body="unknown body",
+        metadata_={"transport": "webhook"},
+        occurred_at=datetime.now(UTC),
+    )
+    other_kind = Object(
+        user_id=user.id,
+        kind="note",
+        provider=TELEGRAM_PROVIDER,
+        external_id=f"telegram-note|{uuid4()}",
+        origin="source",
+        state="observed",
+        title="telegram note",
+        body="telegram note body",
+        metadata_={"transport": "mtproto"},
+        occurred_at=datetime.now(UTC),
+    )
     note = Object(
         user_id=user.id,
         kind="note",
@@ -225,7 +249,7 @@ def test_global_false_allows_only_proven_self_authored_messages(db_session, monk
         body="note body",
         occurred_at=datetime.now(UTC),
     )
-    db_session.add_all([legacy, note])
+    db_session.add_all([legacy, unknown, other_kind, note])
     db_session.flush()
 
     assert _surfaces(db_session, owned) is True
@@ -238,9 +262,10 @@ def test_global_false_allows_only_proven_self_authored_messages(db_session, monk
     assert _surfaces(db_session, malformed) is False
     assert _surfaces(db_session, wrong_account) is False
     assert _surfaces(db_session, inactive) is False
-    assert _surfaces(db_session, legacy) is True
+    assert _surfaces(db_session, legacy) is False
+    assert _surfaces(db_session, unknown) is False
+    assert _surfaces(db_session, other_kind) is False
     assert _surfaces(db_session, note) is True
-    assert "self_authored" not in (legacy.metadata_ or {})
 
 
 def test_global_true_keeps_active_scope_eligibility_for_both_directions(
@@ -372,6 +397,18 @@ def test_ai_surfaces_expose_self_authored_and_hide_inbound(db_session, monkeypat
         body="inbound foreign lexical phrase",
         when=now,
     )
+    legacy = Object(
+        user_id=user.id,
+        kind=TELEGRAM_KIND,
+        provider=TELEGRAM_PROVIDER,
+        external_id=f"bot|{uuid4()}",
+        origin="source",
+        state="observed",
+        title="legacy bot lexical phrase",
+        body="legacy bot lexical phrase",
+        metadata_={"transport": "bot"},
+        occurred_at=now,
+    )
     note = Object(
         user_id=user.id,
         kind="note",
@@ -381,7 +418,7 @@ def test_ai_surfaces_expose_self_authored_and_hide_inbound(db_session, monkeypat
         body="selfauthored lexical phrase inbound foreign lexical phrase",
         occurred_at=now,
     )
-    db_session.add(note)
+    db_session.add_all([legacy, note])
     db_session.flush()
 
     visible = ObjectQueryService(db_session, user.id, ai_only=True).query(
@@ -389,20 +426,26 @@ def test_ai_surfaces_expose_self_authored_and_hide_inbound(db_session, monkeypat
     )
     assert owned in visible
     assert inbound not in visible
+    assert legacy not in visible
     context = ContextService(db_session, user.id).build_context(object_id=owned.id)
     assert owned.id in {item.object_id for item in context.items}
     with pytest.raises(NotFoundError):
         ContextService(db_session, user.id).build_context(object_id=inbound.id)
+    with pytest.raises(NotFoundError):
+        ContextService(db_session, user.id).build_context(object_id=legacy.id)
     hits = SearchService(db_session, user.id).search("selfauthored lexical phrase")
     assert owned.id in {item.id for item in hits}
     hidden = SearchService(db_session, user.id).search("inbound foreign lexical phrase")
     assert inbound.id not in {item.id for item in hidden}
+    legacy_hits = SearchService(db_session, user.id).search("legacy bot lexical phrase")
+    assert legacy.id not in {item.id for item in legacy_hits}
     candidate_ids = {
         item.object_id
         for item in CorrelationCandidateService(db_session, user.id).collect_candidates(note.id)
     }
     assert owned.id in candidate_ids
     assert inbound.id not in candidate_ids
+    assert legacy.id not in candidate_ids
 
 
 def test_summary_handler_accepts_self_authored_stack_and_refuses_mixed(

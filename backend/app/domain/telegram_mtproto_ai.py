@@ -1,6 +1,6 @@
 """AI eligibility policy for Telegram MTProto message objects."""
 
-from sqlalchemy import and_, cast, exists, not_, or_, select
+from sqlalchemy import and_, cast, exists, or_, select
 from sqlalchemy.types import String
 
 from app.connectors.telegram.constants import TELEGRAM_KIND, TELEGRAM_PROVIDER
@@ -51,13 +51,15 @@ def _self_authored_scope_exists(model=Object):
 
 def telegram_mtproto_ai_predicate(model=Object):
     """Return the AI-only gate; transport visibility remains a separate policy."""
-    canonical = and_(
-        model.provider == TELEGRAM_PROVIDER,
-        model.kind == TELEGRAM_KIND,
-        model.metadata_["transport"].as_string().is_not_distinct_from("mtproto"),
-    )
     if not settings.telegram_mtproto_ai_enabled:
-        return or_(not_(canonical), _self_authored_scope_exists(model))
+        return or_(
+            model.provider.is_distinct_from(TELEGRAM_PROVIDER),
+            and_(
+                model.kind == TELEGRAM_KIND,
+                model.metadata_["transport"].as_string().is_not_distinct_from("mtproto"),
+                _self_authored_scope_exists(model),
+            ),
+        )
     return telegram_mtproto_scope_object_predicate(model)
 
 
@@ -68,9 +70,10 @@ def telegram_mtproto_ai_sql_fragment(alias: str = "o") -> str:
     return f"""
     AND (
         {alias}.provider IS DISTINCT FROM 'telegram'
-        OR {alias}.kind IS DISTINCT FROM 'chat_message'
-        OR {alias}.metadata->>'transport' IS DISTINCT FROM 'mtproto'
-        OR EXISTS (
+        OR (
+            {alias}.kind IS NOT DISTINCT FROM 'chat_message'
+            AND {alias}.metadata->>'transport' IS NOT DISTINCT FROM 'mtproto'
+            AND EXISTS (
             SELECT 1
             FROM telegram_mtproto_chat_selections mtcs
             INNER JOIN telegram_mtproto_accounts mta
@@ -83,6 +86,7 @@ def telegram_mtproto_ai_sql_fragment(alias: str = "o") -> str:
               AND NULLIF({alias}.metadata->>'sender_peer_id', '') IS NOT NULL
               AND mta.telegram_user_id IS NOT NULL
               AND mta.telegram_user_id::text = {alias}.metadata->>'sender_peer_id'
+            )
         )
     )
     """
@@ -90,7 +94,10 @@ def telegram_mtproto_ai_sql_fragment(alias: str = "o") -> str:
 
 def telegram_mtproto_ai_eligible(session, obj: Object) -> bool:
     """Check one object against the current AI flag and owned active scope."""
-    if not is_canonical_telegram_mtproto_object(obj):
+    if not settings.telegram_mtproto_ai_enabled:
+        if obj.provider != TELEGRAM_PROVIDER:
+            return True
+    elif not is_canonical_telegram_mtproto_object(obj):
         return True
     return (
         session.scalar(

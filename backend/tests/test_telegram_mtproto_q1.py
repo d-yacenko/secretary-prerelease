@@ -102,27 +102,40 @@ def test_mtproto_materialization_stores_without_embedding_job_when_disabled(
     assert db_session.scalar(select(func.count()).select_from(Job)) == 0
 
 
-def test_bot_api_and_other_provider_enqueue_as_before(db_session, monkeypatch) -> None:
+def test_bot_api_stays_closed_and_other_provider_still_enqueues(db_session, monkeypatch) -> None:
     from app.services.pipeline_enqueue import enqueue_embed_object
 
     monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
     user = _user(db_session)
-    for provider, kind in ((TELEGRAM_PROVIDER, TELEGRAM_KIND), ("google", "email")):
-        obj = Object(
-            user_id=user.id,
-            provider=provider,
-            kind=kind,
-            external_id=f"{provider}|{uuid4()}",
-            origin="source",
-            state="observed",
-            title="ordinary object",
-            body="body",
-            metadata_={},
-        )
-        db_session.add(obj)
-        db_session.flush()
-        enqueue_embed_object(db_session, obj.id, user.id)
-    assert db_session.scalar(select(func.count()).select_from(Job)) == 2
+    telegram = Object(
+        user_id=user.id,
+        provider=TELEGRAM_PROVIDER,
+        kind=TELEGRAM_KIND,
+        external_id=f"telegram|{uuid4()}",
+        origin="source",
+        state="observed",
+        title="legacy telegram",
+        body="body",
+        metadata_={},
+    )
+    other = Object(
+        user_id=user.id,
+        provider="google",
+        kind="email",
+        external_id=f"google|{uuid4()}",
+        origin="source",
+        state="observed",
+        title="ordinary object",
+        body="body",
+        metadata_={},
+    )
+    db_session.add_all([telegram, other])
+    db_session.flush()
+    enqueue_embed_object(db_session, telegram.id, user.id)
+    enqueue_embed_object(db_session, other.id, user.id)
+    jobs = list(db_session.scalars(select(Job).where(Job.user_id == user.id)))
+    assert len(jobs) == 1
+    assert jobs[0].payload["object_id"] == str(other.id)
 
 
 def test_direct_context_cannot_bypass_disabled_mtproto_gate(db_session, monkeypatch) -> None:
