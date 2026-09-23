@@ -1,109 +1,77 @@
-# Current task — Fail-close noncanonical Telegram under global false
+# Current task — Await explicit deploy authorization for self-authored Telegram normal pipeline
 
-## Architect review
+## Architect acceptance
 
 Commit:
 
-`51b6b2eb2c227c00af680fd7e001289169f11dca`
+`681c0e04df5881124ab8d72a4c05e5a2c7977296`
 
-is PARTIALLY ACCEPTED / NOT DEPLOY-READY.
+is ACCEPTED / DEPLOY-READY / NOT DEPLOYED.
 
-The central self-authored MTProto exception is implemented correctly for canonical MTProto messages and the normal materializer/worker/downstream/catch-up path is directionally correct.
+Verified production policy:
 
-One policy blocker remains.
+- global `TELEGRAM_MTPROTO_AI_ENABLED=false` remains the production default;
+- non-Telegram behavior is unchanged;
+- while global false, every `provider=telegram` object is AI-ineligible except the narrow proven self-authored canonical MTProto exception;
+- the exception requires:
+  - kind == `chat_message`;
+  - transport == `mtproto`;
+  - account owned by the same application user;
+  - peer in `scope_active=true`;
+  - direction == `outbound`;
+  - non-empty `sender_peer_id`;
+  - non-null account `telegram_user_id`;
+  - sender_peer_id == account.telegram_user_id;
+- inbound, foreign sender, wrong/malformed account, inactive scope, missing/unknown identity, legacy Bot transport, unknown transport, and non-chat Telegram remain fail-closed;
+- Python eligibility, SQLAlchemy predicate, and raw SQL fragment are aligned;
+- direct context access cannot bypass the false-mode Telegram gate;
+- normal Telegram materialization may enqueue the ordinary embedding entrypoint for a newly created/semantically updated self-authored message;
+- ordinary worker/downstream/retrieval surfaces continue to use the central eligibility policy;
+- global-false recurring Telegram embedding catch-up remains zero, so historical backlog is not activated;
+- global-true behavior remains unchanged;
+- production policy has no E2E marker/harness dependency.
 
-When `TELEGRAM_MTPROTO_AI_ENABLED=false`, the current ORM predicate and raw SQL fragment allow anything that is *not canonical MTProto*. `telegram_mtproto_ai_eligible()` also returns true immediately for noncanonical objects.
+Verification reported on exact commit:
 
-That preserves historical behavior for legacy Telegram, but conflicts with the newly approved production policy: while global Telegram AI is false, **all provider=telegram content must remain AI-ineligible except the narrow proven self-authored canonical MTProto exception**.
+- Telegram policy/Q1/full-pipeline/C1A/C1B/C2A focused suite: 92 passed;
+- `py_compile`: passed;
+- Ruff check on changed files: passed;
+- Ruff format --check on policy module/policy test: passed;
+- `git diff --check`: clean.
 
-The new focused test currently encodes the wrong behavior by asserting legacy Telegram is eligible.
+## Intended live verification after deployment
 
-No production/deploy/live action is authorized.
+The next live verification is NOT the old E2E harness.
 
-## Required correction
+After an explicitly authorized normal deployment of the accepted commit, the human will send a brand-new ordinary Telegram message from the connected Telegram account in an active-scope chat.
 
-Code/test-only.
+Expected normal behavior:
 
-### Global false semantics
+1. MTProto sync/materializer stores the real message.
+2. Because it is canonical + outbound + self-authored + active-scope, the normal materializer enqueues the ordinary AI pipeline.
+3. Existing worker handlers process normal embedding/downstream jobs.
+4. Inbound/foreign Telegram messages remain excluded while global Telegram AI stays false.
+5. No historical catch-up/backlog is activated merely by this policy.
+6. Verification should inspect normal DB/job/audit/result evidence, not run `telegram_self_authored_e2e_remote.py`.
 
-When `settings.telegram_mtproto_ai_enabled == false`:
+## Authorization state
 
-1. Objects whose provider is not `telegram` preserve existing behavior and remain eligible according to the surrounding pipeline policy.
-2. Any object whose provider is `telegram` is AI-ineligible unless ALL of the following hold:
-   - kind == `chat_message`;
-   - metadata transport == `mtproto`;
-   - account_id resolves to an account owned by the same application user;
-   - peer_id resolves to a `scope_active=true` selection for that account;
-   - direction == `outbound`;
-   - sender_peer_id is non-empty;
-   - account.telegram_user_id is non-null;
-   - sender_peer_id == account.telegram_user_id.
-3. Therefore legacy Bot API Telegram, unknown Telegram transports, Telegram objects with another kind, incomplete Telegram metadata, inbound Telegram, foreign sender, wrong account, and inactive scope are all false.
+NO deployment is currently authorized.
+NO production SSH/Docker/Compose is authorized.
+NO live Telegram acceptance action by Executor is authorized.
+NO provider diagnostic/manual pipeline execution is authorized.
 
-### Global true semantics
+Do not:
+- deploy;
+- move production refs;
+- restart/recreate services;
+- change production env;
+- set `TELEGRAM_MTPROTO_AI_ENABLED=true`;
+- run the old E2E harness;
+- manually enqueue Telegram AI jobs;
+- process historical Telegram backlog;
+- run direct SSH or manual Docker/Compose.
 
-Do not change the existing global-true behavior. Preserve the current active-scope canonical MTProto policy and all existing non-Telegram behavior.
+STOP and wait for explicit human authorization for deployment.
 
-### Parity requirement
-
-Keep these three implementations equivalent under global false:
-
-- `telegram_mtproto_ai_eligible(session, obj)`;
-- `telegram_mtproto_ai_predicate(model)`;
-- `telegram_mtproto_ai_sql_fragment(alias)`.
-
-A safe shape is conceptually:
-
-- non-Telegram => existing allowed path;
-- Telegram => canonical AND proven self-authored active-scope.
-
-Do not rely on `NOT canonical` as the false-mode allow branch.
-
-## Required tests
-
-Update/add focused tests proving at least:
-
-1. global false + canonical active-scope self-authored outbound => true on Python, ORM, raw SQL;
-2. global false + inbound canonical => false on all three;
-3. global false + foreign sender canonical => false;
-4. global false + wrong/malformed account => false;
-5. global false + inactive scope => false;
-6. global false + Telegram legacy Bot transport => false on all three;
-7. global false + Telegram unknown/non-MTProto transport => false;
-8. global false + provider=telegram with non-chat kind => false;
-9. global false + ordinary non-Telegram object => unchanged/eligible;
-10. global true regression behavior remains unchanged;
-11. normal MTProto materializer still enqueues exactly one embed entrypoint for self-authored outbound and zero for inbound/foreign;
-12. global-false recurring catch-up remains zero;
-13. AI-only object/context/search/correlation candidate surfaces continue to expose self-authored canonical Telegram and hide inbound/foreign/legacy Telegram;
-14. no marker/harness/transport/session-decrypt dependency is introduced.
-
-Run:
-- `tests/test_telegram_mtproto_self_authored_policy.py`;
-- `tests/test_telegram_mtproto_q1.py`;
-- `tests/test_telegram_mtproto_full_pipeline.py`;
-- any additional directly affected Telegram policy tests;
-- `py_compile`;
-- Ruff check;
-- Ruff format --check;
-- `git diff --check`.
-
-## Hard stop
-
-No production SSH.
-No production Docker/Compose.
-No deploy.
-No provider calls.
-No live Telegram test.
-No remote E2E harness.
-No production DB writes.
-No production env changes.
-No production ref movement.
-
-When complete:
-- update `PROJECT_STATE.md` factually;
-- commit and push;
-- report SHA and checks;
-- STOP.
-
-Deployment/live verification remains a separate explicit human authorization boundary after Architect review.
+After deploy authorization is received, Architect must create a separate exact deploy task. Live normal-message verification remains a separate controlled step after successful deploy.
