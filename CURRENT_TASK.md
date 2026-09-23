@@ -1,87 +1,63 @@
-# Current task — Correct public_web rollout retry/cleanup semantics
+# Current task — Final public_web existence-state correction
 
 ## Architect review
 
 Commit:
 
-`54050ea52efb5234428dfa1fd047cbaa2766680c`
+`157fbbbd7545192cd65639426becea90999e1ef7`
 
-is NOT YET DEPLOY-READY.
+successfully fixes the previously identified HTTPS retry and first-rollout cleanup defect.
 
-The static branding pages, Caddy configuration, Compose `public_web` service, documentation, and schema-neutral scope are accepted.
-
-One blocking defect remains in the production rollout helper.
+One final narrow correctness issue remains before the rollout helper is accepted.
 
 No production work is authorized.
 
 ## Blocking defect
 
-In `ops/production/remote_public_web.py`:
+`remote_public_web.py` currently determines:
 
-- `collect_statuses()` intends to retry public HTTPS verification for up to 45 seconds;
-- however each iteration builds the status dict by calling `http_status()`;
-- `http_status()` uses `run(curl ...)`, which raises `PublicWebError` on initial connection/TLS/certificate-provisioning failure;
-- that exception escapes `collect_statuses()` immediately, so the intended retry window is bypassed;
-- in `main()`, `statuses = collect_statuses()` occurs before the existing cleanup `try/except`, so a first-rollout verification exception can also bypass removal of a newly-created `public_web` container.
+`existed_before = bool(service_id("public_web", required=False))`
 
-This violates the required first-rollout contract:
-- bounded wait for HTTPS readiness;
-- on failed first rollout, stop/remove only the newly-created `public_web` service.
+and `service_id()` uses:
+
+`docker compose ps -q public_web`
+
+Docker Compose `ps` shows only running containers by default. A previously-created but stopped `public_web` container therefore appears absent.
+
+That violates the required update contract:
+- if `public_web` existed before the rollout, a failed update must NOT automatically remove it;
+- "existed before" includes a stopped/exited Compose container, not only a running one.
 
 ## Required correction
 
-Code/test-only.
+Code/test-only, no architecture changes.
 
-1. Make HTTPS readiness polling tolerant of temporary connection/TLS/HTTP transport failures during the bounded startup window.
-   - A temporary curl/network/TLS failure must be treated as "not ready yet", not as immediate terminal rollout failure.
-   - Retry remains bounded; do not hide failure indefinitely.
-   - Do not use `-k` / insecure TLS bypass.
+1. Add a dedicated existence check for `public_web` that includes stopped/exited containers, e.g. using the Compose equivalent of:
+   - `docker compose ps --all -q public_web`
+   or another deterministic all-state query.
 
-2. Ensure EVERY failure after the first-rollout `public_web` start attempt enters first-rollout cleanup when:
-   - `public_web` did not exist before;
-   - the rollout did not reach successful verification.
+2. Use that all-state existence result ONLY to decide `existed_before`.
 
-   This must include at minimum:
-   - temporary verification failures that persist through deadline;
-   - unexpected verification exceptions;
-   - identity invariant failure after service start;
-   - `public_web` missing/not-running after start.
+3. Keep the post-start validation strict:
+   - after `up`, `public_web` must have a running container id;
+   - `require_running()` remains required.
 
-3. Cleanup must remain narrow:
-   - stop/remove only `public_web`;
-   - never touch db/api/worker;
-   - never change `.env`;
-   - do not remove Caddy persistent volumes unless separately justified/authorized;
-   - do not alter Git refs.
-
-4. If `public_web` existed before the rollout, do NOT automatically remove it on a failed update. Report the blocker and preserve the pre-existing service for separate recovery planning.
-
-5. Keep successful evidence unchanged:
-   - PUBLIC_WEB_HEALTH=PASS
-   - DB_CONTAINER_UNCHANGED=true
-   - DB_VOLUME_UNCHANGED=true
-   - ENV_FILE_UNCHANGED=true
-   - API_CONTAINER_UNCHANGED=true
-   - WORKER_CONTAINER_UNCHANGED=true
-   - PUBLIC_WEB_RUNNING=true
-   - PUBLIC_HOME=200
-   - PUBLIC_PRIVACY=200
-   - PUBLIC_TERMS=200
-   - PUBLIC_UNRELATED=404
-   - PUBLIC_WEB=PASS
+4. Preserve all already-correct behavior from `157fbbbd...`:
+   - bounded 45-second HTTPS readiness polling;
+   - temporary connection/TLS failures retry;
+   - no insecure TLS flags;
+   - any failed first rollout cleans up only newly-created `public_web`;
+   - a pre-existing service is not removed after failed update;
+   - db/api/worker/.env remain untouched.
 
 ## Required tests
 
-Add focused deterministic tests proving:
-
-- first HTTPS probe throws connection/TLS-style `PublicWebError`, later probe succeeds -> polling succeeds and does not abort early;
-- persistent probe failure reaches bounded failure;
-- first rollout + persistent verification failure -> cleanup required/executed for `public_web`;
-- first rollout + post-start identity invariant failure -> cleanup required/executed;
-- first rollout + public_web not-running/missing -> cleanup required/executed;
-- pre-existing `public_web` + failed verification -> no automatic remove;
-- cleanup command cannot target db/api/worker;
-- no insecure curl flag is introduced.
+Add deterministic regression proving:
+- running pre-existing public_web => existed_before true;
+- stopped/exited pre-existing public_web => existed_before true;
+- no public_web container in any state => false;
+- stopped pre-existing public_web + failed verification => no automatic stop/rm cleanup;
+- post-start running check still fails if no running public_web container exists.
 
 Run focused tests, py_compile, Ruff check/format, compose config validation as relevant, and git diff --check.
 
