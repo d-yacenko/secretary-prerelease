@@ -386,6 +386,75 @@ class ReadinessAndCleanupTest(unittest.TestCase):
         self.assertEqual(remote.PUBLIC_WEB_STOP, ("stop", "public_web"))
         self.assertEqual(remote.PUBLIC_WEB_RM, ("rm", "-sf", "public_web"))
 
+    def _ps_compose(self, outputs):
+        calls = []
+
+        def compose(*args):
+            calls.append(args)
+            return outputs.get(args, "")
+
+        return calls, compose
+
+    def test_running_preexisting_public_web_exists(self):
+        calls, compose = self._ps_compose(
+            {("ps", "--all", "-q", "public_web"): "running-id\n"}
+        )
+        with unittest.mock.patch.object(remote, "compose", compose):
+            self.assertTrue(remote.public_web_existed_before())
+        self.assertEqual(calls, [("ps", "--all", "-q", "public_web")])
+
+    def test_stopped_preexisting_public_web_exists(self):
+        calls, compose = self._ps_compose(
+            {
+                ("ps", "-q", "public_web"): "",
+                ("ps", "--all", "-q", "public_web"): "exited-id\n",
+            }
+        )
+        with unittest.mock.patch.object(remote, "compose", compose):
+            self.assertTrue(remote.public_web_existed_before())
+        self.assertEqual(calls, [("ps", "--all", "-q", "public_web")])
+
+    def test_absent_public_web_does_not_exist(self):
+        _calls, compose = self._ps_compose({})
+        with unittest.mock.patch.object(remote, "compose", compose):
+            self.assertFalse(remote.public_web_existed_before())
+
+    def test_stopped_preexisting_failed_verification_is_not_removed(self):
+        calls, compose = self._ps_compose(
+            {("ps", "--all", "-q", "public_web"): "exited-id\n"}
+        )
+        before = self._before()
+
+        def collect(**kwargs):
+            raise remote.PublicWebError("public page verification failed")
+
+        with (
+            unittest.mock.patch.object(remote, "compose", compose),
+            unittest.mock.patch.object(remote, "snapshot", lambda *args: dict(before)),
+            unittest.mock.patch.object(
+                remote, "service_id", lambda name, *, required: f"{name}1"
+            ),
+            unittest.mock.patch.object(remote, "require_running", lambda *args: None),
+            unittest.mock.patch.object(remote, "collect_statuses", collect),
+        ):
+            existed_before = remote.public_web_existed_before()
+            self.assertTrue(existed_before)
+            with self.assertRaises(remote.PublicWebError):
+                remote.rollout_public_web(existed_before=existed_before, before=before)
+        self.assertNotIn(remote.PUBLIC_WEB_STOP, calls)
+        self.assertNotIn(remote.PUBLIC_WEB_RM, calls)
+
+    def test_post_start_still_requires_a_running_container(self):
+        calls, compose = self._ps_compose(
+            {("ps", "--all", "-q", "public_web"): "exited-id\n"}
+        )
+        with unittest.mock.patch.object(remote, "compose", compose):
+            self.assertTrue(remote.public_web_existed_before())
+            with self.assertRaises(remote.PublicWebError):
+                remote.service_id("public_web", required=True)
+        self.assertIn(("ps", "-q", "public_web"), calls)
+        self.assertNotIn("--all", calls[-1])
+
     def test_https_probe_does_not_bypass_tls(self):
         source = (OPS / "remote_public_web.py").read_text(encoding="utf-8")
         self.assertNotIn("--insecure", source)

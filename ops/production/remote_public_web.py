@@ -157,9 +157,18 @@ def require_db_healthy(container_id: str) -> None:
         raise PublicWebError("production DB container is not healthy")
 
 
+def _ps_container_id(name: str, *, all_states: bool) -> str:
+    command = ("ps", "--all", "-q", name) if all_states else ("ps", "-q", name)
+    lines = [line.strip() for line in compose(*command).splitlines() if line.strip()]
+    return lines[0] if lines else ""
+
+
+def public_web_existed_before() -> bool:
+    return bool(_ps_container_id("public_web", all_states=True))
+
+
 def service_id(name: str, *, required: bool) -> str:
-    value = compose("ps", "-q", name).splitlines()
-    container_id = value[0].strip() if value else ""
+    container_id = _ps_container_id(name, all_states=False)
     if required and not container_id:
         raise PublicWebError(f"production service missing: {name}")
     return container_id
@@ -302,7 +311,7 @@ def main() -> int:
     require_running(worker_id, "worker")
     before = snapshot(db_id, api_id, worker_id)
 
-    existed_before = bool(service_id("public_web", required=False))
+    existed_before = public_web_existed_before()
     listeners = occupied_public_ports(run(["ss", "-ltn"]))
     require_ports_free_for_first_rollout(
         service_exists=existed_before, listeners=listeners
