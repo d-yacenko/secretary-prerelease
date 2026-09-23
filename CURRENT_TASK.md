@@ -1,76 +1,59 @@
-# Current task — Verify Telegram summary self-authorship correction locally
+# Current task — Await explicit replacement live Telegram E2E authorization
 
-## Architect review
+## Architect acceptance
 
 Commit:
 
 `8ae75dc9e2b6b05e8caa4b966caafc7bbcb63574`
 
-implements the requested separation of Telegram marker membership from base self-authorship.
+is ACCEPTED.
 
-Architect static review accepts the code shape:
+The Telegram summary self-authorship correction is verified and the full self-authored Telegram acceptance path is architect-reviewed as LIVE-READY / NOT EXECUTED.
 
-- `self_authored_block()` requires canonical MTProto, matching account, outbound direction, present sender/account Telegram identity, and sender == connected Telegram user id;
-- it does not require `TG_SELF_E2E_0922A`;
-- `message_identity_block()` layers the marker requirement on top for selected E2E messages;
-- `prove_cohort()` still uses the marker-bearing proof;
-- `prove_summary_cohort()` uses the base self-authorship proof;
-- the remote `docker compose exec` acceptance path is unchanged;
-- focused regression tests cover the self-authored outbound non-marker neighbor and fail-closed identity cases.
+Verified local evidence on exact commit `8ae75dc9e2b6b05e8caa4b966caafc7bbcb63574`:
 
-The prior live authorization is consumed. No live E2E is authorized.
+- focused pytest `tests/test_telegram_self_authored_e2e.py`: 29 passed;
+- `py_compile`: passed;
+- Ruff check: passed;
+- Ruff format --check: both files already formatted;
+- `git diff --check`: clean;
+- working tree on the verified commit was clean.
 
-## Required local verification
+Accepted privacy semantics:
 
-From a clean canonical checkout at exact `8ae75dc9e2b6b05e8caa4b966caafc7bbcb63574`, run only local code/test checks.
+- selected E2E Telegram messages must be canonical outbound MTProto objects for the selected account, authored by the connected Telegram user, and contain `TG_SELF_E2E_0922A`;
+- covered summary neighbors may omit the marker only when they are canonical outbound MTProto objects for the same account and authored by the connected Telegram user;
+- inbound, foreign sender, wrong account, unknown direction, missing identity, and legacy/noncanonical Telegram objects remain fail-closed;
+- the accepted stdin-fed `docker compose exec -T -w /app ... api python3 -B -` remote path is unchanged;
+- no run/create/up/build/pull/helper-filesystem-write path is accepted;
+- long-running production API/worker Telegram AI must remain false.
 
-At minimum:
+Production runtime/ref remains:
 
-```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin
-test "$(git rev-parse HEAD)" = "8ae75dc9e2b6b05e8caa4b966caafc7bbcb63574"
+`8ad52f0653f9f90e1932c49532dc4f993ea1a9cc`
 
-cd backend
-pytest -q tests/test_telegram_self_authored_e2e.py
-python -m py_compile ../ops/production/telegram_self_authored_e2e.py tests/test_telegram_self_authored_e2e.py
-ruff check ../ops/production/telegram_self_authored_e2e.py tests/test_telegram_self_authored_e2e.py
-ruff format --check ../ops/production/telegram_self_authored_e2e.py tests/test_telegram_self_authored_e2e.py
-cd ..
-git diff --check
-```
+Alembic remains:
 
-If the repository's standard command uses `uv run ruff` rather than a direct `ruff` executable, use the existing project-local standard without changing dependencies.
+`0046`
 
-Do not modify code unless a check fails.
+## Authorization state
 
-## Report
+NO live E2E is currently authorized.
 
-Return:
+All prior live authorizations were consumed by their respective attempts. Do not infer a new authorization from this acceptance or from the successful local verification.
 
-- exact HEAD;
-- focused pytest result;
-- py_compile result;
-- Ruff check result;
-- Ruff format-check result;
-- git diff --check result;
-- any failure output, sanitized.
+Do not execute:
 
-Then STOP.
+- production SSH;
+- production Docker/Compose;
+- the remote E2E wrapper;
+- provider calls;
+- Telegram transport/session access;
+- production DB writes;
+- deploy/restart/recreate;
+- production env changes;
+- production ref movement.
 
-## Hard stop
+STOP and wait for explicit human authorization for exactly one new replacement live self-authored Telegram E2E.
 
-No production SSH.
-No production Docker/Compose.
-No remote wrapper execution.
-No live E2E.
-No provider calls.
-No Telegram transport/session access.
-No production DB writes.
-No deploy/restart/recreate.
-No production env changes.
-No production ref movement.
-
-A new live attempt requires Architect acceptance of the verification result and fresh explicit human authorization.
+If such authorization is received, Architect must replace this file with the exact one-shot invocation and complete success/failure contract before Executor may run anything.
