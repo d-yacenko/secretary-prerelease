@@ -1,68 +1,16 @@
-# Current task — Deploy bidirectional communication feed parity
+# Current task — HOLD after bidirectional feed parity deployment
 
-## Human authorization
+## Production status
 
-Human explicitly authorized production deployment of exact commit:
-
-`d22c6cf78945c8f92934a46431b2bcc1887fd8c8`
-
-This authorization covers only the normal schema-neutral deployment of that exact release.
-
-It does NOT authorize:
-- switching `TELEGRAM_MTPROTO_AI_ENABLED` to true;
-- live Telegram/provider testing;
-- manual Telegram sync;
-- manual job enqueue;
-- historical catch-up/backlog;
-- old E2E harness execution;
-- direct production SSH;
-- manual Docker/Compose;
-- environment changes;
-- production DB writes;
-- any code change.
-
-The canonical `production` branch has already been fast-forwarded non-force to the exact authorized release SHA.
-
-## Exact deployment parameters
-
-Release SHA:
+Production runtime/ref:
 
 `d22c6cf78945c8f92934a46431b2bcc1887fd8c8`
 
-Rollback SHA / current production runtime:
+Deployment status:
 
-`681c0e04df5881124ab8d72a4c05e5a2c7977296`
+PASS.
 
-Expected Alembic:
-
-`0046`
-
-This is a schema-neutral application-only release.
-
-## Required execution
-
-Use the normal committed deployment harness only.
-
-From the canonical clean local checkout:
-
-```bash
-cd ~/work/secretary-prerelease
-git switch main
-git pull --ff-only
-git fetch --prune origin main production
-python3 ops/production/deploy.py \
-  --release-sha d22c6cf78945c8f92934a46431b2bcc1887fd8c8 \
-  --rollback-sha 681c0e04df5881124ab8d72a4c05e5a2c7977296 \
-  --expected-alembic 0046
-```
-
-Do not substitute another deploy path.
-Do not use direct SSH or manual Docker/Compose.
-
-## Expected success evidence
-
-Successful deployment must report:
-
+Deployment evidence:
 - `RELEASE_HEAD=d22c6cf78945c8f92934a46431b2bcc1887fd8c8`
 - `HEALTH=PASS`
 - `ALEMBIC=0046`
@@ -72,40 +20,45 @@ Successful deployment must report:
 - `API_RECREATED=true`
 - `WORKER_RECREATED=true`
 - `DEPLOYMENT=PASS`
+- exit status 0;
+- stderr empty;
+- rollback `681c0e04df5881124ab8d72a4c05e5a2c7977296` not used.
 
-The harness may automatically rollback to exact `681c0e04df5881124ab8d72a4c05e5a2c7977296` if a post-recreate invariant fails.
+## Deployed behavior
 
-## Failure handling
+The deployed parity release:
+- removes outbound suppression from ordinary Inbox/feed presentation for Telegram and Teams;
+- keeps both inbound and outbound conversation members visible in detail/history;
+- preserves Mattermost/Gmail/Yandex feed behavior;
+- preserves rejected/deleted/noise/attachment filtering;
+- does not turn visible outbound messages into attention/unread;
+- does not change Telegram AI eligibility.
 
-On any:
-- `DEPLOYMENT_BLOCKED=...`;
-- `DEPLOYMENT=FAILED:...`;
-- nonzero exit;
-- `ROLLBACK=FAILED`;
-- missing required success evidence;
+Production `TELEGRAM_MTPROTO_AI_ENABLED` remains false.
 
-STOP.
+The previously verified self-authored false-mode exception remains active:
+- proven self-authored canonical outbound active-scope Telegram may pass the normal AI pipeline;
+- inbound/foreign Telegram remains AI-ineligible while the flag is false.
 
-Do not retry.
-Do not repair production.
-Do not run direct SSH.
-Do not run manual Docker/Compose.
-Do not change env.
-Do not move refs again.
+The codebase contains regression coverage proving that a future test/runtime switch to true uses the existing active-scope policy for both directions and is not constrained by the false-mode self-authored branch. This does not itself authorize a production flag change.
 
-Return complete sanitized stdout/stderr and exact exit status.
+## Authorization state
 
-## Post-deploy boundary
-
-Even after `DEPLOYMENT=PASS`, STOP.
+No further production work is currently authorized.
 
 Do not:
-- switch Telegram AI true;
-- run live Telegram/provider tests;
-- manually trigger sync;
-- manually enqueue jobs;
-- run old E2E harness.
+- set `TELEGRAM_MTPROTO_AI_ENABLED=true`;
+- move refs;
+- deploy/restart/recreate;
+- change env;
+- run direct SSH/manual Docker/Compose;
+- manually trigger Telegram sync;
+- manually enqueue AI jobs;
+- process historical Telegram backlog;
+- run provider diagnostics;
+- run the old E2E harness;
+- perform production DB writes.
 
-The deployed change is only presentation/feed parity. Future activation of full Telegram AI remains a separate explicit authorization boundary.
+STOP and await a new explicit human authorization/task.
 
-Update `PROJECT_STATE.md` factually with deployment result only, then STOP.
+Any future production activation of full Telegram AI (`false -> true`) is a separate rollout decision and requires its own explicit authorization and preflight/rollback plan.
