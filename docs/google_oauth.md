@@ -11,3 +11,11 @@ Google Cloud projects left in Publishing status **Testing** expire non-basic OAu
 Continuous real use requires the OAuth client’s Publishing status to be **In Production**, or an appropriate **Internal** mode for a Workspace organization. Changing that status is an operator action in Google Cloud Console. It is outside Secretary runtime, and this repository does not automate the consent screen, store a Google password, or rotate refresh tokens around the Testing limit.
 
 Public distribution that uses sensitive or restricted scopes may also require Google’s verification and security review. That review is not performed by Secretary.
+
+After a successful production rollout of the public branding site, set these Google OAuth consent-screen values:
+
+- Application home page: `https://web-itx.duckdns.org/`
+- Application privacy policy: `https://web-itx.duckdns.org/privacy`
+- Application terms of service: `https://web-itx.duckdns.org/terms`
+
+Google Cloud Publishing status remains an operator action. Google may also require domain ownership verification in Google Search Console. After the operator moves the client from Testing to In Production, the currently expired Google refresh token still requires one fresh Secretary OAuth authorization.

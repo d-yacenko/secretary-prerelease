@@ -124,7 +124,21 @@ services:
         condition: service_healthy
     command: python -m app.worker.run
 
+  public_web:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./public:/srv/public:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   db_data:
   resource_data:
   local_files_data:
+  caddy_data:
+  caddy_config:
