@@ -9,8 +9,13 @@ from sqlalchemy import func, select
 
 from app.db.models import Edge, Object, User
 from app.domain.object_visibility import tombstone_object
-from app.domain.person_identity import normalize_email, normalize_telegram_user_id
-from app.domain.person_salience import FOCUS_MIN, MAX_COMMUNICATION_ROWS
+from app.domain.person_identity import (
+    normalize_email,
+    normalize_mattermost_user_id,
+    normalize_teams_user_id,
+    normalize_telegram_user_id,
+)
+from app.domain.person_salience import FOCUS_MIN, MAX_COMMUNICATION_ROWS, MAX_RANKED_PEOPLE
 from app.services.errors import NotFoundError
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_identity_service import PersonIdentityService
@@ -114,7 +119,7 @@ def test_one_way_recency_frequency_attention_and_tasks(db_session) -> None:
             direction="inbound",
         )
     eight = PersonSalienceService(db_session, cap_user, now=NOW).evaluate(capped.id)
-    for _ in range(MAX_COMMUNICATION_ROWS):
+    for _ in range(4):
         _telegram(
             db_session,
             cap_user,
@@ -210,6 +215,216 @@ def test_inactive_people_cross_user_and_bounds(db_session) -> None:
     assert "enqueue" not in source
 
 
+def test_email_direction_does_not_invent_reciprocity(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    sender = people.create_person("Ada")
+    colleague = people.create_person("Bea")
+    people.attach(sender.id, normalize_email("ada@example.com"))
+    people.attach(colleague.id, normalize_email("bea@example.com"))
+    _email(
+        db_session,
+        user_id,
+        provider="gmail",
+        metadata={
+            "labels": ["INBOX"],
+            "sender": "Ada <ada@example.com>",
+            "recipients": ["user@example.com", "bea@example.com"],
+        },
+    )
+    service = PersonSalienceService(db_session, user_id, now=NOW)
+    assert _value(service.evaluate(colleague.id), "reciprocity") == 0
+    assert _value(service.evaluate(colleague.id), "directness") == 0
+    assert _value(service.evaluate(sender.id), "directness") == 0
+    _email(
+        db_session,
+        user_id,
+        provider="gmail",
+        metadata={
+            "labels": ["SENT"],
+            "sender": "user@example.com",
+            "recipients": ["bea@example.com"],
+        },
+    )
+    outbound = service.evaluate(colleague.id)
+    assert _value(outbound, "directness") > 0
+    assert _value(outbound, "reciprocity") == 0
+    _email(
+        db_session,
+        user_id,
+        provider="yandex_mail",
+        metadata={
+            "folder": "INBOX",
+            "sender": "bea@example.com",
+            "recipients": ["user@example.com"],
+        },
+    )
+    reciprocal = service.evaluate(colleague.id)
+    assert _value(reciprocal, "reciprocity") > 0
+    before = reciprocal.score
+    _email(
+        db_session,
+        user_id,
+        provider="gmail",
+        metadata={
+            "labels": ["SENT", "INBOX"],
+            "sender": "bea@example.com",
+            "recipients": ["user@example.com"],
+        },
+    )
+    _email(
+        db_session,
+        user_id,
+        provider="yandex_mail",
+        metadata={
+            "folder": "Archive",
+            "sender": "user@example.com",
+            "recipients": ["bea@example.com"],
+        },
+    )
+    assert service.evaluate(colleague.id).score == before
+    _email(
+        db_session,
+        user_id,
+        provider="gmail",
+        metadata={
+            "labels": ["SENT"],
+            "sender": "user@example.com",
+            "recipients": ["bea@example.com"],
+            "cc": ["ada@example.com"],
+        },
+    )
+    group = service.evaluate(colleague.id)
+    assert _value(group, "directness") == _value(reciprocal, "directness")
+    assert _value(group, "public_exposure") > 0
+
+
+def test_noise_does_not_starve_direct_salience_or_ranking(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    for index in range(MAX_RANKED_PEOPLE):
+        people.create_person(f"Empty {index}")
+    direct = people.create_person("Direct")
+    people.attach(direct.id, normalize_telegram_user_id(ACCOUNT, 42))
+    _telegram(
+        db_session,
+        user_id,
+        peer_kind="private",
+        sender=42,
+        peer=42,
+        direction="inbound",
+        when=NOW - timedelta(hours=3),
+    )
+    _telegram(
+        db_session,
+        user_id,
+        peer_kind="private",
+        sender=1,
+        peer=42,
+        direction="outbound",
+        when=NOW - timedelta(hours=2),
+    )
+    for _ in range(50):
+        _telegram(
+            db_session,
+            user_id,
+            peer_kind="group",
+            sender=99,
+            peer=-100,
+            direction="inbound",
+            when=NOW - timedelta(minutes=5),
+        )
+    service = PersonSalienceService(db_session, user_id, now=NOW)
+    score = service.evaluate(direct.id)
+    assert _value(score, "directness") > 0
+    assert _value(score, "reciprocity") > 0
+    ranked = service.rank()
+    assert direct.id in {item.person_id for item in ranked}
+    assert next(item.person_id for item in ranked) == direct.id
+
+
+def test_teams_and_mattermost_fail_closed_without_outbound_facts(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    human = people.create_person("Teams Human")
+    bot = people.create_person("Teams Bot")
+    teammate = people.create_person("Mattermost")
+    tenant = "11111111-1111-1111-1111-111111111111"
+    teams_user = "22222222-2222-2222-2222-222222222222"
+    people.attach(human.id, normalize_teams_user_id(tenant, teams_user))
+    people.attach(bot.id, normalize_teams_user_id(tenant, "33333333-3333-3333-3333-333333333333"))
+    people.attach(
+        teammate.id,
+        normalize_mattermost_user_id("https://chat.example.com", "mm-user-1"),
+    )
+    _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "sender_kind": "application",
+            "tenant_id": tenant,
+            "sender_id": teams_user,
+            "chat_type": "oneOnOne",
+            "direction": "inbound",
+        },
+    )
+    _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "sender_kind": "user",
+            "tenant_id": tenant,
+            "sender_id": teams_user,
+            "chat_type": "oneOnOne",
+            "direction": "outbound",
+        },
+    )
+    service = PersonSalienceService(db_session, user_id, now=NOW)
+    assert service.evaluate(human.id).score == 0
+    assert service.evaluate(bot.id).score == 0
+    _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "sender_kind": "user",
+            "tenant_id": tenant,
+            "sender_id": teams_user,
+            "chat_type": "group",
+            "direction": "inbound",
+        },
+    )
+    grouped = service.evaluate(human.id)
+    assert _value(grouped, "directness") == 0
+    assert _value(grouped, "public_exposure") > 0
+    _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://chat.example.com",
+            "author_user_id": "mm-user-1",
+            "channel_type": "D",
+        },
+    )
+    _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://chat.example.com",
+            "author_user_id": "mm-user-1",
+            "channel_type": "O",
+        },
+    )
+    mattermost = service.evaluate(teammate.id)
+    assert _value(mattermost, "directness") > 0
+    assert _value(mattermost, "reciprocity") == 0
+    assert _value(mattermost, "public_exposure") > 0
+
+
 def _value(score, name: str) -> int:
     return next(item.value for item in score.components if item.name == name)
 
@@ -260,6 +475,38 @@ def _telegram(
                 "sender_peer_id": sender,
                 "direction": direction,
             },
+        )
+    )
+    db_session.flush()
+
+
+def _email(db_session, user_id: uuid.UUID, *, provider: str, metadata: dict) -> None:
+    db_session.add(
+        Object(
+            user_id=user_id,
+            kind="email",
+            provider=provider,
+            title="mail",
+            origin="source",
+            state="observed",
+            occurred_at=NOW - timedelta(hours=1),
+            metadata_=metadata,
+        )
+    )
+    db_session.flush()
+
+
+def _chat(db_session, user_id: uuid.UUID, *, provider: str, metadata: dict) -> None:
+    db_session.add(
+        Object(
+            user_id=user_id,
+            kind="chat_message",
+            provider=provider,
+            title="chat",
+            origin="source",
+            state="observed",
+            occurred_at=NOW - timedelta(hours=1),
+            metadata_=metadata,
         )
     )
     db_session.flush()

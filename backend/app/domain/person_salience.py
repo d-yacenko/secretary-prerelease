@@ -25,9 +25,13 @@ KNOWN = "known"
 INCIDENTAL = "incidental"
 
 WINDOW_DAYS = 90
-MAX_COMMUNICATION_ROWS = 40
+MAX_SCAN_ROWS = 200
+MAX_DIRECT_HITS = 8
+MAX_PUBLIC_HITS = 8
+MAX_COMMUNICATION_ROWS = MAX_SCAN_ROWS
 MAX_GRAPH_EDGES = 20
 MAX_RANKED_PEOPLE = 20
+MAX_IDENTITY_ROWS = 500
 FREQUENCY_CAP = 8
 PUBLIC_CAP = 8
 DIRECTNESS_CAP = 48
@@ -40,6 +44,8 @@ KNOWN_MIN = 12
 TASK_CALENDAR_KINDS = frozenset({"task", "event", "calendar_event"})
 USER_ATTENTION_TYPES = frozenset({"user_route_choice", "user_confirmed"})
 
+_YANDEX_SENT_FOLDERS = frozenset({"sent", "sent items", "sent messages", "отправленные"})
+_YANDEX_SENT_SUFFIXES = ("/sent", "/sent items", "/отправленные")
 _DIRECT_POINT = 8
 _PUBLIC_POINT = 1
 _RECENT_DAYS = 7
@@ -155,7 +161,7 @@ def score_person(
         eligible=True,
         truncated=truncated,
         window_days=WINDOW_DAYS,
-        row_limit=MAX_COMMUNICATION_ROWS,
+        row_limit=MAX_SCAN_ROWS,
     )
 
 
@@ -168,7 +174,7 @@ def empty_salience(person_id: UUID | None, *, eligible: bool) -> PersonSalience:
         eligible=eligible,
         truncated=False,
         window_days=WINDOW_DAYS,
-        row_limit=MAX_COMMUNICATION_ROWS,
+        row_limit=MAX_SCAN_ROWS,
     )
 
 
@@ -180,7 +186,7 @@ def attribute_communication(
     identity_index: dict[tuple[str, str, str], UUID],
 ) -> list[InteractionHit]:
     if provider in {"gmail", "yandex_mail"}:
-        return _email_hits(metadata, occurred_at, identity_index)
+        return _email_hits(provider, metadata, occurred_at, identity_index)
     if provider == "telegram" and metadata.get("transport") == "mtproto":
         return _telegram_hits(metadata, occurred_at, identity_index)
     if provider == "teams":
@@ -199,26 +205,52 @@ def _tier(score: int) -> str:
 
 
 def _email_hits(
+    provider: str,
     metadata: dict,
     occurred_at: datetime,
     identity_index: dict[tuple[str, str, str], UUID],
 ) -> list[InteractionHit]:
-    sender = _email_address(metadata.get("sender") or metadata.get("from"))
-    recipients = _email_addresses(metadata.get("recipients"))
-    if not recipients:
-        recipients = _email_addresses(metadata.get("to"))
-    exposure = "direct" if len(recipients) <= 2 else "public"
+    direction = _email_direction(provider, metadata)
+    if direction is None:
+        return []
+    audience = _email_audience(metadata)
+    exposure = "direct" if len(audience) == 1 else "public"
+    if direction == "inbound":
+        sender = _email_address(metadata.get("sender") or metadata.get("from"))
+        person_id = _lookup(identity_index, EMAIL_IDENTITY, "", sender)
+        if person_id is None:
+            return []
+        return [InteractionHit(person_id, exposure, "inbound", occurred_at)]
     hits: list[InteractionHit] = []
-    sender_person = _lookup(identity_index, EMAIL_IDENTITY, "", sender)
-    if sender_person is not None:
-        hits.append(InteractionHit(sender_person, exposure, "inbound", occurred_at))
-    for recipient in recipients:
-        if recipient == sender:
+    for address in audience:
+        person_id = _lookup(identity_index, EMAIL_IDENTITY, "", address)
+        if person_id is None:
             continue
-        person_id = _lookup(identity_index, EMAIL_IDENTITY, "", recipient)
-        if person_id is not None and person_id != sender_person:
-            hits.append(InteractionHit(person_id, exposure, "outbound", occurred_at))
+        hits.append(InteractionHit(person_id, exposure, "outbound", occurred_at))
     return hits
+
+
+def _email_direction(provider: str, metadata: dict) -> str | None:
+    if provider == "gmail":
+        labels = {
+            str(label).upper()
+            for label in metadata.get("labels") or []
+            if isinstance(label, str)
+        }
+        sent = "SENT" in labels
+        inbox = "INBOX" in labels or "UNREAD" in labels
+        if sent == inbox:
+            return None
+        return "outbound" if sent else "inbound"
+    if provider == "yandex_mail":
+        folder = (_text(metadata.get("folder")) or "").casefold()
+        if folder == "inbox" or folder.endswith("/inbox"):
+            return "inbound"
+        if folder in _YANDEX_SENT_FOLDERS or any(
+            folder.endswith(suffix) for suffix in _YANDEX_SENT_SUFFIXES
+        ):
+            return "outbound"
+    return None
 
 
 def _telegram_hits(
@@ -265,9 +297,10 @@ def _teams_hits(
     person_id = _lookup(identity_index, TEAMS_USER_ID, realm.casefold(), sender.casefold())
     if person_id is None:
         return []
+    if _text(metadata.get("direction")) != "inbound":
+        return []
     exposure = "direct" if metadata.get("chat_type") == "oneOnOne" else "public"
-    direction = _text(metadata.get("direction")) or "inbound"
-    return [InteractionHit(person_id, exposure, direction, occurred_at)]
+    return [InteractionHit(person_id, exposure, "inbound", occurred_at)]
 
 
 def _mattermost_hits(
@@ -319,6 +352,16 @@ def _email_address(value: object) -> str | None:
     if "@" not in text:
         return None
     return text
+
+
+def _email_audience(metadata: dict) -> list[str]:
+    found = _email_addresses(metadata.get("recipients"))
+    if not found:
+        found = _email_addresses(metadata.get("to"))
+    for address in _email_addresses(metadata.get("cc")):
+        if address not in found:
+            found.append(address)
+    return found
 
 
 def _email_addresses(value: object) -> list[str]:
