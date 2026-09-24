@@ -1,70 +1,15 @@
-# Current task — Graph Refined P1R: person-evidence type safety
+# Current task
 
-Architect review of P1 implementation `3c773db48b8bc0f27a0f6896f94295bfbc5781b1` found two blocking type-safety defects in provider evidence. Fix only these defects plus the smallest provider-dispatch hardening needed to make the evidence layer safe.
+HOLD. Graph Refined P1R person-evidence type safety is implemented at `92aef7e6c9fb2e5acd6afc7056b26ea67ea99d07`.
 
-Do not start P2. Do not add fuzzy matching, auto-merge, UI, Assistant lookup, send-by-person, voice/media, or Task Graph work. Do not deploy or apply migration `0048` in production.
+`telegram_user_id` accepts only a strictly positive user id. Zero and negative Telegram sender peers fail closed and produce no Person evidence. MTProto transport and history storage are unchanged.
 
-## Defect 1 — Telegram non-user peers can become Person identities
+Newly normalized Teams messages persist `sender_kind` as `user` or `application`. Person evidence emits a Teams user identity only when `sender_kind == "user"`. Application, missing, malformed, and unknown sender kinds produce no Person evidence. Legacy Teams objects without the discriminator are not guessed into People. Teams presentation, send, and reply behavior is unchanged.
 
-Canonical MTProto history stores `sender_peer_id` from Telethon peer IDs. The transport explicitly allows positive or negative peer IDs:
-- positive sender peer => Telegram user;
-- negative sender peer may represent chat/channel identity.
+Evidence extraction is anchored to the canonical source Object. Gmail and Yandex email objects produce email identities only. Mattermost chat objects produce Mattermost identities only. Teams chat objects produce a Teams user identity only under the sender-kind rule. Telegram MTProto chat objects produce a Telegram user identity only under the positive-user-id rule. An unsupported provider or kind produces no Person evidence. Display names remain attributes, not identity keys.
 
-Current `normalize_telegram_user_id()` accepts negative values, so a non-person chat/channel sender can be attached to a canonical Person.
+`tests/test_person_identity.py`: 12 passed, including uniqueness, cross-user isolation, detach/reassign, and `0047 <-> 0048`. `tests/test_communication_temporal_parity_a.py`: 5 passed. Combined focused run: 17 passed. Ruff and compile of touched Python passed. `git diff --check` clean.
 
-Required correction:
-- `telegram_user_id` Person identities must accept only strictly positive non-zero Telegram user IDs;
-- zero and every negative value must fail closed;
-- evidence extraction must not emit a Person identity for a negative/non-user sender peer;
-- do not change MTProto transport/history storage semantics merely to satisfy this layer.
+No P2 work, fuzzy matching, auto-merge, UI, Assistant lookup, send-by-person, or live provider/LLM call. Migration `0048` was not applied in production. Production remains `296b4735f9473ea60ef22f1827ed94260603128e`, Alembic `0047 / 0047`. `origin/production` was not moved.
 
-## Defect 2 — Teams application senders can become Person identities
-
-`teams.normalize.sender_from_message()` supports both `from.user` and `from.application`, but normalized message metadata currently persists only `sender_id` / `sender_display_name`. The Person evidence extractor therefore cannot distinguish a human Teams user from an application/bot and currently treats either as `teams_user_id`.
-
-Required correction:
-- preserve a bounded deterministic sender discriminator in newly normalized Teams message metadata, e.g. `sender_kind = "user" | "application"`;
-- Person evidence may emit a Teams user identity only when the normalized evidence proves `sender_kind == "user"`;
-- `sender_kind == "application"`, missing, malformed, or unknown must fail closed for Person extraction;
-- legacy Teams objects without the discriminator must NOT be guessed into People;
-- keep normal Teams message presentation/send/reply behavior unchanged.
-
-## Provider-dispatch hardening
-
-Current generic evidence extraction receives only an arbitrary metadata mapping and runs email, Mattermost, Teams, and Telegram extractors over it in parallel. Before P2 this must be source/provider anchored so coincidental metadata keys cannot manufacture cross-provider Person identities.
-
-Use the smallest clean API, for example:
-- accept the canonical source Object, or
-- require explicit trusted `provider` / `kind` / transport context alongside metadata.
-
-Required semantics:
-- Gmail/Yandex email source objects may produce email identities only;
-- Mattermost chat objects may produce Mattermost identities only;
-- Teams chat objects may produce Teams user identity only under the sender-kind rule above;
-- canonical Telegram MTProto chat objects may produce Telegram user identity only under the positive-user-id rule above;
-- unsupported provider/kind/transport produces no Person identity evidence;
-- display names remain attributes only, never exact identity keys.
-
-Do not trust a provider value copied from arbitrary metadata when the canonical Object already has a provider field.
-
-## Focused proof
-
-Extend focused tests proving at minimum:
-1. Telegram positive user sender emits evidence.
-2. Telegram zero/negative sender does not normalize as a user and emits no Person evidence.
-3. Teams `from.user` normalization persists `sender_kind=user` and emits Person evidence.
-4. Teams `from.application` persists `sender_kind=application` and emits no Person evidence.
-5. Legacy/missing/unknown Teams sender kind emits no Person evidence.
-6. A canonical object for one provider containing coincidental keys from another provider does not emit cross-provider identities.
-7. Email/Mattermost exact evidence still works.
-8. Existing P1 exact uniqueness, cross-user isolation, detach/reassign, and `0047 <-> 0048` migration tests remain green.
-
-Run the smallest relevant backend tests including the touched Teams normalization tests, Ruff/compile for touched Python, and `git diff --check`.
-
-## Completion
-
-When complete:
-- record implementation SHA and exact checks/results in `PROJECT_STATE.md`;
-- return `CURRENT_TASK.md` to HOLD;
-- STOP.
-- Do not choose P2 and do not deploy.
+Do not choose or start the next phase.
