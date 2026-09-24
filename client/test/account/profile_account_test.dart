@@ -388,6 +388,155 @@ void main() {
       expect(find.text('gpt-5.6-terra'), findsOneWidget);
     });
 
+    testWidgets('model dropdown sends assistant_model', (tester) async {
+      Map<String, dynamic>? patched;
+      final client = SecretaryApiClient(
+        httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/connections')) {
+            return http.Response(jsonEncode(_connectionsJson()), 200);
+          }
+          if (request.url.path.endsWith('/me/settings') && request.method == 'PATCH') {
+            patched = jsonDecode(request.body) as Map<String, dynamic>;
+            return http.Response(
+              jsonEncode(
+                accountSettingsJson(
+                  assistantModel: patched!['assistant_model'] as String,
+                  allowedAssistantModels: const ['gpt-5.6-luna', 'gpt-5.6-terra'],
+                ),
+              ),
+              200,
+            );
+          }
+          if (isAccountSettingsRequest(request.url)) {
+            return http.Response(
+              jsonEncode(
+                accountSettingsJson(
+                  assistantModel: 'gpt-5.6-luna',
+                  allowedAssistantModels: const ['gpt-5.6-luna', 'gpt-5.6-terra'],
+                ),
+              ),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      );
+      client.configure(baseUrl: _baseUrl, token: _token);
+
+      await _pumpAccountReady(
+        tester,
+        buildAccountScreen(
+          apiClient: client,
+          authController: _buildAuth(client),
+          settingsJson: accountSettingsJson(
+            assistantModel: 'gpt-5.6-luna',
+            allowedAssistantModels: const ['gpt-5.6-luna', 'gpt-5.6-terra'],
+          ),
+        ),
+      );
+
+      expect(find.text('Модель ИИ'), findsOneWidget);
+      await tester.tap(find.byType(DropdownButton<String>).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('gpt-5.6-terra').last);
+      await tester.pumpAndSettle();
+
+      expect(patched, {'assistant_model': 'gpt-5.6-terra'});
+    });
+
+    testWidgets('switching to Astra from none sends Astra plus low', (tester) async {
+      Map<String, dynamic>? patched;
+      final models = ['gpt-5.6-luna', 'gpt-6-astra'];
+      final client = SecretaryApiClient(
+        httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/connections')) {
+            return http.Response(jsonEncode(_connectionsJson()), 200);
+          }
+          if (request.url.path.endsWith('/me/settings') && request.method == 'PATCH') {
+            patched = jsonDecode(request.body) as Map<String, dynamic>;
+            return http.Response(
+              jsonEncode(
+                accountSettingsJson(
+                  assistantModel: 'gpt-6-astra',
+                  assistantReasoningEffort: 'low',
+                  allowedAssistantModels: models,
+                ),
+              ),
+              200,
+            );
+          }
+          if (isAccountSettingsRequest(request.url)) {
+            return http.Response(
+              jsonEncode(
+                accountSettingsJson(
+                  assistantModel: 'gpt-5.6-luna',
+                  assistantReasoningEffort: 'none',
+                  allowedAssistantModels: models,
+                ),
+              ),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      );
+      client.configure(baseUrl: _baseUrl, token: _token);
+
+      await _pumpAccountReady(
+        tester,
+        buildAccountScreen(
+          apiClient: client,
+          authController: _buildAuth(client),
+          settingsJson: accountSettingsJson(
+            assistantModel: 'gpt-5.6-luna',
+            assistantReasoningEffort: 'none',
+            allowedAssistantModels: models,
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(DropdownButton<String>).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('gpt-6-astra').last);
+      await tester.pumpAndSettle();
+
+      expect(patched, {
+        'assistant_model': 'gpt-6-astra',
+        'assistant_reasoning_effort': 'low',
+      });
+    });
+
+    testWidgets('Astra hides reasoning none', (tester) async {
+      final client = buildAccountApiClient(
+        settingsJson: accountSettingsJson(
+          assistantModel: 'gpt-6-astra',
+          assistantReasoningEffort: 'low',
+          allowedAssistantModels: const ['gpt-6-astra', 'gpt-6-luna'],
+        ),
+      );
+      client.configure(baseUrl: _baseUrl, token: _token);
+
+      await _pumpAccountReady(
+        tester,
+        buildAccountScreen(
+          apiClient: client,
+          authController: _buildAuth(client),
+          settingsJson: accountSettingsJson(
+            assistantModel: 'gpt-6-astra',
+            assistantReasoningEffort: 'low',
+            allowedAssistantModels: const ['gpt-6-astra', 'gpt-6-luna'],
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(DropdownButton<String>).at(1));
+      await tester.pumpAndSettle();
+
+      expect(find.text('none'), findsNothing);
+      expect(find.text('low'), findsWidgets);
+      expect(find.text('high'), findsWidgets);
+    });
+
     testWidgets('inconsistent model and allowlist does not crash Account', (tester) async {
       final client = buildAccountApiClient(
         settingsJson: accountSettingsJson(
@@ -402,7 +551,7 @@ void main() {
         buildAccountScreen(apiClient: client, authController: _buildAuth(client)),
       );
 
-      expect(find.text('Модель Assistant'), findsOneWidget);
+      expect(find.text('Модель ИИ'), findsOneWidget);
       expect(find.text('gpt-5.6-luna'), findsWidgets);
       expect(find.text('gpt-disallowed'), findsNothing);
     });

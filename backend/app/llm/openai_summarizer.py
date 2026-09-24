@@ -102,19 +102,6 @@ def _extract_response_text(response) -> str:
     return ""
 
 
-def create_openai_summarizer() -> Summarizer:
-    from app.core.config import settings
-
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for OpenAI summarizer")
-    return OpenAISummarizer(
-        api_key=settings.openai_api_key,
-        model=settings.openai_assistant_model,
-        reasoning_effort=settings.openai_assistant_reasoning_effort,
-        verbosity=settings.openai_assistant_verbosity,
-    )
-
-
 def create_openai_summarizer_from_effective(
     effective: EffectiveUserSettings,
 ) -> Summarizer:

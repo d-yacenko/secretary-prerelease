@@ -4,6 +4,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 MIN_SOURCE_SYNC_INTERVAL_SECONDS = 60
 MIN_SOURCE_SYNC_HISTORY_DAYS = 1
 MAX_SOURCE_SYNC_HISTORY_DAYS = 90
+DEFAULT_GENERATIVE_MODEL = "gpt-6-luna"
+DEFAULT_ALLOWED_GENERATIVE_MODELS = (
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-sol",
+)
 
 
 def normalize_allowed_assistant_models(raw_allowlist: str, deployment_default: str) -> list[str]:
@@ -39,12 +48,12 @@ class Settings(BaseSettings):
     api_port: int = 8000
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
-    openai_model: str = "gpt-5.6-terra"
-    openai_assistant_model: str = "gpt-5.6-luna"
+    # Canonical deployment fallback for the per-user assistant_model field.
+    openai_assistant_model: str = DEFAULT_GENERATIVE_MODEL
     openai_assistant_reasoning_effort: str = "low"
     openai_assistant_verbosity: str = "low"
     openai_assistant_max_output_tokens: int = 1600
-    openai_allowed_assistant_models: str = ""
+    openai_allowed_assistant_models: str = ",".join(DEFAULT_ALLOWED_GENERATIVE_MODELS)
     openai_transcription_model: str = "gpt-4o-mini-transcribe"
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "alloy"

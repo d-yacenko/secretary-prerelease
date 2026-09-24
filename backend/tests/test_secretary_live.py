@@ -25,7 +25,7 @@ def test_openai_secretary_live_smoke() -> None:
 
     provider = OpenAISecretaryProvider(
         api_key=settings.openai_api_key,
-        model=settings.openai_model,
+        model=settings.openai_assistant_model,
     )
     context = ContextBuildResult(
         items=[

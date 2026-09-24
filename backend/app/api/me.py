@@ -57,7 +57,9 @@ class OpenAIDailyBudgetOut(BaseModel):
 
 class UserSettingsOut(BaseModel):
     timezone: str
-    assistant_model: str
+    assistant_model: str = Field(
+        description="Canonical per-user generative model for text and reasoning workloads."
+    )
     assistant_reasoning_effort: str
     assistant_verbosity: str
     assistant_max_rounds: int

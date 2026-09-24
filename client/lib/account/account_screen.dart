@@ -949,7 +949,7 @@ class _AccountScreenState extends State<AccountScreen>
                       runSpacing: 12,
                       children: [
                         AccountLabeledControl(
-                          label: 'Модель Assistant',
+                          label: 'Модель ИИ',
                           child: DropdownButton<String>(
                             value: _dropdownAssistantModel(settings),
                             items: settings.allowedAssistantModels
@@ -963,9 +963,19 @@ class _AccountScreenState extends State<AccountScreen>
                             onChanged: _settingsSaving
                                 ? null
                                 : (value) {
-                                    if (value != null) {
-                                      _saveAiPreferences(assistantModel: value);
+                                    if (value == null) {
+                                      return;
                                     }
+                                    if (value == 'gpt-6-astra' &&
+                                        settings.assistantReasoningEffort ==
+                                            'none') {
+                                      _saveAiPreferences(
+                                        assistantModel: value,
+                                        assistantReasoningEffort: 'low',
+                                      );
+                                      return;
+                                    }
+                                    _saveAiPreferences(assistantModel: value);
                                   },
                           ),
                         ),
@@ -973,20 +983,21 @@ class _AccountScreenState extends State<AccountScreen>
                           label: 'Reasoning effort',
                           child: DropdownButton<String>(
                             value: _dropdownReasoningEffort(settings),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'none',
-                                child: Text('none'),
-                              ),
-                              DropdownMenuItem(
+                            items: [
+                              if (settings.assistantModel != 'gpt-6-astra')
+                                const DropdownMenuItem(
+                                  value: 'none',
+                                  child: Text('none'),
+                                ),
+                              const DropdownMenuItem(
                                 value: 'low',
                                 child: Text('low'),
                               ),
-                              DropdownMenuItem(
+                              const DropdownMenuItem(
                                 value: 'medium',
                                 child: Text('medium'),
                               ),
-                              DropdownMenuItem(
+                              const DropdownMenuItem(
                                 value: 'high',
                                 child: Text('high'),
                               ),
@@ -1233,8 +1244,12 @@ String _dropdownAssistantModel(UserSettings settings) {
 
 String _dropdownReasoningEffort(UserSettings settings) {
   const allowed = ['none', 'low', 'medium', 'high'];
-  if (allowed.contains(settings.assistantReasoningEffort)) {
-    return settings.assistantReasoningEffort;
+  final stored = settings.assistantReasoningEffort;
+  if (settings.assistantModel == 'gpt-6-astra' && stored == 'none') {
+    return 'low';
+  }
+  if (allowed.contains(stored)) {
+    return stored;
   }
   return 'low';
 }

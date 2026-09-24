@@ -19,6 +19,7 @@ from app.core.assistant_openai_config import (
     validate_assistant_model,
     validate_assistant_reasoning_effort,
     validate_assistant_verbosity,
+    validate_generative_model_reasoning,
     validated_assistant_openai_settings,
 )
 from app.core.config import settings
@@ -164,6 +165,22 @@ class EffectiveUserSettingsService:
     ) -> EffectiveUserSettings:
         row = self.get_or_create_settings_row(user_id)
         allowed_models = settings.allowed_assistant_models
+        if assistant_model is not None or assistant_reasoning_effort is not None:
+            try:
+                deployment = validated_assistant_openai_settings(settings)
+                prospective_model = (
+                    validate_assistant_model(assistant_model, allowed_models)
+                    if assistant_model is not None
+                    else self._resolve_assistant_model(row, deployment.model, allowed_models)
+                )
+                prospective_effort = (
+                    validate_assistant_reasoning_effort(assistant_reasoning_effort)
+                    if assistant_reasoning_effort is not None
+                    else self._resolve_reasoning_effort(row, deployment.reasoning_effort)
+                )
+                validate_generative_model_reasoning(prospective_model, prospective_effort)
+            except AssistantOpenAIConfigError as exc:
+                raise ValidationError(str(exc)) from exc
         if timezone is not None:
             self._validate_timezone(timezone)
             row.timezone = timezone.strip()

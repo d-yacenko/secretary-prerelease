@@ -10,6 +10,7 @@ from app.llm.secretary_provider import (
     SecretaryConfigurationError,
     SecretaryProvider,
 )
+from app.services.effective_user_settings_service import EffectiveUserSettings
 
 SECRETARY_INSTRUCTIONS = (
     "You analyze bounded context for a personal secretary. "
@@ -85,14 +86,12 @@ def validate_proposal_evidence(
     return analysis.model_copy(update={"proposals": validated_proposals})
 
 
-def create_secretary_provider() -> SecretaryProvider:
-    if not settings.openai_api_key:
-        raise SecretaryConfigurationError("OPENAI_API_KEY is not configured")
+def create_secretary_provider_from_effective(
+    effective: EffectiveUserSettings,
+) -> SecretaryProvider:
+    if not effective.openai_api_key:
+        raise SecretaryConfigurationError("OpenAI API key is not configured")
     return OpenAISecretaryProvider(
-        api_key=settings.openai_api_key,
-        model=settings.openai_model,
+        api_key=effective.openai_api_key,
+        model=effective.assistant_model,
     )
-
-
-def create_secretary_service() -> SecretaryService:
-    return SecretaryService(create_secretary_provider())

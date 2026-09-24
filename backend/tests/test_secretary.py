@@ -131,17 +131,23 @@ def test_secretary_deduplicates_evidence_indices() -> None:
 
 
 def test_create_secretary_provider_without_api_key_fails() -> None:
-    from app.core.config import settings
     from app.llm.secretary_provider import SecretaryConfigurationError
-    from app.services.secretary_service import create_secretary_provider
+    from app.services.effective_user_settings_service import EffectiveUserSettings
+    from app.services.secretary_service import create_secretary_provider_from_effective
 
-    original = settings.openai_api_key
-    settings.openai_api_key = ""
-    try:
-        with pytest.raises(SecretaryConfigurationError):
-            create_secretary_provider()
-    finally:
-        settings.openai_api_key = original
+    effective = EffectiveUserSettings(
+        timezone="Europe/Amsterdam",
+        assistant_model="gpt-6-luna",
+        assistant_reasoning_effort="low",
+        assistant_verbosity="low",
+        assistant_max_rounds=6,
+        assistant_max_rounds_override=None,
+        openai_key_configured=False,
+        allowed_assistant_models=["gpt-6-luna"],
+        openai_api_key=None,
+    )
+    with pytest.raises(SecretaryConfigurationError):
+        create_secretary_provider_from_effective(effective)
 
 
 class _InvalidEvidenceProvider:

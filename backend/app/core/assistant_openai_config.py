@@ -40,6 +40,13 @@ def validate_assistant_verbosity(value: str) -> str:
     return normalized
 
 
+def validate_generative_model_reasoning(model: str, reasoning_effort: str) -> None:
+    if model == "gpt-6-astra" and reasoning_effort == "none":
+        raise AssistantOpenAIConfigError(
+            "gpt-6-astra does not support assistant_reasoning_effort none"
+        )
+
+
 def validate_assistant_model(value: str, allowed_models: list[str]) -> str:
     model = value.strip()
     if not model:
@@ -89,6 +96,7 @@ def validated_assistant_openai_settings(settings: Settings) -> AssistantOpenAISe
         raise AssistantOpenAIConfigError(
             f"OPENAI_ASSISTANT_MODEL must be one of: {', '.join(allowed_models)}"
         )
+    validate_generative_model_reasoning(model, reasoning_effort)
 
     return AssistantOpenAISettings(
         model=model,

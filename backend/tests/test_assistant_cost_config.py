@@ -61,7 +61,6 @@ def test_create_assistant_provider_uses_assistant_settings(monkeypatch) -> None:
         "app.services.assistant_service.settings",
         Settings(
             openai_api_key="sk-test",
-            openai_model="gpt-5.6-terra",
             openai_assistant_model="gpt-5.6-luna",
             openai_assistant_reasoning_effort="low",
             openai_assistant_verbosity="low",

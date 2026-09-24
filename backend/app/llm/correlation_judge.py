@@ -254,19 +254,6 @@ def _parse_judge_response(text: str, allowed_ids: set[str]) -> CorrelationJudgeR
     return CorrelationJudgeResult(decisions=tuple(decisions[:CORRELATION_MAX_PROPOSED_EDGES]))
 
 
-def create_correlation_judge() -> CorrelationJudge:
-    from app.core.config import settings
-
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for correlation judge")
-    return OpenAICorrelationJudge(
-        api_key=settings.openai_api_key,
-        model=settings.openai_assistant_model,
-        reasoning_effort=CORRELATION_BACKGROUND_REASONING_EFFORT,
-        verbosity=CORRELATION_BACKGROUND_VERBOSITY,
-    )
-
-
 def create_correlation_judge_from_effective(
     effective: EffectiveUserSettings,
 ) -> CorrelationJudge:
