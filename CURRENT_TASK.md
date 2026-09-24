@@ -1,48 +1,22 @@
-# Current task — Persistent Assistant conversations corrective pass
+# Current task — HOLD
 
-Authorized scope: review/fix the already implemented persistent/resumable Assistant conversations MVP at implementation SHA `6acea4d49a175b43b0bb4a187d17e748dfa08a8b`.
+No implementation task is authorized.
 
-Do not start another product feature. Do not deploy to production. Migration `0047` remains unapplied in production; production Alembic remains `0046 / 0046`.
+The persistent Assistant conversations corrective pass is complete.
 
-## 1. Wire conversation transcript pagination end to end
+Implementation SHA: `890ee7ae449d0b009a029d8c6479072552fa3ee7`
 
-Backend `GET /assistant/conversations/{id}/messages` already supports `has_more` and `before_id`, but Flutter currently restores only the first/default page.
+Files changed:
+- `client/lib/api/secretary_api_client.dart`
+- `client/lib/assistant/assistant_controller.dart`
+- `client/lib/assistant/assistant_screen.dart`
+- `client/test/assistant/assistant_conversations_test.dart`
+- `backend/tests/test_assistant_conversations.py`
 
-Required:
-- add optional `before_id` support to the Flutter API client;
-- retain and consume `has_more` in Assistant state;
-- make older messages reachable from the Assistant UI without loading an unbounded transcript at once;
-- prepend older pages in stable chronological order with no duplicates;
-- conversation switching/restart must preserve the exact selected conversation;
-- UI pagination must not change the existing bounded server-owned model-history contract.
+Older transcript pages load through `before_id`. A transient conversation bootstrap failure stays retryable and does not send a legacy Assistant turn. Missing conversation routes still use the legacy path.
 
-Focused proof:
-- a conversation with more than 50 stored messages restores the newest page correctly;
-- older page(s) can be loaded using `before_id`;
-- ordering is stable and messages are not duplicated;
-- model history remains bounded by the existing `MAX_ASSISTANT_HISTORY_MESSAGES` contract.
+Focused checks: backend conversation tests 10 passed; Flutter `assistant_conversations_test.dart` and `assistant_test.dart` 16 passed; Ruff/compile of touched Python passed; `git diff --check` clean. Flutter analyze still reports the pre-existing drop-target warning in `assistant_screen.dart`.
 
-## 2. Do not permanently fall back to legacy mode after a transient bootstrap failure
+No live provider call. Migration `0047` was not applied in production. No production deploy. Telegram MTProto AI activation/quarantine unchanged.
 
-Current problem: `AssistantController.restorePersistentConversation()` marks restore as started before network bootstrap and catches generic API failures by switching to legacy mode. A temporary network/5xx failure can therefore prevent another restore attempt for the rest of the client process.
-
-Required:
-- keep legacy in-memory fallback only for the intended route-absent/old-server compatibility case;
-- transient bootstrap/list/message-load failures must remain retryable;
-- after a transient persistent-bootstrap failure, do not silently send a legacy/stateless Assistant turn;
-- a later retry must be able to restore/create the persistent conversation and continue normally;
-- once persistent sending begins, retry of the same user turn must continue to reuse the same `client_turn_id`;
-- typed and voice turns must continue to use the same selected conversation.
-
-Focused proof:
-- first persistent bootstrap fails transiently, later retry succeeds;
-- no legacy `POST /assistant/message` is emitted during the failed bootstrap;
-- route-absent compatibility still uses the legacy path;
-- existing New dialog, conversation switching, unresolved-plan blocking, rehydrated references/action-plan cards, and stable retry-id tests remain green.
-
-Run the smallest relevant backend and Flutter tests, touched-file Ruff/compile/analyze, and `git diff --check`.
-
-When complete:
-- record exact checks/results and implementation SHA in `PROJECT_STATE.md`;
-- return `CURRENT_TASK.md` to HOLD;
-- STOP. Do not choose the next phase and do not deploy.
+Production remains `42db393be50a4c3f20ce86dadc280d77bada3959`. Alembic remains `0046 / 0046`.
