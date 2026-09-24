@@ -16,6 +16,7 @@ import '../navigation/secretary_navigation.dart';
 import '../ui/domain_labels.dart';
 import '../ui/object_bookmark_controller.dart';
 import 'assistant_message_body.dart';
+import 'assistant_reference_chip.dart';
 
 class AssistantScreen extends StatefulWidget {
   const AssistantScreen({
@@ -378,10 +379,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
                             runSpacing: 8,
                             children: message.references
                                 .map(
-                                  (ref) => ActionChip(
-                                    label: Text(
-                                      '${objectKindLabel(ref.kind)}: ${ref.title}',
-                                    ),
+                                  (ref) => AssistantReferenceChip(
+                                    reference: ref,
                                     onPressed: () => _openReference(ref),
                                   ),
                                 )

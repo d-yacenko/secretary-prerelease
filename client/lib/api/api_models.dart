@@ -1681,12 +1681,16 @@ class AssistantReference {
     required this.title,
     required this.kind,
     this.canonicalUri,
+    this.provider,
+    this.primaryAt,
   });
 
   final String objectId;
   final String title;
   final String kind;
   final String? canonicalUri;
+  final String? provider;
+  final String? primaryAt;
 
   factory AssistantReference.fromJson(Map<String, dynamic> json) {
     return AssistantReference(
@@ -1694,6 +1698,8 @@ class AssistantReference {
       title: json['title'] as String,
       kind: json['kind'] as String,
       canonicalUri: json['canonical_uri'] as String?,
+      provider: json['provider'] as String?,
+      primaryAt: json['primary_at'] as String?,
     );
   }
 

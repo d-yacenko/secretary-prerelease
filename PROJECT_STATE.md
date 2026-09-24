@@ -5,10 +5,11 @@
 - Production/runtime work relies on the pre-existing Executor/workstation SSH credential integration plus the pinned target contract. Do not create/copy/request new production private-key material as a workaround.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
-- Production branch/ref: `bd1433921a056b8dc42bd23c6ecf0e4ce2bedf4b`.
+- Production application/runtime: `36c2ce9f43e56a9554688f50c60a79d56e469fbe`.
+- Production branch/ref: `36c2ce9f43e56a9554688f50c60a79d56e469fbe`.
 - Production Alembic: `0046 / 0046`.
 - Production health: PASS.
+- Unified per-user generative model selector: LIVE.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
 - Production Deploy Contract v2: MERGED / MANDATORY FOR NORMAL SCHEMA-NEUTRAL PRODUCTION DEPLOYMENT.
 - Yandex transient retry hotfix: DEPLOYED / RUNTIME VERIFIED.
@@ -21,7 +22,7 @@
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
 - M2 production readiness retry: READY.
-- Production runtime/ref is `8091736337689b68b4510126e74d9e409397f696` after successful M3 cutover.
+- After the successful M3 cutover, production runtime/ref was `8091736337689b68b4510126e74d9e409397f696`.
 - Production Migration Rollout M3: SUCCESS. Production ref/runtime is exact `8091736337689b68b4510126e74d9e409397f696`; production Alembic is `0046`; api/worker/db healthy; DB container/volume and `.env` preserved; no Telegram login/history import occurred; Bot API untouched.
 - Telegram MTProto M4 activation: human login including Telegram 2FA completed through the exact-release client; one manual group was selected; initial manual group history sync returned HTTP 409 surfaced as `Telegram MTProto authorization is no longer valid`.
 - Telegram MTProto M4AD/M4ADH4R3 diagnostics: strict pinned SSH transport verified; production runtime/ref remains exact `8091736337689b68b4510126e74d9e409397f696`; Alembic `0046`; health/api/worker/db PASS; exactly one MTProto account; encrypted session non-empty; challenges 0; manual-selected groups 1; configured folders 0; active scope 0; recurring Telegram job pending/recent but cannot make scope/history provider calls in this state; manual group sync route/HTTP 409 confirmed; no worker auth/provider error evidence and no AuthKeyDuplicated/AuthKeyUnregistered/SessionRevoked/Unauthorized/AuthKeyNotFound evidence.

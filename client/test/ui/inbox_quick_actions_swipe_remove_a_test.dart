@@ -882,6 +882,8 @@ void main() {
 
           expect(visualOrder(ask, graph), lessThan(0));
           expect(visualOrder(graph, trashCenter), lessThan(0));
+          final cardRect = tester.getRect(card);
+          expect(cardRect.contains(trashCenter), isTrue);
           final inboxCalls = harness.inboxCalls;
           await tester.tap(find.byKey(const Key('inbox_card_delete_b')));
           await tester.pumpAndSettle();
@@ -929,6 +931,36 @@ void main() {
     },
   );
 
+  testWidgets('Linux cancelled trash keeps the card', (tester) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.linux,
+      size: const Size(800, 900),
+      body: () async {
+        final harness = InboxHarness(
+          sources: [
+            sourceRow(
+              id: 'n',
+              title: 'Note N',
+              kind: 'note',
+              provider: 'local',
+              feedAt: '2026-09-09T12:00:00Z',
+            ),
+          ],
+        );
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('inbox_card_delete_n')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Отмена'));
+        await tester.pumpAndSettle();
+        expect(harness.deleteCalls, 0);
+        expect(find.text('Note N'), findsOneWidget);
+        expect(find.byKey(const Key('inbox_card_delete_n')), findsOneWidget);
+      },
+    );
+  });
+
   testWidgets('Linux failed trash keeps the card', (tester) async {
     await withPlatform(
       tester,
@@ -951,6 +983,24 @@ void main() {
     );
   });
 
+  testWidgets('macOS list card shows trash and has no swipe', (tester) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.macOS,
+      size: const Size(900, 700),
+      body: () async {
+        final harness = InboxHarness();
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxSwipeToRemove), findsNothing);
+        final trash = find.byKey(const Key('inbox_card_delete_b'));
+        expect(trash, findsOneWidget);
+        final card = find.ancestor(of: trash, matching: find.byType(Card)).first;
+        expect(tester.getRect(card).contains(tester.getCenter(trash)), isTrue);
+      },
+    );
+  });
+
   testWidgets('Android inbox keeps swipe and hides the desktop trash button', (
     tester,
   ) async {
@@ -964,6 +1014,38 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(InboxSwipeToRemove), findsWidgets);
         expect(find.byKey(const Key('inbox_card_delete_a')), findsNothing);
+      },
+    );
+  });
+
+  testWidgets('iOS inbox keeps swipe and hides the desktop trash button', (
+    tester,
+  ) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.iOS,
+      size: const Size(360, 760),
+      body: () async {
+        final harness = InboxHarness();
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxSwipeToRemove), findsWidgets);
+        expect(find.byKey(const Key('inbox_card_delete_a')), findsNothing);
+      },
+    );
+  });
+
+  testWidgets('Windows list card shows trash and has no swipe', (tester) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.windows,
+      size: const Size(900, 700),
+      body: () async {
+        final harness = InboxHarness();
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxSwipeToRemove), findsNothing);
+        expect(find.byKey(const Key('inbox_card_delete_b')), findsOneWidget);
       },
     );
   });

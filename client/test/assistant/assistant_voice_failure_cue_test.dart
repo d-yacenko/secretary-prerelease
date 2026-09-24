@@ -250,4 +250,43 @@ void main() {
       assistant.dispose();
     },
   );
+
+  test('screen-mic output-limit stays visible and plays one failure cue', () async {
+    const outputLimitMessage =
+        'Секретарю не хватило лимита ответа, чтобы закончить формулировку. Попробуйте повторить или сузить запрос.';
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/transcribe') {
+        return http.Response(
+          jsonEncode({'text': 'найди письма'}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      if (request.url.path == '/assistant/message') {
+        return http.Response(
+          jsonEncode({
+            'detail': {
+              'code': 'assistant_output_limit',
+              'message': outputLimitMessage,
+            },
+          }),
+          422,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('{}', 404);
+    });
+    final api = SecretaryApiClient(httpClient: mock)
+      ..configure(baseUrl: baseUrl, token: token);
+    final cues = RecordingVoiceLocalFeedback();
+    final assistant = build(apiClient: api, cues: cues);
+    await assistant.handleVoiceTrigger(source: VoiceInvocationSource.screenMic);
+    await assistant.handleVoiceTrigger(source: VoiceInvocationSource.screenMic);
+    expect(assistant.voiceState, AssistantVoiceState.error);
+    expect(assistant.sendState, AssistantSendState.error);
+    expect(assistant.voiceErrorMessage, outputLimitMessage);
+    expect(cues.errorCount, 1);
+    expect(assistant.messages, isEmpty);
+    assistant.dispose();
+  });
 }

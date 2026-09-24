@@ -15,6 +15,21 @@ String formatUserDateTime(String? iso) {
   return '$day.$month.$year, $hour:$minute';
 }
 
+String? formatCompactChipDate(String? iso) {
+  if (iso == null || iso.trim().isEmpty) {
+    return null;
+  }
+  final parsed = DateTime.tryParse(iso);
+  if (parsed == null) {
+    return null;
+  }
+  final local = parsed.toLocal();
+  final day = local.day.toString().padLeft(2, '0');
+  final month = local.month.toString().padLeft(2, '0');
+  final year = (local.year % 100).toString().padLeft(2, '0');
+  return '$day.$month.$year';
+}
+
 String formatUserDateTimeFromDateTime(DateTime? value) {
   if (value == null) {
     return '';

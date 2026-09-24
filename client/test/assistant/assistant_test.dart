@@ -147,7 +147,8 @@ void main() {
     expect(assistantCalls, 1);
     expect(find.text('Hello back'), findsOneWidget);
     expect(find.byTooltip('Скопировать ответ'), findsOneWidget);
-    expect(find.text('Задача: Referenced task'), findsOneWidget);
+    expect(find.text('Referenced task'), findsOneWidget);
+    expect(find.byKey(const Key('assistant_reference_task-1')), findsOneWidget);
   });
 
   testWidgets('assistant sends context_object_id without copying body', (tester) async {

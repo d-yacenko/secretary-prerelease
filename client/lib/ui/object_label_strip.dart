@@ -123,38 +123,13 @@ class ObjectMetaActionRow extends StatelessWidget {
             labels: labels,
             alignment: wide ? WrapAlignment.end : WrapAlignment.start,
           );
-    if (!wide) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Wrap(
-          spacing: AppSpacing.xs,
-          runSpacing: 2,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [...actions, if (labelStrip != null) labelStrip],
-        ),
-      );
-    }
     return Padding(
       padding: const EdgeInsets.only(top: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          if (actions.isNotEmpty)
-            Flexible(
-              child: Wrap(
-                spacing: AppSpacing.xs,
-                runSpacing: 2,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: actions,
-              ),
-            ),
-          if (labelStrip != null) ...[
-            if (actions.isNotEmpty) const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Align(alignment: Alignment.centerRight, child: labelStrip),
-            ),
-          ],
-        ],
+      child: Wrap(
+        spacing: AppSpacing.xs,
+        runSpacing: 2,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [...actions, if (labelStrip != null) labelStrip],
       ),
     );
   }

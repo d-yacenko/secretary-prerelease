@@ -502,6 +502,8 @@ class TemporalSignalService:
             return outcome
 
     def _extract_and_persist(self, source: Object, payload_sig: str) -> TemporalSignalJobOutcome:
+        if self._active_same_revision_anchor(source.id, payload_sig) is not None:
+            return TemporalSignalJobOutcome(reason="already_evidenced")
         request = self._build_request(source)
         extractor = self._paid_extractor()
         extraction = extractor.extract(request)

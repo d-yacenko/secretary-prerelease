@@ -1051,11 +1051,12 @@ def test_communication_providers_use_common_temporal_job_path_and_dedup(
         has_other_participants=False,
     )
     extractor = FakeTemporalSignalExtractor(payload=_exact_payload())
+    judge = FakeTemporalMatchJudge()
     service = TemporalSignalService(
         db_session,
         BOOTSTRAP_USER_ID,
         extractor=extractor,
-        match_judge=FakeTemporalMatchJudge(),
+        match_judge=judge,
     )
     with patch.object(service, "_build_request", return_value=request):
         first = service.run_extract_job(
@@ -1065,6 +1066,7 @@ def test_communication_providers_use_common_temporal_job_path_and_dedup(
                 "extractor_version": TEMPORAL_SIGNAL_EXTRACTOR_VERSION,
             }
         )
+        judge_calls_after_first = judge.calls
         second = service.run_extract_job(
             {
                 "object_id": str(source.id),
@@ -1075,6 +1077,7 @@ def test_communication_providers_use_common_temporal_job_path_and_dedup(
     assert first.reason in {"hint_created", "hint_merged"}
     assert second.reason == "already_evidenced"
     assert extractor.calls == 1
+    assert judge.calls == judge_calls_after_first
     assert len(_unresolved_hints(db_session)) == 1
     assert len(_active_evidence(db_session)) == 1
 

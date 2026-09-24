@@ -110,6 +110,8 @@ class AssistantReferenceOut(BaseModel):
     title: str
     kind: str
     canonical_uri: str | None = None
+    provider: str | None = None
+    primary_at: datetime | None = None
 
 
 class AssistantAffectedObjectOut(BaseModel):
@@ -485,6 +487,8 @@ def assistant_message(
                 title=ref.title,
                 kind=ref.kind,
                 canonical_uri=ref.canonical_uri,
+                provider=ref.provider,
+                primary_at=ref.primary_at,
             )
             for ref in result.references
         ],
