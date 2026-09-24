@@ -101,3 +101,19 @@
 - Today single-day ephemeral-object presentation is a later product enhancement.
 - Label aggregation/polish is lower priority.
 - Proactive detection of emerging tasks/attention needs is a long-term future stage, not current work.
+
+
+## Graph Refined — interaction feedback and active identity learning
+
+- User interaction with Assistant/voice/hands-free flows is a valid source of identity-resolution evidence, but interaction semantics must be modeled explicitly rather than treating every route choice as an identity confirmation.
+- Keep separate confidence/evidence dimensions for at least:
+  1. **person identity** — whether two aliases/endpoints belong to the same real-world Person;
+  2. **endpoint ownership** — whether a concrete email/chat/provider endpoint belongs to that Person;
+  3. **route preference** — whether the user prefers or selected a particular communication route in a given context.
+- Choosing a candidate route during a send flow is positive evidence, but by default it is only weak/moderate evidence for identity/ownership and stronger evidence for route preference. It must not silently become a 100% identity merge.
+- Explicit confirmation such as “yes, this Telegram account is Olga Volodko” is strong user-confirmed identity evidence. Explicit correction such as “no, this is another Olga” is strong negative evidence and should prevent the same mistaken merge proposal from recurring.
+- Repeated consistent route choices may strengthen the corresponding evidence over time, while contradictory choices or corrections must reduce/override it.
+- Preserve the provenance of every confidence contribution (exact provider match, profile/directory fact, graph/context match, LLM suggestion, user route choice, explicit confirmation/rejection) so the derived score is explainable and reversible.
+- Prefer deriving a confidence/score from accumulated evidence records over mutating a single opaque probability in place.
+- In ambiguous send flows the Assistant may present multiple known/proposed routes with confidence language and ask the user to choose. The selected route still goes through the normal pending-action-plan approval/frozen-route safety boundary before any external write.
+- A route choice may optionally trigger a separate lightweight clarification/confirmation when the identity implication matters, but hands-free flows should avoid unnecessary questioning when the user only needs to send a message safely.
