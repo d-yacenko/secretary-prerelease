@@ -5,9 +5,9 @@
 - Production/runtime work relies on the pre-existing Executor/workstation SSH credential integration plus the pinned target contract. Do not create/copy/request new production private-key material as a workaround.
 - Production canonical Git repository: `d-yacenko/secretary-prerelease`.
 - Architect encrypted recovery context is stored in the same repository as `secretary_architect_context_encrypted.md`; plaintext is not committed.
-- Production application/runtime: `42db393be50a4c3f20ce86dadc280d77bada3959`.
-- Production branch/ref: `42db393be50a4c3f20ce86dadc280d77bada3959`.
-- Production Alembic: `0046 / 0046`.
+- Production application/runtime: `296b4735f9473ea60ef22f1827ed94260603128e`.
+- Production branch/ref: `296b4735f9473ea60ef22f1827ed94260603128e`.
+- Production Alembic: `0047 / 0047`.
 - Production health: PASS.
 - Unified per-user generative model selector: LIVE.
 - Google Sync Resilience A: COMPLETE / DEPLOYED / RUNTIME VERIFIED.
@@ -18,7 +18,7 @@
 - Telegram A4.1–A4.4: ACCEPTED / MAIN / NOT PRODUCTION DEPLOYED.
 - Telegram Integration Gate I1: ACCEPTED.
 - Production Line Reconciliation R1: ACCEPTED.
-- Accepted migration chain is exactly `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`; no `0047` is authorized.
+- Historical Telegram migration chain remains `0041 -> 0042 -> 0043 -> 0044 -> 0045 -> 0046`. Assistant revision `0047` is applied in production.
 - Production Migration Rollout M1 harness: ACCEPTED at exact SHA `917eebed4b0ffb6bf55f573a24d99d00dc1f8fbb`.
 - Telegram platform credentials are provisioned in production `/opt/secretary/.env`; values/hashes are not committed or logged.
 - M2 production readiness retry: READY.
@@ -676,3 +676,4 @@
 
 - Architect final acceptance of persistent/resumable Assistant conversations: ACCEPTED / DEPLOY-READY / NOT DEPLOYED. Accepted implementation chain: MVP `6acea4d49a175b43b0bb4a187d17e748dfa08a8b`, pagination/bootstrap corrective pass `890ee7ae449d0b009a029d8c6479072552fa3ee7`, auth-session isolation `5711f47f63b0a3c7222a618833554327756a5b8e`, stale voice-transcription isolation `b1331596144354aaea3a8c31e69869b50410aab4`; Executor HOLD SHA `36285295dbbc7946e694854e3d95a3da177be30b`. Review confirms server-owned persistent per-user conversations/messages, bounded 12-message model context, paginated UI transcript, stable turn idempotency, New dialog/history switching, pending-plan safety, typed/voice parity, retryable transient bootstrap, old-server compatibility, strict client auth-session reset, and stale bootstrap/send/action-plan/voice-transcription completions not crossing into a later auth session. Focused backend conversation coverage previously passed 10 tests; latest Flutter voice/session/conversation coverage reports 32 + 53 passing tests; touched-file Flutter analyze is clean; `git diff --check` is clean. Migration `0047` remains unapplied in production. Production remains exact `42db393be50a4c3f20ce86dadc280d77bada3959`, Alembic `0046 / 0046`. No live provider call occurred. Telegram MTProto AI activation/quarantine is unchanged. Production rollout of migration `0047` and the feature requires separate explicit human authorization; until then CURRENT_TASK remains HOLD and issue #8 remains open as the rollout/acceptance tracker.
 - Assistant `0046 -> 0047` migration harness implemented at `748949f5816c3eb6f1ec031d42b887a73c205a65`. Dedicated entrypoints `ops/production/migrate_assistant_0047.py` and `ops/production/remote_migrate_assistant_0047.py` accept only release `296b4735f9473ea60ef22f1827ed94260603128e`, rollback `42db393be50a4c3f20ce86dadc280d77bada3959`, and Alembic `0046 -> 0047`. The migration delta must be exactly added `backend/alembic/versions/0047_assistant_conversations.py` with unchanged Alembic infrastructure. The historical `0041 -> 0046` harness is unchanged. Post-cutover downgrade is allowed only when `assistant_messages` and `assistant_conversations` are both proven empty; otherwise the harness stops api/worker, does not downgrade, and emits `BREAK_GLASS_REQUIRED=true`. `tests/test_assistant_0047_migration_harness.py`: 23 passed. Ruff and compile of touched Python passed. `git diff --check` clean. No production connection, no `origin/production` move, no production migration, and no deploy. Production remains `42db393be50a4c3f20ce86dadc280d77bada3959`, Alembic `0046 / 0046`. Telegram MTProto AI gate unchanged.
+- Assistant conversations production rollout: PASS. `origin/production` fast-forwarded from `42db393be50a4c3f20ce86dadc280d77bada3959` to exact release `296b4735f9473ea60ef22f1827ed94260603128e`. Dedicated harness `ops/production/migrate_assistant_0047.py` exited 0 with `ASSISTANT_MIGRATION_DEPLOYMENT=PASS`, `ALEMBIC=0047`, `DB_CONTAINER_UNCHANGED=true`, `DB_VOLUME_UNCHANGED=true`, `ENV_FILE_UNCHANGED=true`, `API_RECREATED=true`, `WORKER_RECREATED=true`. Rollback was unused. No `BREAK_GLASS_REQUIRED`. No live provider/LLM call. Telegram MTProto AI activation/quarantine was not changed. Production runtime/ref is `296b4735f9473ea60ef22f1827ed94260603128e`, Alembic `0047 / 0047`.
