@@ -76,9 +76,10 @@ class PersonEnrichmentService:
     ) -> list[PersonEnrichmentCandidate]:
         identities = extract_person_identity_evidence(message)
         if identities:
-            return [
-                self._exact_candidate(message, identity, salience) for identity in identities
-            ]
+            found: list[PersonEnrichmentCandidate] = []
+            for identity in identities:
+                found.extend(self._exact_candidates(message, identity, salience))
+            return found
         display = _display_name(message)
         if not display:
             return []
@@ -103,47 +104,56 @@ class PersonEnrichmentService:
             for match in matches[:MAX_SOURCE_REFS]
         ]
 
-    def _exact_candidate(
+    def _exact_candidates(
         self,
         message: Object,
         identity: NormalizedPersonIdentity,
         salience: dict,
-    ) -> PersonEnrichmentCandidate:
+    ) -> list[PersonEnrichmentCandidate]:
         owner = self._people.resolve(identity)
-        confirmed = self._confirmed_person(identity)
+        confirmed_ids = self._confirmed_people(identity)
+        if len(confirmed_ids) > 1:
+            return self._confirmation_conflicts(message, identity, owner, confirmed_ids, salience)
+        confirmed = confirmed_ids[0] if confirmed_ids else None
         if owner is not None and (confirmed is None or confirmed == owner.id):
             self._record_exact(owner.id, identity, message.id)
-            return self._known(
-                owner.id,
-                identity,
-                message,
-                RECORD_PROVIDER_EVIDENCE,
-                ("exact_identity",),
-                salience,
-            )
+            return [
+                self._known(
+                    owner.id,
+                    identity,
+                    message,
+                    RECORD_PROVIDER_EVIDENCE,
+                    ("exact_identity",),
+                    salience,
+                )
+            ]
         if confirmed is not None and owner is None:
             self._people.attach(confirmed, identity)
             self._record_exact(confirmed, identity, message.id)
-            return self._known(
-                confirmed,
-                identity,
-                message,
-                ATTACH_EXACT,
-                ("explicit_confirmation",),
-                salience,
-            )
+            return [
+                self._known(
+                    confirmed,
+                    identity,
+                    message,
+                    ATTACH_EXACT,
+                    ("explicit_confirmation",),
+                    salience,
+                )
+            ]
         if owner is not None and confirmed is not None and confirmed != owner.id:
-            return self._known(
-                confirmed,
-                identity,
-                message,
-                NEEDS_CONFIRMATION,
-                ("identity_conflict",),
-                salience,
-            )
+            return [
+                self._known(
+                    confirmed,
+                    identity,
+                    message,
+                    NEEDS_CONFIRMATION,
+                    ("identity_conflict",),
+                    salience,
+                )
+            ]
         names = self._evidence.propose_candidates(identity, identity.display_value)
         if names:
-            return PersonEnrichmentCandidate(
+            return [PersonEnrichmentCandidate(
                 person_id=names[0].person_id,
                 identity=identity,
                 provider=identity.provider,
@@ -154,10 +164,39 @@ class PersonEnrichmentService:
                 next_step=NEEDS_CONFIRMATION,
                 source_object_ids=(message.id,),
                 truncated=False,
-            )
+            )]
         step = NEEDS_PROVIDER_LOOKUP if _is_direct(message) else IGNORE_FOR_NOW
         reason = "direct_unresolved" if step == NEEDS_PROVIDER_LOOKUP else "public_or_unknown"
-        return self._unresolved(message, identity, step, (reason,), salience)
+        return [self._unresolved(message, identity, step, (reason,), salience)]
+
+    def _confirmation_conflicts(
+        self,
+        message: Object,
+        identity: NormalizedPersonIdentity,
+        owner: Object | None,
+        confirmed_ids: tuple[UUID, ...],
+        salience: dict,
+    ) -> list[PersonEnrichmentCandidate]:
+        reasons = ["multiple_user_confirmations"]
+        if owner is not None:
+            reasons.append("identity_conflict")
+        visible = confirmed_ids[:MAX_SOURCE_REFS]
+        hidden = len(confirmed_ids) > MAX_SOURCE_REFS
+        return [
+            PersonEnrichmentCandidate(
+                person_id=person_id,
+                identity=identity,
+                provider=identity.provider,
+                reasons=tuple(reasons),
+                assessment_resolution=self._evidence.score(person_id, identity).resolution,
+                salience_tier=_tier(salience, person_id),
+                salience_score=_score(salience, person_id),
+                next_step=NEEDS_CONFIRMATION,
+                source_object_ids=(message.id,),
+                truncated=hidden,
+            )
+            for person_id in visible
+        ]
 
     def _coverage_candidate(
         self,
@@ -206,7 +245,7 @@ class PersonEnrichmentService:
         missing = tuple(category for category in PROVIDER_CATEGORIES if category not in known)
         return PersonCoverage(person_id, tuple(sorted(known)), missing)
 
-    def _confirmed_person(self, identity: NormalizedPersonIdentity) -> UUID | None:
+    def _confirmed_people(self, identity: NormalizedPersonIdentity) -> tuple[UUID, ...]:
         rows = self._session.scalars(
             select(PersonIdentityEvidence.person_object_id)
             .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
@@ -225,10 +264,7 @@ class PersonEnrichmentService:
             )
             .distinct()
         )
-        found = list(rows)
-        if len(found) != 1:
-            return None
-        return found[0]
+        return tuple(sorted(set(rows), key=str))
 
     def _person_has_confirmation(self, person_id: UUID) -> bool:
         row = self._session.scalar(
