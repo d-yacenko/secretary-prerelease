@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -25,6 +26,20 @@ import 'voice_output_policy_controller.dart';
 import 'voice_turn_timing.dart';
 
 const int maxAssistantHistoryMessages = 12;
+const unresolvedPendingPlanDetail = 'unresolved_pending_action_plan';
+const conversationSwitchWaitMessage = 'Дождитесь завершения подтверждения.';
+const unresolvedPendingPlanMessage =
+    'Сначала подтвердите или отклоните ожидающее действие.';
+
+String newAssistantTurnId() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}
 
 const voiceUnsupportedPlanSpeech = 'Это действие нужно подтвердить на экране.';
 const voiceRejectedSpeech = 'Не отправляю.';
@@ -99,7 +114,9 @@ class AssistantController extends ChangeNotifier {
     VoiceLocalFeedback? voiceFeedback,
     VoiceOutputPolicyController? voiceOutputPolicy,
     this.lockScreenSession = false,
+    String Function()? newTurnId,
   }) : _apiClient = apiClient,
+       _newTurnId = newTurnId ?? newAssistantTurnId,
        _authController = authController,
        _voiceTempFiles =
            voiceTempFiles ??
@@ -149,6 +166,7 @@ class AssistantController extends ChangeNotifier {
 
   final SecretaryApiClient _apiClient;
   final AuthController _authController;
+  final String Function() _newTurnId;
   late final VoiceTranscriptionController _voice;
   final VoiceTempFiles _voiceTempFiles;
   late final SpeechPlaybackController _speech;
@@ -253,6 +271,14 @@ class AssistantController extends ChangeNotifier {
   String? errorMessage;
   String? actionPlanErrorMessage;
   String? _pendingRetryMessage;
+  String? _retryTurnId;
+  String? _retryTurnText;
+  bool _conversationRestoreStarted = false;
+  bool persistentMode = false;
+  String? conversationId;
+  List<AssistantConversation> conversations = const [];
+  bool historyCollapsed = false;
+  String? switchBlockedMessage;
   bool _approveInFlight = false;
   bool _voiceInputActive = false;
   bool _autoSpeechAllowed = false;
@@ -304,6 +330,17 @@ class AssistantController extends ChangeNotifier {
       (_assistantTurnVoiceError ? errorMessage : null);
 
   List<AssistantChatMessage> get messages => List.unmodifiable(_messages);
+
+  bool get canSwitchConversation =>
+      actionPlanOperationState == AssistantActionPlanOperationState.idle &&
+      sendState != AssistantSendState.sending;
+
+  String? get conversationSwitchNotice {
+    if (!canSwitchConversation) {
+      return conversationSwitchWaitMessage;
+    }
+    return switchBlockedMessage;
+  }
   AssistantContextRef? get objectContext => _objectContext;
   AssistantContextRef? get notificationContext => _notificationContext;
   String? get pendingRetryMessage => _pendingRetryMessage;
@@ -382,6 +419,76 @@ class AssistantController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> restorePersistentConversation() async {
+    if (_conversationRestoreStarted) {
+      return;
+    }
+    _conversationRestoreStarted = true;
+    try {
+      final current = await _apiClient.getCurrentAssistantConversation();
+      final conversation =
+          current ?? await _apiClient.createAssistantConversation();
+      if (conversation == null) {
+        persistentMode = false;
+        notifyListeners();
+        return;
+      }
+      persistentMode = true;
+      conversationId = conversation.id;
+      await _refreshConversationList();
+      await _replaceMessagesFromServer(conversation.id);
+    } on ApiException {
+      persistentMode = false;
+    }
+    notifyListeners();
+  }
+
+  Future<void> startNewConversation() async {
+    if (!canSwitchConversation) {
+      notifyListeners();
+      return;
+    }
+    try {
+      final created = await _apiClient.createAssistantConversation();
+      if (created == null) {
+        return;
+      }
+      _clearTransientTurnState();
+      persistentMode = true;
+      conversationId = created.id;
+      _messages.clear();
+      switchBlockedMessage = null;
+      await _refreshConversationList();
+    } on ApiException catch (error) {
+      switchBlockedMessage = _switchFailureMessage(error);
+    }
+    notifyListeners();
+  }
+
+  Future<void> selectConversation(String id) async {
+    if (!canSwitchConversation) {
+      notifyListeners();
+      return;
+    }
+    try {
+      final selected = await _apiClient.selectAssistantConversation(id);
+      _clearTransientTurnState();
+      persistentMode = true;
+      conversationId = selected.id;
+      switchBlockedMessage = null;
+      await _replaceMessagesFromServer(selected.id);
+      await _refreshConversationList();
+    } on ApiException catch (error) {
+      switchBlockedMessage = _switchFailureMessage(error);
+    }
+    notifyListeners();
+  }
+
+  void toggleHistoryPanel() {
+    historyCollapsed = !historyCollapsed;
+    notifyListeners();
+  }
+
   Future<void> sendMessage(
     String text, {
     VoiceInvocationSource source = VoiceInvocationSource.typed,
@@ -401,7 +508,11 @@ class AssistantController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
 
-    final history = _boundedHistory();
+    await restorePersistentConversation();
+    final turnId = persistentMode ? _turnIdFor(trimmed) : null;
+    final history = persistentMode
+        ? const <AssistantHistoryMessage>[]
+        : _boundedHistory();
     try {
       final started = Stopwatch()..start();
       final response = await _apiClient.sendAssistantMessage(
@@ -410,6 +521,8 @@ class AssistantController extends ChangeNotifier {
           history: history,
           contextObjectId: _objectContext?.id,
           contextNotificationId: _notificationContext?.id,
+          conversationId: persistentMode ? conversationId : null,
+          clientTurnId: turnId,
         ),
       );
       VoiceTurnTiming.interval('assistant_rtt_ms', started.elapsedMilliseconds);
@@ -427,8 +540,17 @@ class AssistantController extends ChangeNotifier {
       );
       _bindVoiceApprovalForPlan(response.pendingActionPlan);
       _pendingRetryMessage = null;
+      _retryTurnId = null;
+      _retryTurnText = null;
       _assistantTurnVoiceError = false;
       sendState = AssistantSendState.idle;
+      if (persistentMode) {
+        try {
+          await _refreshConversationList();
+        } on ApiException {
+          // The turn is already stored. History refresh can retry later.
+        }
+      }
       notifyListeners();
       _pendingInboxReviewReceipt =
           _autoSpeechAllowed &&
@@ -1077,6 +1199,89 @@ class AssistantController extends ChangeNotifier {
     notifyListeners();
   }
 
+  String _turnIdFor(String text) {
+    if (_retryTurnText == text && _retryTurnId != null) {
+      return _retryTurnId!;
+    }
+    final id = _newTurnId();
+    _retryTurnId = id;
+    _retryTurnText = text;
+    return id;
+  }
+
+  String _switchFailureMessage(ApiException error) {
+    if (error.message == unresolvedPendingPlanDetail) {
+      return unresolvedPendingPlanMessage;
+    }
+    return error.message;
+  }
+
+  Future<void> _refreshConversationList() async {
+    conversations = await _apiClient.listAssistantConversations();
+  }
+
+  Future<void> _replaceMessagesFromServer(String id) async {
+    final page = await _apiClient.listAssistantMessages(id);
+    _messages
+      ..clear()
+      ..addAll(page.messages.map(_chatFromStored));
+  }
+
+  AssistantChatMessage _chatFromStored(AssistantStoredMessage message) {
+    final plan = message.pendingActionPlan;
+    return AssistantChatMessage(
+      role: message.role,
+      content: message.content,
+      references: message.references,
+      affectedObjects: message.affectedObjects,
+      actionPlan: plan == null
+          ? null
+          : MessageActionPlan(plan: plan, cardState: _cardStateFor(plan)),
+    );
+  }
+
+  ActionPlanCardState _cardStateFor(PendingActionPlan plan) {
+    final expires = DateTime.tryParse(plan.expiresAt);
+    if (plan.status == 'pending' &&
+        expires != null &&
+        expires.isBefore(DateTime.now().toUtc())) {
+      return ActionPlanCardState.expired;
+    }
+    switch (plan.status) {
+      case 'executed':
+        return ActionPlanCardState.completed;
+      case 'rejected':
+        return ActionPlanCardState.rejected;
+      case 'failed':
+        return ActionPlanCardState.failed;
+      case 'expired':
+        return ActionPlanCardState.expired;
+      default:
+        return ActionPlanCardState.pending;
+    }
+  }
+
+  void _clearTransientTurnState() {
+    _cancelDrivingSilenceMonitor();
+    _voice.reset();
+    _speech.stop();
+    _objectContext = null;
+    _notificationContext = null;
+    sendState = AssistantSendState.idle;
+    errorMessage = null;
+    actionPlanErrorMessage = null;
+    _pendingRetryMessage = null;
+    _retryTurnId = null;
+    _retryTurnText = null;
+    _voiceInputActive = false;
+    _autoSpeechAllowed = false;
+    _voiceApprovalArmed = false;
+    _planNarrationInProgress = false;
+    _boundVoiceApprovalPlanId = null;
+    _boundVoiceApprovalSessionId = null;
+    _boundVoiceApprovalSource = null;
+  }
+
   List<AssistantHistoryMessage> _boundedHistory() {
     final pairs = <AssistantHistoryMessage>[];
     for (final message in _messages) {
@@ -1114,6 +1319,8 @@ class AssistantController extends ChangeNotifier {
     errorMessage = null;
     actionPlanErrorMessage = null;
     _pendingRetryMessage = null;
+    _retryTurnId = null;
+    _retryTurnText = null;
     _approveInFlight = false;
     _voiceInputActive = false;
     _autoSpeechAllowed = false;

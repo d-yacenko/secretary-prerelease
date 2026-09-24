@@ -62,6 +62,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     if (widget.controller.messages.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToEnd());
     }
+    widget.controller.restorePersistentConversation();
   }
 
   @override
@@ -203,6 +204,39 @@ class _AssistantScreenState extends State<AssistantScreen> {
     final inputDisabled = controller.isInputBlocked;
     final body = Column(
       children: [
+        Row(
+          children: [
+            IconButton(
+              key: const Key('assistant_history_button'),
+              tooltip: 'Диалоги',
+              onPressed: () {
+                final wide = MediaQuery.sizeOf(context).width >= 600;
+                if (wide) {
+                  controller.toggleHistoryPanel();
+                } else {
+                  Scaffold.of(context).openEndDrawer();
+                }
+              },
+              icon: const Icon(Icons.forum_outlined),
+            ),
+            TextButton(
+              key: const Key('assistant_new_conversation'),
+              onPressed: controller.canSwitchConversation
+                  ? () => controller.startNewConversation()
+                  : null,
+              child: const Text('Новый диалог'),
+            ),
+            if (controller.conversationSwitchNotice != null)
+              Expanded(
+                child: Text(
+                  controller.conversationSwitchNotice!,
+                  key: const Key('assistant_conversation_switch_notice'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+        ),
         if (controller.objectContext != null)
           _ContextBanner(
             label: _objectContextLabel(controller.objectContext!),
@@ -554,7 +588,24 @@ class _AssistantScreenState extends State<AssistantScreen> {
         ),
       ],
     );
-    return Scaffold(body: _wrapDropTarget(body));
+    final wide = MediaQuery.sizeOf(context).width >= 600;
+    final history = _ConversationHistory(controller: controller);
+    return Scaffold(
+      endDrawer: wide ? null : Drawer(child: history),
+      body: wide
+          ? Row(
+              children: [
+                if (!controller.historyCollapsed)
+                  SizedBox(
+                    key: const Key('assistant_history_panel'),
+                    width: 240,
+                    child: history,
+                  ),
+                Expanded(child: _wrapDropTarget(body)),
+              ],
+            )
+          : _wrapDropTarget(body),
+    );
   }
 
   Widget _wrapDropTarget(Widget child) {
@@ -571,6 +622,42 @@ class _AssistantScreenState extends State<AssistantScreen> {
         _intakeActions.registerDroppedFiles(context, paths);
       },
       child: child,
+    );
+  }
+}
+
+class _ConversationHistory extends StatelessWidget {
+  const _ConversationHistory({required this.controller});
+
+  final AssistantController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final conversations = controller.conversations;
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: ListView(
+        children: [
+          for (final conversation in conversations)
+            ListTile(
+              key: Key('assistant_history_item_${conversation.id}'),
+              selected: conversation.id == controller.conversationId,
+              title: Text(
+                conversation.displayTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                conversation.lastMessageAt ?? conversation.createdAt,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: controller.canSwitchConversation
+                  ? () => controller.selectConversation(conversation.id)
+                  : null,
+            ),
+        ],
+      ),
     );
   }
 }

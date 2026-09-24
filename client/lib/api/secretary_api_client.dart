@@ -965,6 +965,74 @@ class SecretaryApiClient {
     return SearchFacetsOut.fromJson(decoded);
   }
 
+  Future<AssistantConversation?> getCurrentAssistantConversation() async {
+    try {
+      final decoded = await _requestJson('GET', '/assistant/conversations/current');
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      return AssistantConversation.fromJson(decoded);
+    } on NotFoundException {
+      return null;
+    }
+  }
+
+  Future<AssistantConversation?> createAssistantConversation() async {
+    try {
+      final decoded = await _requestJson(
+        'POST',
+        '/assistant/conversations',
+        successStatuses: const {200, 201},
+      );
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      return AssistantConversation.fromJson(decoded);
+    } on NotFoundException {
+      return null;
+    }
+  }
+
+  Future<List<AssistantConversation>> listAssistantConversations() async {
+    final decoded = await _requestJson('GET', '/assistant/conversations');
+    if (decoded is! Map<String, dynamic>) {
+      throw ServerException('Unexpected conversation list response format');
+    }
+    final rows = decoded['conversations'] as List<dynamic>? ?? [];
+    return rows
+        .map((e) => AssistantConversation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<AssistantConversation> selectAssistantConversation(String id) async {
+    final decoded = await _requestJson(
+      'POST',
+      '/assistant/conversations/$id/select',
+    );
+    if (decoded is! Map<String, dynamic>) {
+      throw ServerException('Unexpected conversation select response format');
+    }
+    return AssistantConversation.fromJson(decoded);
+  }
+
+  Future<({List<AssistantStoredMessage> messages, bool hasMore})>
+  listAssistantMessages(String conversationId) async {
+    final decoded = await _requestJson(
+      'GET',
+      '/assistant/conversations/$conversationId/messages',
+    );
+    if (decoded is! Map<String, dynamic>) {
+      throw ServerException('Unexpected conversation messages response format');
+    }
+    final rows = decoded['messages'] as List<dynamic>? ?? [];
+    return (
+      messages: rows
+          .map((e) => AssistantStoredMessage.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      hasMore: decoded['has_more'] as bool? ?? false,
+    );
+  }
+
   Future<AssistantMessageResponse> sendAssistantMessage(
     AssistantMessageRequest request,
   ) async {

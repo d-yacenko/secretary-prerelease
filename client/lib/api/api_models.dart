@@ -1652,6 +1652,8 @@ class AssistantMessageRequest {
     this.contextNotificationId,
     this.clientTimezoneId,
     this.clientUtcOffsetMinutes,
+    this.conversationId,
+    this.clientTurnId,
   });
 
   final String message;
@@ -1660,6 +1662,8 @@ class AssistantMessageRequest {
   final String? contextNotificationId;
   final String? clientTimezoneId;
   final int? clientUtcOffsetMinutes;
+  final String? conversationId;
+  final String? clientTurnId;
 
   Map<String, dynamic> toJson() {
     return {
@@ -1671,7 +1675,96 @@ class AssistantMessageRequest {
       if (clientTimezoneId != null) 'client_timezone_id': clientTimezoneId,
       if (clientUtcOffsetMinutes != null)
         'client_utc_offset_minutes': clientUtcOffsetMinutes,
+      if (conversationId != null) 'conversation_id': conversationId,
+      if (clientTurnId != null) 'client_turn_id': clientTurnId,
     };
+  }
+}
+
+class AssistantConversation {
+  AssistantConversation({
+    required this.id,
+    required this.isCurrent,
+    required this.createdAt,
+    required this.updatedAt,
+    this.title,
+    this.lastMessageAt,
+  });
+
+  final String id;
+  final String? title;
+  final bool isCurrent;
+  final String createdAt;
+  final String updatedAt;
+  final String? lastMessageAt;
+
+  String get displayTitle {
+    final trimmed = title?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return 'Новый диалог';
+    }
+    return trimmed;
+  }
+
+  factory AssistantConversation.fromJson(Map<String, dynamic> json) {
+    return AssistantConversation(
+      id: json['id'] as String,
+      title: json['title'] as String?,
+      isCurrent: json['is_current'] as bool? ?? false,
+      createdAt: json['created_at'] as String,
+      updatedAt: json['updated_at'] as String,
+      lastMessageAt: json['last_message_at'] as String?,
+    );
+  }
+}
+
+class AssistantStoredMessage {
+  AssistantStoredMessage({
+    required this.id,
+    required this.role,
+    required this.content,
+    required this.createdAt,
+    this.clientTurnId,
+    this.references = const [],
+    this.affectedObjects = const [],
+    this.pendingActionPlan,
+    this.inboxReviewReceipt,
+  });
+
+  final String id;
+  final String role;
+  final String content;
+  final String createdAt;
+  final String? clientTurnId;
+  final List<AssistantReference> references;
+  final List<AssistantAffectedObject> affectedObjects;
+  final PendingActionPlan? pendingActionPlan;
+  final InboxReviewReceipt? inboxReviewReceipt;
+
+  factory AssistantStoredMessage.fromJson(Map<String, dynamic> json) {
+    final pendingRaw = json['pending_action_plan'];
+    final receiptRaw = json['inbox_review_receipt'];
+    return AssistantStoredMessage(
+      id: json['id'] as String,
+      role: json['role'] as String,
+      content: json['content'] as String,
+      createdAt: json['created_at'] as String,
+      clientTurnId: json['client_turn_id'] as String?,
+      references: (json['references'] as List<dynamic>? ?? [])
+          .map((e) => AssistantReference.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      affectedObjects: (json['affected_objects'] as List<dynamic>? ?? [])
+          .map(
+            (e) => AssistantAffectedObject.fromJson(e as Map<String, dynamic>),
+          )
+          .toList(),
+      pendingActionPlan: pendingRaw is Map<String, dynamic>
+          ? PendingActionPlan.fromJson(pendingRaw)
+          : null,
+      inboxReviewReceipt: receiptRaw is Map<String, dynamic>
+          ? InboxReviewReceipt.fromJson(receiptRaw)
+          : null,
+    );
   }
 }
 
@@ -1766,6 +1859,9 @@ class AssistantMessageResponse {
     required this.affectedObjects,
     this.pendingActionPlan,
     this.inboxReviewReceipt,
+    this.conversationId,
+    this.userMessageId,
+    this.assistantMessageId,
   });
 
   final String answer;
@@ -1773,6 +1869,9 @@ class AssistantMessageResponse {
   final List<AssistantAffectedObject> affectedObjects;
   final PendingActionPlan? pendingActionPlan;
   final InboxReviewReceipt? inboxReviewReceipt;
+  final String? conversationId;
+  final String? userMessageId;
+  final String? assistantMessageId;
 
   factory AssistantMessageResponse.fromJson(Map<String, dynamic> json) {
     final pendingRaw = json['pending_action_plan'];
@@ -1793,6 +1892,9 @@ class AssistantMessageResponse {
       inboxReviewReceipt: receiptRaw is Map<String, dynamic>
           ? InboxReviewReceipt.fromJson(receiptRaw)
           : null,
+      conversationId: json['conversation_id'] as String?,
+      userMessageId: json['user_message_id'] as String?,
+      assistantMessageId: json['assistant_message_id'] as String?,
     );
   }
 }

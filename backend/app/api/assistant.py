@@ -52,6 +52,10 @@ from app.services.action_plan_service import (
     ActionPlanService,
     PendingActionPlanView,
 )
+from app.services.assistant_conversation_service import (
+    AssistantConversationService,
+    IncompletePersistentTurnError,
+)
 from app.services.assistant_service import (
     AssistantConfigurationError,
     AssistantProvider,
@@ -63,7 +67,7 @@ from app.services.effective_user_settings_service import (
     EffectiveUserSettings,
     EffectiveUserSettingsService,
 )
-from app.services.errors import NotFoundError, ValidationError
+from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.openai_daily_budget import (
     OpenAIDailyBudgetExhaustedError,
     OpenAIDailyBudgetGuard,
@@ -103,6 +107,8 @@ class AssistantMessageRequest(BaseModel):
     context_notification_id: UUID | None = None
     client_timezone_id: str | None = None
     client_utc_offset_minutes: int | None = None
+    conversation_id: UUID | None = None
+    client_turn_id: UUID | None = None
 
 
 class AssistantReferenceOut(BaseModel):
@@ -148,6 +154,9 @@ class AssistantMessageResponse(BaseModel):
     affected_objects: list[AssistantAffectedObjectOut]
     pending_action_plan: PendingActionPlanOut | None = None
     inbox_review_receipt: InboxReviewReceiptOut | None = None
+    conversation_id: UUID | None = None
+    user_message_id: UUID | None = None
+    assistant_message_id: UUID | None = None
 
 
 class ActionPlanResponse(BaseModel):
@@ -415,15 +424,219 @@ async def assistant_speech(
     return Response(content=result.audio_bytes, media_type=result.content_type)
 
 
-@router.post("/assistant/message", response_model=AssistantMessageResponse)
+class AssistantConversationOut(BaseModel):
+    id: UUID
+    title: str | None = None
+    is_current: bool
+    created_at: datetime
+    updated_at: datetime
+    last_message_at: datetime | None = None
+
+
+class AssistantConversationListOut(BaseModel):
+    conversations: list[AssistantConversationOut]
+
+
+class AssistantStoredMessageOut(BaseModel):
+    id: UUID
+    role: str
+    content: str
+    created_at: datetime
+    client_turn_id: UUID | None = None
+    references: list[AssistantReferenceOut]
+    affected_objects: list[AssistantAffectedObjectOut]
+    pending_action_plan: PendingActionPlanOut | None = None
+    inbox_review_receipt: InboxReviewReceiptOut | None = None
+
+
+class AssistantStoredMessageListOut(BaseModel):
+    messages: list[AssistantStoredMessageOut]
+    has_more: bool
+
+
+def _conversation_service(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> AssistantConversationService:
+    return AssistantConversationService(session, current_user.user_id)
+
+
+def _conversation_out(view) -> AssistantConversationOut:
+    return AssistantConversationOut(
+        id=view.id,
+        title=view.title,
+        is_current=view.is_current,
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+        last_message_at=view.last_message_at,
+    )
+
+
+@router.get("/assistant/conversations", response_model=AssistantConversationListOut)
+def list_assistant_conversations(
+    service: AssistantConversationService = Depends(_conversation_service),
+) -> AssistantConversationListOut:
+    return AssistantConversationListOut(
+        conversations=[_conversation_out(item) for item in service.list_conversations()]
+    )
+
+
+@router.get("/assistant/conversations/current", response_model=AssistantConversationOut)
+def get_current_assistant_conversation(
+    service: AssistantConversationService = Depends(_conversation_service),
+) -> AssistantConversationOut:
+    try:
+        return _conversation_out(service.get_current())
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+
+
+@router.post(
+    "/assistant/conversations",
+    response_model=AssistantConversationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_assistant_conversation(
+    service: AssistantConversationService = Depends(_conversation_service),
+) -> AssistantConversationOut:
+    try:
+        return _conversation_out(service.create_current())
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.message,
+        ) from exc
+
+
+@router.post(
+    "/assistant/conversations/{conversation_id}/select",
+    response_model=AssistantConversationOut,
+)
+def select_assistant_conversation(
+    conversation_id: UUID,
+    service: AssistantConversationService = Depends(_conversation_service),
+) -> AssistantConversationOut:
+    try:
+        return _conversation_out(service.select(conversation_id))
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.message,
+        ) from exc
+
+
+@router.get(
+    "/assistant/conversations/{conversation_id}/messages",
+    response_model=AssistantStoredMessageListOut,
+)
+def list_assistant_conversation_messages(
+    conversation_id: UUID,
+    limit: int = 50,
+    before_id: UUID | None = None,
+    service: AssistantConversationService = Depends(_conversation_service),
+) -> AssistantStoredMessageListOut:
+    try:
+        rows, has_more = service.list_messages(
+            conversation_id,
+            limit=limit,
+            before_id=before_id,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+    messages = []
+    for row in rows:
+        rendered = service.message_result(row)
+        messages.append(
+            AssistantStoredMessageOut(
+                id=row.id,
+                role=row.role,
+                content=row.content,
+                created_at=row.created_at,
+                client_turn_id=row.client_turn_id,
+                references=[
+                    AssistantReferenceOut(
+                        object_id=ref.object_id,
+                        title=ref.title,
+                        kind=ref.kind,
+                        canonical_uri=ref.canonical_uri,
+                        provider=ref.provider,
+                        primary_at=ref.primary_at,
+                    )
+                    for ref in rendered.references
+                ],
+                affected_objects=[
+                    AssistantAffectedObjectOut(
+                        object_id=item.object_id,
+                        title=item.title,
+                        kind=item.kind,
+                        state=item.state,
+                        status=item.status,
+                    )
+                    for item in rendered.affected_objects
+                ],
+                pending_action_plan=_pending_plan_out(rendered.pending_action_plan),
+                inbox_review_receipt=_receipt_out(rendered.inbox_review_receipt),
+            )
+        )
+    return AssistantStoredMessageListOut(messages=messages, has_more=has_more)
+
+
+@router.post(
+    "/assistant/message",
+    response_model=AssistantMessageResponse,
+    response_model_exclude_none=True,
+)
 def assistant_message(
     data: AssistantMessageRequest,
     service: AssistantService = Depends(get_assistant_service),
+    conversations: AssistantConversationService = Depends(_conversation_service),
 ) -> AssistantMessageResponse:
-    history = [
-        AssistantHistoryMessage(role=item.role, content=item.content)
-        for item in data.history
-    ]
+    persistent = data.conversation_id is not None or data.client_turn_id is not None
+    if persistent and (data.conversation_id is None or data.client_turn_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="conversation_id and client_turn_id are required together",
+        )
+    stored_ids: tuple[UUID, UUID, UUID] | None = None
+    if persistent:
+        assert data.conversation_id is not None
+        assert data.client_turn_id is not None
+        try:
+            stored = conversations.stored_turn(data.conversation_id, data.client_turn_id)
+        except IncompletePersistentTurnError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=exc.message,
+            ) from exc
+        except NotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"{exc.resource} not found",
+            ) from exc
+        if stored is not None:
+            return _message_response(
+                stored.result,
+                conversation_id=stored.conversation_id,
+                user_message_id=stored.user_message_id,
+                assistant_message_id=stored.assistant_message_id,
+            )
+        history = conversations.bounded_history(data.conversation_id)
+    else:
+        history = [
+            AssistantHistoryMessage(role=item.role, content=item.content)
+            for item in data.history
+        ]
     try:
         result = service.send_message(
             message=data.message,
@@ -454,56 +667,31 @@ def assistant_message(
             detail=build_assistant_error_detail(exc),
         ) from exc
 
-    pending_action_plan = None
-    if result.pending_action_plan is not None:
-        pending_action_plan = PendingActionPlanOut(
-            id=result.pending_action_plan.id,
-            status=result.pending_action_plan.status,
-            expires_at=result.pending_action_plan.expires_at.isoformat(),
-            actions=[
-                PendingActionOut(
-                    tool_name=action.tool_name,
-                    arguments=action.arguments,
-                )
-                for action in result.pending_action_plan.actions
-            ],
-        )
-
-    inbox_review_receipt = None
-    if result.inbox_review_receipt is not None:
-        inbox_review_receipt = InboxReviewReceiptOut(
-            anchor_before_object_id=result.inbox_review_receipt.anchor_before_object_id,
-            anchor_before_feed_at=result.inbox_review_receipt.anchor_before_feed_at,
-            snapshot_top_object_id=result.inbox_review_receipt.snapshot_top_object_id,
-            snapshot_top_feed_at=result.inbox_review_receipt.snapshot_top_feed_at,
-            total_count=result.inbox_review_receipt.total_count,
-        )
-
-    return AssistantMessageResponse(
-        answer=result.answer,
-        references=[
-            AssistantReferenceOut(
-                object_id=ref.object_id,
-                title=ref.title,
-                kind=ref.kind,
-                canonical_uri=ref.canonical_uri,
-                provider=ref.provider,
-                primary_at=ref.primary_at,
+    if persistent:
+        assert data.conversation_id is not None
+        assert data.client_turn_id is not None
+        try:
+            saved = conversations.persist_completed_turn(
+                conversation_id=data.conversation_id,
+                client_turn_id=data.client_turn_id,
+                user_text=data.message.strip(),
+                result=result,
             )
-            for ref in result.references
-        ],
-        affected_objects=[
-            AssistantAffectedObjectOut(
-                object_id=item.object_id,
-                title=item.title,
-                kind=item.kind,
-                state=item.state,
-                status=item.status,
-            )
-            for item in result.affected_objects
-        ],
-        pending_action_plan=pending_action_plan,
-        inbox_review_receipt=inbox_review_receipt,
+        except NotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"{exc.resource} not found",
+            ) from exc
+        stored_ids = (
+            saved.conversation_id,
+            saved.user_message_id,
+            saved.assistant_message_id,
+        )
+    return _message_response(
+        result,
+        conversation_id=None if stored_ids is None else stored_ids[0],
+        user_message_id=None if stored_ids is None else stored_ids[1],
+        assistant_message_id=None if stored_ids is None else stored_ids[2],
     )
 
 
@@ -580,6 +768,22 @@ def resume_action_plan(
     session: Session = Depends(get_db),
 ) -> ActionPlanResumeResponse:
     plan_service = ActionPlanService(session, current_user.user_id)
+    conversations = AssistantConversationService(session, current_user.user_id)
+    stored_resume = conversations.stored_resume(plan_id)
+    if stored_resume is not None:
+        return ActionPlanResumeResponse(
+            answer=stored_resume.answer,
+            affected_objects=[
+                AssistantAffectedObjectOut(
+                    object_id=item.object_id,
+                    title=item.title,
+                    kind=item.kind,
+                    state=item.state,
+                    status=item.status,
+                )
+                for item in stored_resume.affected_objects
+            ],
+        )
     try:
         plan = plan_service.get_for_resume(plan_id)
     except NotFoundError as exc:
@@ -620,8 +824,68 @@ def resume_action_plan(
             detail=build_assistant_error_detail(exc),
         ) from exc
 
+    persisted = conversations.persist_resume(plan_id, result)
     return ActionPlanResumeResponse(
+        answer=persisted.answer,
+        affected_objects=[
+            AssistantAffectedObjectOut(
+                object_id=item.object_id,
+                title=item.title,
+                kind=item.kind,
+                state=item.state,
+                status=item.status,
+            )
+            for item in persisted.affected_objects
+        ],
+    )
+
+
+def _pending_plan_out(plan) -> PendingActionPlanOut | None:
+    if plan is None:
+        return None
+    return PendingActionPlanOut(
+        id=plan.id,
+        status=plan.status,
+        expires_at=plan.expires_at.isoformat(),
+        actions=[
+            PendingActionOut(tool_name=action.tool_name, arguments=action.arguments)
+            for action in plan.actions
+        ],
+    )
+
+
+def _receipt_out(receipt) -> InboxReviewReceiptOut | None:
+    if receipt is None:
+        return None
+    return InboxReviewReceiptOut(
+        anchor_before_object_id=receipt.anchor_before_object_id,
+        anchor_before_feed_at=receipt.anchor_before_feed_at,
+        snapshot_top_object_id=receipt.snapshot_top_object_id,
+        snapshot_top_feed_at=receipt.snapshot_top_feed_at,
+        total_count=receipt.total_count,
+    )
+
+
+def _message_response(
+    result,
+    *,
+    conversation_id: UUID | None = None,
+    user_message_id: UUID | None = None,
+    assistant_message_id: UUID | None = None,
+) -> AssistantMessageResponse:
+    return AssistantMessageResponse(
         answer=result.answer,
+        references=[
+            AssistantReferenceOut(
+                object_id=ref.object_id,
+                title=ref.title,
+                kind=ref.kind,
+                canonical_uri=ref.canonical_uri,
+                provider=ref.provider,
+                primary_at=ref.primary_at,
+            )
+            for ref in result.references
+        ],
         affected_objects=[
             AssistantAffectedObjectOut(
                 object_id=item.object_id,
@@ -632,4 +896,9 @@ def resume_action_plan(
             )
             for item in result.affected_objects
         ],
+        pending_action_plan=_pending_plan_out(result.pending_action_plan),
+        inbox_review_receipt=_receipt_out(result.inbox_review_receipt),
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        assistant_message_id=assistant_message_id,
     )

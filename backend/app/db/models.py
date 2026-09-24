@@ -3,7 +3,7 @@ from datetime import datetime
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -397,6 +397,110 @@ class PendingActionPlan(Base):
         Index("ix_pending_action_plans_user_id", "user_id"),
         Index("ix_pending_action_plans_status", "status"),
         Index("ix_pending_action_plans_expires_at", "expires_at"),
+    )
+
+
+class AssistantConversation(Base):
+    __tablename__ = "assistant_conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    title: Mapped[str | None] = mapped_column(nullable=True)
+    is_current: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        Index("ix_assistant_conversations_user_id", "user_id"),
+        Index(
+            "ix_assistant_conversations_user_last_message",
+            "user_id",
+            "last_message_at",
+        ),
+        Index(
+            "uq_assistant_conversations_one_current",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+    )
+
+
+class AssistantMessage(Base):
+    __tablename__ = "assistant_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assistant_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    client_turn_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    presentation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    pending_action_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pending_action_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    resume_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pending_action_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_assistant_messages_conversation_id", "conversation_id"),
+        Index(
+            "ix_assistant_messages_conversation_created",
+            "conversation_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "uq_assistant_messages_user_turn",
+            "conversation_id",
+            "client_turn_id",
+            unique=True,
+            postgresql_where=text("role = 'user' AND client_turn_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_assistant_messages_resume_plan",
+            "resume_plan_id",
+            unique=True,
+            postgresql_where=text("resume_plan_id IS NOT NULL"),
+        ),
+        sa.CheckConstraint(
+            "role IN ('user', 'assistant')",
+            name="ck_assistant_messages_role",
+        ),
     )
 
 
