@@ -76,6 +76,35 @@ void main() {
     expect(find.byKey(const Key('provider_icon_yandex')), findsOneWidget);
   });
 
+  testWidgets('long title at phone width keeps icons and date without overflow', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpChip(
+      tester,
+      reference(
+        provider: 'google',
+        primaryAt: '2026-03-04T15:00:00Z',
+        title:
+            'Очень длинный заголовок письма которое не должно вызвать переполнение строки чипа',
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.byIcon(iconForObjectKind('email')), findsOneWidget);
+    expect(find.byKey(const Key('provider_icon_google')), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^\d{2}\.\d{2}\.\d{2}$')), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            widget.overflow == TextOverflow.ellipsis &&
+            widget.data!.startsWith('Очень длинный'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('providerless undated chip keeps the kind icon and title only', (
     tester,
   ) async {

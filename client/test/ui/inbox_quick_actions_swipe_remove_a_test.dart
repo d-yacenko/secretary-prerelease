@@ -1001,6 +1001,25 @@ void main() {
     );
   });
 
+  testWidgets('narrow desktop inbox keeps trash inside the card', (tester) async {
+    await withPlatform(
+      tester,
+      platform: TargetPlatform.linux,
+      size: const Size(640, 800),
+      body: () async {
+        final harness = InboxHarness();
+        await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final trash = find.byKey(const Key('inbox_card_delete_b'));
+        expect(trash, findsOneWidget);
+        final card = find.ancestor(of: trash, matching: find.byType(Card)).first;
+        expect(tester.getRect(card).contains(tester.getCenter(trash)), isTrue);
+        expect(find.byType(InboxSwipeToRemove), findsNothing);
+      },
+    );
+  });
+
   testWidgets('Android inbox keeps swipe and hides the desktop trash button', (
     tester,
   ) async {

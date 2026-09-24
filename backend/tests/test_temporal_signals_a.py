@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.schemas import ObjectCreate
-from app.db.models import Edge, GoogleAccount, Job, Object, User, UserSettings
+from app.db.models import AITraceEvent, Edge, GoogleAccount, Job, Object, User, UserSettings
 from app.domain.object_visibility import tombstone_object
 from app.domain.temporal_hint import (
     EDGE_TYPE_TEMPORAL_CONFIRMATION,
@@ -1000,12 +1000,8 @@ def test_eligible_gate_excludes_calendar_task_and_hint(db_session) -> None:
     ("provider", "metadata"),
     [
         (
-            "telegram",
-            {
-                "business_user_id": "5000000000",
-                "from_user_id": "6000000000",
-                "direction": "inbound",
-            },
+            "mattermost",
+            {"direction": "inbound"},
         ),
         (
             "teams",
@@ -1076,10 +1072,112 @@ def test_communication_providers_use_common_temporal_job_path_and_dedup(
         )
     assert first.reason in {"hint_created", "hint_merged"}
     assert second.reason == "already_evidenced"
+    assert second.hint_id == first.hint_id
+    assert second.hint_id is not None
+    assert second.calendar_id is None
     assert extractor.calls == 1
     assert judge.calls == judge_calls_after_first
     assert len(_unresolved_hints(db_session)) == 1
     assert len(_active_evidence(db_session)) == 1
+    already = [
+        event
+        for event in _temporal_result_events(db_session, source.id)
+        if event.get("result_class") == "already_evidenced"
+    ]
+    assert already[-1]["chosen_hint_id"] == str(second.hint_id)
+    assert already[-1]["chosen_calendar_id"] is None
+
+
+def _temporal_result_events(session: Session, source_id) -> list[dict]:
+    rows = session.scalars(
+        select(AITraceEvent).where(AITraceEvent.event_type == "temporal_signal_result")
+    ).all()
+    return [
+        dict(row.metadata_ or {})
+        for row in rows
+        if (row.metadata_ or {}).get("source_object_id") == str(source_id)
+    ]
+
+
+def test_quarantined_telegram_does_not_enqueue_temporal_extract(db_session) -> None:
+    """At 73457fec226e113f7f8ddf8768497cafa8e003f1 this enqueue already returned no job.
+
+    Telegram MTProto AI stays off, so a Telegram object outside the AI predicate
+    must not enter the common extraction path.
+    """
+    from app.core.config import settings
+    from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_eligible
+
+    assert settings.telegram_mtproto_ai_enabled is False
+    _enable(db_session)
+    source = _source(
+        db_session,
+        title="Встреча",
+        body="завтра в 15:00",
+        provider="telegram",
+        kind="chat_message",
+        metadata={
+            "business_user_id": "5000000000",
+            "from_user_id": "6000000000",
+            "direction": "inbound",
+        },
+    )
+    assert telegram_mtproto_ai_eligible(db_session, source) is False
+    enqueue_extract_temporal_signal(db_session, source.id, BOOTSTRAP_USER_ID)
+    jobs = list(
+        db_session.scalars(select(Job).where(Job.type == JOB_TYPE_EXTRACT_TEMPORAL_SIGNAL))
+    )
+    assert jobs == []
+
+
+def test_early_already_evidenced_preserves_calendar_anchor(db_session) -> None:
+    _enable(db_session)
+    source = _source(
+        db_session,
+        title="Встреча",
+        body="завтра в 15:00",
+        provider="teams",
+        kind="chat_message",
+        metadata={
+            "teams_user_id": "22222222-2222-2222-2222-222222222222",
+            "sender_id": "33333333-3333-3333-3333-333333333333",
+            "direction": "inbound",
+        },
+    )
+    anchor = Object(
+        id=uuid4(),
+        user_id=BOOTSTRAP_USER_ID,
+        kind="event",
+        title="Calendar",
+        origin="sync",
+        state="active",
+        provider="google_calendar",
+    )
+    extractor = FakeTemporalSignalExtractor(payload=_exact_payload())
+    judge = FakeTemporalMatchJudge()
+    service = TemporalSignalService(
+        db_session,
+        BOOTSTRAP_USER_ID,
+        extractor=extractor,
+        match_judge=judge,
+    )
+    with patch.object(service, "_active_same_revision_anchor", return_value=anchor):
+        outcome = service.run_extract_job(
+            {
+                "object_id": str(source.id),
+                "source_signature": source_extraction_signature(source),
+                "extractor_version": TEMPORAL_SIGNAL_EXTRACTOR_VERSION,
+            }
+        )
+    assert outcome.reason == "already_evidenced"
+    assert outcome.calendar_id == anchor.id
+    assert outcome.hint_id is None
+    assert extractor.calls == 0
+    assert judge.calls == 0
+    events = _temporal_result_events(db_session, source.id)
+    assert events[-1]["result_class"] == "already_evidenced"
+    assert events[-1]["chosen_calendar_id"] == str(anchor.id)
+    assert events[-1]["chosen_hint_id"] is None
 
 
 def test_embed_enqueues_extract_when_enabled(db_session, fake_embedding_service) -> None:

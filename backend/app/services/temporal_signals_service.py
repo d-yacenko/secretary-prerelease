@@ -501,9 +501,17 @@ class TemporalSignalService:
             self._record_result(event.id, outcome)
             return outcome
 
+    def _already_evidenced(self, anchor: Object) -> TemporalSignalJobOutcome:
+        return TemporalSignalJobOutcome(
+            reason="already_evidenced",
+            hint_id=anchor.id if anchor.kind == KIND_TEMPORAL_HINT else None,
+            calendar_id=anchor.id if anchor.kind == "event" else None,
+        )
+
     def _extract_and_persist(self, source: Object, payload_sig: str) -> TemporalSignalJobOutcome:
-        if self._active_same_revision_anchor(source.id, payload_sig) is not None:
-            return TemporalSignalJobOutcome(reason="already_evidenced")
+        same_revision = self._active_same_revision_anchor(source.id, payload_sig)
+        if same_revision is not None:
+            return self._already_evidenced(same_revision)
         request = self._build_request(source)
         extractor = self._paid_extractor()
         extraction = extractor.extract(request)
@@ -561,11 +569,7 @@ class TemporalSignalService:
         )
         same_revision = self._active_same_revision_anchor(source.id, payload_sig)
         if same_revision is not None:
-            return TemporalSignalJobOutcome(
-                reason="already_evidenced",
-                hint_id=same_revision.id if same_revision.kind == KIND_TEMPORAL_HINT else None,
-                calendar_id=same_revision.id if same_revision.kind == "event" else None,
-            )
+            return self._already_evidenced(same_revision)
         matched = self._match_existing_anchor(resolved)
         if matched is not None:
             if not self._commit_source_revision(source, payload_sig, matched, resolved):

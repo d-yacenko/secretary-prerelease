@@ -1757,7 +1757,11 @@ class _SourceObjectCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ObjectMetaActionRow(actions: actionChildren, labels: labels),
+                ObjectMetaActionRow(
+                  actions: actionChildren,
+                  labels: labels,
+                  wrapActions: true,
+                ),
               ],
             ),
           ),

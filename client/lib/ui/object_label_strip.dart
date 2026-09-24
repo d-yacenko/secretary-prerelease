@@ -106,10 +106,15 @@ class ObjectMetaActionRow extends StatelessWidget {
     super.key,
     this.actions = const [],
     this.labels = const [],
+    this.wrapActions = false,
   });
 
   final List<Widget> actions;
   final List<LabelItem> labels;
+
+  /// Inbox list cards set this so desktop actions, including trash, stay
+  /// inside the card. Search and Today keep the wide row.
+  final bool wrapActions;
 
   @override
   Widget build(BuildContext context) {
@@ -123,13 +128,38 @@ class ObjectMetaActionRow extends StatelessWidget {
             labels: labels,
             alignment: wide ? WrapAlignment.end : WrapAlignment.start,
           );
+    if (!wide || wrapActions) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Wrap(
+          spacing: AppSpacing.xs,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [...actions, if (labelStrip != null) labelStrip],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 2),
-      child: Wrap(
-        spacing: AppSpacing.xs,
-        runSpacing: 2,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [...actions, if (labelStrip != null) labelStrip],
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (actions.isNotEmpty)
+            Flexible(
+              child: Wrap(
+                spacing: AppSpacing.xs,
+                runSpacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: actions,
+              ),
+            ),
+          if (labelStrip != null) ...[
+            if (actions.isNotEmpty) const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Align(alignment: Alignment.centerRight, child: labelStrip),
+            ),
+          ],
+        ],
       ),
     );
   }

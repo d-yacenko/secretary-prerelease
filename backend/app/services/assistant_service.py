@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
-
 from app.ai_audit.constants import (
     WORKLOAD_ASSISTANT_ACTION_PLAN_FINALIZE,
     WORKLOAD_ASSISTANT_INTERACTIVE,
@@ -46,7 +44,6 @@ from app.core.client_timezone import (
     set_request_timezone,
 )
 from app.core.config import settings
-from app.db.models import Object
 from app.db.session import SessionLocal
 from app.llm.assistant_models import AssistantHistoryMessage, AssistantProviderResult
 from app.llm.assistant_provider_errors import AssistantInternalError
@@ -59,7 +56,7 @@ from app.services.action_plan_service import ActionPlanService, PendingActionPla
 from app.services.effective_user_settings_service import EffectiveUserSettings
 from app.services.errors import NotFoundError, ValidationError
 from app.services.notification_service import NotificationService
-from app.services.object_primary_date import object_primary_search_datetime
+from app.services.object_primary_date import primary_search_datetime_from_object_snapshot
 from app.services.secretary_service import normalize_reference_datetime
 from app.services.user_identity_context_service import (
     UserIdentityContextService,
@@ -154,25 +151,10 @@ class AssistantProvider:
         raise NotImplementedError
 
 
-def _reference_provenance(
-    user_id: UUID,
-    object_ids: list[UUID],
-) -> dict[UUID, tuple[str | None, datetime | None]]:
-    if not object_ids:
-        return {}
-    session = SessionLocal()
-    try:
-        rows = session.scalars(
-            select(Object).where(Object.user_id == user_id, Object.id.in_(object_ids))
-        ).all()
-    finally:
-        session.close()
-    found: dict[UUID, tuple[str | None, datetime | None]] = {}
-    for row in rows:
-        raw = row.provider
-        provider = raw.strip() if isinstance(raw, str) and raw.strip() else None
-        found[row.id] = (provider, object_primary_search_datetime(row))
-    return found
+def _reference_provider(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 class AssistantService:
@@ -526,7 +508,6 @@ class AssistantService:
         return UiContextResult(text=text, exposed_object_ids=exposed)
 
     def _serialize_references(self, candidate_ids: list[UUID]) -> list[AssistantReference]:
-        provenance = _reference_provenance(self._user_id, candidate_ids)
         references: list[AssistantReference] = []
         for object_id in candidate_ids:
             result = run_assistant_tool(
@@ -536,16 +517,17 @@ class AssistantService:
             )
             if not result.success or not result.output:
                 continue
-            obj = result.output.get("object", {})
-            provider, primary_at = provenance.get(UUID(str(obj["id"])), (None, None))
+            obj = result.output.get("object") or {}
+            if not obj:
+                continue
             references.append(
                 AssistantReference(
                     object_id=UUID(str(obj["id"])),
                     title=obj["title"],
                     kind=obj["kind"],
                     canonical_uri=sanitize_canonical_uri_for_assistant(obj.get("canonical_uri")),
-                    provider=provider,
-                    primary_at=primary_at,
+                    provider=_reference_provider(obj.get("provider")),
+                    primary_at=primary_search_datetime_from_object_snapshot(obj),
                 )
             )
         return references
