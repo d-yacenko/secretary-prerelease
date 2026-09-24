@@ -28,22 +28,39 @@ Requirements:
 
 Focused tests must prove zero extractor/judge calls on repeated exact revision and normal calls for changed/stale cases.
 
-## Scope B — Inbox rapid-delete UX regression verification
+## Scope B — Inbox rapid-delete UX: desktop inline trash on the list card
 
-The requested product behavior is already present in current code and must remain:
+Clarified human requirement:
 
-- Android/iOS Inbox source cards: swipe-to-remove enabled;
-- desktop Linux/macOS/Windows: no swipe-to-remove;
-- desktop source card action row: trash/delete action appears after Ask Secretary and Open in Graph when those actions are present;
-- delete reuses the existing universal delete semantics/confirmation and removes the deleted object from the local Inbox view.
+### Mobile
+- Keep the existing Android/iOS swipe-to-remove behavior.
+- The existing delete action inside opened object/detail UI is fine and must not be removed.
+- Do not add a second always-visible inline trash control to the compact mobile Inbox card merely to mirror desktop.
 
-Start with focused tests against the current implementation.
+### Desktop
+- Linux/macOS/Windows must continue to have no swipe-to-remove.
+- Add a visible trash/delete action directly on the Inbox source card in the LIST view, without opening the object/detail screen.
+- In the card action row, place the delete/trash action after:
+  1. Ask Secretary;
+  2. Open in Graph;
+  when those actions are present.
+- The user's screenshot is the visual baseline: the current list card shows bookmark + Ask Secretary + Open in Graph, but no trash action on the list card. That missing list-level trash is the bug to fix.
+- Do not confuse this requirement with the already-existing delete/trash action inside the opened object/detail view.
 
-If all behavior already passes, do not redesign it and do not add duplicate controls. Add/strengthen only the missing regression coverage if necessary.
+Behavior:
+- reuse the existing universal object-delete flow and existing confirmation semantics; do not create a second deletion API or alternate trash state;
+- after successful deletion, remove the object from the current Inbox list immediately and preserve existing pagination/review-marker behavior;
+- failed/cancelled deletion must leave the card present;
+- do not change bookmark, Ask Secretary, or Open in Graph behavior;
+- keep the action row compact and consistent with existing Inbox card styling.
 
-If a real current mismatch is found, fix only that mismatch.
-
-Do not add an inline trash action to the mobile source card merely because desktop has one; mobile rapid deletion remains swipe-based.
+Focused Flutter tests must prove:
+- mobile card retains swipe-to-remove;
+- mobile does not gain the desktop-only list-card trash action;
+- desktop has no swipe but does show the inline list-card trash;
+- desktop trash is ordered after Ask Secretary and Open in Graph when both are present;
+- tapping it uses the existing delete/confirmation flow and successful deletion removes the card from the local list;
+- cancelling/failing deletion does not remove the card.
 
 ## Scope C — Hands-free terminal-failure cue regression verification
 
@@ -178,7 +195,7 @@ No Alembic migration is expected.
 
 Record:
 - exact implementation SHA;
-- per-scope result, including when B/C required no product-code change because current behavior already passed;
+- per-scope result; Scope B is an implementation fix, while Scope C may legitimately require no product-code change if the existing failure-cue behavior passes the targeted regression tests;
 - test/check results;
 - remaining backlog after this round.
 
