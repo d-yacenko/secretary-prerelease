@@ -1,6 +1,6 @@
 # Current task
 
-HOLD. Graph Refined P2 explainable identity evidence and candidate scoring is implemented at `b94a56a19c891f31a6f6c8d6964ba6c905d7719e`.
+HOLD. Graph Refined P2 explainable identity evidence and candidate scoring is implemented at `c74571132b643a816a2069d0ce6708c128a8dba4`.
 
 Migration `0049` adds `person_identity_evidence`. Evidence is user-scoped, targets a Person, and stores the candidate identity tuple. Corrections retract the prior row instead of rewriting it. Deleting a source communication object sets `source_object_id` to null and keeps the evidence row. Provider secrets are rejected.
 
