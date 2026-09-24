@@ -8,27 +8,33 @@ class ObjectActionButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    this.tooltip,
   });
 
   final IconData icon;
   final String label;
+  final String? tooltip;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
+    final tip = tooltip ?? label;
     final compact = isWideLayout(context);
     if (compact) {
-      return TextButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-        style: TextButton.styleFrom(
-          visualDensity: VisualDensity.compact,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      return Tooltip(
+        message: tip,
+        child: TextButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon, size: 18),
+          label: Text(label),
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
         ),
       );
     }
-    return IconButton(tooltip: label, onPressed: onPressed, icon: Icon(icon));
+    return IconButton(tooltip: tip, onPressed: onPressed, icon: Icon(icon));
   }
 }
 
@@ -41,7 +47,8 @@ class AskSecretaryAction extends StatelessWidget {
   Widget build(BuildContext context) {
     return ObjectActionButton(
       icon: Icons.smart_toy_outlined,
-      label: 'Спросить секретаря',
+      label: 'Секретарь',
+      tooltip: 'Спросить секретаря',
       onPressed: onPressed,
     );
   }
@@ -56,7 +63,8 @@ class OpenInGraphAction extends StatelessWidget {
   Widget build(BuildContext context) {
     return ObjectActionButton(
       icon: Icons.hub_outlined,
-      label: 'Открыть в графе',
+      label: 'Граф',
+      tooltip: 'Открыть в графе',
       onPressed: onPressed,
     );
   }

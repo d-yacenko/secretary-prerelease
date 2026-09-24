@@ -155,7 +155,7 @@ void main() {
 
     expect(find.byTooltip('Обновить'), findsOneWidget);
     expect(
-      find.text('Открыть в графе', skipOffstage: false),
+      find.text('Граф', skipOffstage: false),
       findsAtLeastNWidgets(6),
     );
     expect(find.text('Показать в графе'), findsNothing);

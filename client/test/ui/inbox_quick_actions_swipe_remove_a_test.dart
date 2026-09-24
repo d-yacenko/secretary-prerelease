@@ -14,6 +14,8 @@ import 'package:personal_secretary/capture/capture_controller.dart';
 import 'package:personal_secretary/inbox/inbox_review_marker.dart';
 import 'package:personal_secretary/inbox/inbox_screen.dart';
 import 'package:personal_secretary/inbox/inbox_swipe_to_remove.dart';
+import 'package:personal_secretary/ui/app_spacing.dart';
+import 'package:personal_secretary/ui/object_label_strip.dart';
 import 'package:personal_secretary/ui/object_bookmark_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -103,6 +105,7 @@ class InboxHarness {
     this.cursor,
     this.reviewMarker,
     this.bookmarks = const {},
+    this.labelsByObject = const {},
     this.deleteStatus = 200,
     this.deleteError,
     this.continuation = const [],
@@ -113,6 +116,7 @@ class InboxHarness {
   final String? cursor;
   final Map<String, dynamic>? reviewMarker;
   final Map<String, String> bookmarks;
+  final Map<String, List<Map<String, String>>> labelsByObject;
   int deleteStatus;
   final String? deleteError;
   final List<Map<String, dynamic>> continuation;
@@ -151,7 +155,7 @@ class InboxHarness {
       });
     }
     if (request.url.path == '/labels/by-objects') {
-      return jsonRes({'objects': {}});
+      return jsonRes({'objects': labelsByObject});
     }
     if (request.url.path == '/object-bookmarks/by-objects') {
       return jsonRes({
@@ -866,13 +870,10 @@ void main() {
               .ancestor(of: trash, matching: find.byType(Card))
               .first;
           final ask = tester.getCenter(
-            find.descendant(
-              of: card,
-              matching: find.text('Спросить секретаря'),
-            ),
+            find.descendant(of: card, matching: find.text('Секретарь')),
           );
           final graph = tester.getCenter(
-            find.descendant(of: card, matching: find.text('Открыть в графе')),
+            find.descendant(of: card, matching: find.text('Граф')),
           );
           final trashCenter = tester.getCenter(trash);
           int visualOrder(Offset left, Offset right) {
@@ -887,11 +888,26 @@ void main() {
           final inboxCalls = harness.inboxCalls;
           await tester.tap(find.byKey(const Key('inbox_card_delete_b')));
           await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(find.text('Удалить из Секретаря?'), findsOneWidget);
+          expect(
+            find.text('Письмо останется в почтовом ящике.'),
+            findsOneWidget,
+          );
+          expect(harness.deleteCalls, 0);
+          expect(find.text('Card B'), findsOneWidget);
+          await tester.tap(find.text('Отмена'));
+          await tester.pumpAndSettle();
+          expect(harness.deleteCalls, 0);
+          expect(find.text('Card B'), findsOneWidget);
+          await tester.tap(find.byKey(const Key('inbox_card_delete_b')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.widgetWithText(FilledButton, 'Удалить'));
+          await tester.pumpAndSettle();
           expect(harness.deleteCalls, 1);
           expect(harness.deletedIds, ['b']);
           expect(find.text('Card B'), findsNothing);
           expect(harness.inboxCalls, inboxCalls);
-          expect(find.byType(AlertDialog), findsNothing);
         },
       );
     },
@@ -977,6 +993,9 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('inbox_card_delete_a')));
         await tester.pumpAndSettle();
+        expect(failed.deleteCalls, 0);
+        await tester.tap(find.widgetWithText(FilledButton, 'Удалить'));
+        await tester.pumpAndSettle();
         expect(find.text('Card A'), findsOneWidget);
         expect(failed.deleteCalls, 1);
       },
@@ -995,25 +1014,93 @@ void main() {
         expect(find.byType(InboxSwipeToRemove), findsNothing);
         final trash = find.byKey(const Key('inbox_card_delete_b'));
         expect(trash, findsOneWidget);
-        final card = find.ancestor(of: trash, matching: find.byType(Card)).first;
+        final card = find
+            .ancestor(of: trash, matching: find.byType(Card))
+            .first;
         expect(tester.getRect(card).contains(tester.getCenter(trash)), isTrue);
       },
     );
   });
 
-  testWidgets('narrow desktop inbox keeps trash inside the card', (tester) async {
+  testWidgets(
+    'wide Inbox pins labels to the card edge beside compact actions',
+    (tester) async {
+      await withPlatform(
+        tester,
+        platform: TargetPlatform.linux,
+        size: const Size(1100, 800),
+        body: () async {
+          final harness = InboxHarness(
+            labelsByObject: const {
+              'b': [
+                {'id': 'l1', 'title': 'Личное'},
+                {'id': 'l2', 'title': 'Проект'},
+                {'id': 'l3', 'title': 'Архив'},
+              ],
+            },
+          );
+          await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          final card = find
+              .ancestor(
+                of: find.byKey(const Key('inbox_card_delete_b')),
+                matching: find.byType(Card),
+              )
+              .first;
+          final cardRect = tester.getRect(card);
+          final label = tester.getRect(find.text('Проект'));
+          final overflow = tester.getRect(
+            find.byKey(const Key('object_label_overflow')),
+          );
+          final ask = tester.getRect(
+            find.descendant(of: card, matching: find.text('Секретарь')),
+          );
+          expect(find.text('Секретарь'), findsWidgets);
+          expect(find.text('Граф'), findsWidgets);
+          expect(find.text('Удалить'), findsWidgets);
+          expect(find.text('Архив'), findsNothing);
+          expect(find.text('+1'), findsOneWidget);
+          final row = tester.getRect(
+            find.descendant(
+              of: card,
+              matching: find.byType(ObjectMetaActionRow),
+            ),
+          );
+          expect(overflow.right, closeTo(row.right, 1));
+          expect(row.right, closeTo(cardRect.right - AppSpacing.md, 1));
+          expect(label.left, greaterThan(ask.right));
+        },
+      );
+    },
+  );
+
+  testWidgets('narrow desktop inbox keeps trash inside the card', (
+    tester,
+  ) async {
     await withPlatform(
       tester,
       platform: TargetPlatform.linux,
       size: const Size(640, 800),
       body: () async {
-        final harness = InboxHarness();
+        final harness = InboxHarness(
+          labelsByObject: const {
+            'b': [
+              {'id': 'l1', 'title': 'Личное'},
+              {'id': 'l2', 'title': 'Проект'},
+            ],
+          },
+        );
         await tester.pumpWidget(pumpHarness(harness, desktopActions: true));
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        expect(find.text('Личное'), findsOneWidget);
+        expect(find.text('Проект'), findsOneWidget);
         final trash = find.byKey(const Key('inbox_card_delete_b'));
         expect(trash, findsOneWidget);
-        final card = find.ancestor(of: trash, matching: find.byType(Card)).first;
+        final card = find
+            .ancestor(of: trash, matching: find.byType(Card))
+            .first;
         expect(tester.getRect(card).contains(tester.getCenter(trash)), isTrue);
         expect(find.byType(InboxSwipeToRemove), findsNothing);
       },

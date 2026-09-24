@@ -73,6 +73,21 @@ String deleteConfirmationMessage(SecretaryObject object) {
   return 'Удалить из Секретаря?';
 }
 
+/// Extra dialog body. The title already asks the question, so this is only
+/// the provider/source-survival explanation.
+String? deleteConfirmationDetail(SecretaryObject object) {
+  const title = 'Удалить из Секретаря?';
+  final message = deleteConfirmationMessage(object);
+  if (message == title) {
+    return null;
+  }
+  const prefix = '$title\n';
+  if (message.startsWith(prefix)) {
+    return message.substring(prefix.length);
+  }
+  return message;
+}
+
 Future<bool> deleteObjectFromSecretary(
   BuildContext context, {
   required SecretaryObject object,
@@ -101,11 +116,12 @@ Future<bool> confirmAndDeleteObject(
   required SecretaryApiClient apiClient,
   required AuthController authController,
 }) async {
+  final detail = deleteConfirmationDetail(object);
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Удалить из Секретаря?'),
-      content: Text(deleteConfirmationMessage(object)),
+      content: detail == null ? null : Text(detail),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),

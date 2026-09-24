@@ -112,8 +112,9 @@ class ObjectMetaActionRow extends StatelessWidget {
   final List<Widget> actions;
   final List<LabelItem> labels;
 
-  /// Inbox list cards set this so desktop actions, including trash, stay
-  /// inside the card. Search and Today keep the wide row.
+  /// Kept for Inbox call sites. Wide cards always pin labels to the right
+  /// and wrap actions only inside the left cluster.
+  // ignore: unused_field
   final bool wrapActions;
 
   @override
@@ -128,7 +129,7 @@ class ObjectMetaActionRow extends StatelessWidget {
             labels: labels,
             alignment: wide ? WrapAlignment.end : WrapAlignment.start,
           );
-    if (!wide || wrapActions) {
+    if (!wide) {
       return Padding(
         padding: const EdgeInsets.only(top: 2),
         child: Wrap(
@@ -145,19 +146,19 @@ class ObjectMetaActionRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (actions.isNotEmpty)
-            Flexible(
+            Expanded(
               child: Wrap(
                 spacing: AppSpacing.xs,
                 runSpacing: 2,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: actions,
               ),
-            ),
+            )
+          else
+            const Spacer(),
           if (labelStrip != null) ...[
             if (actions.isNotEmpty) const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Align(alignment: Alignment.centerRight, child: labelStrip),
-            ),
+            labelStrip,
           ],
         ],
       ),
