@@ -357,3 +357,86 @@ class ObjectBookmarkEditor extends StatelessWidget {
     );
   }
 }
+
+/// Read-only aggregate of bookmark colors already on the rendered children
+/// of one Inbox conversation stack. It does not open a palette or write a
+/// bookmark for the stack itself.
+class InboxConversationStackBookmarkSummary extends StatelessWidget {
+  const InboxConversationStackBookmarkSummary({
+    super.key,
+    required this.stackId,
+    required this.childObjectIds,
+    required this.colorFor,
+  });
+
+  final String stackId;
+  final List<String> childObjectIds;
+  final String? Function(String objectId) colorFor;
+
+  static const visibleCap = 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = <String, int>{};
+    final order = <String>[];
+    for (final id in childObjectIds) {
+      final token = colorFor(id);
+      if (token == null || !kBookmarkColorTokens.contains(token)) {
+        continue;
+      }
+      counts[token] = (counts[token] ?? 0) + 1;
+      if (counts[token] == 1) {
+        order.add(token);
+      }
+    }
+    if (order.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final scheme = Theme.of(context).colorScheme;
+    final visible = order.take(visibleCap).toList();
+    final overflow = order.length - visible.length;
+    final label = stackBookmarkSummaryLabel(order, counts);
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        container: true,
+        label: label,
+        child: Row(
+          key: Key('inbox_stack_bookmarks_$stackId'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final token in visible)
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: ObjectBookmarkGlyph(
+                  key: Key('inbox_stack_bookmark_${stackId}_$token'),
+                  fillColor: bookmarkTokenColor(token, scheme),
+                  size: kBookmarkGlyphSize,
+                ),
+              ),
+            if (overflow > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: Text(
+                  '+$overflow',
+                  key: Key('inbox_stack_bookmark_overflow_$stackId'),
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String stackBookmarkSummaryLabel(
+  List<String> order,
+  Map<String, int> counts,
+) {
+  final parts = [
+    for (final token in order)
+      '${kBookmarkColorLabels[token] ?? token} ×${counts[token] ?? 0}',
+  ];
+  return 'Закладки сообщений в переписке: ${parts.join(', ')}';
+}

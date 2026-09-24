@@ -885,10 +885,11 @@ class InboxScreenState extends State<InboxScreen> {
           widgets.add(const _InboxReviewMarkerBar(unplaced: false));
         case InboxConversationStackEntry(:final stack, :final children):
           final expanded = _expandedStackIds.contains(stack.stackId);
-          final collapsed = _conversationStackCard(
-            stack: stack,
-            expanded: expanded,
-            onToggle: () {
+        final collapsed = _conversationStackCard(
+          stack: stack,
+          children: children,
+          expanded: expanded,
+          onToggle: () {
               setState(() {
                 if (expanded) {
                   _expandedStackIds.remove(stack.stackId);
@@ -1043,6 +1044,7 @@ class InboxScreenState extends State<InboxScreen> {
 
   Widget _conversationStackCard({
     required InboxConversationStack stack,
+    required List<InboxSourceObjectOut> children,
     required bool expanded,
     required VoidCallback onToggle,
   }) {
@@ -1086,6 +1088,13 @@ class InboxScreenState extends State<InboxScreen> {
                           'inbox_conversation_stack_meta_${stack.stackId}',
                         ),
                       ),
+                    ),
+                    InboxConversationStackBookmarkSummary(
+                      stackId: stack.stackId,
+                      childObjectIds: [
+                        for (final child in children) child.id,
+                      ],
+                      colorFor: _bookmarks.colorFor,
                     ),
                     Icon(
                       expanded
