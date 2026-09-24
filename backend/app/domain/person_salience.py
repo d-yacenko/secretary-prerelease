@@ -32,6 +32,8 @@ MAX_COMMUNICATION_ROWS = MAX_SCAN_ROWS
 MAX_GRAPH_EDGES = 20
 MAX_RANKED_PEOPLE = 20
 MAX_IDENTITY_ROWS = 500
+MAX_ATTENTION_CANDIDATES = 20
+MAX_TASK_CANDIDATES = 20
 FREQUENCY_CAP = 8
 PUBLIC_CAP = 8
 DIRECTNESS_CAP = 48
@@ -176,6 +178,61 @@ def empty_salience(person_id: UUID | None, *, eligible: bool) -> PersonSalience:
         window_days=WINDOW_DAYS,
         row_limit=MAX_SCAN_ROWS,
     )
+
+
+def communication_identity_keys(
+    *,
+    provider: str | None,
+    metadata: dict,
+) -> list[tuple[str, str, str]]:
+    """Exact identity tuples a message may reference. Display names are omitted."""
+    if provider in {"gmail", "yandex_mail"}:
+        keys: list[tuple[str, str, str]] = []
+        sender = _email_address(metadata.get("sender") or metadata.get("from"))
+        if sender is not None:
+            keys.append((EMAIL_IDENTITY, "", sender))
+        for address in _email_audience(metadata):
+            if (EMAIL_IDENTITY, "", address) not in keys:
+                keys.append((EMAIL_IDENTITY, "", address))
+        return keys
+    if provider == "telegram" and metadata.get("transport") == "mtproto":
+        realm = _text(metadata.get("account_id"))
+        if realm is None:
+            return []
+        keys = []
+        for value in (
+            _positive_id(metadata.get("sender_peer_id")),
+            _positive_id(metadata.get("peer_id")),
+        ):
+            if value is None:
+                continue
+            key = (TELEGRAM_USER_ID, realm, value)
+            if key not in keys:
+                keys.append(key)
+        return keys
+    if provider == "teams" and metadata.get("sender_kind") == "user":
+        realm = _text(metadata.get("tenant_id"))
+        sender = _text(metadata.get("sender_id"))
+        if realm is None or sender is None:
+            return []
+        return [(TEAMS_USER_ID, realm.casefold(), sender.casefold())]
+    if provider == "mattermost":
+        raw_realm = _text(metadata.get("server_url"))
+        if raw_realm is None:
+            return []
+        try:
+            realm = normalize_server_url(raw_realm)
+        except MattermostSecurityError:
+            return []
+        keys = []
+        author_id = _text(metadata.get("author_user_id"))
+        if author_id is not None:
+            keys.append((MATTERMOST_USER_ID, realm, author_id))
+        username = _text(metadata.get("author_username"))
+        if username is not None:
+            keys.append((MATTERMOST_USERNAME, realm, username.casefold()))
+        return keys
+    return []
 
 
 def attribute_communication(

@@ -15,7 +15,14 @@ from app.domain.person_identity import (
     normalize_teams_user_id,
     normalize_telegram_user_id,
 )
-from app.domain.person_salience import FOCUS_MIN, MAX_COMMUNICATION_ROWS, MAX_RANKED_PEOPLE
+from app.domain.person_salience import (
+    FOCUS_MIN,
+    MAX_ATTENTION_CANDIDATES,
+    MAX_COMMUNICATION_ROWS,
+    MAX_IDENTITY_ROWS,
+    MAX_RANKED_PEOPLE,
+    MAX_TASK_CANDIDATES,
+)
 from app.services.errors import NotFoundError
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_identity_service import PersonIdentityService
@@ -341,6 +348,92 @@ def test_noise_does_not_starve_direct_salience_or_ranking(db_session) -> None:
     ranked = service.rank()
     assert direct.id in {item.person_id for item in ranked}
     assert next(item.person_id for item in ranked) == direct.id
+
+
+def test_ranking_pool_keeps_newer_relevant_people(db_session) -> None:
+    user_id = _user(db_session)
+    other_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    other_people = PersonIdentityService(db_session, other_id)
+    evidence = PersonEvidenceService(db_session, user_id)
+    for index in range(MAX_IDENTITY_ROWS + 1):
+        older = people.create_person(f"Old identity {index}")
+        people.attach(older.id, normalize_email(f"old-{index}@example.com"))
+    direct = people.create_person("New direct")
+    people.attach(direct.id, normalize_telegram_user_id(ACCOUNT, 42))
+    _telegram(db_session, user_id, peer_kind="private", sender=42, peer=42, direction="inbound")
+    service = PersonSalienceService(db_session, user_id, now=NOW)
+    assert direct.id in {item.person_id for item in service.rank()}
+
+    for index in range(MAX_ATTENTION_CANDIDATES + 1):
+        person = people.create_person(f"Old route {index}")
+        identity = normalize_email(f"route-{index}@example.com")
+        people.attach(person.id, identity)
+        evidence.record_route_choice(person.id, identity, f"route:{index}")
+    confirmed = people.create_person("New confirmation")
+    confirmed_identity = normalize_email("confirmed@example.com")
+    people.attach(confirmed.id, confirmed_identity)
+    evidence.record_confirmation(confirmed.id, confirmed_identity, "confirm:new")
+    rejected = people.create_person("Rejected confirmation")
+    rejected_identity = normalize_email("rejected@example.com")
+    people.attach(rejected.id, rejected_identity)
+    evidence.record_confirmation(rejected.id, rejected_identity, "confirm:rejected")
+    rejected.state = REJECTED_STATE
+    other = other_people.create_person("Other confirmation")
+    other_identity = normalize_email("other@example.com")
+    other_people.attach(other.id, other_identity)
+    PersonEvidenceService(db_session, other_id).record_confirmation(
+        other.id, other_identity, "confirm:other"
+    )
+    db_session.flush()
+    ranked_ids = [item.person_id for item in service.rank()]
+    assert confirmed.id in ranked_ids
+    assert rejected.id not in ranked_ids
+    assert other.id not in ranked_ids
+    assert ranked_ids == [item.person_id for item in service.rank()]
+    assert len(ranked_ids) <= MAX_RANKED_PEOPLE
+
+    note = Object(
+        user_id=user_id,
+        kind="email",
+        title="unrelated",
+        origin="source",
+        state="observed",
+    )
+    task = Object(
+        user_id=user_id,
+        kind="task",
+        title="Do",
+        origin="user",
+        state="confirmed",
+    )
+    db_session.add_all([note, task])
+    db_session.flush()
+    for index in range(MAX_TASK_CANDIDATES + 5):
+        holder = people.create_person(f"Unrelated edge {index}")
+        db_session.add(
+            Edge(
+                user_id=user_id,
+                source_id=holder.id,
+                target_id=note.id,
+                type="related_to",
+                origin="user",
+                state="confirmed",
+            )
+        )
+    linked = people.create_person("New task link")
+    db_session.add(
+        Edge(
+            user_id=user_id,
+            source_id=linked.id,
+            target_id=task.id,
+            type="related_to",
+            origin="user",
+            state="confirmed",
+        )
+    )
+    db_session.flush()
+    assert linked.id in {item.person_id for item in service.rank()}
 
 
 def test_teams_and_mattermost_fail_closed_without_outbound_facts(db_session) -> None:

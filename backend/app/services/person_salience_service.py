@@ -9,24 +9,26 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy.orm import Session, aliased
 
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.person_salience import (
+    MAX_ATTENTION_CANDIDATES,
     MAX_DIRECT_HITS,
     MAX_GRAPH_EDGES,
-    MAX_IDENTITY_ROWS,
     MAX_PUBLIC_HITS,
     MAX_RANKED_PEOPLE,
     MAX_SCAN_ROWS,
+    MAX_TASK_CANDIDATES,
     TASK_CALENDAR_KINDS,
     USER_ATTENTION_TYPES,
     WINDOW_DAYS,
     InteractionHit,
     PersonSalience,
     attribute_communication,
+    communication_identity_keys,
     empty_salience,
     score_person,
 )
@@ -65,17 +67,33 @@ class PersonSalienceService:
         )
 
     def rank(self) -> list[PersonSalience]:
-        index, identity_truncated = self._active_identity_index()
-        hits, truncated = self._hits(index)
+        """Rank the union of three bounded candidate sources.
+
+        Sources are recent exact-identity hits from the communication scan,
+        newest explicit confirmations then route choices, and newest active
+        Person-task/calendar edges. The result is the top of that pool, not a
+        slice of the oldest stored rows.
+        """
+        rows, scan_truncated = self._load_communication()
+        index = self._index_for_messages(rows)
+        hits, hit_truncated = self._attribute_rows(rows, index)
+        attention_ids, attention_truncated = self._attention_candidates()
+        task_ids, task_truncated = self._task_candidates()
         pool = {hit.person_id for hit in hits}
-        pool.update(self._attention_people())
-        pool.update(self._task_calendar_pool())
+        pool.update(attention_ids)
+        pool.update(task_ids)
         people = [person_id for person_id in pool if self._is_ranked_person(person_id)]
         if not people:
             return []
         attention = self._attention(people)
         linked = self._task_calendar_people(people)
-        pool_truncated = len(people) > MAX_RANKED_PEOPLE or identity_truncated
+        pool_truncated = (
+            len(people) > MAX_RANKED_PEOPLE
+            or scan_truncated
+            or hit_truncated
+            or attention_truncated
+            or task_truncated
+        )
         scored = [
             score_person(
                 person_id,
@@ -84,7 +102,7 @@ class PersonSalienceService:
                 route_choice=attention.get(person_id, (False, False))[0],
                 confirmed=attention.get(person_id, (False, False))[1],
                 task_calendar=person_id in linked,
-                truncated=truncated or pool_truncated,
+                truncated=pool_truncated,
             )
             for person_id in people
         ]
@@ -107,26 +125,36 @@ class PersonSalienceService:
             index[(row.identity_type, row.realm, row.canonical_value)] = row.person_object_id
         return index
 
-    def _active_identity_index(self) -> tuple[dict[tuple[str, str, str], UUID], bool]:
-        rows = list(
-            self._session.scalars(
-                select(PersonIdentity)
-                .where(
-                    PersonIdentity.user_id == self._user_id,
-                    PersonIdentity.state != REJECTED_STATE,
-                )
-                .order_by(PersonIdentity.created_at, PersonIdentity.id)
-                .limit(MAX_IDENTITY_ROWS + 1)
+    def _index_for_messages(self, rows: list[Object]) -> dict[tuple[str, str, str], UUID]:
+        keys: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for row in rows:
+            metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
+            for key in communication_identity_keys(provider=row.provider, metadata=metadata):
+                if key in seen:
+                    continue
+                seen.add(key)
+                keys.append(key)
+        if not keys:
+            return {}
+        matched = self._session.scalars(
+            select(PersonIdentity).where(
+                PersonIdentity.user_id == self._user_id,
+                PersonIdentity.state != REJECTED_STATE,
+                tuple_(
+                    PersonIdentity.identity_type,
+                    PersonIdentity.realm,
+                    PersonIdentity.canonical_value,
+                ).in_(keys),
             )
         )
-        truncated = len(rows) > MAX_IDENTITY_ROWS
         index: dict[tuple[str, str, str], UUID] = {}
-        for row in rows[:MAX_IDENTITY_ROWS]:
+        for row in matched:
             person = self._session.get(Object, row.person_object_id)
             if person is None or not _active_person(person):
                 continue
             index[(row.identity_type, row.realm, row.canonical_value)] = row.person_object_id
-        return index, truncated
+        return index
 
     def _is_ranked_person(self, person_id: UUID) -> bool:
         person = self._session.get(Object, person_id)
@@ -136,52 +164,86 @@ class PersonSalienceService:
             and _active_person(person)
         )
 
-    def _attention_people(self) -> set[UUID]:
-        rows = self._session.scalars(
-            select(PersonIdentityEvidence.person_object_id)
-            .where(
-                PersonIdentityEvidence.user_id == self._user_id,
-                PersonIdentityEvidence.state == "active",
-                PersonIdentityEvidence.evidence_type.in_(tuple(USER_ATTENTION_TYPES)),
-            )
-            .limit(MAX_RANKED_PEOPLE)
+    def _attention_candidates(self) -> tuple[set[UUID], bool]:
+        confirmed_first = case(
+            (PersonIdentityEvidence.evidence_type == "user_confirmed", 0),
+            else_=1,
         )
-        return set(rows)
-
-    def _task_calendar_pool(self) -> set[UUID]:
         rows = list(
             self._session.scalars(
-                select(Edge)
+                select(PersonIdentityEvidence.person_object_id)
+                .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
+                .where(
+                    PersonIdentityEvidence.user_id == self._user_id,
+                    PersonIdentityEvidence.state == "active",
+                    PersonIdentityEvidence.evidence_type.in_(tuple(USER_ATTENTION_TYPES)),
+                    Object.user_id == self._user_id,
+                    Object.kind == PERSON_KIND,
+                    Object.state != REJECTED_STATE,
+                    object_is_active(),
+                )
+                .order_by(
+                    confirmed_first,
+                    PersonIdentityEvidence.created_at.desc(),
+                    PersonIdentityEvidence.id.desc(),
+                )
+                .limit(MAX_ATTENTION_CANDIDATES + 1)
+            )
+        )
+        truncated = len(rows) > MAX_ATTENTION_CANDIDATES
+        return set(rows[:MAX_ATTENTION_CANDIDATES]), truncated
+
+    def _task_candidates(self) -> tuple[set[UUID], bool]:
+        source = aliased(Object)
+        target = aliased(Object)
+        person_to_work = and_(
+            source.kind == PERSON_KIND,
+            target.kind.in_(tuple(TASK_CALENDAR_KINDS)),
+        )
+        work_to_person = and_(
+            target.kind == PERSON_KIND,
+            source.kind.in_(tuple(TASK_CALENDAR_KINDS)),
+        )
+        rows = list(
+            self._session.execute(
+                select(Edge, source, target)
+                .join(source, source.id == Edge.source_id)
+                .join(target, target.id == Edge.target_id)
                 .where(
                     Edge.user_id == self._user_id,
                     Edge.state != REJECTED_STATE,
+                    source.user_id == self._user_id,
+                    target.user_id == self._user_id,
+                    source.state != REJECTED_STATE,
+                    target.state != REJECTED_STATE,
+                    object_is_active(source),
+                    object_is_active(target),
+                    or_(person_to_work, work_to_person),
                 )
-                .limit(MAX_GRAPH_EDGES + 1)
+                .order_by(Edge.updated_at.desc(), Edge.created_at.desc(), Edge.id)
+                .limit(MAX_TASK_CANDIDATES + 1)
             )
         )
+        truncated = len(rows) > MAX_TASK_CANDIDATES
         found: set[UUID] = set()
-        for edge in rows[:MAX_GRAPH_EDGES]:
-            for left_id, right_id in (
-                (edge.source_id, edge.target_id),
-                (edge.target_id, edge.source_id),
-            ):
-                left = self._session.get(Object, left_id)
-                right = self._session.get(Object, right_id)
-                if left is None or right is None:
-                    continue
-                if (
-                    _active_person(left)
-                    and right.kind in TASK_CALENDAR_KINDS
-                    and _active_person_object(right)
-                ):
-                    found.add(left.id)
-        return found
+        for edge, left, right in rows[:MAX_TASK_CANDIDATES]:
+            del edge
+            if left.kind == PERSON_KIND and right.kind in TASK_CALENDAR_KINDS:
+                found.add(left.id)
+            elif right.kind == PERSON_KIND and left.kind in TASK_CALENDAR_KINDS:
+                found.add(right.id)
+        return found, truncated
 
     def _hits(
         self, identity_index: dict[tuple[str, str, str], UUID]
     ) -> tuple[list[InteractionHit], bool]:
         if not identity_index:
             return [], False
+        rows, scan_truncated = self._load_communication()
+        hits, hit_truncated = self._attribute_rows(rows, identity_index)
+        return hits, scan_truncated or hit_truncated
+
+    def _load_communication(self) -> tuple[list[Object], bool]:
         cutoff = self._now - timedelta(days=WINDOW_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
         rows = list(
@@ -198,12 +260,18 @@ class PersonSalienceService:
                 .limit(MAX_SCAN_ROWS + 1)
             )
         )
-        scan_truncated = len(rows) > MAX_SCAN_ROWS
+        return rows[:MAX_SCAN_ROWS], len(rows) > MAX_SCAN_ROWS
+
+    def _attribute_rows(
+        self,
+        rows: list[Object],
+        identity_index: dict[tuple[str, str, str], UUID],
+    ) -> tuple[list[InteractionHit], bool]:
         hits: list[InteractionHit] = []
         direct_kept: dict[UUID, int] = {}
         public_kept: dict[UUID, int] = {}
         hit_truncated = False
-        for row in rows[:MAX_SCAN_ROWS]:
+        for row in rows:
             metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
             occurred = row.occurred_at or row.created_at
             if occurred is None:
@@ -227,7 +295,7 @@ class PersonSalienceService:
                         continue
                     public_kept[hit.person_id] = kept + 1
                 hits.append(hit)
-        return hits, scan_truncated or hit_truncated
+        return hits, hit_truncated
 
     def _attention(self, people: list[UUID]) -> dict[UUID, tuple[bool, bool]]:
         rows = self._session.scalars(
