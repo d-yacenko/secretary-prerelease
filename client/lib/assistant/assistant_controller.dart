@@ -1512,6 +1512,7 @@ class AssistantController extends ChangeNotifier {
     _persistentBootstrapReady = false;
     switchBlockedMessage = null;
     _cancelDrivingSilenceMonitor();
+    _stopVoiceInFlight = null;
     _voice.reset();
     _speech.stop();
     _messages.clear();

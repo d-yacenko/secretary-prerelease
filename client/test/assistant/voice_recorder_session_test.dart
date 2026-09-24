@@ -406,4 +406,167 @@ void main() {
     expect(samples.last.bytes, pcmWavBytes(durationMs: 500).length);
     expect(samples.first.bytes, lessThan(samples.last.bytes));
   });
+
+  test('stale transcription cannot deliver into the next voice session', () async {
+    final gate = Completer<http.Response>();
+    final uploadStarted = Completer<void>();
+    var transcribeCalls = 0;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/transcribe') {
+        transcribeCalls += 1;
+        if (transcribeCalls == 1) {
+          if (!uploadStarted.isCompleted) {
+            uploadStarted.complete();
+          }
+          return gate.future;
+        }
+        return jsonResponse({'text': 'фраза-b'});
+      }
+      return http.Response('{}', 404);
+    });
+    final apiClient = SecretaryApiClient(httpClient: mock);
+    apiClient.configure(baseUrl: baseUrl, token: token);
+    final voice = VoiceTranscriptionController(
+      apiClient: apiClient,
+      authController: buildAuth(apiClient),
+      voiceRecorder: FakeVoiceRecorder(),
+      voiceTempFiles: VoiceTempFiles(directory: tempDir),
+    );
+    final consumed = <String>[];
+    voice.bindTranscriptConsumer((transcript) async {
+      consumed.add(transcript);
+    });
+
+    await voice.startRecording();
+    final pending = voice.stopAndTranscribe();
+    await uploadStarted.future;
+    voice.reset();
+    expect(voice.voiceState, VoiceState.idle);
+
+    await voice.startRecording();
+    expect(voice.voiceState, VoiceState.recording);
+    gate.complete(
+      jsonResponse({'text': 'тайна-a'}),
+    );
+    await pending;
+    expect(consumed, isEmpty);
+    expect(voice.voiceState, VoiceState.recording);
+    expect(voice.voiceErrorMessage, isNull);
+
+    await voice.stopAndTranscribe();
+    expect(consumed, ['фраза-b']);
+    expect(voice.voiceState, VoiceState.idle);
+    expect(transcribeCalls, 2);
+    voice.dispose();
+  });
+
+  test('stale transcription error does not mark the next session', () async {
+    final gate = Completer<http.Response>();
+    final uploadStarted = Completer<void>();
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/transcribe') {
+        if (!uploadStarted.isCompleted) {
+          uploadStarted.complete();
+          return gate.future;
+        }
+        return jsonResponse({'text': 'фраза-b'});
+      }
+      return http.Response('{}', 404);
+    });
+    final apiClient = SecretaryApiClient(httpClient: mock);
+    apiClient.configure(baseUrl: baseUrl, token: token);
+    final auth = buildAuth(apiClient);
+    final voice = VoiceTranscriptionController(
+      apiClient: apiClient,
+      authController: auth,
+      voiceRecorder: FakeVoiceRecorder(),
+      voiceTempFiles: VoiceTempFiles(directory: tempDir),
+    );
+    final consumed = <String>[];
+    voice.bindTranscriptConsumer((transcript) async {
+      consumed.add(transcript);
+    });
+
+    await voice.startRecording();
+    final pending = voice.stopAndTranscribe();
+    await uploadStarted.future;
+    voice.reset();
+    await voice.startRecording();
+    gate.complete(http.Response('{"detail":"boom"}', 500));
+    await pending;
+    expect(consumed, isEmpty);
+    expect(voice.voiceState, VoiceState.recording);
+    expect(voice.voiceErrorMessage, isNull);
+    expect(auth.status, AuthStatus.authenticated);
+    voice.dispose();
+  });
+
+  test(
+    'stale assistant transcript does not send into the next session',
+    () async {
+      final gate = Completer<http.Response>();
+      final uploadStarted = Completer<void>();
+      var transcribeCalls = 0;
+      var messageCalls = 0;
+      String? postedText;
+      final mock = MockClient((request) async {
+        if (request.url.path == '/assistant/transcribe') {
+          transcribeCalls += 1;
+          if (transcribeCalls == 1) {
+            if (!uploadStarted.isCompleted) {
+              uploadStarted.complete();
+            }
+            return gate.future;
+          }
+          return jsonResponse({'text': 'фраза-b'});
+        }
+        if (request.url.path == '/assistant/message') {
+          messageCalls += 1;
+          final body = jsonDecode(utf8.decode(request.bodyBytes));
+          postedText = body['message'] as String?;
+          return jsonResponse({
+            'answer': 'ответ-b',
+            'references': [],
+            'affected_objects': [],
+          });
+        }
+        return http.Response('{}', 404);
+      });
+      final apiClient = SecretaryApiClient(httpClient: mock);
+      apiClient.configure(baseUrl: baseUrl, token: token);
+      final assistant = buildAssistant(
+        apiClient: apiClient,
+        recorder: FakeVoiceRecorder(),
+      );
+
+      await assistant.startVoiceRecording();
+      final pending = assistant.stopVoiceRecordingAndTranscribe();
+      await uploadStarted.future;
+      assistant.resetSession();
+
+      await assistant.startVoiceRecording();
+      expect(assistant.voiceState, AssistantVoiceState.recording);
+      final nextStop = assistant.stopVoiceRecordingAndTranscribe();
+      await nextStop.timeout(const Duration(seconds: 5));
+      expect(messageCalls, 1);
+      expect(postedText, 'фраза-b');
+      expect(assistant.messages.map((message) => message.content), [
+        'фраза-b',
+        'ответ-b',
+      ]);
+
+      gate.complete(jsonResponse({'text': 'тайна-a'}));
+      await pending;
+      expect(messageCalls, 1);
+      expect(
+        assistant.messages.any((message) => message.content.contains('тайна-a')),
+        isFalse,
+      );
+      expect(assistant.messages.map((message) => message.content), [
+        'фраза-b',
+        'ответ-b',
+      ]);
+      assistant.dispose();
+    },
+  );
 }

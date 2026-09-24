@@ -66,6 +66,7 @@ class VoiceTranscriptionController extends ChangeNotifier {
   String? _activeRecordingPath;
   Timer? _recordingLimitTimer;
   int _voiceStartGeneration = 0;
+  int _transcriptionGeneration = 0;
   bool _voiceStartInFlight = false;
   Stopwatch? _recordingWallClock;
 
@@ -192,6 +193,7 @@ class VoiceTranscriptionController extends ChangeNotifier {
       return;
     }
 
+    final transcriptionGeneration = _transcriptionGeneration;
     voiceState = VoiceState.transcribing;
     voiceErrorMessage = null;
     _recordingLimitTimer?.cancel();
@@ -203,12 +205,22 @@ class VoiceTranscriptionController extends ChangeNotifier {
     try {
       recordedPath = await _voiceRecorder.stopRecording();
     } on VoiceRecorderException catch (e) {
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       await _cleanupActiveRecording();
       _setVoiceError(e.message);
       return;
     } catch (_) {
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       await _cleanupActiveRecording();
       _setVoiceError(const VoiceRecorderStopFailure().message);
+      return;
+    }
+    if (!_isActiveTranscription(transcriptionGeneration)) {
+      await _voiceTempFiles.deleteIfExists(recordedPath);
       return;
     }
     _activeRecordingPath = null;
@@ -223,6 +235,10 @@ class VoiceTranscriptionController extends ChangeNotifier {
     final file = File(recordedPath);
     if (_enableFileFinalizeWait) {
       final samples = await waitUntilRecordingFileFinalized(file);
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        await _voiceTempFiles.deleteIfExists(recordedPath);
+        return;
+      }
       VoiceCaptureDiagnostics.event('file_finalize_samples', {
         'samples': samples
             .map((sample) => '${sample.elapsedMs}:${sample.bytes}')
@@ -233,17 +249,27 @@ class VoiceTranscriptionController extends ChangeNotifier {
     try {
       if (!await file.exists() || await file.length() == 0) {
         await _voiceTempFiles.deleteIfExists(recordedPath);
+        if (!_isActiveTranscription(transcriptionGeneration)) {
+          return;
+        }
         _setVoiceError(const VoiceRecorderStopFailure().message);
         return;
       }
     } catch (_) {
       await _voiceTempFiles.deleteIfExists(recordedPath);
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       _setVoiceError(const VoiceRecorderStopFailure().message);
       return;
     }
 
     if (afterRecorderStopped != null) {
       await afterRecorderStopped();
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        await _voiceTempFiles.deleteIfExists(recordedPath);
+        return;
+      }
     }
 
     List<int> audioBytes;
@@ -251,10 +277,16 @@ class VoiceTranscriptionController extends ChangeNotifier {
       audioBytes = await file.readAsBytes();
     } catch (_) {
       await _voiceTempFiles.deleteIfExists(recordedPath);
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       _setVoiceError(const VoiceRecorderStopFailure().message);
       return;
     } finally {
       await _voiceTempFiles.deleteIfExists(recordedPath);
+    }
+    if (!_isActiveTranscription(transcriptionGeneration)) {
+      return;
     }
 
     final filename = _voiceRecorder.recordingFilename;
@@ -290,6 +322,9 @@ class VoiceTranscriptionController extends ChangeNotifier {
         filename: filename,
         contentType: contentType,
       );
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       VoiceTurnTiming.interval(
         'transcription_rtt_ms',
         started.elapsedMilliseconds,
@@ -308,11 +343,17 @@ class VoiceTranscriptionController extends ChangeNotifier {
       notifyListeners();
       await handler(transcript);
     } on AuthenticationException catch (e) {
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       voiceState = VoiceState.error;
       voiceErrorMessage = e.message;
       _authController.handleAuthenticationFailure();
       notifyListeners();
     } on NetworkException catch (e) {
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       _logTranscriptionDebug(
         stage: 'http_error',
         encoder: _voiceRecorder.recordingDebugEncoder,
@@ -324,6 +365,9 @@ class VoiceTranscriptionController extends ChangeNotifier {
       );
       _setVoiceError(e.message);
     } on ApiException catch (e) {
+      if (!_isActiveTranscription(transcriptionGeneration)) {
+        return;
+      }
       _logTranscriptionDebug(
         stage: 'http_error',
         encoder: _voiceRecorder.recordingDebugEncoder,
@@ -405,6 +449,7 @@ class VoiceTranscriptionController extends ChangeNotifier {
   }
 
   void reset() {
+    _transcriptionGeneration += 1;
     if (voiceState == VoiceState.starting ||
         voiceState == VoiceState.recording) {
       _invalidateVoiceStart();
@@ -433,6 +478,9 @@ class VoiceTranscriptionController extends ChangeNotifier {
 
   bool _isActiveVoiceStart(int generation) =>
       generation == _voiceStartGeneration;
+
+  bool _isActiveTranscription(int generation) =>
+      generation == _transcriptionGeneration;
 
   void _invalidateVoiceStart() {
     _voiceStartGeneration++;
