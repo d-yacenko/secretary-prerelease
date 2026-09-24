@@ -10,6 +10,7 @@ from sqlalchemy import inspect, select
 from alembic import command
 from app.db.engine import engine
 from app.db.models import Object, PersonIdentity, User
+from app.domain.object_visibility import tombstone_object
 from app.domain.person_candidate_score import (
     AUTOMATIC_LINK_THRESHOLD,
     EXACT_IDENTIFIER,
@@ -20,6 +21,7 @@ from app.domain.person_identity import normalize_email
 from app.services.errors import NotFoundError, ValidationError
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_identity_service import PersonIdentityService
+from app.services.provenance import REJECTED_STATE
 
 ROOT = Path(__file__).parents[1]
 EMAIL = "olga@example.com"
@@ -218,6 +220,88 @@ def test_candidates_do_not_attach_or_merge(db_session) -> None:
     ).read_text(encoding="utf-8")
     assert ".attach(" not in source
     assert "openai" not in scoring.casefold()
+
+
+def test_linked_identity_must_belong_to_the_target_person(db_session) -> None:
+    user_id, _other = _users(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    evidence = PersonEvidenceService(db_session, user_id)
+    person_a = people.create_person("Olga A")
+    person_b = people.create_person("Olga B")
+    identity = normalize_email(EMAIL)
+    foreign = people.attach(person_b.id, identity)
+    with pytest.raises(ValidationError):
+        evidence.record(
+            person_a.id,
+            identity,
+            EXACT_IDENTIFIER,
+            provenance_kind="provider_fact",
+            provenance_key="foreign-link",
+            person_identity_id=foreign.id,
+        )
+    people.detach(foreign.id)
+    with pytest.raises(ValidationError):
+        evidence.record(
+            person_b.id,
+            identity,
+            EXACT_IDENTIFIER,
+            provenance_kind="provider_fact",
+            provenance_key="rejected-link",
+            person_identity_id=foreign.id,
+        )
+    owned = people.attach(person_a.id, identity)
+    row = evidence.record(
+        person_a.id,
+        identity,
+        EXACT_IDENTIFIER,
+        provenance_kind="provider_fact",
+        provenance_key="owned-link",
+        person_identity_id=owned.id,
+    )
+    assert row.person_identity_id == owned.id
+    people.detach(owned.id)
+    history = evidence.history(person_a.id, identity)
+    assert [item.id for item in history] == [row.id]
+    assert history[0].state == "active"
+    with pytest.raises(ValidationError):
+        evidence.record(
+            person_a.id,
+            identity,
+            EXACT_IDENTIFIER,
+            provenance_kind="provider_fact",
+            provenance_key="relink-rejected",
+            person_identity_id=owned.id,
+        )
+
+
+def test_inactive_people_and_identities_are_not_candidates(db_session) -> None:
+    user_id, _other = _users(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    evidence = PersonEvidenceService(db_session, user_id)
+    rejected = people.create_person("Rejected Olga")
+    hidden = people.create_person("Olga Hidden")
+    carrier = people.create_person("Alex")
+    visible = people.create_person("Olga Volkova")
+    rejected_identity = normalize_email(EMAIL)
+    people.attach(rejected.id, rejected_identity)
+    rejected.state = REJECTED_STATE
+    hidden_identity = normalize_email("hidden@example.com")
+    people.attach(hidden.id, hidden_identity)
+    tombstone_object(hidden)
+    alias = normalize_email("alias@example.com", display_value="Olga Volkova")
+    detached = people.attach(carrier.id, alias)
+    people.detach(detached.id)
+    db_session.flush()
+    before = _identity_count(db_session)
+
+    assert people.resolve(rejected_identity) is None
+    assert people.resolve(hidden_identity) is None
+    assert evidence.propose_candidates(rejected_identity, "Rejected Olga") == []
+    assert evidence.propose_candidates(hidden_identity, "Olga Hidden") == []
+    names = {item.person_id for item in evidence.propose_candidates(None, "Olga Volkova")}
+    assert names == {visible.id}
+    assert carrier.id not in names
+    assert _identity_count(db_session) == before
 
 
 def _users(db_session) -> tuple[uuid.UUID, uuid.UUID]:

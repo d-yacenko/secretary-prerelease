@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import ObjectCreate
 from app.db.models import Object, PersonIdentity
+from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.domain.person_identity import NormalizedPersonIdentity
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
@@ -76,6 +77,8 @@ class PersonIdentityService:
             return None
         person = self._session.get(Object, row.person_object_id)
         if person is None or person.user_id != self._user_id or person.kind != PERSON_KIND:
+            return None
+        if person.state == REJECTED_STATE or is_object_hidden_from_active_reads(person):
             return None
         return person
 

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object, PersonIdentity, PersonIdentityEvidence
+from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.person_candidate_names import names_match
 from app.domain.person_candidate_score import (
     ACTIVE,
@@ -30,6 +31,7 @@ from app.domain.person_candidate_score import (
 from app.domain.person_identity import NormalizedPersonIdentity
 from app.services.errors import NotFoundError, ValidationError
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
+from app.services.provenance import REJECTED_STATE
 
 _MAX_KEY_CHARS = 200
 _MAX_EXPLANATION_CHARS = 400
@@ -62,7 +64,7 @@ class PersonEvidenceService:
         explanation: str | None = None,
         details: dict | None = None,
     ) -> PersonIdentityEvidence:
-        self._require_person(person_id)
+        self._require_active_person(person_id)
         if evidence_type not in EVIDENCE_TYPES:
             raise ValidationError("person evidence type is unknown")
         key = _bounded_key(provenance_key)
@@ -70,7 +72,7 @@ class PersonEvidenceService:
         text = _bounded_explanation(explanation)
         payload = _safe_details(details)
         self._require_source(source_object_id)
-        self._require_linked_identity(person_identity_id, identity)
+        self._require_linked_identity(person_id, person_identity_id, identity)
         existing = self._active_source(person_id, identity, evidence_type, key)
         if existing is not None:
             return existing
@@ -273,6 +275,12 @@ class PersonEvidenceService:
             raise ValidationError("evidence target must be a person")
         return person
 
+    def _require_active_person(self, person_id: UUID) -> Object:
+        person = self._require_person(person_id)
+        if not _person_is_active(person):
+            raise ValidationError("evidence target must be an active person")
+        return person
+
     def _require_source(self, source_object_id: UUID | None) -> None:
         if source_object_id is None:
             return
@@ -282,6 +290,7 @@ class PersonEvidenceService:
 
     def _require_linked_identity(
         self,
+        person_id: UUID,
         person_identity_id: UUID | None,
         identity: NormalizedPersonIdentity,
     ) -> None:
@@ -290,6 +299,10 @@ class PersonEvidenceService:
         row = self._session.get(PersonIdentity, person_identity_id)
         if row is None or row.user_id != self._user_id:
             raise NotFoundError("person_identity", person_identity_id)
+        if row.person_object_id != person_id:
+            raise ValidationError("evidence identity belongs to another person")
+        if row.state == REJECTED_STATE:
+            raise ValidationError("evidence identity is not active")
         same = (
             row.provider == identity.provider
             and row.identity_type == identity.identity_type
@@ -304,19 +317,32 @@ class PersonEvidenceService:
             select(Object).where(
                 Object.user_id == self._user_id,
                 Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
             )
         )
         matched = [person.id for person in people if names_match(display_name, person.title)]
         displays = self._session.execute(
-            select(PersonIdentity.person_object_id, PersonIdentity.display_value).where(
+            select(PersonIdentity.person_object_id, PersonIdentity.display_value)
+            .join(Object, Object.id == PersonIdentity.person_object_id)
+            .where(
                 PersonIdentity.user_id == self._user_id,
+                PersonIdentity.state != REJECTED_STATE,
                 PersonIdentity.display_value.is_not(None),
+                Object.user_id == self._user_id,
+                Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
             )
         )
         for person_id, display_value in displays:
             if person_id not in matched and names_match(display_name, display_value):
                 matched.append(person_id)
         return matched
+
+
+def _person_is_active(person: Object) -> bool:
+    return person.state != REJECTED_STATE and not is_object_hidden_from_active_reads(person)
 
 
 def _bounded_key(value: str) -> str:
