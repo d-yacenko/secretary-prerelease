@@ -8,6 +8,19 @@ from app.assistant.inbox_review_intent import (
     format_inspect_utterance_list,
 )
 
+_PERSON_IDENTITY_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "person_id": {"type": "string"},
+        "identity_type": {"type": "string"},
+        "provider": {"type": "string"},
+        "realm": {"type": "string"},
+        "canonical_value": {"type": "string"},
+    },
+    "required": ["person_id", "identity_type", "provider", "canonical_value"],
+    "additionalProperties": False,
+}
+
 ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
     "retrieve": {
         "type": "function",
@@ -15,7 +28,9 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         "description": (
             "Retrieve up to five qualified local objects ranked by relevance. "
             "Top-K is a maximum, not a target. "
-            "Omit kind to search across all object kinds."
+            "Omit kind to search across all object kinds. "
+            "When the user names a person, call resolve_person first and do not "
+            "treat two different names as the same Person."
         ),
         "parameters": {
             "type": "object",
@@ -288,6 +303,83 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "required": ["object_id"],
             "additionalProperties": False,
         },
+        "strict": False,
+    },
+    "resolve_person": {
+        "type": "function",
+        "name": "resolve_person",
+        "description": (
+            "READ only. Resolve a person name or exact identifier such as "
+            "«что писала Ольга?», «последние сообщения от Максима», or "
+            "«что мы обсуждали с VOA?». "
+            "Call this before broad retrieve when the user refers to a person. "
+            "state=resolved means one Person. state=ambiguous means ask which "
+            "candidate; do not pick a winner. state=none means no Person candidate. "
+            "Do not create or merge People. Do not treat two names as the same Person. "
+            "Salience only orders candidates."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "find_person_communications": {
+        "type": "function",
+        "name": "find_person_communications",
+        "description": (
+            "READ only. Return recent communications linked to one resolved Person "
+            "through active exact identities. person_id must come from resolve_person "
+            "in this turn. Display-name similarity is not attribution. "
+            "Use the returned object ids with get_object or get_context. "
+            "This does not send a message."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "person_id": {"type": "string"},
+                "provider": {"type": "string"},
+                "occurred_from": {"type": "string"},
+                "occurred_to": {"type": "string"},
+                "direction": {"type": "string", "enum": ["inbound", "outbound"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+            },
+            "required": ["person_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "confirm_person_identity": {
+        "type": "function",
+        "name": "confirm_person_identity",
+        "description": (
+            "Record explicit user confirmation of one candidate identity already "
+            "shown for that Person in this turn. Does not attach, merge, or send. "
+            "Do not invent an email, user id, or Telegram id."
+        ),
+        "parameters": _PERSON_IDENTITY_PARAMETERS,
+        "strict": False,
+    },
+    "reject_person_identity": {
+        "type": "function",
+        "name": "reject_person_identity",
+        "description": (
+            "Record explicit user rejection of one candidate identity already shown "
+            "for that Person in this turn. Does not detach, merge, or send."
+        ),
+        "parameters": _PERSON_IDENTITY_PARAMETERS,
+        "strict": False,
+    },
+    "retract_person_identity_feedback": {
+        "type": "function",
+        "name": "retract_person_identity_feedback",
+        "description": (
+            "Retract active confirmation or rejection for one identity already shown "
+            "for that Person in this turn. The prior feedback row stays auditable."
+        ),
+        "parameters": _PERSON_IDENTITY_PARAMETERS,
         "strict": False,
     },
     "set_inbox_review_marker": {

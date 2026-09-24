@@ -124,6 +124,15 @@ def collect_seen_object_ids_from_bounded_tool(
     elif tool_name == "list_conversation_members":
         for item in bounded.get("members", []):
             _append_uuid(seen_ids, item.get("object_id"))
+    elif tool_name == "resolve_person":
+        _append_uuid(seen_ids, bounded.get("person_id"))
+        for candidate in bounded.get("candidates") or []:
+            if isinstance(candidate, dict):
+                _append_uuid(seen_ids, candidate.get("person_id"))
+    elif tool_name == "find_person_communications":
+        for obj in bounded.get("objects") or []:
+            if isinstance(obj, dict):
+                _append_uuid(seen_ids, obj.get("id"))
     elif tool_name in (
         "create_task",
         "update_task",
@@ -137,6 +146,35 @@ def collect_seen_object_ids_from_bounded_tool(
         if obj:
             _append_uuid(seen_ids, obj.get("id"))
     return seen_ids
+
+
+def collect_seen_person_candidates(
+    tool_name: str,
+    bounded: dict[str, Any],
+) -> list[tuple[UUID, str, str, str, str]]:
+    if tool_name != "resolve_person":
+        return []
+    found: list[tuple[UUID, str, str, str, str]] = []
+    for candidate in bounded.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            person_id = UUID(str(candidate.get("person_id")))
+        except (ValueError, TypeError):
+            continue
+        for identity in candidate.get("identities") or []:
+            if not isinstance(identity, dict):
+                continue
+            found.append(
+                (
+                    person_id,
+                    str(identity.get("identity_type") or ""),
+                    str(identity.get("provider") or ""),
+                    str(identity.get("realm") or ""),
+                    str(identity.get("canonical_value") or ""),
+                )
+            )
+    return found
 
 
 def collect_seen_edge_ids_from_bounded_tool(

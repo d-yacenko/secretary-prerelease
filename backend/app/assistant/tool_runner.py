@@ -8,9 +8,12 @@ from app.assistant.inbox_review_progress import InboxReviewTurnProgress
 from app.assistant.reference_ids import (
     collect_seen_edge_ids_from_bounded_tool,
     collect_seen_object_ids_from_bounded_tool,
+    collect_seen_person_candidates,
 )
 from app.assistant.tool_output import serialize_tool_output_for_assistant
 from app.assistant.turn_telemetry import AssistantTurnTelemetry
+from app.domain.person_assistant import feedback_identity_key, parse_feedback_identity
+from app.domain.person_identity import PersonIdentityInputError
 from app.tools.policy import ToolPermission
 from app.tools.registry import get_tool_spec
 from app.tools.results import ToolExecutionResult, ToolExecutionStatus
@@ -29,6 +32,8 @@ _READ_TOOLS = frozenset(
         "list_labels",
         "list_inbox_since_review_marker",
         "list_conversation_members",
+        "resolve_person",
+        "find_person_communications",
     }
 )
 _EVIDENCE_WRITE_TOOLS = frozenset({"create_task", "update_task", "set_task_status", "delete_task"})
@@ -49,6 +54,14 @@ _ACTIVITY_TARGET_TOOLS = frozenset({"cancel_scheduled_activity"})
 # target object and the label must have been exposed to the model this turn.
 _ANNOTATION_TARGET_TOOLS = frozenset({"assign_label", "remove_label"})
 _REVIEW_MARKER_TARGET_TOOLS = frozenset({"set_inbox_review_marker"})
+_PERSON_READ_TOOLS = frozenset({"find_person_communications"})
+_PERSON_FEEDBACK_TOOLS = frozenset(
+    {
+        "confirm_person_identity",
+        "reject_person_identity",
+        "retract_person_identity_feedback",
+    }
+)
 _MUTATION_TOOLS = frozenset(
     {
         "create_task",
@@ -73,6 +86,9 @@ _MUTATION_TOOLS = frozenset(
         "delete_label",
         "set_inbox_review_marker",
         "clear_inbox_review_marker",
+        "confirm_person_identity",
+        "reject_person_identity",
+        "retract_person_identity_feedback",
     }
 )
 
@@ -92,6 +108,8 @@ class PerTurnToolBudget:
         self._pending_seen_object_ids: set[UUID] = set()
         self._seen_edge_ids: set[UUID] = set()
         self._pending_seen_edge_ids: set[UUID] = set()
+        self._seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
+        self._pending_seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
         self._staged_actions: list[dict] = []
         self._plan_sealed = False
         self._inbox_review_purpose = inbox_review_purpose
@@ -122,6 +140,8 @@ class PerTurnToolBudget:
         self._pending_seen_object_ids.clear()
         self._seen_edge_ids.update(self._pending_seen_edge_ids)
         self._pending_seen_edge_ids.clear()
+        self._seen_person_candidates.update(self._pending_seen_person_candidates)
+        self._pending_seen_person_candidates.clear()
         if self._staged_actions:
             self._plan_sealed = True
 
@@ -220,6 +240,20 @@ class PerTurnToolBudget:
                     self._telemetry.tool_calls += 1
                 return annotation_error
 
+        if tool_name in _PERSON_READ_TOOLS:
+            person_error = self._validate_seen_person(tool_name, arguments)
+            if person_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return person_error
+
+        if tool_name in _PERSON_FEEDBACK_TOOLS:
+            feedback_error = self._validate_person_feedback_allowlist(tool_name, arguments)
+            if feedback_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return feedback_error
+
         if tool_name in _REVIEW_MARKER_TARGET_TOOLS:
             marker_error = self._validate_review_marker_target_allowlist(tool_name, arguments)
             if marker_error is not None:
@@ -254,6 +288,10 @@ class PerTurnToolBudget:
                 tool_name, model_output.model_visible_payload
             ):
                 self._pending_seen_edge_ids.add(edge_id)
+            for candidate in collect_seen_person_candidates(
+                tool_name, model_output.model_visible_payload
+            ):
+                self._pending_seen_person_candidates.add(candidate)
             result = result.model_copy(
                 update={
                     "model_output_json": model_output.model_output_json,
@@ -517,6 +555,55 @@ class PerTurnToolBudget:
                 success=False,
                 tool_name=tool_name,
                 error="target object was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        return None
+
+    def _validate_seen_person(self, tool_name: str, arguments: dict) -> ToolExecutionResult | None:
+        raw_id = arguments.get("person_id")
+        try:
+            parsed = UUID(str(raw_id))
+        except (ValueError, TypeError):
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="invalid person id",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if parsed not in self._seen_object_ids:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        return None
+
+    def _validate_person_feedback_allowlist(
+        self, tool_name: str, arguments: dict
+    ) -> ToolExecutionResult | None:
+        raw_id = arguments.get("person_id")
+        try:
+            person_id = UUID(str(raw_id))
+            identity = parse_feedback_identity(
+                str(arguments.get("identity_type") or ""),
+                str(arguments.get("provider") or ""),
+                str(arguments.get("realm") or ""),
+                str(arguments.get("canonical_value") or ""),
+            )
+        except (ValueError, TypeError, PersonIdentityInputError):
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person identity was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        key = (person_id, *feedback_identity_key(identity))
+        if key not in self._seen_person_candidates:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person identity was not exposed in this Assistant turn",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
         return None

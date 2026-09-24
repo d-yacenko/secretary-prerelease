@@ -1321,3 +1321,77 @@ class CancelScheduledActivityOutput(BaseModel):
     object: ObjectOut
     changed: bool = False
     status: str
+
+
+class ResolvePersonInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=200)
+
+
+class PersonIdentitySummary(BaseModel):
+    category: str
+    identity_type: str
+    provider: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str | None = None
+
+
+class PersonCandidateOut(BaseModel):
+    person_id: UUID
+    title: str
+    identities: list[PersonIdentitySummary]
+    assessment_resolution: str | None = None
+    reasons: tuple[str, ...] = ()
+    salience_tier: str | None = None
+    salience_score: int | None = None
+
+
+class ResolvePersonOutput(BaseModel):
+    state: Literal["resolved", "ambiguous", "none"]
+    person_id: UUID | None = None
+    candidates: list[PersonCandidateOut]
+    truncated: bool = False
+
+
+class FindPersonCommunicationsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    provider: str | None = None
+    occurred_from: datetime | None = None
+    occurred_to: datetime | None = None
+    direction: Literal["inbound", "outbound"] | None = None
+    limit: int = Field(default=10, ge=1, le=10)
+
+
+class PersonCommunicationOut(BaseModel):
+    id: UUID
+    kind: str
+    provider: str | None = None
+    title: str | None = None
+    occurred_at: datetime | None = None
+
+
+class FindPersonCommunicationsOutput(BaseModel):
+    person_id: UUID
+    objects: list[PersonCommunicationOut]
+    truncated: bool = False
+
+
+class PersonIdentityFeedbackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    identity_type: str
+    provider: str
+    realm: str = ""
+    canonical_value: str
+
+
+class PersonIdentityFeedbackOutput(BaseModel):
+    person_id: UUID
+    evidence_id: UUID
+    evidence_type: str
+    state: str

@@ -67,6 +67,8 @@ from app.tools.schemas import (
     DeleteLabelOutput,
     DeleteTaskInput,
     DeleteTaskOutput,
+    FindPersonCommunicationsInput,
+    FindPersonCommunicationsOutput,
     GetContextInput,
     GetContextOutput,
     GetObjectInput,
@@ -89,6 +91,8 @@ from app.tools.schemas import (
     ListNotificationsInput,
     ListNotificationsOutput,
     NeighborItem,
+    PersonIdentityFeedbackInput,
+    PersonIdentityFeedbackOutput,
     QueryObjectItemOut,
     QueryObjectsInput,
     QueryObjectsOutput,
@@ -99,6 +103,8 @@ from app.tools.schemas import (
     RenameLabelCanonicalInput,
     RenameLabelInput,
     RenameLabelOutput,
+    ResolvePersonInput,
+    ResolvePersonOutput,
     RetrievalHitOut,
     RetrieveInput,
     RetrieveOutput,
@@ -685,6 +691,50 @@ class DomainToolService:
         except NotFoundError as exc:
             raise ToolError(f"object not found: {exc.entity_id}") from exc
         return GetObjectOutput(object=ObjectOut.from_model(obj))
+
+    def resolve_person(self, payload: ResolvePersonInput) -> ResolvePersonOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            return PersonAssistantService(self._session, self._user_id).resolve(payload.query)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def find_person_communications(
+        self, payload: FindPersonCommunicationsInput
+    ) -> FindPersonCommunicationsOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            return PersonAssistantService(self._session, self._user_id).find_communications(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def confirm_person_identity(
+        self, payload: PersonIdentityFeedbackInput
+    ) -> PersonIdentityFeedbackOutput:
+        return self._person_feedback("confirm_person_identity", payload)
+
+    def reject_person_identity(
+        self, payload: PersonIdentityFeedbackInput
+    ) -> PersonIdentityFeedbackOutput:
+        return self._person_feedback("reject_person_identity", payload)
+
+    def retract_person_identity_feedback(
+        self, payload: PersonIdentityFeedbackInput
+    ) -> PersonIdentityFeedbackOutput:
+        return self._person_feedback("retract_person_identity_feedback", payload)
+
+    def _person_feedback(
+        self, method_name: str, payload: PersonIdentityFeedbackInput
+    ) -> PersonIdentityFeedbackOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            method = getattr(PersonAssistantService(self._session, self._user_id), method_name)
+            return method(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
 
     def get_context(self, input: GetContextInput) -> GetContextOutput:
         if input.object_id is None and input.query is None:

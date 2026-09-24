@@ -32,6 +32,11 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "list_labels",
         "list_inbox_since_review_marker",
         "list_conversation_members",
+        "resolve_person",
+        "find_person_communications",
+        "confirm_person_identity",
+        "reject_person_identity",
+        "retract_person_identity_feedback",
         "set_inbox_review_marker",
         "clear_inbox_review_marker",
         "create_label",
@@ -85,6 +90,11 @@ def test_registry_covers_executor_dispatch_tools():
         "list_labels",
         "list_inbox_since_review_marker",
         "list_conversation_members",
+        "resolve_person",
+        "find_person_communications",
+        "confirm_person_identity",
+        "reject_person_identity",
+        "retract_person_identity_feedback",
         "set_inbox_review_marker",
         "clear_inbox_review_marker",
         "create_label",
@@ -151,6 +161,8 @@ def test_permission_classifications():
         "list_labels",
         "list_inbox_since_review_marker",
         "list_conversation_members",
+        "resolve_person",
+        "find_person_communications",
         "get_today",
     }
     internal_write = {
@@ -164,7 +176,15 @@ def test_permission_classifications():
         "rename_label",
     }
     destructive = {"delete_task", "remove_relation", "delete_label"}
-    annotate = {"assign_label", "remove_label", "set_inbox_review_marker", "clear_inbox_review_marker"}
+    annotate = {
+        "assign_label",
+        "remove_label",
+        "set_inbox_review_marker",
+        "clear_inbox_review_marker",
+        "confirm_person_identity",
+        "reject_person_identity",
+        "retract_person_identity_feedback",
+    }
     for name in read_tools:
         assert TOOL_REGISTRY[name].permission == ToolPermission.READ
     for name in internal_write:
