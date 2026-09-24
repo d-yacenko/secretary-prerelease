@@ -117,3 +117,50 @@
 - Prefer deriving a confidence/score from accumulated evidence records over mutating a single opaque probability in place.
 - In ambiguous send flows the Assistant may present multiple known/proposed routes with confidence language and ask the user to choose. The selected route still goes through the normal pending-action-plan approval/frozen-route safety boundary before any external write.
 - A route choice may optionally trigger a separate lightweight clarification/confirmation when the identity implication matters, but hands-free flows should avoid unnecessary questioning when the user only needs to send a message safely.
+
+
+## Graph Refined — Person salience and processing budget
+
+- Secretary should maintain an internal, provider-neutral **Person salience** signal: how strongly a real-world person currently participates in the user's working/personal communication graph.
+- Person salience is an internal prioritization/budget signal, not a new user-facing label taxonomy. Do not add dedicated UI badges, stars, or manual classification controls unless later usage demonstrates a need.
+- Salience must not be confused with object/content importance. A low-salience or previously unknown person may still produce a highly important email, task, temporal signal, publication decision, legal/financial notice, or other object. Content/object relevance continues to be evaluated independently.
+- Conversely, a high-salience person may generate routine or irrelevant content. Salience is one feature, never a hard inclusion/exclusion rule for object importance or proactive attention.
+- Prefer explainable components over one opaque mutable importance number. Useful components include:
+  - direct 1:1 interaction;
+  - reciprocity (the user and person both communicate);
+  - interaction frequency;
+  - recency with time decay;
+  - task/dependency involvement;
+  - shared calendar/meeting participation;
+  - explicit user attention (searching, asking the Assistant about the person, choosing them as recipient);
+  - confirmed durable relationship facts;
+  - cross-provider presence/identity confidence.
+- Broadcast/group/channel exposure alone should contribute little. High message volume in a general channel must not make every author a high-salience Person.
+- Direct/replied/reciprocal communication should outweigh passive exposure to many broadcast messages.
+- Recency/frequency components may decay over time. Durable semantic relationship facts (for example family relation or current direct manager, when explicitly confirmed) should not decay merely because recent message volume is low.
+- Internal derived tiers such as `focus / known / incidental` are acceptable implementation concepts, but are not required as visible product labels.
+
+### Lazy Person promotion and cost control
+
+- Do not eagerly create/enrich a full Person graph for every author observed in large communication feeds.
+- Provider-native sender identity may remain only as source-object metadata / normalized identity evidence until there is enough reason to promote it into active Person resolution.
+- Promotion/deeper resolution may be triggered by strong exact identity evidence, direct/repeated interaction, task/calendar dependency, explicit Assistant lookup, recipient selection, user confirmation, or other bounded salience evidence.
+- This lazy strategy is intended to prevent large corporate/Telegram/Teams/Mattermost channels from creating thousands of expensive Person-resolution workloads for incidental authors.
+- Salience may allocate processing budget for cross-provider identity enrichment, graph expansion, candidate matching, and later semantic work, but it must respect all existing provider/AI eligibility gates. In particular it must never bypass `TELEGRAM_MTPROTO_AI_ENABLED` or any other privacy/consent boundary.
+
+### Downstream Graph / proactive use
+
+- Person salience may be used as one input when ranking or correlating objects, tasks, temporal signals, communication threads, and future proactive candidates.
+- Strong interaction with a high-salience Person is useful evidence that an associated object may deserve more attention, but cannot establish importance by itself.
+- Object content, direct user participation, task/dependency state, deadlines, source semantics, and other relevance evidence remain independent inputs.
+- A rare high-value source/object must be able to outrank routine traffic from a high-salience Person.
+- Future proactive logic may use Person salience to allocate review budget and rank candidates, not as a sole notification trigger.
+
+## Graph Refined staged implementation direction
+
+- P2 (currently in progress): persistent identity evidence ledger, explainable candidate scoring, and interaction feedback semantics; no auto-merge.
+- P3: Person salience foundation and bounded interaction evidence, including directness, reciprocity, recency/frequency decay, task/calendar/user-attention signals where already available. No dedicated UI.
+- P4: bounded identity enrichment / candidate-resolution orchestration, using exact provider facts first and salience to decide where deeper cross-provider resolution is worth the cost. Do not eagerly enrich every incidental sender.
+- P5: safe confirmation/rejection/reversal flows and Person-aware Assistant lookup/retrieval, so queries such as “what did Olga write?” can resolve a Person and search linked communication evidence.
+- P6: Person-aware communication routing / send-by-person with ambiguity handling, route-choice feedback, and the existing pending-action-plan/frozen-route approval safety boundary.
+- Each phase remains separately reviewable. Do not let a current phase silently start the next one.
