@@ -70,3 +70,34 @@
 - Do not create actionable Notifications merely because an outbound message exists.
 - Provider-specific outbound suppression in ordinary communication presentation is a parity defect unless there is a separately documented provider limitation.
 - Existing canonical source objects/history should be reused; do not duplicate or rewrite messages solely to change visibility.
+
+
+## Graph Refined — People & Identity
+
+- The next major product stage is **Graph Refined: People & Identity**.
+- A real-world person is a canonical per-user graph node represented by the existing Object model with `kind="person"`; do not build a disconnected contact silo beside the graph.
+- Provider/account identities are separate typed identity records attached to the canonical Person. Strong identifiers are namespaced by the provider realm (for example email, Mattermost user id/username within a server, Teams user id within a tenant, Telegram user id/peer id) and must be normalized deterministically.
+- An exact strong identifier may resolve/link deterministically. Display-name or fuzzy textual similarity alone must never silently merge two people.
+- Ambiguous or similarity-based matches must remain proposed/confirmable and reversible; an incorrect merge must be safely separable without rewriting source messages.
+- Source communication Objects remain immutable provenance/evidence. Person resolution layers on top of them; it must not replace provider-native message/account identifiers.
+- Future Assistant queries such as “what did Olga write?” should resolve a Person first and then retrieve that person's linked communication objects across providers.
+- Future “send to Olga” behavior must never invent an address/username. The backend resolves only known routes for the selected Person; if the route is ambiguous it must clarify. The final provider/account/conversation/recipient is frozen in the existing pending-action-plan approval flow before any external write.
+- People/identity work is provider-neutral. Email, Mattermost, Teams, Telegram MTProto, and future communication providers should feed the same identity layer through normalized provider-specific identifiers.
+
+## Telegram development posture while external permission is pending
+
+- Product development should continue assuming Telegram MTProto will eventually participate in the same provider-neutral semantic features as other communication sources; do not fork Graph Refined, voice/media ingestion, task correlation, or other architecture into a Telegram-specific design merely because production AI is currently quarantined.
+- Production keeps the existing `TELEGRAM_MTPROTO_AI_ENABLED=false` gate until the external permission/consent question is resolved. The gate remains the hard boundary for Telegram-derived ML/LLM transmission; ordinary Inbox, transport, storage, CRUD, deterministic metadata normalization, and other non-AI behavior remain available.
+- Development and tests may build the full gated Telegram paths ahead of permission so future activation remains an environment/configuration operation rather than a redesign.
+- A private self-authored Telegram test conversation such as the user's solo `TestML` chat may be used only through the already accepted self-authored canonical MTProto eligibility/safety path. Do not hardcode the chat name or create a product policy exception keyed to `TestML`; the safety property is self-authorship/ownership, not the label.
+- If external permission never arrives, the global Telegram AI gate remains false and normal non-AI Telegram Inbox/communication behavior continues to work.
+
+## Major-stage priority after Graph Refined
+
+- After People & Identity, the next intended major stage is provider-neutral voice-note/media ingestion and transcription, especially for communication feeds and hands-free use.
+- The following major stage is substantial Task Graph refinement.
+- Rolling summaries for very long Assistant conversations remain backlog, not the current stage.
+- Further voice/hands-free refinement should be driven by real usage after the media-ingestion stage.
+- Today single-day ephemeral-object presentation is a later product enhancement.
+- Label aggregation/polish is lower priority.
+- Proactive detection of emerging tasks/attention needs is a long-term future stage, not current work.
