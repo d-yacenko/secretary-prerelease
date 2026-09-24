@@ -1408,3 +1408,84 @@ class PersonIdentity(Base):
             postgresql_where=text("state <> 'rejected'"),
         ),
     )
+
+
+class PersonIdentityEvidence(Base):
+    __tablename__ = "person_identity_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    person_object_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("objects.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    person_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("person_identities.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    provider: Mapped[str] = mapped_column(nullable=False)
+    identity_type: Mapped[str] = mapped_column(nullable=False)
+    realm: Mapped[str] = mapped_column(nullable=False, server_default="")
+    canonical_value: Mapped[str] = mapped_column(nullable=False)
+    evidence_type: Mapped[str] = mapped_column(nullable=False)
+    polarity: Mapped[str] = mapped_column(nullable=False)
+    weight: Mapped[int] = mapped_column(nullable=False)
+    provenance_kind: Mapped[str] = mapped_column(nullable=False)
+    provenance_key: Mapped[str] = mapped_column(nullable=False)
+    source_object_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("objects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    explanation: Mapped[str | None] = mapped_column(nullable=True)
+    details: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    state: Mapped[str] = mapped_column(nullable=False)
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("person_identity_evidence.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "evidence_type in ("
+            "'exact_identifier', 'provider_profile', 'name_similarity', "
+            "'organization_match', 'graph_context', 'llm_suggestion', "
+            "'user_route_choice', 'user_confirmed', 'user_rejected')",
+            name="ck_person_identity_evidence_type",
+        ),
+        sa.CheckConstraint(
+            "polarity in ('positive', 'negative')",
+            name="ck_person_identity_evidence_polarity",
+        ),
+        sa.CheckConstraint(
+            "state in ('active', 'retracted')",
+            name="ck_person_identity_evidence_state",
+        ),
+        Index("ix_person_identity_evidence_user_person", "user_id", "person_object_id"),
+        Index(
+            "uq_person_identity_evidence_active_source",
+            "user_id",
+            "person_object_id",
+            "provider",
+            "identity_type",
+            "realm",
+            "canonical_value",
+            "evidence_type",
+            "polarity",
+            "provenance_key",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+        ),
+    )
