@@ -90,6 +90,7 @@ class AssistantChatMessage {
   AssistantChatMessage({
     required this.role,
     required this.content,
+    this.storedId,
     this.references = const [],
     this.affectedObjects = const [],
     this.actionPlan,
@@ -97,6 +98,7 @@ class AssistantChatMessage {
 
   final String role;
   final String content;
+  final String? storedId;
   final List<AssistantReference> references;
   final List<AssistantAffectedObject> affectedObjects;
   final MessageActionPlan? actionPlan;
@@ -273,8 +275,12 @@ class AssistantController extends ChangeNotifier {
   String? _pendingRetryMessage;
   String? _retryTurnId;
   String? _retryTurnText;
-  bool _conversationRestoreStarted = false;
+  bool _legacyConversationServer = false;
+  bool _persistentBootstrapReady = false;
+  Future<void>? _restoreInFlight;
   bool persistentMode = false;
+  bool hasOlderMessages = false;
+  bool loadingOlderMessages = false;
   String? conversationId;
   List<AssistantConversation> conversations = const [];
   bool historyCollapsed = false;
@@ -419,16 +425,30 @@ class AssistantController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> restorePersistentConversation() async {
-    if (_conversationRestoreStarted) {
-      return;
+  Future<void> restorePersistentConversation() {
+    if (_persistentBootstrapReady || _legacyConversationServer) {
+      return Future<void>.value();
     }
-    _conversationRestoreStarted = true;
+    final inFlight = _restoreInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final run = _restorePersistentConversationBody();
+    _restoreInFlight = run;
+    return run.whenComplete(() {
+      if (identical(_restoreInFlight, run)) {
+        _restoreInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _restorePersistentConversationBody() async {
     try {
       final current = await _apiClient.getCurrentAssistantConversation();
       final conversation =
           current ?? await _apiClient.createAssistantConversation();
       if (conversation == null) {
+        _legacyConversationServer = true;
         persistentMode = false;
         notifyListeners();
         return;
@@ -437,9 +457,47 @@ class AssistantController extends ChangeNotifier {
       conversationId = conversation.id;
       await _refreshConversationList();
       await _replaceMessagesFromServer(conversation.id);
-    } on ApiException {
+      _persistentBootstrapReady = true;
+      errorMessage = null;
+    } on ApiException catch (error) {
       persistentMode = false;
+      _persistentBootstrapReady = false;
+      errorMessage = error.message;
     }
+    notifyListeners();
+  }
+
+  Future<void> loadOlderMessages() async {
+    final id = conversationId;
+    final oldest = _messages.isEmpty ? null : _messages.first.storedId;
+    if (!hasOlderMessages ||
+        loadingOlderMessages ||
+        id == null ||
+        oldest == null) {
+      return;
+    }
+    loadingOlderMessages = true;
+    notifyListeners();
+    try {
+      final page = await _apiClient.listAssistantMessages(id, beforeId: oldest);
+      final known = <String>{
+        for (final message in _messages)
+          if (message.storedId != null) message.storedId!,
+      };
+      final older = <AssistantChatMessage>[];
+      for (final message in page.messages) {
+        final chat = _chatFromStored(message);
+        if (chat.storedId != null && known.contains(chat.storedId)) {
+          continue;
+        }
+        older.add(chat);
+      }
+      _messages.insertAll(0, older);
+      hasOlderMessages = page.hasMore;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+    }
+    loadingOlderMessages = false;
     notifyListeners();
   }
 
@@ -457,6 +515,7 @@ class AssistantController extends ChangeNotifier {
       persistentMode = true;
       conversationId = created.id;
       _messages.clear();
+      hasOlderMessages = false;
       switchBlockedMessage = null;
       await _refreshConversationList();
     } on ApiException catch (error) {
@@ -509,6 +568,12 @@ class AssistantController extends ChangeNotifier {
     notifyListeners();
 
     await restorePersistentConversation();
+    if (!_persistentBootstrapReady && !_legacyConversationServer) {
+      sendState = AssistantSendState.error;
+      errorMessage ??= 'Не удалось открыть диалог.';
+      notifyListeners();
+      return;
+    }
     final turnId = persistentMode ? _turnIdFor(trimmed) : null;
     final history = persistentMode
         ? const <AssistantHistoryMessage>[]
@@ -526,11 +591,18 @@ class AssistantController extends ChangeNotifier {
         ),
       );
       VoiceTurnTiming.interval('assistant_rtt_ms', started.elapsedMilliseconds);
-      _messages.add(AssistantChatMessage(role: 'user', content: trimmed));
+      _messages.add(
+        AssistantChatMessage(
+          role: 'user',
+          content: trimmed,
+          storedId: response.userMessageId,
+        ),
+      );
       _messages.add(
         AssistantChatMessage(
           role: 'assistant',
           content: response.answer,
+          storedId: response.assistantMessageId,
           references: response.references,
           affectedObjects: response.affectedObjects,
           actionPlan: response.pendingActionPlan == null
@@ -1225,6 +1297,7 @@ class AssistantController extends ChangeNotifier {
     _messages
       ..clear()
       ..addAll(page.messages.map(_chatFromStored));
+    hasOlderMessages = page.hasMore;
   }
 
   AssistantChatMessage _chatFromStored(AssistantStoredMessage message) {
@@ -1232,6 +1305,7 @@ class AssistantController extends ChangeNotifier {
     return AssistantChatMessage(
       role: message.role,
       content: message.content,
+      storedId: message.id,
       references: message.references,
       affectedObjects: message.affectedObjects,
       actionPlan: plan == null

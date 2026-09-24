@@ -368,6 +368,60 @@ def test_plan_status_hydrates_and_resume_persists_once(conversations_client, db_
     assert len(summaries) == 1
 
 
+def test_message_pages_are_bounded_and_model_history_stays_short(conversations_client, db_session):
+    client, provider, _session = conversations_client
+    conversation_id = uuid.UUID(client.post("/assistant/conversations").json()["id"])
+    base = datetime(2026, 9, 1, tzinfo=UTC)
+    for index in range(55):
+        db_session.add(
+            AssistantMessage(
+                conversation_id=conversation_id,
+                user_id=BOOTSTRAP_USER_ID,
+                role="user" if index % 2 == 0 else "assistant",
+                content=f"m-{index:03d}",
+                created_at=base + timedelta(seconds=index),
+            )
+        )
+    db_session.flush()
+
+    first = client.get(f"/assistant/conversations/{conversation_id}/messages")
+    assert first.status_code == 200
+    page = first.json()
+    assert page["has_more"] is True
+    assert [item["content"] for item in page["messages"]] == [
+        f"m-{index:03d}" for index in range(5, 55)
+    ]
+    older = client.get(
+        f"/assistant/conversations/{conversation_id}/messages",
+        params={"before_id": page["messages"][0]["id"]},
+    )
+    assert older.status_code == 200
+    older_body = older.json()
+    assert older_body["has_more"] is False
+    assert [item["content"] for item in older_body["messages"]] == [
+        f"m-{index:03d}" for index in range(5)
+    ]
+    combined = [item["content"] for item in older_body["messages"]] + [
+        item["content"] for item in page["messages"]
+    ]
+    assert combined == [f"m-{index:03d}" for index in range(55)]
+    assert len(combined) == len(set(combined))
+
+    sent = client.post(
+        "/assistant/message",
+        json={
+            "message": "follow-up",
+            "conversation_id": str(conversation_id),
+            "client_turn_id": str(uuid.uuid4()),
+        },
+    )
+    assert sent.status_code == 200
+    assert len(provider.histories[-1]) == MAX_ASSISTANT_HISTORY_MESSAGES
+    assert provider.histories[-1][0] == "m-043"
+    assert provider.histories[-1][-1] == "m-054"
+    assert "m-000" not in provider.histories[-1]
+
+
 def test_history_type_stays_bounded_for_the_provider_contract():
     assert MAX_ASSISTANT_HISTORY_MESSAGES == 12
     sample = AssistantHistoryMessage(role="user", content="kept")

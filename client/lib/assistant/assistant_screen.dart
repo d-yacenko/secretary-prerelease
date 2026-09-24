@@ -324,6 +324,19 @@ class _AssistantScreenState extends State<AssistantScreen> {
               ),
             ),
           ),
+        if (controller.hasOlderMessages)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const Key('assistant_load_older_messages'),
+              onPressed: controller.loadingOlderMessages
+                  ? null
+                  : controller.loadOlderMessages,
+              child: Text(
+                controller.loadingOlderMessages ? 'Загрузка…' : 'Ранее',
+              ),
+            ),
+          ),
         Expanded(
           child: SelectionArea(
             child: ListView.builder(

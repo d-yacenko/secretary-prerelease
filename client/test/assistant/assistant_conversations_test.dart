@@ -444,4 +444,152 @@ void main() {
     expect(turnIds, ['turn-1', 'turn-1']);
     expect(find.text('ok'), findsOneWidget);
   });
+
+  testWidgets('older pages prepend without duplicates', (tester) async {
+    final requestedCursors = <String?>[];
+    final histories = <dynamic>[];
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current') {
+        return jsonResponse(conversation(id: 'c1', title: 'Длинный', current: true), 200);
+      }
+      if (request.url.path == '/assistant/conversations/c1/messages') {
+        final beforeId = request.url.queryParameters['before_id'];
+        requestedCursors.add(beforeId);
+        if (beforeId == null) {
+          return jsonResponse({
+            'messages': [
+              storedMessage(id: 'm50', role: 'user', content: 'новое-50'),
+              storedMessage(id: 'm51', role: 'assistant', content: 'новое-51'),
+            ],
+            'has_more': true,
+          }, 200);
+        }
+        return jsonResponse({
+          'messages': [
+            storedMessage(id: 'm48', role: 'user', content: 'старое-48'),
+            storedMessage(id: 'm49', role: 'assistant', content: 'старое-49'),
+            storedMessage(id: 'm50', role: 'user', content: 'новое-50'),
+          ],
+          'has_more': false,
+        }, 200);
+      }
+      if (request.url.path == '/assistant/conversations') {
+        return jsonResponse({
+          'conversations': [
+            conversation(id: 'c1', title: 'Длинный', current: true),
+          ],
+        }, 200);
+      }
+      if (request.url.path == '/assistant/message') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        histories.add(body['history']);
+        expect(body['conversation_id'], 'c1');
+        return jsonResponse({
+          'answer': 'дальше',
+          'references': [],
+          'affected_objects': [],
+          'conversation_id': 'c1',
+        }, 200);
+      }
+      return http.Response('{}', 404);
+    });
+    final assistant = await pump(tester: tester, mock: mock);
+    expect(find.text('новое-51'), findsOneWidget);
+    expect(find.text('старое-48'), findsNothing);
+    expect(assistant.hasOlderMessages, isTrue);
+    await tester.tap(find.byKey(const Key('assistant_load_older_messages')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('старое-48'), findsOneWidget);
+    expect(find.text('новое-50'), findsOneWidget);
+    expect(assistant.messages.map((message) => message.content).toList(), [
+      'старое-48',
+      'старое-49',
+      'новое-50',
+      'новое-51',
+    ]);
+    expect(requestedCursors, [null, 'm50']);
+    expect(assistant.hasOlderMessages, isFalse);
+    await assistant.sendMessage('ещё', source: VoiceInvocationSource.typed);
+    await assistant.sendMessage(
+      'голосом',
+      source: VoiceInvocationSource.screenMic,
+    );
+    expect(histories, [[], []]);
+  });
+
+  testWidgets('transient bootstrap failure stays retryable and does not send', (
+    tester,
+  ) async {
+    var currentAttempts = 0;
+    var posts = 0;
+    String? sentConversation;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current') {
+        currentAttempts += 1;
+        if (currentAttempts == 1) {
+          return jsonResponse({'detail': 'unavailable'}, 503);
+        }
+        return jsonResponse(conversation(id: 'c1', current: true), 200);
+      }
+      if (request.url.path.endsWith('/messages')) {
+        return jsonResponse({'messages': [], 'has_more': false}, 200);
+      }
+      if (request.url.path == '/assistant/conversations') {
+        return jsonResponse({
+          'conversations': [conversation(id: 'c1', current: true)],
+        }, 200);
+      }
+      if (request.url.path == '/assistant/message') {
+        posts += 1;
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        sentConversation = body['conversation_id'] as String?;
+        return jsonResponse({
+          'answer': 'после повтора',
+          'references': [],
+          'affected_objects': [],
+          'conversation_id': body['conversation_id'],
+        }, 200);
+      }
+      return http.Response('{}', 404);
+    });
+    final assistant = await pump(tester: tester, mock: mock);
+    expect(posts, 0);
+    expect(assistant.persistentMode, isFalse);
+    await assistant.sendMessage('ещё');
+    expect(posts, 1);
+    expect(sentConversation, 'c1');
+    expect(assistant.persistentMode, isTrue);
+    expect(find.text('после повтора'), findsNothing);
+    await tester.pump();
+    expect(find.text('после повтора'), findsOneWidget);
+  });
+
+  testWidgets('missing conversation routes keep the legacy send path', (
+    tester,
+  ) async {
+    Map<String, dynamic>? sent;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current' ||
+          request.url.path == '/assistant/conversations') {
+        return jsonResponse({'detail': 'not found'}, 404);
+      }
+      if (request.url.path == '/assistant/message') {
+        sent = jsonDecode(request.body) as Map<String, dynamic>;
+        return jsonResponse({
+          'answer': 'legacy-ok',
+          'references': [],
+          'affected_objects': [],
+        }, 200);
+      }
+      return http.Response('{}', 404);
+    });
+    final assistant = await pump(tester: tester, mock: mock);
+    expect(assistant.persistentMode, isFalse);
+    await assistant.sendMessage('по-старому');
+    expect(sent?['conversation_id'], isNull);
+    expect(sent?['client_turn_id'], isNull);
+    expect(sent?['history'], isEmpty);
+    expect(assistant.messages.last.content, 'legacy-ok');
+  });
 }

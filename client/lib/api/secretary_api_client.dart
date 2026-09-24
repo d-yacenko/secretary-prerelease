@@ -1016,10 +1016,11 @@ class SecretaryApiClient {
   }
 
   Future<({List<AssistantStoredMessage> messages, bool hasMore})>
-  listAssistantMessages(String conversationId) async {
+  listAssistantMessages(String conversationId, {String? beforeId}) async {
     final decoded = await _requestJson(
       'GET',
       '/assistant/conversations/$conversationId/messages',
+      queryParameters: beforeId == null ? null : {'before_id': beforeId},
     );
     if (decoded is! Map<String, dynamic>) {
       throw ServerException('Unexpected conversation messages response format');
