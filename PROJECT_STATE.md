@@ -596,3 +596,6 @@
 
 
 - Google OAuth operator closure: COMPLETE. Branding verification is confirmed by the human as passed in Google Auth Platform, Publishing status is `In production`, a fresh Google OAuth reconnect was completed, and the prior warning banners disappeared. The previously expired/revoked refresh token is no longer the active credential path. No additional Google OAuth operator action is currently required for the personal Secretary workflow. The temporary read-only live-meta diagnostic is superseded by the successful live-tag rollout plus completed Google-side verification and reconnect.
+
+
+- Architect model-routing decision: the prior GPT-6 selector task is superseded before implementation. Secretary will use one canonical per-user generative model selection (existing `assistant_model` field) across interactive Assistant and all background/reasoning/generative OpenAI workloads. The legacy `OPENAI_MODEL`/global Terra path is to be retired from runtime. Specialized embeddings, STT, and TTS remain separate. Current official GPT-6 family has Luna, Sol, and Astra; there is no `gpt-6-terra`, so the selector target is GPT-6 Luna/Sol/Astra plus GPT-5.6 Luna/Terra/Sol. Production is not authorized to change in this task.
