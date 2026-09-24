@@ -17,7 +17,6 @@ from app.domain.object_visibility import is_object_hidden_from_active_reads, obj
 from app.domain.person_salience import (
     MAX_ATTENTION_CANDIDATES,
     MAX_DIRECT_HITS,
-    MAX_GRAPH_EDGES,
     MAX_PUBLIC_HITS,
     MAX_RANKED_PEOPLE,
     MAX_SCAN_ROWS,
@@ -169,24 +168,36 @@ class PersonSalienceService:
             (PersonIdentityEvidence.evidence_type == "user_confirmed", 0),
             else_=1,
         )
+        best = (
+            select(
+                PersonIdentityEvidence.person_object_id.label("person_id"),
+                confirmed_first.label("priority"),
+                PersonIdentityEvidence.created_at.label("created_at"),
+                PersonIdentityEvidence.id.label("evidence_id"),
+            )
+            .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
+            .where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type.in_(tuple(USER_ATTENTION_TYPES)),
+                Object.user_id == self._user_id,
+                Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
+            )
+            .distinct(PersonIdentityEvidence.person_object_id)
+            .order_by(
+                PersonIdentityEvidence.person_object_id,
+                confirmed_first,
+                PersonIdentityEvidence.created_at.desc(),
+                PersonIdentityEvidence.id.desc(),
+            )
+            .subquery()
+        )
         rows = list(
             self._session.scalars(
-                select(PersonIdentityEvidence.person_object_id)
-                .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
-                .where(
-                    PersonIdentityEvidence.user_id == self._user_id,
-                    PersonIdentityEvidence.state == "active",
-                    PersonIdentityEvidence.evidence_type.in_(tuple(USER_ATTENTION_TYPES)),
-                    Object.user_id == self._user_id,
-                    Object.kind == PERSON_KIND,
-                    Object.state != REJECTED_STATE,
-                    object_is_active(),
-                )
-                .order_by(
-                    confirmed_first,
-                    PersonIdentityEvidence.created_at.desc(),
-                    PersonIdentityEvidence.id.desc(),
-                )
+                select(best.c.person_id)
+                .order_by(best.c.priority, best.c.created_at.desc(), best.c.evidence_id.desc())
                 .limit(MAX_ATTENTION_CANDIDATES + 1)
             )
         )
@@ -204,35 +215,45 @@ class PersonSalienceService:
             target.kind == PERSON_KIND,
             source.kind.in_(tuple(TASK_CALENDAR_KINDS)),
         )
+        person_id = case((source.kind == PERSON_KIND, source.id), else_=target.id)
+        best = (
+            select(
+                person_id.label("person_id"),
+                Edge.updated_at.label("updated_at"),
+                Edge.created_at.label("created_at"),
+                Edge.id.label("edge_id"),
+            )
+            .join(source, source.id == Edge.source_id)
+            .join(target, target.id == Edge.target_id)
+            .where(
+                Edge.user_id == self._user_id,
+                Edge.state != REJECTED_STATE,
+                source.user_id == self._user_id,
+                target.user_id == self._user_id,
+                source.state != REJECTED_STATE,
+                target.state != REJECTED_STATE,
+                object_is_active(source),
+                object_is_active(target),
+                or_(person_to_work, work_to_person),
+            )
+            .distinct(person_id)
+            .order_by(
+                person_id,
+                Edge.updated_at.desc(),
+                Edge.created_at.desc(),
+                Edge.id.desc(),
+            )
+            .subquery()
+        )
         rows = list(
-            self._session.execute(
-                select(Edge, source, target)
-                .join(source, source.id == Edge.source_id)
-                .join(target, target.id == Edge.target_id)
-                .where(
-                    Edge.user_id == self._user_id,
-                    Edge.state != REJECTED_STATE,
-                    source.user_id == self._user_id,
-                    target.user_id == self._user_id,
-                    source.state != REJECTED_STATE,
-                    target.state != REJECTED_STATE,
-                    object_is_active(source),
-                    object_is_active(target),
-                    or_(person_to_work, work_to_person),
-                )
-                .order_by(Edge.updated_at.desc(), Edge.created_at.desc(), Edge.id)
+            self._session.scalars(
+                select(best.c.person_id)
+                .order_by(best.c.updated_at.desc(), best.c.created_at.desc(), best.c.edge_id.desc())
                 .limit(MAX_TASK_CANDIDATES + 1)
             )
         )
         truncated = len(rows) > MAX_TASK_CANDIDATES
-        found: set[UUID] = set()
-        for edge, left, right in rows[:MAX_TASK_CANDIDATES]:
-            del edge
-            if left.kind == PERSON_KIND and right.kind in TASK_CALENDAR_KINDS:
-                found.add(left.id)
-            elif right.kind == PERSON_KIND and left.kind in TASK_CALENDAR_KINDS:
-                found.add(right.id)
-        return found, truncated
+        return set(rows[:MAX_TASK_CANDIDATES]), truncated
 
     def _hits(
         self, identity_index: dict[tuple[str, str, str], UUID]
@@ -298,53 +319,62 @@ class PersonSalienceService:
         return hits, hit_truncated
 
     def _attention(self, people: list[UUID]) -> dict[UUID, tuple[bool, bool]]:
-        rows = self._session.scalars(
-            select(PersonIdentityEvidence)
+        if not people:
+            return {}
+        rows = self._session.execute(
+            select(
+                PersonIdentityEvidence.person_object_id,
+                func.bool_or(PersonIdentityEvidence.evidence_type == "user_route_choice"),
+                func.bool_or(PersonIdentityEvidence.evidence_type == "user_confirmed"),
+            )
             .where(
                 PersonIdentityEvidence.user_id == self._user_id,
                 PersonIdentityEvidence.person_object_id.in_(people),
                 PersonIdentityEvidence.state == "active",
                 PersonIdentityEvidence.evidence_type.in_(tuple(USER_ATTENTION_TYPES)),
             )
-            .limit(MAX_SCAN_ROWS)
+            .group_by(PersonIdentityEvidence.person_object_id)
         )
-        found: dict[UUID, tuple[bool, bool]] = {}
-        for row in rows:
-            route, confirmed = found.get(row.person_object_id, (False, False))
-            if row.evidence_type == "user_route_choice":
-                route = True
-            if row.evidence_type == "user_confirmed":
-                confirmed = True
-            found[row.person_object_id] = (route, confirmed)
-        return found
+        return {
+            person_id: (bool(route_choice), bool(confirmed))
+            for person_id, route_choice, confirmed in rows
+        }
 
     def _task_calendar_people(self, people: list[UUID]) -> set[UUID]:
-        rows = list(
-            self._session.scalars(
-                select(Edge)
-                .where(
-                    Edge.user_id == self._user_id,
-                    Edge.state != REJECTED_STATE,
-                    or_(Edge.source_id.in_(people), Edge.target_id.in_(people)),
-                )
-                .limit(MAX_GRAPH_EDGES + 1)
-            )
+        if not people:
+            return set()
+        source = aliased(Object)
+        target = aliased(Object)
+        person_to_work = and_(
+            source.kind == PERSON_KIND,
+            target.kind.in_(tuple(TASK_CALENDAR_KINDS)),
+            source.id.in_(people),
         )
-        linked: set[UUID] = set()
-        for edge in rows[:MAX_GRAPH_EDGES]:
-            for person_id, other_id in (
-                (edge.source_id, edge.target_id),
-                (edge.target_id, edge.source_id),
-            ):
-                if person_id not in people:
-                    continue
-                other = self._session.get(Object, other_id)
-                if other is None or other.user_id != self._user_id:
-                    continue
-                if other.kind not in TASK_CALENDAR_KINDS or not _active_person_object(other):
-                    continue
-                linked.add(person_id)
-        return linked
+        work_to_person = and_(
+            target.kind == PERSON_KIND,
+            source.kind.in_(tuple(TASK_CALENDAR_KINDS)),
+            target.id.in_(people),
+        )
+        person_id = case((source.kind == PERSON_KIND, source.id), else_=target.id)
+        rows = self._session.scalars(
+            select(person_id)
+            .select_from(Edge)
+            .join(source, source.id == Edge.source_id)
+            .join(target, target.id == Edge.target_id)
+            .where(
+                Edge.user_id == self._user_id,
+                Edge.state != REJECTED_STATE,
+                source.user_id == self._user_id,
+                target.user_id == self._user_id,
+                source.state != REJECTED_STATE,
+                target.state != REJECTED_STATE,
+                object_is_active(source),
+                object_is_active(target),
+                or_(person_to_work, work_to_person),
+            )
+            .distinct()
+        )
+        return set(rows)
 
 
 def _active_person(person: Object) -> bool:

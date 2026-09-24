@@ -436,6 +436,153 @@ def test_ranking_pool_keeps_newer_relevant_people(db_session) -> None:
     assert linked.id in {item.person_id for item in service.rank()}
 
 
+def test_candidate_bounds_count_distinct_people(db_session) -> None:
+    attention_user = _user(db_session)
+    attention_people = PersonIdentityService(db_session, attention_user)
+    attention_evidence = PersonEvidenceService(db_session, attention_user)
+    noisy = attention_people.create_person("Noisy feedback")
+    noisy_identity = normalize_email("noisy-feedback@example.com")
+    attention_people.attach(noisy.id, noisy_identity)
+    for index in range(MAX_ATTENTION_CANDIDATES + 5):
+        row = attention_evidence.record_route_choice(noisy.id, noisy_identity, f"route:{index}")
+        row.created_at = NOW - timedelta(days=2)
+    confirmed = attention_people.create_person("Confirmed person")
+    confirmed_identity = normalize_email("confirmed-person@example.com")
+    attention_people.attach(confirmed.id, confirmed_identity)
+    confirmation = attention_evidence.record_confirmation(
+        confirmed.id, confirmed_identity, "confirm:person"
+    )
+    confirmation.created_at = NOW
+    db_session.flush()
+    attention_service = PersonSalienceService(db_session, attention_user, now=NOW)
+    paired = {item.person_id: item for item in attention_service.rank()}
+    assert confirmed.id in paired
+    assert _value(paired[confirmed.id], "user_attention") == 20
+    assert paired[confirmed.id].truncated is False
+    assert [item.person_id for item in attention_service.rank()] == [
+        item.person_id for item in attention_service.rank()
+    ]
+
+    ordered: list[uuid.UUID] = []
+    for index in range(MAX_ATTENTION_CANDIDATES + 1):
+        person = attention_people.create_person(f"Attention {index}")
+        identity = normalize_email(f"attention-{index}@example.com")
+        attention_people.attach(person.id, identity)
+        row = attention_evidence.record_confirmation(person.id, identity, f"confirm:{index}")
+        row.created_at = NOW + timedelta(seconds=index)
+        ordered.append(person.id)
+    db_session.flush()
+    attention_rank = attention_service.rank()
+    attention_ids = {item.person_id for item in attention_rank}
+    assert ordered[-1] in attention_ids
+    assert ordered[0] not in attention_ids
+    assert any(item.truncated for item in attention_rank)
+    assert len(attention_rank) <= MAX_RANKED_PEOPLE
+
+    task_user = _user(db_session)
+    task_people = PersonIdentityService(db_session, task_user)
+    noisy_tasks = task_people.create_person("Many tasks")
+    newer = task_people.create_person("Newer task")
+    note = Object(
+        user_id=task_user,
+        kind="email",
+        title="unrelated",
+        origin="source",
+        state="observed",
+    )
+    work = [
+        Object(user_id=task_user, kind="task", title=f"Task {index}", origin="user", state="confirmed")
+        for index in range(MAX_TASK_CANDIDATES + 5)
+    ]
+    fresh = Object(user_id=task_user, kind="task", title="Fresh", origin="user", state="confirmed")
+    db_session.add_all([note, fresh, *work])
+    db_session.flush()
+    old_stamp = NOW - timedelta(days=3)
+    for index, task in enumerate(work):
+        db_session.add(
+            Edge(
+                user_id=task_user,
+                source_id=noisy_tasks.id,
+                target_id=task.id,
+                type="related_to",
+                origin="user",
+                state="confirmed",
+                created_at=old_stamp,
+                updated_at=old_stamp,
+            )
+        )
+        db_session.add(
+            Edge(
+                user_id=task_user,
+                source_id=noisy_tasks.id,
+                target_id=note.id,
+                type="related_to",
+                origin="user",
+                state="confirmed",
+                created_at=old_stamp,
+                updated_at=old_stamp,
+            )
+        )
+        del index
+    db_session.add(
+        Edge(
+            user_id=task_user,
+            source_id=newer.id,
+            target_id=fresh.id,
+            type="related_to",
+            origin="user",
+            state="confirmed",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    db_session.flush()
+    task_service = PersonSalienceService(db_session, task_user, now=NOW)
+    scored = {item.person_id: item for item in task_service.rank()}
+    assert _value(scored[newer.id], "task_calendar") == 16
+    assert _value(scored[noisy_tasks.id], "task_calendar") == 16
+    assert scored[newer.id].truncated is False
+
+    distinct_people: list[uuid.UUID] = []
+    distinct_tasks = [
+        Object(
+            user_id=task_user,
+            kind="task",
+            title=f"Distinct {index}",
+            origin="user",
+            state="confirmed",
+        )
+        for index in range(MAX_TASK_CANDIDATES + 1)
+    ]
+    db_session.add_all(distinct_tasks)
+    db_session.flush()
+    for index, task in enumerate(distinct_tasks):
+        person = task_people.create_person(f"Task person {index}")
+        stamp = NOW + timedelta(seconds=index)
+        db_session.add(
+            Edge(
+                user_id=task_user,
+                source_id=person.id,
+                target_id=task.id,
+                type="related_to",
+                origin="user",
+                state="confirmed",
+                created_at=stamp,
+                updated_at=stamp,
+            )
+        )
+        distinct_people.append(person.id)
+    db_session.flush()
+    distinct_rank = task_service.rank()
+    distinct_ids = {item.person_id for item in distinct_rank}
+    assert distinct_people[-1] in distinct_ids
+    assert distinct_people[0] not in distinct_ids
+    assert any(item.truncated for item in distinct_rank)
+    assert [item.person_id for item in task_service.rank()] == [
+        item.person_id for item in distinct_rank
+    ]
+
+
 def test_teams_and_mattermost_fail_closed_without_outbound_facts(db_session) -> None:
     user_id = _user(db_session)
     people = PersonIdentityService(db_session, user_id)
