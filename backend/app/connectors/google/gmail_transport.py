@@ -81,10 +81,19 @@ class GmailTransport:
         raise_for_google_response(response, "get_message")
         return response.json()
 
-    def send_message(self, access_token: str, user_id: str, raw: str) -> dict[str, Any]:
+    def send_message(
+        self,
+        access_token: str,
+        user_id: str,
+        raw: str,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"raw": raw}
+        if thread_id:
+            body["threadId"] = thread_id
         response = self._http.post(
             f"{GMAIL_API_BASE}/users/{user_id}/messages/send",
-            json={"raw": raw},
+            json=body,
             headers={"Authorization": f"Bearer {access_token}"},
         )
         raise_for_google_response(response, "send_message")

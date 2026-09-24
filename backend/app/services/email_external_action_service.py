@@ -29,8 +29,16 @@ from app.connectors.yandex.errors import YandexImapError, YandexSmtpError
 from app.connectors.yandex.imap_transport import ImaplibTransport
 from app.connectors.yandex.smtp_transport import SmtpSslTransport
 from app.core.config import settings
-from app.db.models import ExternalActionAttempt, GoogleAccount, YandexMailAccount
+from app.db.models import ExternalActionAttempt, GoogleAccount, Object, YandexMailAccount
 from app.db.session import SessionLocal
+from app.services.email_reply import (
+    gmail_thread_id,
+    reply_message_id,
+    reply_recipient,
+    reply_references,
+    reply_subject,
+    resolve_reply_source_email,
+)
 from app.services.external_account_resolution import (
     execution_provider,
     resolve_external_account,
@@ -42,12 +50,8 @@ ATTEMPT_SUCCEEDED = "succeeded"
 ATTEMPT_FAILED_DEFINITE = "failed_definite"
 ATTEMPT_UNCERTAIN = "uncertain"
 
-_RECONNECT_SEND_SCOPE_MESSAGE = (
-    "Google must be reconnected to grant Gmail send permission"
-)
-_UNCERTAIN_DELIVERY_MESSAGE = (
-    "could not confirm email delivery; not retrying send"
-)
+_RECONNECT_SEND_SCOPE_MESSAGE = "Google must be reconnected to grant Gmail send permission"
+_UNCERTAIN_DELIVERY_MESSAGE = "could not confirm email delivery; not retrying send"
 _MISMATCH_MESSAGE = "existing sent message does not match frozen fields"
 _DUPLICATE_OPERATION_MESSAGE = "multiple sent messages match this operation"
 _FAILED_DEFINITE_MESSAGE = "email send previously failed; create a new plan"
@@ -118,6 +122,10 @@ def build_email_message(payload: SendEmailCanonicalInput) -> EmailMessage:
     message["Subject"] = payload.subject
     message["Message-ID"] = payload.rfc822_message_id
     message[SECRETARY_OPERATION_HEADER] = secretary_operation_header_value(payload.operation_id)
+    if payload.in_reply_to:
+        message["In-Reply-To"] = payload.in_reply_to
+    if payload.references:
+        message["References"] = payload.references
     message.set_content(payload.body, subtype="plain", charset="utf-8")
     return message
 
@@ -190,6 +198,8 @@ class EmailExternalActionService:
         self._yandex_imap_transport = yandex_imap_transport
 
     def prepare_send_email(self, payload: SendEmailInput) -> SendEmailCanonicalInput:
+        if payload.reply_to_object_id is not None:
+            return self._prepare_reply_email(payload)
         resolved = resolve_external_account(
             self._session,
             self._user_id,
@@ -206,12 +216,57 @@ class EmailExternalActionService:
         return SendEmailCanonicalInput(
             provider=resolved.provider,
             account_email=resolved.email,
-            to=list(payload.to),
-            subject=payload.subject,
+            to=list(payload.to or []),
+            subject=payload.subject or "",
             body=payload.body,
             operation_id=operation_id,
             rfc822_message_id=rfc822_message_id_from_operation_id(operation_id),
         )
+
+    def _prepare_reply_email(self, payload: SendEmailInput) -> SendEmailCanonicalInput:
+        obj = self._require_reply_object(payload.reply_to_object_id)
+        metadata = dict(obj.metadata_ or {})
+        mapped, source_email = resolve_reply_source_email(
+            self._session,
+            self._user_id,
+            object_provider=obj.provider or "",
+            metadata=metadata,
+            provider_constraint=payload.provider,
+            account_email_constraint=payload.account_email,
+        )
+        if mapped == "google":
+            account = self._require_google_account(source_email)
+            self._require_send_scopes(account)
+        else:
+            self._require_yandex_mail_account(source_email)
+        message_id = reply_message_id(metadata)
+        operation_id = generate_operation_id()
+        thread_id = gmail_thread_id(metadata) if obj.provider == "gmail" else None
+        return SendEmailCanonicalInput(
+            provider=mapped,
+            account_email=source_email,
+            to=[reply_recipient(metadata)],
+            subject=reply_subject(metadata.get("subject") or obj.title),
+            body=payload.body,
+            operation_id=operation_id,
+            rfc822_message_id=rfc822_message_id_from_operation_id(operation_id),
+            reply_to_object_id=obj.id,
+            in_reply_to=message_id,
+            references=reply_references(metadata, message_id),
+            gmail_thread_id=thread_id,
+        )
+
+    def _require_reply_object(self, object_id: UUID | None) -> Object:
+        if object_id is None:
+            raise ToolError("reply_to_object_id is required")
+        obj = self._session.get(Object, object_id)
+        if obj is None or obj.user_id != self._user_id or obj.deleted_at is not None:
+            raise ToolError("reply object was not found")
+        if obj.state == "rejected" or obj.kind != "email":
+            raise ToolError("reply object must be an active email")
+        if obj.provider not in {"gmail", "yandex_mail"}:
+            raise ToolError("reply requires a gmail or yandex mail message")
+        return obj
 
     def send_email(self, payload: SendEmailCanonicalInput) -> SendEmailOutput:
         expected_id = rfc822_message_id_from_operation_id(payload.operation_id)
@@ -237,12 +292,15 @@ class EmailExternalActionService:
 
         access_token = self._valid_access_token(account.id)
         raw = build_rfc822_raw(payload)
+        send_kwargs: dict[str, Any] = {
+            "access_token": access_token,
+            "user_id": "me",
+            "raw": raw,
+        }
+        if payload.gmail_thread_id:
+            send_kwargs["thread_id"] = payload.gmail_thread_id
         try:
-            sent = self._transport.send_message(
-                access_token=access_token,
-                user_id="me",
-                raw=raw,
-            )
+            sent = self._transport.send_message(**send_kwargs)
         except GoogleApiError as exc:
             if _is_ambiguous_send_error(exc):
                 return self._after_ambiguous_send(account, payload, access_token, attempt)
@@ -303,7 +361,9 @@ class EmailExternalActionService:
         access_token: str,
         attempt: ExternalActionAttempt,
     ) -> SendEmailOutput:
-        started_at = self._attempt_started_at(payload.operation_id) or attempt.started_at or _utcnow()
+        started_at = (
+            self._attempt_started_at(payload.operation_id) or attempt.started_at or _utcnow()
+        )
         query = sent_window_query(started_at)
         try:
             ids, incomplete = self._list_sent_candidate_ids(access_token, query)
@@ -539,7 +599,11 @@ class EmailExternalActionService:
         claimed = self._claim_copy_state(payload.operation_id, METADATA_SENT_COPY_STATE)
         if not claimed:
             latest = self._load_attempt(payload.operation_id)
-            copy_state = self._copy_state(latest, METADATA_SENT_COPY_STATE) if latest else SENT_COPY_UNCERTAIN
+            copy_state = (
+                self._copy_state(latest, METADATA_SENT_COPY_STATE)
+                if latest
+                else SENT_COPY_UNCERTAIN
+            )
             if copy_state == SENT_COPY_STORED:
                 return "already_present"
             return self._reconcile_yandex_mailbox_copy(
@@ -565,7 +629,11 @@ class EmailExternalActionService:
         message_bytes: bytes,
     ) -> None:
         latest = self._load_attempt(payload.operation_id)
-        copy_state = self._copy_state(latest, METADATA_UNCERTAIN_COPY_STATE) if latest else SENT_COPY_NOT_STARTED
+        copy_state = (
+            self._copy_state(latest, METADATA_UNCERTAIN_COPY_STATE)
+            if latest
+            else SENT_COPY_NOT_STARTED
+        )
         if copy_state == SENT_COPY_STORED:
             return
         try:
@@ -573,10 +641,14 @@ class EmailExternalActionService:
         except YandexImapError:
             tagged = []
         if len(tagged) == 1:
-            self._set_copy_state(payload.operation_id, METADATA_UNCERTAIN_COPY_STATE, SENT_COPY_STORED)
+            self._set_copy_state(
+                payload.operation_id, METADATA_UNCERTAIN_COPY_STATE, SENT_COPY_STORED
+            )
             return
         if len(tagged) > 1:
-            self._set_copy_state(payload.operation_id, METADATA_UNCERTAIN_COPY_STATE, SENT_COPY_UNCERTAIN)
+            self._set_copy_state(
+                payload.operation_id, METADATA_UNCERTAIN_COPY_STATE, SENT_COPY_UNCERTAIN
+            )
             return
         if copy_state in {SENT_COPY_STARTED, SENT_COPY_UNCERTAIN, SENT_COPY_FAILED_DEFINITE}:
             self._reconcile_yandex_mailbox_copy(
@@ -673,7 +745,9 @@ class EmailExternalActionService:
         self._set_copy_state(payload.operation_id, metadata_key, SENT_COPY_UNCERTAIN)
         return "unconfirmed"
 
-    def _find_exact_mailbox_copies(self, imap, folder: str, payload: SendEmailCanonicalInput) -> list[Any]:
+    def _find_exact_mailbox_copies(
+        self, imap, folder: str, payload: SendEmailCanonicalInput
+    ) -> list[Any]:
         header_value = secretary_operation_header_value(payload.operation_id)
         uids, incomplete = imap.search_uids_header(
             folder,
@@ -694,15 +768,15 @@ class EmailExternalActionService:
             tagged.append(parsed)
         return tagged
 
-    def _rfc822_operation_header_matches(self, payload: SendEmailCanonicalInput, message: Any) -> bool:
+    def _rfc822_operation_header_matches(
+        self, payload: SendEmailCanonicalInput, message: Any
+    ) -> bool:
         expected = secretary_operation_header_value(payload.operation_id)
         actual = str(message.get(SECRETARY_OPERATION_HEADER) or "").strip()
         return actual == expected
 
     def _rfc822_content_matches(self, payload: SendEmailCanonicalInput, message: Any) -> bool:
-        from_addresses = [
-            addr.lower() for addr in _parse_addresses(str(message.get("From") or ""))
-        ]
+        from_addresses = [addr.lower() for addr in _parse_addresses(str(message.get("From") or ""))]
         if payload.account_email.lower() not in from_addresses:
             return False
         to_addresses = {addr.lower() for addr in _parse_addresses(str(message.get("To") or ""))}
@@ -820,7 +894,9 @@ class EmailExternalActionService:
     def _bounded_yandex_error(self, exc: YandexSmtpError | YandexImapError) -> str:
         message = (exc.message or "Yandex mail request failed").strip()
         lowered = message.lower()
-        if any(token in lowered for token in ("password", "app_password", "app-password", "secret")):
+        if any(
+            token in lowered for token in ("password", "app_password", "app-password", "secret")
+        ):
             return "Yandex mail request failed"
         return message[:500]
 
@@ -1014,7 +1090,9 @@ class EmailExternalActionService:
             return False
         if (self._header_value(message, "Subject") or "") != payload.subject:
             return False
-        payload_body = message.get("payload") if isinstance(message.get("payload"), dict) else message
+        payload_body = (
+            message.get("payload") if isinstance(message.get("payload"), dict) else message
+        )
         if not isinstance(payload_body, dict):
             return False
         plain = _extract_plain_body(payload_body)

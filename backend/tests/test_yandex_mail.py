@@ -385,6 +385,7 @@ def test_bounded_yandex_sync_creates_observed_email_objects(
         assert obj.user_id == BOOTSTRAP_USER_ID
         assert obj.origin == "source"
         assert obj.state == "observed"
+        assert obj.metadata_["source_account_email"] == "user@yandex.ru"
 
 
 def test_incremental_sync_skips_imap_search_for_already_checkpointed_uids(

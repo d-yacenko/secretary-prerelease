@@ -86,6 +86,7 @@ class GmailSyncService:
             owner_user_id=owner_user_id,
             access_token=access_token,
             effective_limit=effective_limit,
+            source_account_email=account_email,
         )
 
         if include_history_pass:
@@ -95,6 +96,7 @@ class GmailSyncService:
                 owner_user_id=owner_user_id,
                 access_token=access_token,
                 effective_limit=effective_limit,
+                source_account_email=account_email,
             )
 
         return {
@@ -114,6 +116,7 @@ class GmailSyncService:
         owner_user_id: UUID,
         access_token: str,
         effective_limit: int,
+        source_account_email: str,
     ) -> dict[str, int]:
         after_date = (utcnow() - timedelta(days=self._sync_days)).strftime("%Y/%m/%d")
         query = build_gmail_list_query(after_date)
@@ -127,6 +130,7 @@ class GmailSyncService:
             message_ids=message_ids,
             owner_user_id=owner_user_id,
             access_token=access_token,
+            source_account_email=source_account_email,
         )
 
     def _run_history_pass(
@@ -137,6 +141,7 @@ class GmailSyncService:
         owner_user_id: UUID,
         access_token: str,
         effective_limit: int,
+        source_account_email: str,
     ) -> dict[str, int]:
         gmail_state = self._account_store.get_gmail_sync_state(account_id, user_id)
         original_backfill = get_history_backfill(gmail_state)
@@ -179,6 +184,7 @@ class GmailSyncService:
             message_ids=page.message_ids,
             owner_user_id=owner_user_id,
             access_token=access_token,
+            source_account_email=source_account_email,
         )
 
         gmail_state = self._account_store.get_gmail_sync_state(account_id, user_id)
@@ -198,6 +204,7 @@ class GmailSyncService:
         message_ids: list[str],
         owner_user_id: UUID,
         access_token: str,
+        source_account_email: str,
     ) -> dict[str, int]:
         known_external_ids = self._load_known_gmail_external_ids(owner_user_id, message_ids)
         self._session.commit()
@@ -217,6 +224,8 @@ class GmailSyncService:
             self._session.commit()
             raw_message = self._transport.get_message(access_token, "me", message_id)
             normalized = normalize_gmail_message(raw_message)
+            metadata = dict(normalized["metadata"])
+            metadata["source_account_email"] = source_account_email
             obj = Object(
                 user_id=owner_user_id,
                 kind=normalized["kind"],
@@ -226,7 +235,7 @@ class GmailSyncService:
                 state=normalized["state"],
                 title=normalized["title"],
                 body=normalized.get("body"),
-                metadata_=normalized["metadata"],
+                metadata_=metadata,
                 occurred_at=normalized.get("occurred_at"),
             )
             self._session.add(obj)
@@ -260,9 +269,7 @@ class GmailSyncService:
                     except GoogleApiError:
                         return None
 
-                attachment_service.materialize_gmail_attachments(
-                    obj, descriptors, fetch_attachment
-                )
+                attachment_service.materialize_gmail_attachments(obj, descriptors, fetch_attachment)
             self._job_queue.enqueue(
                 "embed_object",
                 {"object_id": str(obj.id)},

@@ -370,6 +370,7 @@ def test_bounded_gmail_sync_creates_observed_email_objects(
         assert obj.external_id is not None
         assert obj.body == "Hello world"
         assert "body_text" not in obj.metadata_
+        assert obj.metadata_["source_account_email"] == "user@example.com"
 
 
 def test_gmail_body_stored_in_object_body(

@@ -52,6 +52,150 @@ def _bounded_query_object_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_SEMANTIC_TEXT_CHARS = 240
+_SEMANTIC_KEYS = (
+    "sender",
+    "from",
+    "recipients",
+    "to",
+    "cc",
+    "subject",
+    "source_account_email",
+    "location",
+    "organizer",
+    "attendees",
+    "calendar_summary",
+    "author_username",
+    "author_display_name",
+    "from_username",
+    "from_display_name",
+    "chat_display_name",
+    "chat_display_title",
+    "sender_display_name",
+    "direction",
+    "filename",
+    "name",
+    "path",
+    "semantic_summary",
+    "participants",
+    "tags",
+    "category",
+    "labels",
+    "folder",
+)
+_SENSITIVE_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "authorization",
+    "api_key",
+    "session",
+    "cookie",
+)
+
+
+def _sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
+
+
+def _clip_semantic_text(value: object, max_chars: int = _SEMANTIC_TEXT_CHARS) -> str | None:
+    text = " ".join(str(value).replace("\n", " ").split())
+    if not text:
+        return None
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _clip_semantic_value(value: object) -> object | None:
+    if isinstance(value, str):
+        return _clip_semantic_text(value)
+    if isinstance(value, list):
+        items = []
+        for item in value[:8]:
+            if isinstance(item, str):
+                clipped = _clip_semantic_text(item, 120)
+            elif isinstance(item, dict):
+                clipped = _clip_semantic_mapping(item)
+            else:
+                clipped = _clip_semantic_text(item, 120)
+            if clipped:
+                items.append(clipped)
+        return items or None
+    if isinstance(value, dict):
+        return _clip_semantic_mapping(value)
+    return _clip_semantic_text(value, 120)
+
+
+def _clip_semantic_mapping(value: dict[str, Any]) -> dict[str, Any] | None:
+    payload: dict[str, Any] = {}
+    for key, item in list(value.items())[:12]:
+        name = str(key)
+        if _sensitive_key(name):
+            continue
+        clipped = _clip_semantic_value(item)
+        if clipped:
+            payload[name] = clipped
+    return payload or None
+
+
+def _semantic_metadata(obj: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = obj.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    payload: dict[str, Any] = {}
+    if obj.get("kind") == "email" or obj.get("provider") in {"gmail", "yandex_mail"}:
+        email = _email_envelope(metadata, obj.get("title"))
+        if email:
+            payload["email"] = email
+    for key in _SEMANTIC_KEYS:
+        if _sensitive_key(key) or key not in metadata:
+            continue
+        if (
+            key in {"sender", "recipients", "cc", "subject", "source_account_email"}
+            and "email" in payload
+        ):
+            continue
+        clipped = _clip_semantic_value(metadata.get(key))
+        if clipped:
+            payload[key] = clipped
+    return payload or None
+
+
+def _email_envelope(metadata: dict[str, Any], title: object) -> dict[str, Any] | None:
+    headers = metadata.get("headers") if isinstance(metadata.get("headers"), dict) else {}
+    envelope: dict[str, Any] = {}
+    sender = _clip_semantic_text(
+        metadata.get("sender") or headers.get("from") or headers.get("From")
+    )
+    reply_to = _clip_semantic_text(headers.get("reply-to") or headers.get("Reply-To"))
+    subject = _clip_semantic_text(metadata.get("subject") or title)
+    to = _clip_semantic_value(metadata.get("recipients") or headers.get("to") or headers.get("To"))
+    cc = _clip_semantic_value(metadata.get("cc") or headers.get("cc") or headers.get("Cc"))
+    source_account = _clip_semantic_text(metadata.get("source_account_email"))
+    message_id = _clip_semantic_text(headers.get("message-id") or headers.get("Message-ID"), 200)
+    thread_id = _clip_semantic_text(metadata.get("thread_id"), 200)
+    if sender:
+        envelope["from"] = sender
+    if reply_to:
+        envelope["reply_to"] = reply_to
+    if to:
+        envelope["to"] = to
+    if cc:
+        envelope["cc"] = cc
+    if subject:
+        envelope["subject"] = subject
+    if source_account:
+        envelope["source_account_email"] = source_account
+    if message_id:
+        envelope["message_id"] = message_id
+    if thread_id:
+        envelope["thread_id"] = thread_id
+    return envelope or None
+
+
 def _bounded_object(obj: dict[str, Any]) -> dict[str, Any]:
     safe_uri = sanitize_canonical_uri_for_assistant(obj.get("canonical_uri"))
     payload: dict[str, Any] = {
@@ -64,6 +208,9 @@ def _bounded_object(obj: dict[str, Any]) -> dict[str, Any]:
         "origin": obj.get("origin"),
         "state": obj.get("state"),
     }
+    semantic = _semantic_metadata(obj)
+    if semantic:
+        payload["semantic"] = semantic
     if safe_uri is not None:
         payload["canonical_uri"] = safe_uri
     return payload
@@ -150,7 +297,9 @@ def _conversation_members_visible_payload(
         "object_id": raw_output.get("object_id"),
         "provider": raw_output.get("provider"),
         "conversation_label": (
-            _clip_member_text(raw_output.get("conversation_label"), _CONVERSATION_MEMBER_LABEL_CHARS)
+            _clip_member_text(
+                raw_output.get("conversation_label"), _CONVERSATION_MEMBER_LABEL_CHARS
+            )
             or raw_output.get("conversation_label")
         ),
         "stack_fingerprint": raw_output.get("stack_fingerprint"),
@@ -193,9 +342,7 @@ def _compact_coverage_ids(item: dict[str, Any]) -> list[str]:
     return [normalized] if normalized else []
 
 
-def _visible_feed_range(
-    covered: list[str], by_id: dict[str, dict[str, Any]]
-):
+def _visible_feed_range(covered: list[str], by_id: dict[str, dict[str, Any]]):
     from app.services.errors import ValidationError
     from app.services.inbox_review_snapshot_cursor import parse_feed_at
 
@@ -242,8 +389,7 @@ def _rebuild_partial_stack(
 
             provider_label = PROVIDER_FALLBACK_LABELS.get(provider, provider)
             fallback = (
-                f"{provider_label}, {label.strip() or provider_label}, "
-                f"{len(covered)} сообщений."
+                f"{provider_label}, {label.strip() or provider_label}, {len(covered)} сообщений."
             )
         stack["summary"] = None
         stack["summary_status"] = "fallback"
@@ -267,7 +413,9 @@ def _trim_compact_items_to_visible(
     visible_set = set(visible_ids)
     trimmed: list[dict[str, Any]] = []
     for item in compact_items:
-        covered = [object_id for object_id in _compact_coverage_ids(item) if object_id in visible_set]
+        covered = [
+            object_id for object_id in _compact_coverage_ids(item) if object_id in visible_set
+        ]
         if not covered:
             continue
         if item.get("type") == "stack" and len(covered) >= 2:
@@ -368,9 +516,7 @@ def _inbox_review_list_payload(
             next_cursor = encode_inbox_review_snapshot_cursor(
                 anchor_object_id=parse_object_id(raw_output.get("anchor_object_id")),
                 anchor_feed_at=parse_feed_at(raw_output.get("anchor_feed_at")),
-                snapshot_top_object_id=parse_object_id(
-                    raw_output.get("snapshot_top_object_id")
-                ),
+                snapshot_top_object_id=parse_object_id(raw_output.get("snapshot_top_object_id")),
                 snapshot_top_feed_at=parse_feed_at(raw_output.get("snapshot_top_feed_at")),
                 last_object_id=parse_object_id(last.get("object_id")),
                 last_feed_at=parse_feed_at(last.get("feed_at")),
@@ -580,20 +726,22 @@ def serialize_tool_output_for_model(tool_name: str, raw_output: dict[str, Any]) 
     if tool_name == "list_conversation_members":
         raw_members = list(raw_output.get("members") or [])
         members = [
-            _bounded_conversation_member(row)
-            for row in raw_members[:MAX_ASSISTANT_LIST_RESULTS]
+            _bounded_conversation_member(row) for row in raw_members[:MAX_ASSISTANT_LIST_RESULTS]
         ]
         return _conversation_members_visible_payload(raw_output, members)
 
-    if tool_name in ("create_task", "update_task", "create_scheduled_activity", "create_recurring_scheduled_activity"):
+    if tool_name in (
+        "create_task",
+        "update_task",
+        "create_scheduled_activity",
+        "create_recurring_scheduled_activity",
+    ):
         obj = raw_output.get("object")
         payload: dict[str, Any] = {"object": _bounded_object(obj) if obj else None}
         if tool_name == "update_task":
             payload["changed"] = raw_output.get("changed", False)
             payload["evidence_edges_created"] = raw_output.get("evidence_edges_created", 0)
-            payload["evidence_added_object_ids"] = raw_output.get(
-                "evidence_added_object_ids", []
-            )
+            payload["evidence_added_object_ids"] = raw_output.get("evidence_added_object_ids", [])
             payload["evidence_already_linked_object_ids"] = raw_output.get(
                 "evidence_already_linked_object_ids", []
             )
@@ -714,9 +862,7 @@ def serialize_tool_output_for_assistant(
         while objects:
             candidate = dict(bounded)
             candidate["objects"] = objects
-            if truncated_by_count or len(objects) < len(
-                raw_output.get("objects", [])
-            ):
+            if truncated_by_count or len(objects) < len(raw_output.get("objects", [])):
                 candidate["truncated"] = True
             text = json.dumps(candidate, ensure_ascii=False)
             if len(text) <= MAX_ASSISTANT_TOOL_OUTPUT_CHARS:

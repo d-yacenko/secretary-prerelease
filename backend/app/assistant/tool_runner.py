@@ -15,9 +15,7 @@ from app.tools.policy import ToolPermission
 from app.tools.registry import get_tool_spec
 from app.tools.results import ToolExecutionResult, ToolExecutionStatus
 
-_IRREVERSIBLE_PERMISSIONS = frozenset(
-    {ToolPermission.EXTERNAL_WRITE, ToolPermission.COMMUNICATE}
-)
+_IRREVERSIBLE_PERMISSIONS = frozenset({ToolPermission.EXTERNAL_WRITE, ToolPermission.COMMUNICATE})
 
 _READ_TOOLS = frozenset(
     {
@@ -33,9 +31,7 @@ _READ_TOOLS = frozenset(
         "list_conversation_members",
     }
 )
-_EVIDENCE_WRITE_TOOLS = frozenset(
-    {"create_task", "update_task", "set_task_status", "delete_task"}
-)
+_EVIDENCE_WRITE_TOOLS = frozenset({"create_task", "update_task", "set_task_status", "delete_task"})
 _OBJECT_TARGET_TOOLS = frozenset(
     {
         "update_task",
@@ -196,6 +192,13 @@ class PerTurnToolBudget:
                     self._telemetry.tool_calls += 1
                 return anchor_error
 
+        if tool_name == "send_email":
+            anchor_error = self._validate_email_reply_anchor_allowlist(tool_name, arguments)
+            if anchor_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return anchor_error
+
         if tool_name in _ACTIVITY_TARGET_TOOLS:
             target_error = self._validate_activity_target_allowlist(tool_name, arguments)
             if target_error is not None:
@@ -233,10 +236,15 @@ class PerTurnToolBudget:
 
         if result.success and result.output:
             model_output = serialize_tool_output_for_assistant(tool_name, result.output)
-            if tool_name in _READ_TOOLS or tool_name in _EVIDENCE_WRITE_TOOLS or tool_name in (
-                "create_scheduled_activity",
-                "create_recurring_scheduled_activity",
-                "cancel_scheduled_activity",
+            if (
+                tool_name in _READ_TOOLS
+                or tool_name in _EVIDENCE_WRITE_TOOLS
+                or tool_name
+                in (
+                    "create_scheduled_activity",
+                    "create_recurring_scheduled_activity",
+                    "cancel_scheduled_activity",
+                )
             ):
                 for object_id in collect_seen_object_ids_from_bounded_tool(
                     tool_name, model_output.model_visible_payload
@@ -305,10 +313,9 @@ class PerTurnToolBudget:
 
     def _is_duplicate_action(self, staged_action: dict) -> bool:
         for existing in self._staged_actions:
-            if (
-                existing.get("tool_name") == staged_action.get("tool_name")
-                and existing.get("arguments") == staged_action.get("arguments")
-            ):
+            if existing.get("tool_name") == staged_action.get("tool_name") and existing.get(
+                "arguments"
+            ) == staged_action.get("arguments"):
                 return True
         return False
 
@@ -390,6 +397,30 @@ class PerTurnToolBudget:
                 success=False,
                 tool_name=tool_name,
                 error="invalid send_message anchor object id",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if parsed not in self._seen_object_ids:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="target object was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        return None
+
+    def _validate_email_reply_anchor_allowlist(
+        self, tool_name: str, arguments: dict
+    ) -> ToolExecutionResult | None:
+        raw_id = arguments.get("reply_to_object_id")
+        if raw_id is None:
+            return None
+        try:
+            parsed = UUID(str(raw_id))
+        except (ValueError, TypeError, AttributeError):
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="invalid send_email reply object id",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
         if parsed not in self._seen_object_ids:

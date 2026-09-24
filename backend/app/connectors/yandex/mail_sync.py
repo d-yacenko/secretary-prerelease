@@ -47,7 +47,9 @@ def _imap_date(value: date) -> datetime:
     return datetime(value.year, value.month, value.day, tzinfo=UTC)
 
 
-def _valid_forward_checkpoint(stored_uidvalidity: Any, uidvalidity: int, stored_last_uid: Any) -> bool:
+def _valid_forward_checkpoint(
+    stored_uidvalidity: Any, uidvalidity: int, stored_last_uid: Any
+) -> bool:
     if stored_uidvalidity is None or stored_uidvalidity != uidvalidity:
         return False
     if stored_last_uid is None:
@@ -201,6 +203,7 @@ class YandexMailSyncService:
             uids=candidate_uids,
             owner_user_id=snapshot.user_id,
             initial_max_uid=int(stored_last_uid or 0) if use_incremental else 0,
+            source_account_email=snapshot.email,
         )
 
         account = self._account_store.get_by_id_for_user(account_id, user_id)
@@ -286,6 +289,7 @@ class YandexMailSyncService:
             uids=page.uids,
             owner_user_id=snapshot.user_id,
             initial_max_uid=0,
+            source_account_email=snapshot.email,
         )
 
         account = self._account_store.get_by_id_for_user(account_id, user_id)
@@ -312,6 +316,7 @@ class YandexMailSyncService:
         uids: list[int],
         owner_user_id: UUID,
         initial_max_uid: int,
+        source_account_email: str,
     ) -> tuple[dict[str, int], int]:
         known_external_ids = self._load_known_external_ids(
             owner_user_id,
@@ -344,6 +349,8 @@ class YandexMailSyncService:
                 uid=uid,
                 uidvalidity=uidvalidity,
             )
+            metadata = dict(normalized["metadata"])
+            metadata["source_account_email"] = source_account_email
             obj = Object(
                 user_id=owner_user_id,
                 kind=normalized["kind"],
@@ -353,7 +360,7 @@ class YandexMailSyncService:
                 state=normalized["state"],
                 title=normalized["title"],
                 body=normalized.get("body"),
-                metadata_=normalized["metadata"],
+                metadata_=metadata,
                 occurred_at=normalized.get("occurred_at"),
             )
             self._session.add(obj)

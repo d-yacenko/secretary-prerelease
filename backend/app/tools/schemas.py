@@ -607,9 +607,10 @@ class SendEmailInput(BaseModel):
 
     account_email: str | None = None
     provider: ExternalActionProvider | None = None
-    to: list[str] = Field(min_length=1, max_length=MAX_EMAIL_TO_RECIPIENTS)
-    subject: str = Field(min_length=1, max_length=MAX_EMAIL_SUBJECT_CHARS)
+    to: list[str] | None = Field(default=None, max_length=MAX_EMAIL_TO_RECIPIENTS)
+    subject: str | None = Field(default=None, max_length=MAX_EMAIL_SUBJECT_CHARS)
     body: str = Field(min_length=1, max_length=MAX_EMAIL_BODY_CHARS)
+    reply_to_object_id: UUID | None = None
 
     @field_validator("account_email", mode="before")
     @classmethod
@@ -638,13 +639,25 @@ class SendEmailInput(BaseModel):
 
     @field_validator("to")
     @classmethod
-    def _validate_to(cls, value: list[str]) -> list[str]:
+    def _validate_to(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
         normalized: list[str] = []
         for item in value:
             normalized.append(_normalize_email_address(value=item))
         if not normalized:
             raise ValueError("at least one recipient is required")
         return normalized
+
+    @model_validator(mode="after")
+    def _exactly_one_mode(self) -> Self:
+        reply = self.reply_to_object_id is not None
+        has_compose = self.to is not None or self.subject is not None
+        if reply and has_compose:
+            raise ValueError("reply mode must not include to or subject")
+        if not reply and (self.to is None or self.subject is None):
+            raise ValueError("compose mode requires to and subject")
+        return self
 
 
 class SendEmailCanonicalInput(BaseModel):
@@ -657,6 +670,10 @@ class SendEmailCanonicalInput(BaseModel):
     operation_id: str = Field(min_length=5, max_length=1024)
     rfc822_message_id: str = Field(min_length=5, max_length=200)
     provider: ExternalActionProvider | None = None
+    reply_to_object_id: UUID | None = None
+    in_reply_to: str | None = None
+    references: str | None = None
+    gmail_thread_id: str | None = None
 
     @field_validator("account_email", "operation_id", "rfc822_message_id", mode="before")
     @classmethod
@@ -775,7 +792,9 @@ class MattermostSendRoute(BaseModel):
             return value.strip()
         return value
 
-    @field_validator("root_id", "channel_type", "channel_name", "channel_display_name", mode="before")
+    @field_validator(
+        "root_id", "channel_type", "channel_name", "channel_display_name", mode="before"
+    )
     @classmethod
     def _strip_optional(cls, value: object) -> object:
         return _strip_optional_text(value)
@@ -903,9 +922,7 @@ class SendMessageCanonicalInput(BaseModel):
         if "pending_post_id" not in data and "channel_id" not in data:
             return data
         lifted = {
-            key: value
-            for key, value in data.items()
-            if key not in _LEGACY_MATTERMOST_ROUTE_KEYS
+            key: value for key, value in data.items() if key not in _LEGACY_MATTERMOST_ROUTE_KEYS
         }
         lifted["provider"] = "mattermost"
         lifted["route"] = _legacy_mattermost_route_from_flat(data)
