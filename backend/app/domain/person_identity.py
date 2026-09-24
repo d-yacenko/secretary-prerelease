@@ -123,20 +123,13 @@ def normalize_telegram_user_id(
     realm = str(account_realm).strip()
     if not realm or any(char.isspace() for char in realm) or len(realm) > _MAX_REALM_CHARS:
         raise PersonIdentityInputError("telegram account realm is malformed")
-    text = str(sender_peer_id).strip()
-    if not text or text in {"+", "-"}:
+    text = str(sender_peer_id).strip().removeprefix("+")
+    if not text.isdigit():
         raise PersonIdentityInputError("telegram sender peer id is malformed")
-    sign = ""
-    digits = text
-    if text[0] in "+-":
-        if text[0] == "-":
-            sign = "-"
-        digits = text[1:]
-    if not digits.isdigit():
+    value = int(text)
+    if value <= 0:
         raise PersonIdentityInputError("telegram sender peer id is malformed")
-    canonical = f"{sign}{int(digits)}"
-    if canonical in {"", "-0"}:
-        raise PersonIdentityInputError("telegram sender peer id is malformed")
+    canonical = str(value)
     return NormalizedPersonIdentity(
         identity_type=TELEGRAM_USER_ID,
         provider=TELEGRAM_MTPROTO_PROVIDER,

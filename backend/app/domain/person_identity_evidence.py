@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from app.db.models import Object
 from app.domain.person_identity import (
     NormalizedPersonIdentity,
     PersonIdentityInputError,
@@ -22,17 +23,21 @@ _EMAIL_KEYS = ("sender", "from", "reply_to")
 _HEADER_EMAIL_KEYS = ("from", "reply-to", "sender")
 
 
-def extract_person_identity_evidence(
-    metadata: Mapping[str, Any],
-) -> tuple[NormalizedPersonIdentity, ...]:
+def extract_person_identity_evidence(source: Object) -> tuple[NormalizedPersonIdentity, ...]:
+    metadata = source.metadata_ if isinstance(source.metadata_, Mapping) else {}
+    if source.provider in {"gmail", "yandex_mail"} and source.kind == "email":
+        identities = _email_evidence(metadata)
+    elif source.provider == "mattermost" and source.kind == "chat_message":
+        identities = _mattermost_evidence(metadata)
+    elif source.provider == "teams" and source.kind == "chat_message":
+        identities = _teams_evidence(metadata)
+    elif source.provider == "telegram" and source.kind == "chat_message":
+        identities = _telegram_evidence(metadata)
+    else:
+        identities = []
     found: list[NormalizedPersonIdentity] = []
     seen: set[tuple[str, str, str, str]] = set()
-    for identity in (
-        *_email_evidence(metadata),
-        *_mattermost_evidence(metadata),
-        *_teams_evidence(metadata),
-        *_telegram_evidence(metadata),
-    ):
+    for identity in identities:
         key = (identity.provider, identity.identity_type, identity.realm, identity.canonical_value)
         if key in seen:
             continue
@@ -102,6 +107,8 @@ def _mattermost_evidence(metadata: Mapping[str, Any]) -> list[NormalizedPersonId
 
 
 def _teams_evidence(metadata: Mapping[str, Any]) -> list[NormalizedPersonIdentity]:
+    if metadata.get("sender_kind") != "user":
+        return []
     tenant_id = metadata.get("tenant_id")
     sender_id = metadata.get("sender_id")
     if not isinstance(tenant_id, str) or not isinstance(sender_id, str):

@@ -181,21 +181,32 @@ def _nested_user_id(member: dict[str, Any]) -> str | None:
     return None
 
 
-def sender_from_message(message: dict[str, Any]) -> tuple[str | None, str | None]:
+def sender_identity_from_message(
+    message: dict[str, Any],
+) -> tuple[str | None, str | None, str | None]:
     raw_from = message.get("from")
     if not isinstance(raw_from, dict):
-        return None, None
+        return None, None, None
     user = raw_from.get("user")
     if isinstance(user, dict):
-        return provider_id_str(user.get("id")), _clip(
-            provider_id_str(user.get("displayName")), MAX_DISPLAY_NAME_CHARS
+        return (
+            provider_id_str(user.get("id")),
+            _clip(provider_id_str(user.get("displayName")), MAX_DISPLAY_NAME_CHARS),
+            "user",
         )
     application = raw_from.get("application")
     if isinstance(application, dict):
-        return provider_id_str(application.get("id")), _clip(
-            provider_id_str(application.get("displayName")), MAX_DISPLAY_NAME_CHARS
+        return (
+            provider_id_str(application.get("id")),
+            _clip(provider_id_str(application.get("displayName")), MAX_DISPLAY_NAME_CHARS),
+            "application",
         )
-    return None, None
+    return None, None, None
+
+
+def sender_from_message(message: dict[str, Any]) -> tuple[str | None, str | None]:
+    sender_id, sender_name, _sender_kind = sender_identity_from_message(message)
+    return sender_id, sender_name
 
 
 def normalize_teams_message(
@@ -228,7 +239,7 @@ def normalize_teams_message(
         text = text[:MAX_MESSAGE_BODY_CHARS]
     tenant_id = canonicalize_microsoft_guid(tenant_id, claim="tenant id")
     microsoft_user_id = canonicalize_microsoft_guid(microsoft_user_id, claim="user id")
-    sender_id, sender_name = sender_from_message(message)
+    sender_id, sender_name, sender_kind = sender_identity_from_message(message)
     sender_identity = try_canonical_microsoft_guid(sender_id)
     direction = DIRECTION_OUTBOUND if sender_identity == microsoft_user_id else DIRECTION_INBOUND
     occurred_at = parse_graph_datetime(message.get("createdDateTime"))
@@ -256,6 +267,7 @@ def normalize_teams_message(
             "message_id": message_id,
             "sender_id": sender_id,
             "sender_display_name": sender_name,
+            "sender_kind": sender_kind,
             "chat_display_title": chat_display_title,
             "direction": direction,
             "created_at": occurred_at.isoformat() if occurred_at else None,

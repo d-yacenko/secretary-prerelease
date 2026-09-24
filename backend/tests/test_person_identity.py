@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect
 
 from alembic import command
+from app.connectors.teams.normalize import normalize_teams_message
 from app.db.engine import engine
 from app.db.models import Object, PersonIdentity, User
 from app.domain.person_identity import (
@@ -61,6 +62,10 @@ def test_malformed_identifiers_fail_closed() -> None:
         normalize_teams_user_id(TENANT, "not-a-guid")
     with pytest.raises(PersonIdentityInputError):
         normalize_telegram_user_id("account-1", "abc")
+    with pytest.raises(PersonIdentityInputError):
+        normalize_telegram_user_id("account-1", 0)
+    with pytest.raises(PersonIdentityInputError):
+        normalize_telegram_user_id("account-1", -100)
 
 
 def test_person_creation_and_exact_provider_uniqueness(db_session) -> None:
@@ -144,8 +149,16 @@ def test_display_name_alone_does_not_resolve_or_merge(db_session) -> None:
     service = PersonIdentityService(db_session, user_id)
     first = service.create_person("Olga")
     second = service.create_person("Olga")
-    evidence = extract_person_identity_evidence({"author_display_name": "Olga"})
-    assert evidence == ()
+    display_only = Object(
+        user_id=user_id,
+        kind="chat_message",
+        provider="mattermost",
+        title="Olga",
+        origin="source",
+        state="observed",
+        metadata_={"author_display_name": "Olga", "server_url": SERVER},
+    )
+    assert extract_person_identity_evidence(display_only) == ()
     assert service.list_identities(first.id) == []
     assert service.list_identities(second.id) == []
     assert first.id != second.id
@@ -188,12 +201,24 @@ def test_detach_and_reassign_are_explicit(db_session) -> None:
     assert rebound.person_object_id == first.id
 
 
-def test_extractors_are_read_only_and_exact(db_session) -> None:
+def _source(user_id: uuid.UUID, *, provider: str, kind: str, metadata: dict) -> Object:
+    return Object(
+        user_id=user_id,
+        kind=kind,
+        provider=provider,
+        title="note",
+        origin="source",
+        state="observed",
+        metadata_=metadata,
+    )
+
+
+def test_extractors_are_read_only_and_provider_scoped(db_session) -> None:
     user_id = uuid.uuid4()
     db_session.add(User(id=user_id, display_name="Owner"))
     db_session.flush()
     account = str(uuid.uuid4())
-    metadata = {
+    shared = {
         "sender": "Olga <Olga@Example.com>",
         "server_url": SERVER,
         "author_user_id": "mm-user-1",
@@ -202,33 +227,147 @@ def test_extractors_are_read_only_and_exact(db_session) -> None:
         "tenant_id": TENANT,
         "sender_id": TEAMS_USER,
         "sender_display_name": "Olga",
+        "sender_kind": "user",
         "transport": "mtproto",
         "account_id": account,
         "sender_peer_id": 42,
     }
-    message = Object(
-        user_id=user_id,
+    email = _source(user_id, provider="gmail", kind="email", metadata=dict(shared))
+    mattermost = _source(user_id, provider="mattermost", kind="chat_message", metadata=dict(shared))
+    teams = _source(user_id, provider="teams", kind="chat_message", metadata=dict(shared))
+    telegram = _source(user_id, provider="telegram", kind="chat_message", metadata=dict(shared))
+    yandex = _source(user_id, provider="yandex_mail", kind="email", metadata=dict(shared))
+    db_session.add_all([email, mattermost, teams, telegram, yandex])
+    db_session.flush()
+    before = dict(email.metadata_)
+    email_keys = {
+        (item.provider, item.identity_type, item.canonical_value)
+        for item in extract_person_identity_evidence(email)
+    }
+    assert email.metadata_ == before
+    assert email_keys == {("email", "email", "olga@example.com")}
+    assert {
+        (item.provider, item.identity_type, item.canonical_value)
+        for item in extract_person_identity_evidence(yandex)
+    } == {("email", "email", "olga@example.com")}
+    assert {
+        (item.provider, item.identity_type, item.canonical_value)
+        for item in extract_person_identity_evidence(mattermost)
+    } == {
+        ("mattermost", "mattermost_user_id", "mm-user-1"),
+        ("mattermost", "mattermost_username", "olga.user"),
+    }
+    assert {
+        (item.provider, item.identity_type, item.canonical_value)
+        for item in extract_person_identity_evidence(teams)
+    } == {("teams", "teams_user_id", TEAMS_USER)}
+    assert {
+        (item.provider, item.identity_type, item.canonical_value)
+        for item in extract_person_identity_evidence(telegram)
+    } == {("telegram_mtproto", "telegram_user_id", "42")}
+    unsupported = _source(user_id, provider="telegram", kind="task", metadata=dict(shared))
+    assert extract_person_identity_evidence(unsupported) == ()
+
+
+def test_telegram_non_user_sender_emits_no_person_evidence() -> None:
+    user_id = uuid.uuid4()
+    positive = normalize_telegram_user_id("account-1", 42)
+    assert positive.canonical_value == "42"
+    source = _source(
+        user_id,
+        provider="telegram",
         kind="chat_message",
-        title="note",
-        origin="source",
-        state="observed",
-        metadata_=dict(metadata),
+        metadata={"transport": "mtproto", "account_id": "account-1", "sender_peer_id": 42},
     )
-    db_session.add(message)
-    db_session.flush()
-    before = dict(message.metadata_)
-    evidence = extract_person_identity_evidence(message.metadata_)
-    assert message.metadata_ == before
-    keys = {(item.provider, item.identity_type, item.canonical_value) for item in evidence}
-    assert ("email", "email", "olga@example.com") in keys
-    assert ("mattermost", "mattermost_user_id", "mm-user-1") in keys
-    assert ("mattermost", "mattermost_username", "olga.user") in keys
-    assert ("teams", "teams_user_id", TEAMS_USER) in keys
-    assert ("telegram_mtproto", "telegram_user_id", "42") in keys
-    assert all(item.identity_type != "display_name" for item in evidence)
-    db_session.delete(message)
-    db_session.flush()
-    assert db_session.scalar(select(PersonIdentity.id)) is None
+    assert extract_person_identity_evidence(source)[0].canonical_value == "42"
+    for sender in (0, -100, "-7"):
+        negative = _source(
+            user_id,
+            provider="telegram",
+            kind="chat_message",
+            metadata={
+                "transport": "mtproto",
+                "account_id": "account-1",
+                "sender_peer_id": sender,
+            },
+        )
+        assert extract_person_identity_evidence(negative) == ()
+
+
+def test_teams_sender_kind_gates_person_evidence() -> None:
+    account_id = uuid.uuid4()
+    user_message = normalize_teams_message(
+        message={
+            "id": "message-1",
+            "messageType": "message",
+            "createdDateTime": "2026-09-16T08:00:00Z",
+            "body": {"contentType": "text", "content": "hello"},
+            "from": {"user": {"id": TEAMS_USER, "displayName": "Olga"}},
+        },
+        account_id=account_id,
+        tenant_id=TENANT,
+        microsoft_user_id=OTHER_TEAMS_USER,
+        chat_id="chat-1",
+        chat_type="oneOnOne",
+        chat_display_title="Olga",
+    )
+    assert user_message is not None
+    assert user_message["metadata"]["sender_kind"] == "user"
+    assert user_message["title"].startswith("Olga:")
+    user_source = _source(
+        uuid.uuid4(),
+        provider="teams",
+        kind="chat_message",
+        metadata=user_message["metadata"],
+    )
+    assert extract_person_identity_evidence(user_source)[0].canonical_value == TEAMS_USER
+
+    app_message = normalize_teams_message(
+        message={
+            "id": "message-2",
+            "messageType": "message",
+            "createdDateTime": "2026-09-16T08:00:00Z",
+            "body": {"contentType": "text", "content": "hello"},
+            "from": {"application": {"id": TEAMS_USER, "displayName": "Bot"}},
+        },
+        account_id=account_id,
+        tenant_id=TENANT,
+        microsoft_user_id=OTHER_TEAMS_USER,
+        chat_id="chat-1",
+        chat_type="oneOnOne",
+        chat_display_title="Bot",
+    )
+    assert app_message is not None
+    assert app_message["metadata"]["sender_kind"] == "application"
+    assert app_message["metadata"]["sender_id"] == TEAMS_USER
+    assert app_message["title"].startswith("Bot:")
+    app_source = _source(
+        uuid.uuid4(),
+        provider="teams",
+        kind="chat_message",
+        metadata=app_message["metadata"],
+    )
+    assert extract_person_identity_evidence(app_source) == ()
+    for sender_kind in (None, "", "bot", "unknown"):
+        legacy = _source(
+            uuid.uuid4(),
+            provider="teams",
+            kind="chat_message",
+            metadata={
+                "tenant_id": TENANT,
+                "sender_id": TEAMS_USER,
+                "sender_display_name": "Olga",
+                "sender_kind": sender_kind,
+            },
+        )
+        assert extract_person_identity_evidence(legacy) == ()
+    missing = _source(
+        uuid.uuid4(),
+        provider="teams",
+        kind="chat_message",
+        metadata={"tenant_id": TENANT, "sender_id": TEAMS_USER, "sender_display_name": "Olga"},
+    )
+    assert extract_person_identity_evidence(missing) == ()
 
 
 def test_source_message_deletion_does_not_remove_person_identity(db_session) -> None:
