@@ -1,33 +1,146 @@
-# Current task — HOLD
+# Current task — Production rollout: pre-next-feature fix round
 
-No implementation task is authorized.
+## Human authorization
 
-The narrow corrective pass for the pre-next-feature fix round is complete.
+The human explicitly authorized this production rollout.
 
-Corrective implementation SHA: `a2a2e85ed5255cdf9fcf57fad15b222d89e946f6`
+This authorization covers:
+- fast-forwarding `origin/production`;
+- the normal server production deploy path via `ops/production/deploy.py`;
+- read-only/sanitized production verification.
 
-Parent review baseline: `82b27f9f93af489d086344fc443337d23aecd6a0`
+It does NOT authorize:
+- editing production `.env`;
+- live paid OpenAI/provider calls;
+- direct/manual SSH deployment outside the normal deploy harness;
+- Telegram AI activation/provider calls;
+- inventing a client binary distribution/install mechanism.
 
-Production was not changed. Production runtime/ref remains `36c2ce9f43e56a9554688f50c60a79d56e469fbe`. Alembic remains `0046 / 0046`. No live provider calls were made.
+## Exact release
 
-## Results
+Deploy the current task commit itself as the exact release SHA.
 
-- Temporal early `already_evidenced` again returns `hint_id` for a temporal hint and `calendar_id` for a calendar event. Extractor and match-judge calls stay at zero on an exact active revision. `temporal_signal_result.chosen_hint_id` / `chosen_calendar_id` stay populated.
-- Inbox list cards opt into wrapping. The shared `ObjectMetaActionRow` wide layout is the previous row with right-aligned labels, so Search and Today keep that alignment.
-- Reference `provider` and `primary_at` are taken from the same `get_object` snapshot. A second `SessionLocal()` query is not used. A long chip title at phone width ellipsizes and keeps the kind icon, provider icon, and date.
-- At `73457fec226e113f7f8ddf8768497cafa8e003f1` the Telegram parameter already failed enqueue with zero jobs. The suite now expects that quarantined Telegram does not enqueue, and Mattermost plus Teams cover the common dedup path. Telegram AI was not enabled.
+Its parent MUST be exactly:
+`efa4bd027500acdf32566282983dc671233b431b`
 
-## Checks
+Accepted implementation chain contained in this release:
+- base fix round: `82b27f9f93af489d086344fc443337d23aecd6a0`
+- corrective pass: `a2a2e85ed5255cdf9fcf57fad15b222d89e946f6`
+- Architect acceptance: `efa4bd027500acdf32566282983dc671233b431b`
 
-- Focused temporal tests, including same-revision audit ids, calendar anchor, stale/unchanged revision, quarantine, and Mattermost/Teams dedup: PASS (9 in the last focused selection, plus the earlier stale/unchanged trio inside the broader run before the audit-query fix; the final selection is green).
-- Assistant reference provenance tests: PASS.
-- Flutter Inbox swipe/desktop trash, narrow desktop containment, shared-row alignment, reference chips including the long title, and voice failure cue: PASS.
-- `py_compile` and Ruff check on changed Python modules: PASS.
-- Ruff format check: PASS for `object_primary_date.py`, `assistant_service.py`, and `test_assistant_reference_provenance.py`. `test_temporal_signals_a.py` and `temporal_signals_service.py` still have pre-existing format failures and were not wholesale-formatted.
-- Flutter analyze of touched Dart files: no new errors. Pre-existing `unnecessary_null_comparison` in `assistant_screen.dart` and `use_build_context_synchronously` infos in `inbox_screen.dart` remain.
-- `git diff --check`: PASS.
-- No Alembic migration.
+Current production / rollback baseline:
+`36c2ce9f43e56a9554688f50c60a79d56e469fbe`
 
-## Remaining
+Expected Alembic:
+`0046`
 
-The next large feature is not authorized. This corrective pass is not deployed.
+The production-to-release delta is schema-neutral; normal deploy harness must independently enforce this.
+
+## Important client boundary
+
+The canonical production deployment harness deploys the server Compose runtime (db/api/worker). It does not install or distribute Flutter Android/Linux clients.
+
+Therefore:
+- deploy the server release normally;
+- do not claim that desktop/mobile UI changes are installed on user devices solely because the server rollout succeeded;
+- do not invent ad-hoc APK/Linux binary copying or installation;
+- report client UI as SOURCE/RELEASE READY but DEVICE INSTALL/DISTRIBUTION NOT PERFORMED unless an already-established canonical client delivery mechanism is discovered in the repo during bootstrap. If none exists, STOP there for client distribution.
+
+## Required preflight — before production ref movement
+
+1. Bootstrap canonical repository:
+   - clean worktree;
+   - canonical origin;
+   - local branch `main`;
+   - fetch/prune;
+   - `HEAD == origin/main`;
+   - current HEAD is this exact task/release commit;
+   - current release commit parent is exactly `efa4bd027500acdf32566282983dc671233b431b`.
+
+2. Confirm:
+   - `origin/production == 36c2ce9f43e56a9554688f50c60a79d56e469fbe`;
+   - current production runtime reports the same SHA;
+   - Alembic is `0046`.
+
+3. Capture sanitized rollback invariants:
+   - production DB container identity;
+   - production DB volume identity;
+   - production `.env` SHA-256 only;
+   - API and worker container identities.
+
+4. Confirm no migration infrastructure changes between rollback and release. The normal deploy harness also enforces this; any disagreement is a blocker.
+
+5. Do not print secrets or complete environment contents.
+
+BLOCK before ref movement on any mismatch.
+
+## Authorized rollout sequence
+
+Only if preflight passes:
+
+1. Fast-forward `origin/production` non-force from
+   `36c2ce9f43e56a9554688f50c60a79d56e469fbe`
+   to the exact current task/release SHA.
+
+2. Deploy ONLY with:
+
+`python3 ops/production/deploy.py --release-sha <EXACT_RELEASE_SHA> --rollback-sha 36c2ce9f43e56a9554688f50c60a79d56e469fbe --expected-alembic 0046`
+
+Do not substitute manual SSH/docker-compose commands.
+
+3. Require normal deploy success and health PASS.
+
+## Post-deploy verification
+
+Confirm:
+- `origin/production` equals exact release SHA;
+- runtime release SHA equals exact release SHA;
+- Alembic remains `0046 / 0046`;
+- health PASS;
+- DB container identity unchanged;
+- DB volume identity unchanged;
+- production `.env` SHA-256 unchanged;
+- API and worker were recreated as expected;
+- rollback was not used unless required by the normal harness;
+- `TELEGRAM_MTPROTO_AI_ENABLED` behavior/config was not changed by this rollout.
+
+No authenticated Assistant request is required. Do not issue a live OpenAI/provider call merely to smoke-test the fix.
+
+Where safe with existing unauthenticated/read-only endpoints, verify only infrastructure/API health. Do not improvise credentials.
+
+## Release-specific verification notes
+
+Server-side behavior included in this release:
+- temporal exact-revision pre-model idempotency with preserved anchor audit IDs;
+- prompt untrusted-data consistency hardening;
+- Assistant reference provider/date API fields and canonical primary-date semantics.
+
+Client source included in this release:
+- desktop Inbox inline trash;
+- mobile swipe unchanged;
+- hands-free terminal failure cue regression coverage;
+- reference-chip kind/provider/date UI and narrow-width handling;
+- Inbox-only action wrapping.
+
+Because the production Compose harness does not distribute Flutter clients, report these client changes separately as code/source included in the release, not as installed-device verification.
+
+## Rollback
+
+If deployment or health verification fails after the production ref moves, use ONLY the rollback behavior provided by the normal production deployment harness to restore:
+`36c2ce9f43e56a9554688f50c60a79d56e469fbe`
+
+Do not manually mutate DB, Compose state, nginx, DNS, firewall, env, or credentials.
+
+## Completion
+
+Record sanitized exact results in `PROJECT_STATE.md`, including:
+- exact deployed release SHA;
+- production ref before/after;
+- deploy/health status;
+- Alembic;
+- DB/container/env invariants;
+- rollback used yes/no;
+- server runtime status;
+- explicit client boundary: whether any canonical client distribution path existed and whether client binaries were actually installed/distributed (do not infer).
+
+Return `CURRENT_TASK.md` to HOLD, commit/push, and STOP.
