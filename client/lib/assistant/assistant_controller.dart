@@ -275,6 +275,7 @@ class AssistantController extends ChangeNotifier {
   String? _pendingRetryMessage;
   String? _retryTurnId;
   String? _retryTurnText;
+  int _sessionEpoch = 0;
   bool _legacyConversationServer = false;
   bool _persistentBootstrapReady = false;
   Future<void>? _restoreInFlight;
@@ -442,11 +443,20 @@ class AssistantController extends ChangeNotifier {
     });
   }
 
+  bool _isCurrentSession(int epoch) => epoch == _sessionEpoch;
+
   Future<void> _restorePersistentConversationBody() async {
+    final epoch = _sessionEpoch;
     try {
       final current = await _apiClient.getCurrentAssistantConversation();
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       final conversation =
           current ?? await _apiClient.createAssistantConversation();
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       if (conversation == null) {
         _legacyConversationServer = true;
         persistentMode = false;
@@ -455,14 +465,26 @@ class AssistantController extends ChangeNotifier {
       }
       persistentMode = true;
       conversationId = conversation.id;
-      await _refreshConversationList();
-      await _replaceMessagesFromServer(conversation.id);
+      await _refreshConversationList(epoch);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
+      await _replaceMessagesFromServer(conversation.id, epoch);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _persistentBootstrapReady = true;
       errorMessage = null;
     } on ApiException catch (error) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       persistentMode = false;
       _persistentBootstrapReady = false;
       errorMessage = error.message;
+    }
+    if (!_isCurrentSession(epoch)) {
+      return;
     }
     notifyListeners();
   }
@@ -478,8 +500,12 @@ class AssistantController extends ChangeNotifier {
     }
     loadingOlderMessages = true;
     notifyListeners();
+    final epoch = _sessionEpoch;
     try {
       final page = await _apiClient.listAssistantMessages(id, beforeId: oldest);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       final known = <String>{
         for (final message in _messages)
           if (message.storedId != null) message.storedId!,
@@ -495,7 +521,13 @@ class AssistantController extends ChangeNotifier {
       _messages.insertAll(0, older);
       hasOlderMessages = page.hasMore;
     } on ApiException catch (error) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       errorMessage = error.message;
+    }
+    if (!_isCurrentSession(epoch)) {
+      return;
     }
     loadingOlderMessages = false;
     notifyListeners();
@@ -506,9 +538,10 @@ class AssistantController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final epoch = _sessionEpoch;
     try {
       final created = await _apiClient.createAssistantConversation();
-      if (created == null) {
+      if (!_isCurrentSession(epoch) || created == null) {
         return;
       }
       _clearTransientTurnState();
@@ -517,9 +550,15 @@ class AssistantController extends ChangeNotifier {
       _messages.clear();
       hasOlderMessages = false;
       switchBlockedMessage = null;
-      await _refreshConversationList();
+      await _refreshConversationList(epoch);
     } on ApiException catch (error) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       switchBlockedMessage = _switchFailureMessage(error);
+    }
+    if (!_isCurrentSession(epoch)) {
+      return;
     }
     notifyListeners();
   }
@@ -529,16 +568,29 @@ class AssistantController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final epoch = _sessionEpoch;
     try {
       final selected = await _apiClient.selectAssistantConversation(id);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _clearTransientTurnState();
       persistentMode = true;
       conversationId = selected.id;
       switchBlockedMessage = null;
-      await _replaceMessagesFromServer(selected.id);
-      await _refreshConversationList();
+      await _replaceMessagesFromServer(selected.id, epoch);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
+      await _refreshConversationList(epoch);
     } on ApiException catch (error) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       switchBlockedMessage = _switchFailureMessage(error);
+    }
+    if (!_isCurrentSession(epoch)) {
+      return;
     }
     notifyListeners();
   }
@@ -567,7 +619,11 @@ class AssistantController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
 
+    final epoch = _sessionEpoch;
     await restorePersistentConversation();
+    if (!_isCurrentSession(epoch)) {
+      return;
+    }
     if (!_persistentBootstrapReady && !_legacyConversationServer) {
       sendState = AssistantSendState.error;
       errorMessage ??= 'Не удалось открыть диалог.';
@@ -591,6 +647,9 @@ class AssistantController extends ChangeNotifier {
         ),
       );
       VoiceTurnTiming.interval('assistant_rtt_ms', started.elapsedMilliseconds);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _messages.add(
         AssistantChatMessage(
           role: 'user',
@@ -618,10 +677,13 @@ class AssistantController extends ChangeNotifier {
       sendState = AssistantSendState.idle;
       if (persistentMode) {
         try {
-          await _refreshConversationList();
+          await _refreshConversationList(epoch);
         } on ApiException {
           // The turn is already stored. History refresh can retry later.
         }
+      }
+      if (!_isCurrentSession(epoch)) {
+        return;
       }
       notifyListeners();
       _pendingInboxReviewReceipt =
@@ -648,17 +710,26 @@ class AssistantController extends ChangeNotifier {
         await _speakLatestAssistantResult();
       }
     } on AuthenticationException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _pendingRetryMessage = trimmed;
       sendState = AssistantSendState.error;
       errorMessage = e.message;
       _authController.handleAuthenticationFailure();
       await _noteAssistantTurnFailure();
     } on NetworkException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _pendingRetryMessage = trimmed;
       sendState = AssistantSendState.error;
       errorMessage = e.message;
       await _noteAssistantTurnFailure();
     } on ApiException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _pendingRetryMessage = trimmed;
       sendState = AssistantSendState.error;
       errorMessage = localOpenAiDailyBudgetMessage(e) ?? e.message;
@@ -704,12 +775,16 @@ class AssistantController extends ChangeNotifier {
     }
 
     _approveInFlight = true;
+    final epoch = _sessionEpoch;
     actionPlanOperationState = AssistantActionPlanOperationState.approving;
     actionPlanErrorMessage = null;
     notifyListeners();
 
     try {
       final response = await _apiClient.approveActionPlan(actionPlan.plan.id);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       if (response.status == 'failed') {
         actionPlan.cardState = ActionPlanCardState.failed;
         actionPlanOperationState = AssistantActionPlanOperationState.idle;
@@ -744,20 +819,31 @@ class AssistantController extends ChangeNotifier {
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       notifyListeners();
     } on AuthenticationException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
       _authController.handleAuthenticationFailure();
       notifyListeners();
     } on NetworkException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
       notifyListeners();
     } on ApiException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = localOpenAiDailyBudgetMessage(e) ?? e.message;
       notifyListeners();
     } finally {
-      _approveInFlight = false;
+      if (_isCurrentSession(epoch)) {
+        _approveInFlight = false;
+      }
     }
   }
 
@@ -778,9 +864,13 @@ class AssistantController extends ChangeNotifier {
     actionPlanOperationState = AssistantActionPlanOperationState.rejecting;
     actionPlanErrorMessage = null;
     notifyListeners();
+    final epoch = _sessionEpoch;
 
     try {
       final response = await _apiClient.rejectActionPlan(actionPlan.plan.id);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       if (response.status == 'expired') {
         actionPlan.cardState = ActionPlanCardState.expired;
       } else {
@@ -798,15 +888,24 @@ class AssistantController extends ChangeNotifier {
         );
       }
     } on AuthenticationException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
       _authController.handleAuthenticationFailure();
       notifyListeners();
     } on NetworkException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
       notifyListeners();
     } on ApiException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = localOpenAiDailyBudgetMessage(e) ?? e.message;
       notifyListeners();
@@ -837,9 +936,13 @@ class AssistantController extends ChangeNotifier {
     actionPlanOperationState = AssistantActionPlanOperationState.resuming;
     actionPlanErrorMessage = null;
     notifyListeners();
+    final epoch = _sessionEpoch;
 
     try {
       final response = await _apiClient.resumeActionPlan(actionPlan.plan.id);
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       _messages.add(
         AssistantChatMessage(
           role: 'assistant',
@@ -854,6 +957,9 @@ class AssistantController extends ChangeNotifier {
         await _speakDeterministic(response.answer);
       }
     } on AuthenticationException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlan.resumeFailed = true;
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
@@ -863,6 +969,9 @@ class AssistantController extends ChangeNotifier {
         await _speakDeterministic(voiceResumeFailedSpeech);
       }
     } on NetworkException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlan.resumeFailed = true;
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = e.message;
@@ -871,6 +980,9 @@ class AssistantController extends ChangeNotifier {
         await _speakDeterministic(voiceResumeFailedSpeech);
       }
     } on ApiException catch (e) {
+      if (!_isCurrentSession(epoch)) {
+        return;
+      }
       actionPlan.resumeFailed = true;
       actionPlanOperationState = AssistantActionPlanOperationState.idle;
       actionPlanErrorMessage = localOpenAiDailyBudgetMessage(e) ?? e.message;
@@ -1288,12 +1400,19 @@ class AssistantController extends ChangeNotifier {
     return error.message;
   }
 
-  Future<void> _refreshConversationList() async {
-    conversations = await _apiClient.listAssistantConversations();
+  Future<void> _refreshConversationList(int epoch) async {
+    final rows = await _apiClient.listAssistantConversations();
+    if (!_isCurrentSession(epoch)) {
+      return;
+    }
+    conversations = rows;
   }
 
-  Future<void> _replaceMessagesFromServer(String id) async {
+  Future<void> _replaceMessagesFromServer(String id, int epoch) async {
     final page = await _apiClient.listAssistantMessages(id);
+    if (!_isCurrentSession(epoch)) {
+      return;
+    }
     _messages
       ..clear()
       ..addAll(page.messages.map(_chatFromStored));
@@ -1382,6 +1501,16 @@ class AssistantController extends ChangeNotifier {
   }
 
   void resetSession() {
+    _sessionEpoch += 1;
+    _restoreInFlight = null;
+    persistentMode = false;
+    conversationId = null;
+    conversations = const [];
+    hasOlderMessages = false;
+    loadingOlderMessages = false;
+    _legacyConversationServer = false;
+    _persistentBootstrapReady = false;
+    switchBlockedMessage = null;
     _cancelDrivingSilenceMonitor();
     _voice.reset();
     _speech.stop();

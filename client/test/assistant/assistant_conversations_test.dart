@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -591,5 +592,191 @@ void main() {
     expect(sent?['client_turn_id'], isNull);
     expect(sent?['history'], isEmpty);
     expect(assistant.messages.last.content, 'legacy-ok');
+  });
+
+  testWidgets('the next session bootstraps its own conversation', (tester) async {
+    var phase = 'a';
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current') {
+        final id = phase == 'a' ? 'c-a' : 'c-b';
+        final title = phase == 'a' ? 'Диалог A' : 'Диалог B';
+        return jsonResponse(
+          conversation(id: id, title: title, current: true),
+          200,
+        );
+      }
+      if (request.url.path.endsWith('/messages')) {
+        final id = request.url.path.split('/')[3];
+        return jsonResponse({
+          'messages': [
+            storedMessage(
+              id: 'm-$id',
+              role: 'user',
+              content: id == 'c-a' ? 'тайна-a' : 'ответ-b',
+            ),
+          ],
+          'has_more': false,
+        }, 200);
+      }
+      if (request.url.path == '/assistant/conversations') {
+        final id = phase == 'a' ? 'c-a' : 'c-b';
+        final title = phase == 'a' ? 'Диалог A' : 'Диалог B';
+        return jsonResponse({
+          'conversations': [
+            conversation(id: id, title: title, current: true),
+          ],
+        }, 200);
+      }
+      return http.Response('{}', 404);
+    });
+    final assistant = await pump(tester: tester, mock: mock);
+    expect(assistant.conversationId, 'c-a');
+    expect(find.text('тайна-a'), findsOneWidget);
+    expect(find.text('Диалог A'), findsOneWidget);
+    phase = 'b';
+    assistant.resetSession();
+    await assistant.restorePersistentConversation();
+    await tester.pump();
+    expect(assistant.conversationId, 'c-b');
+    expect(assistant.messages.single.content, 'ответ-b');
+    expect(find.text('тайна-a'), findsNothing);
+    expect(find.text('Диалог A'), findsNothing);
+    expect(find.text('Диалог B'), findsOneWidget);
+  });
+
+  testWidgets('a stale bootstrap cannot restore the previous conversation', (
+    tester,
+  ) async {
+    final gate = Completer<http.Response>();
+    var currentCalls = 0;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current') {
+        currentCalls += 1;
+        if (currentCalls == 1) {
+          return gate.future;
+        }
+        return jsonResponse(
+          conversation(id: 'c-b', title: 'Диалог B', current: true),
+          200,
+        );
+      }
+      if (request.url.path.endsWith('/messages')) {
+        final id = request.url.path.split('/')[3];
+        return jsonResponse({
+          'messages': [
+            storedMessage(
+              id: 'm-$id',
+              role: 'user',
+              content: id == 'c-a' ? 'тайна-a' : 'ответ-b',
+            ),
+          ],
+          'has_more': false,
+        }, 200);
+      }
+      if (request.url.path == '/assistant/conversations') {
+        return jsonResponse({
+          'conversations': [
+            conversation(id: 'c-b', title: 'Диалог B', current: true),
+          ],
+        }, 200);
+      }
+      return http.Response('{}', 404);
+    });
+    final apiClient = SecretaryApiClient(
+      httpClient: mock,
+      timezoneProvider: const FixedClientTimezoneProvider(
+        ClientTimezoneContext(zoneId: 'UTC', utcOffsetMinutes: 0),
+      ),
+    );
+    apiClient.configure(baseUrl: baseUrl, token: 't');
+    final auth = AuthController(
+      apiClient: apiClient,
+      tokenStore: FakeTokenStore(),
+      serverUrlStore: FakeServerUrlStore(),
+    );
+    final assistant = AssistantController(
+      apiClient: apiClient,
+      authController: auth,
+      voiceRecorder: FakeVoiceRecorder(),
+      voiceTempFiles: VoiceTempFiles(
+        directory: Directory.systemTemp.createTempSync('assistant_epoch'),
+      ),
+    );
+    final pending = assistant.restorePersistentConversation();
+    await tester.pump();
+    assistant.resetSession();
+    gate.complete(
+      jsonResponse(conversation(id: 'c-a', title: 'Диалог A', current: true), 200),
+    );
+    await pending;
+    await tester.pump();
+    expect(assistant.conversationId, isNull);
+    expect(assistant.messages, isEmpty);
+    expect(assistant.conversations, isEmpty);
+    expect(assistant.persistentMode, isFalse);
+    await assistant.restorePersistentConversation();
+    expect(assistant.conversationId, 'c-b');
+    expect(assistant.messages.single.content, 'ответ-b');
+    expect(find.text('тайна-a'), findsNothing);
+  });
+
+  testWidgets('a stale send does not restore the previous transcript', (
+    tester,
+  ) async {
+    final gate = Completer<http.Response>();
+    var sendStarted = false;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/conversations/current') {
+        return jsonResponse(
+          conversation(id: 'c-a', title: 'Диалог A', current: true),
+          200,
+        );
+      }
+      if (request.url.path == '/assistant/conversations/c-a/messages') {
+        return jsonResponse({
+          'messages': [
+            storedMessage(id: 'm-a', role: 'user', content: 'исходное-a'),
+          ],
+          'has_more': false,
+        }, 200);
+      }
+      if (request.url.path == '/assistant/conversations') {
+        return jsonResponse({
+          'conversations': [
+            conversation(id: 'c-a', title: 'Диалог A', current: true),
+          ],
+        }, 200);
+      }
+      if (request.url.path == '/assistant/message') {
+        sendStarted = true;
+        return gate.future;
+      }
+      return http.Response('{}', 404);
+    });
+    final assistant = await pump(tester: tester, mock: mock);
+    expect(find.text('исходное-a'), findsOneWidget);
+    final pending = assistant.sendMessage('секрет-a');
+    await tester.pump();
+    expect(sendStarted, isTrue);
+    assistant.resetSession();
+    gate.complete(
+      jsonResponse({
+        'answer': 'ответ-a',
+        'references': [],
+        'affected_objects': [],
+        'conversation_id': 'c-a',
+        'user_message_id': 'u-new',
+        'assistant_message_id': 'a-new',
+      }, 200),
+    );
+    await pending;
+    await tester.pump();
+    expect(assistant.messages, isEmpty);
+    expect(assistant.conversationId, isNull);
+    expect(assistant.persistentMode, isFalse);
+    expect(assistant.conversations, isEmpty);
+    expect(find.text('секрет-a'), findsNothing);
+    expect(find.text('ответ-a'), findsNothing);
+    expect(find.text('исходное-a'), findsNothing);
   });
 }

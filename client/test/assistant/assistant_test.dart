@@ -310,8 +310,60 @@ void main() {
   });
 
   testWidgets('logout clears assistant conversation and context', (tester) async {
+    var currentLoads = 0;
     final apiClient = SecretaryApiClient(
-      httpClient: MockClient((request) async => http.Response('{}', 404)),
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/assistant/conversations/current') {
+          currentLoads += 1;
+          return http.Response(
+            jsonEncode({
+              'id': 'conv-a',
+              'title': 'Thread A',
+              'is_current': true,
+              'created_at': '2026-09-24T10:00:00Z',
+              'updated_at': '2026-09-24T10:00:00Z',
+              'last_message_at': '2026-09-24T10:00:00Z',
+            }),
+            200,
+          );
+        }
+        if (request.url.path == '/assistant/conversations/conv-a/messages') {
+          return http.Response(
+            jsonEncode({
+              'messages': [
+                {
+                  'id': 'm-a',
+                  'role': 'user',
+                  'content': 'secret-a',
+                  'created_at': '2026-09-24T10:00:00Z',
+                  'references': [],
+                  'affected_objects': [],
+                },
+              ],
+              'has_more': true,
+            }),
+            200,
+          );
+        }
+        if (request.url.path == '/assistant/conversations') {
+          return http.Response(
+            jsonEncode({
+              'conversations': [
+                {
+                  'id': 'conv-a',
+                  'title': 'Thread A',
+                  'is_current': true,
+                  'created_at': '2026-09-24T10:00:00Z',
+                  'updated_at': '2026-09-24T10:00:00Z',
+                  'last_message_at': '2026-09-24T10:00:00Z',
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response('{}', 404);
+      }),
     );
     apiClient.configure(baseUrl: baseUrl, token: token);
     final auth = AuthController(
@@ -340,9 +392,26 @@ void main() {
         updatedAt: '2026-08-28T08:00:00Z',
       ),
     );
+    await assistant.restorePersistentConversation();
+    assistant.loadingOlderMessages = true;
+    assistant.switchBlockedMessage = 'stale-switch';
+    expect(assistant.persistentMode, isTrue);
+    expect(assistant.conversationId, 'conv-a');
+    expect(assistant.conversations, isNotEmpty);
+    expect(assistant.messages.single.content, 'secret-a');
+    expect(assistant.hasOlderMessages, isTrue);
     assistant.resetSession();
     expect(assistant.objectContext, isNull);
     expect(assistant.messages, isEmpty);
+    expect(assistant.persistentMode, isFalse);
+    expect(assistant.conversationId, isNull);
+    expect(assistant.conversations, isEmpty);
+    expect(assistant.hasOlderMessages, isFalse);
+    expect(assistant.loadingOlderMessages, isFalse);
+    expect(assistant.switchBlockedMessage, isNull);
+    expect(assistant.errorMessage, isNull);
+    await assistant.restorePersistentConversation();
+    expect(currentLoads, 2);
   });
 
   test('assistant stores structured server error message', () async {
