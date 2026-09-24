@@ -1355,3 +1355,56 @@ class ExternalActionAttempt(Base):
         ),
         Index("ix_external_action_attempts_user_id", "user_id"),
     )
+
+
+class PersonIdentity(Base):
+    __tablename__ = "person_identities"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    person_object_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("objects.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    identity_type: Mapped[str] = mapped_column(nullable=False)
+    provider: Mapped[str] = mapped_column(nullable=False)
+    realm: Mapped[str] = mapped_column(nullable=False, server_default="")
+    canonical_value: Mapped[str] = mapped_column(nullable=False)
+    display_value: Mapped[str | None] = mapped_column(nullable=True)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    origin: Mapped[str] = mapped_column(nullable=False)
+    state: Mapped[str] = mapped_column(nullable=False)
+    confidence: Mapped[float | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_person_identities_user_person", "user_id", "person_object_id"),
+        Index(
+            "uq_person_identities_active_exact",
+            "user_id",
+            "provider",
+            "identity_type",
+            "realm",
+            "canonical_value",
+            unique=True,
+            postgresql_where=text("state <> 'rejected'"),
+        ),
+    )
