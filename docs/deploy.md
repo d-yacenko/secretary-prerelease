@@ -220,3 +220,38 @@ it does not delete data or perform a destructive downgrade. A schema-changing
 release therefore requires its own Architect-authorized migration deployment
 plan with explicit forward and rollback semantics; it cannot be enabled with a
 normal-deploy override.
+
+## Assistant conversations migration 0046 -> 0047
+
+The historical Telegram migration entrypoints stay restricted to
+`0041 -> 0046`. The Assistant conversations schema move uses a separate
+harness and does not add a generic migration override to `deploy.py`:
+
+```bash
+python3 ops/production/migrate_assistant_0047.py \
+  --release-sha 296b4735f9473ea60ef22f1827ed94260603128e \
+  --rollback-sha 42db393be50a4c3f20ce86dadc280d77bada3959 \
+  --from-alembic 0046 \
+  --to-alembic 0047
+```
+
+The local entrypoint accepts only that release, that rollback, and that
+revision pair. The Alembic delta must be exactly the added file
+`backend/alembic/versions/0047_assistant_conversations.py`, with no changes
+to Alembic env, config, or template. It reuses the pinned production target
+and host-key contract.
+
+The remote helper builds `api` and `worker` before downtime, stops them,
+runs `alembic upgrade 0047` with `--rm --no-deps`, checks the database
+revision directly, then recreates only `api` and `worker`. The database
+container, volume, and `.env` stay in place. No new Telegram or provider
+environment value is required.
+
+Before the release runtime starts, a failed rollout may downgrade
+`0047 -> 0046` and restore the rollback application. After the release
+application has started, that downgrade is allowed only when
+`assistant_messages` and `assistant_conversations` are both directly proven
+empty. If either table is non-empty, a count cannot be proven, or another
+safety check fails, the harness keeps `api` and `worker` stopped, does not
+downgrade, does not delete conversation rows, and emits
+`BREAK_GLASS_REQUIRED=true`.
