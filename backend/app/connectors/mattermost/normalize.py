@@ -13,6 +13,7 @@ from app.connectors.mattermost.constants import (
     MENTION_ID_INSPECT_LIMIT,
 )
 from app.connectors.mattermost.errors import MattermostSecurityError
+from app.domain.communication_media import CommunicationMediaDescriptor, stored_media_descriptors
 
 
 def normalize_server_url(server_url: str) -> str:
@@ -117,6 +118,69 @@ def _build_title(message: str, author: dict[str, Any] | None) -> str:
     if len(title) > MAX_TITLE_CHARS:
         return title[:MAX_TITLE_CHARS]
     return title
+
+
+def _stored_file_descriptors(
+    post: dict[str, Any],
+    file_ids: list[str],
+    *,
+    server_url: str,
+    channel_id: str,
+    post_id: str,
+) -> list[dict]:
+    details = _file_details(post)
+    descriptors: list[CommunicationMediaDescriptor] = []
+    for file_id in file_ids:
+        info = details.get(file_id, {})
+        descriptors.append(
+            CommunicationMediaDescriptor(
+                provider="mattermost",
+                descriptor_key=file_id,
+                media_kind="document",
+                provider_media_id=file_id,
+                filename=_optional_text(info.get("name")),
+                mime_type=_optional_text(info.get("mime_type")),
+                size=_optional_size(info.get("size")),
+                provenance={
+                    "server_url": server_url,
+                    "channel_id": channel_id,
+                    "post_id": post_id,
+                },
+            )
+        )
+    return stored_media_descriptors(descriptors)
+
+
+def _file_details(post: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    metadata = post.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    files = metadata.get("files")
+    if not isinstance(files, list):
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        file_id = str(item.get("id") or "").strip()
+        if file_id and file_id not in found:
+            found[file_id] = item
+    return found
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _optional_size(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
 
 
 def _bounded_file_ids(file_ids: list[Any] | None) -> list[str]:
@@ -270,6 +334,15 @@ def normalize_mattermost_post(
         "post_type": str(post.get("type") or "") or None,
         "file_ids": file_ids,
     }
+    media = _stored_file_descriptors(
+        post,
+        file_ids,
+        server_url=normalized_server_url,
+        channel_id=channel.channel_id,
+        post_id=post_id,
+    )
+    if media:
+        metadata["media_descriptors"] = media
     if mentioned_user_ids:
         metadata["mentioned_user_ids"] = mentioned_user_ids
     if mentions_truncated:

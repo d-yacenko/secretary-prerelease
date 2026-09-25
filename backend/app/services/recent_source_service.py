@@ -216,11 +216,14 @@ class RecentSourceService:
     @staticmethod
     def _not_child_email_attachment_clause(model=Object) -> object:
         parent_email_id = model.metadata_["parent_email_id"].as_string()
+        parent_communication_id = model.metadata_["parent_communication_id"].as_string()
         return ~and_(
             model.origin == "source",
             model.kind == "file",
-            parent_email_id.is_not(None),
-            parent_email_id != "",
+            or_(
+                and_(parent_email_id.is_not(None), parent_email_id != ""),
+                and_(parent_communication_id.is_not(None), parent_communication_id != ""),
+            ),
         )
 
     def _source_feed_clause(self, model=Object) -> object:

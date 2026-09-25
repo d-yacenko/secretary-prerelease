@@ -1,6 +1,6 @@
 """Query-time visibility for dynamically scoped Telegram MTProto messages."""
 
-from sqlalchemy import cast, exists, or_, select
+from sqlalchemy import and_, cast, exists, or_, select
 from sqlalchemy.types import String
 
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
@@ -26,13 +26,31 @@ def _owned_selection(model=Object):
     )
 
 
+def telegram_media_file_excluded(model=Object):
+    """Telegram file children are canonical media, not model-visible messages."""
+    return or_(
+        model.provider.is_distinct_from("telegram"),
+        model.kind.is_distinct_from("file"),
+    )
+
+
+def telegram_media_file_sql(alias: str) -> str:
+    return (
+        f"({alias}.provider IS DISTINCT FROM 'telegram' "
+        f"OR {alias}.kind IS DISTINCT FROM 'file')"
+    )
+
+
 def telegram_mtproto_active_object_predicate(model=Object):
     """Return ordinary visibility for an owned manual or scoped selection."""
-    return or_(
+    return and_(
+        telegram_media_file_excluded(model),
+        or_(
         model.provider.is_distinct_from("telegram"),
         model.kind.is_distinct_from("chat_message"),
         model.metadata_["transport"].as_string().is_distinct_from("mtproto"),
         _owned_selection(model),
+        ),
     )
 
 
@@ -52,17 +70,21 @@ def telegram_mtproto_scope_object_predicate(model=Object):
             == model.metadata_["peer_id"].as_string(),
         )
     )
-    return or_(
-        model.provider.is_distinct_from("telegram"),
-        model.kind.is_distinct_from("chat_message"),
-        model.metadata_["transport"].as_string().is_distinct_from("mtproto"),
-        scoped_selection,
+    return and_(
+        telegram_media_file_excluded(model),
+        or_(
+            model.provider.is_distinct_from("telegram"),
+            model.kind.is_distinct_from("chat_message"),
+            model.metadata_["transport"].as_string().is_distinct_from("mtproto"),
+            scoped_selection,
+        ),
     )
 
 
 def telegram_mtproto_active_sql_fragment(alias: str = "o") -> str:
     """Return ordinary visibility for raw-SQL candidate queries."""
     return f"""
+    AND {telegram_media_file_sql(alias)}
     AND (
         {alias}.provider IS DISTINCT FROM 'telegram'
         OR {alias}.kind IS DISTINCT FROM 'chat_message'
@@ -84,6 +106,7 @@ def telegram_mtproto_active_sql_fragment(alias: str = "o") -> str:
 def telegram_mtproto_scope_sql_fragment(alias: str = "o") -> str:
     """Return the scope-only raw-SQL predicate used by AI retrieval."""
     return f"""
+    AND {telegram_media_file_sql(alias)}
     AND (
         {alias}.provider IS DISTINCT FROM 'telegram'
         OR {alias}.kind IS DISTINCT FROM 'chat_message'

@@ -39,6 +39,7 @@ from app.connectors.telegram.mtproto_transport import (
 )
 from app.core.config import settings
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
+from app.domain.communication_media import CommunicationMediaDescriptor, stored_media_descriptors
 from app.domain.object_visibility import tombstone_object
 from app.services.telegram_mtproto_notification_service import (
     TelegramMtprotoNotificationPersistenceError,
@@ -594,15 +595,39 @@ def _normalize_entry(
     entry: TelegramMtprotoHistoryEntry,
     cutoff: datetime,
 ) -> dict | None:
-    if entry.is_service or not entry.text or not entry.text.strip():
+    if entry.is_service:
         return None
     if entry.occurred_at is None or entry.occurred_at < cutoff:
         return None
-    body = _bound_body(entry.text)
-    if not body.strip():
+    body = _bound_body(entry.text) if entry.text else ""
+    media = _stored_media(account, selection, entry)
+    if not body.strip() and not media:
         return None
-    first_line = body.strip().splitlines()[0].strip()
+    if body.strip():
+        first_line = body.strip().splitlines()[0].strip()
+    else:
+        first_line = media[0]["media_kind"]
+        body = ""
     title = build_mtproto_presentation_title(selection.title, first_line)
+    metadata = {
+        "transport": "mtproto",
+        "account_id": str(account.id),
+        "peer_id": selection.peer_id,
+        "peer_kind": selection.peer_kind,
+        "message_id": entry.message_id,
+        "peer_title": selection.title,
+        "peer_username": selection.username,
+        "group_title": selection.title,
+        "group_username": selection.username,
+        "is_forum": selection.is_forum,
+        "sender_peer_id": entry.sender_peer_id,
+        "direction": "outbound" if entry.outgoing else "inbound",
+        "reply_to_message_id": entry.reply_to_message_id,
+        "topic_id": entry.topic_id,
+        "edited_at": entry.edited_at.isoformat() if entry.edited_at else None,
+    }
+    if media:
+        metadata["media_descriptors"] = media
     return {
         "provider": TELEGRAM_PROVIDER,
         "kind": TELEGRAM_KIND,
@@ -610,26 +635,34 @@ def _normalize_entry(
         "state": TELEGRAM_STATE,
         "external_id": f"mtproto|{account.id}|{selection.peer_id}|{entry.message_id}",
         "title": title,
-        "body": body,
+        "body": body or None,
         "occurred_at": entry.occurred_at,
-        "metadata": {
-            "transport": "mtproto",
-            "account_id": str(account.id),
-            "peer_id": selection.peer_id,
-            "peer_kind": selection.peer_kind,
-            "message_id": entry.message_id,
-            "peer_title": selection.title,
-            "peer_username": selection.username,
-            "group_title": selection.title,
-            "group_username": selection.username,
-            "is_forum": selection.is_forum,
-            "sender_peer_id": entry.sender_peer_id,
-            "direction": "outbound" if entry.outgoing else "inbound",
-            "reply_to_message_id": entry.reply_to_message_id,
-            "topic_id": entry.topic_id,
-            "edited_at": entry.edited_at.isoformat() if entry.edited_at else None,
-        },
+        "metadata": metadata,
     }
+
+
+def _stored_media(account, selection, entry: TelegramMtprotoHistoryEntry) -> list[dict]:
+    descriptors: list[CommunicationMediaDescriptor] = []
+    for hint in entry.media:
+        descriptors.append(
+            CommunicationMediaDescriptor(
+                provider=TELEGRAM_PROVIDER,
+                descriptor_key=f"{hint.media_kind}:{hint.provider_media_id}",
+                media_kind=hint.media_kind,
+                provider_media_id=hint.provider_media_id,
+                filename=hint.filename,
+                mime_type=hint.mime_type,
+                size=hint.size,
+                duration_seconds=hint.duration_seconds,
+                provenance={
+                    "account_id": str(account.id),
+                    "peer_id": str(selection.peer_id),
+                    "message_id": str(entry.message_id),
+                    "media_category": hint.media_kind,
+                },
+            )
+        )
+    return stored_media_descriptors(descriptors)
 
 
 def _next_backfill_state(

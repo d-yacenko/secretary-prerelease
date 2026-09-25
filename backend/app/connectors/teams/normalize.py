@@ -26,6 +26,7 @@ from app.connectors.teams.id_token import (
     canonicalize_microsoft_guid,
     try_canonical_microsoft_guid,
 )
+from app.domain.communication_media import CommunicationMediaDescriptor, stored_media_descriptors
 
 
 def build_external_id(tenant_id: str, microsoft_user_id: str, chat_id: str, message_id: str) -> str:
@@ -81,6 +82,59 @@ def extract_message_reference_ids(message: dict[str, Any] | None) -> list[str]:
         seen.add(message_id)
         found.append(message_id)
     return found
+
+
+def _stored_attachment_descriptors(
+    message: dict[str, Any],
+    *,
+    tenant_id: str,
+    chat_id: str,
+    message_id: str,
+) -> list[dict]:
+    attachments = message.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    descriptors: list[CommunicationMediaDescriptor] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        content_type = str(attachment.get("contentType") or "").strip()
+        if content_type == MESSAGE_REFERENCE_CONTENT_TYPE or not content_type:
+            continue
+        if content_type.startswith("application/vnd.microsoft.card"):
+            continue
+        attachment_id = provider_id_str(attachment.get("id"))
+        if attachment_id is None:
+            continue
+        descriptors.append(
+            CommunicationMediaDescriptor(
+                provider=TEAMS_PROVIDER,
+                descriptor_key=attachment_id,
+                media_kind=_teams_media_kind(content_type),
+                provider_media_id=attachment_id,
+                filename=provider_id_str(attachment.get("name")),
+                mime_type=content_type,
+                provenance={
+                    "tenant_id": tenant_id,
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "content_reference": provider_id_str(attachment.get("contentUrl")) or "",
+                    "media_category": _teams_media_kind(content_type),
+                },
+            )
+        )
+    return stored_media_descriptors(descriptors)
+
+
+def _teams_media_kind(content_type: str) -> str:
+    folded = content_type.casefold()
+    if folded.startswith("audio/"):
+        return "audio"
+    if folded.startswith("image/"):
+        return "photo"
+    if folded.startswith("video/"):
+        return "video"
+    return "document"
 
 
 def quoted_message_id_from_attachments(message: dict[str, Any] | None) -> str | None:
@@ -249,6 +303,31 @@ def normalize_teams_message(
     title = _clip(f"{title_name}: {preview}", MAX_TITLE_CHARS) or "Teams"
     graph_quoted = quoted_message_id_from_attachments(message)
     quoted_message_id = provider_id_str(frozen_quoted_message_id) or graph_quoted
+    metadata: dict[str, Any] = {
+        "account_id": str(account_id),
+        "tenant_id": tenant_id,
+        "teams_user_id": microsoft_user_id,
+        "chat_id": chat_id,
+        "chat_type": chat_type,
+        "message_id": message_id,
+        "sender_id": sender_id,
+        "sender_display_name": sender_name,
+        "sender_kind": sender_kind,
+        "chat_display_title": chat_display_title,
+        "direction": direction,
+        "created_at": occurred_at.isoformat() if occurred_at else None,
+        "modified_at": modified_at.isoformat() if modified_at else None,
+        "reply_to_message_id": provider_id_str(message.get("replyToId")),
+        "quoted_message_id": quoted_message_id,
+    }
+    media = _stored_attachment_descriptors(
+        message,
+        tenant_id=tenant_id,
+        chat_id=chat_id,
+        message_id=message_id,
+    )
+    if media:
+        metadata["media_descriptors"] = media
     return {
         "provider": TEAMS_PROVIDER,
         "kind": TEAMS_KIND,
@@ -258,21 +337,5 @@ def normalize_teams_message(
         "title": title,
         "body": text,
         "occurred_at": occurred_at,
-        "metadata": {
-            "account_id": str(account_id),
-            "tenant_id": tenant_id,
-            "teams_user_id": microsoft_user_id,
-            "chat_id": chat_id,
-            "chat_type": chat_type,
-            "message_id": message_id,
-            "sender_id": sender_id,
-            "sender_display_name": sender_name,
-            "sender_kind": sender_kind,
-            "chat_display_title": chat_display_title,
-            "direction": direction,
-            "created_at": occurred_at.isoformat() if occurred_at else None,
-            "modified_at": modified_at.isoformat() if modified_at else None,
-            "reply_to_message_id": provider_id_str(message.get("replyToId")),
-            "quoted_message_id": quoted_message_id,
-        },
+        "metadata": metadata,
     }

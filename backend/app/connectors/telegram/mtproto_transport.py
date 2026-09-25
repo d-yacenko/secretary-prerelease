@@ -126,6 +126,16 @@ class TelegramMtprotoFolderDialogsResult:
 
 
 @dataclass(frozen=True)
+class TelegramMtprotoMediaHint:
+    media_kind: str
+    provider_media_id: str
+    filename: str | None = None
+    mime_type: str | None = None
+    size: int | None = None
+    duration_seconds: int | None = None
+
+
+@dataclass(frozen=True)
 class TelegramMtprotoHistoryEntry:
     message_id: int
     occurred_at: datetime | None
@@ -136,6 +146,7 @@ class TelegramMtprotoHistoryEntry:
     edited_at: datetime | None
     is_service: bool
     outgoing: bool = False
+    media: tuple[TelegramMtprotoMediaHint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1211,7 +1222,70 @@ def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry 
         edited_at=edited_at,
         is_service=getattr(message, "action", None) is not None,
         outgoing=bool(getattr(message, "out", False)),
+        media=_media_hints(message),
     )
+
+
+def _media_hints(message: object) -> tuple[TelegramMtprotoMediaHint, ...]:
+    media = getattr(message, "media", None)
+    if isinstance(media, types.MessageMediaPhoto):
+        photo_id = getattr(getattr(media, "photo", None), "id", None)
+        if not isinstance(photo_id, int) or isinstance(photo_id, bool) or photo_id <= 0:
+            return ()
+        return (
+            TelegramMtprotoMediaHint(
+                media_kind="photo",
+                provider_media_id=str(photo_id),
+                mime_type="image/jpeg",
+            ),
+        )
+    if not isinstance(media, types.MessageMediaDocument):
+        return ()
+    document = getattr(media, "document", None)
+    document_id = getattr(document, "id", None)
+    if not isinstance(document_id, int) or isinstance(document_id, bool) or document_id <= 0:
+        return ()
+    kind = "document"
+    duration: int | None = None
+    filename: str | None = None
+    sticker = False
+    for attr in getattr(document, "attributes", None) or []:
+        if isinstance(attr, types.DocumentAttributeAudio):
+            kind = "voice" if bool(getattr(attr, "voice", False)) else "audio"
+            duration = _bounded_duration(getattr(attr, "duration", None))
+        elif isinstance(attr, types.DocumentAttributeVideo) and kind == "document":
+            kind = "video"
+            duration = _bounded_duration(getattr(attr, "duration", None))
+        elif isinstance(attr, types.DocumentAttributeFilename):
+            raw_name = getattr(attr, "file_name", None)
+            if isinstance(raw_name, str) and raw_name.strip():
+                filename = raw_name.strip()[:200]
+        elif isinstance(attr, types.DocumentAttributeSticker):
+            sticker = True
+    if sticker and kind == "document":
+        return ()
+    mime = getattr(document, "mime_type", None)
+    mime_type = mime.strip()[:200] if isinstance(mime, str) and mime.strip() else None
+    size = getattr(document, "size", None)
+    bounded_size = size if isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= 2_000_000_000 else None
+    return (
+        TelegramMtprotoMediaHint(
+            media_kind=kind,
+            provider_media_id=str(document_id),
+            filename=filename,
+            mime_type=mime_type,
+            size=bounded_size,
+            duration_seconds=duration,
+        ),
+    )
+
+
+def _bounded_duration(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0 or value > 86_400:
+        return None
+    return value
 
 
 def _peer_id_from_message(message: object) -> int | None:

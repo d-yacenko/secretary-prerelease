@@ -10,6 +10,7 @@ from app.connectors.teams.constants import TEAMS_KIND, TEAMS_PROVIDER
 from app.connectors.teams.normalize import merge_quoted_message_provenance, normalize_teams_message
 from app.db.models import Object
 from app.domain.object_visibility import passive_sync_should_skip_existing
+from app.services.communication_media_service import CommunicationMediaService
 from app.services.pipeline_enqueue import enqueue_embed_object
 
 
@@ -90,6 +91,7 @@ class TeamsObjectMaterializer:
             return self._apply_existing(existing, normalized, skip_hidden=skip_hidden)
 
         self._enqueue_embed(obj)
+        self._attach_media(obj)
         return TeamsMaterializeResult(obj=obj, change="created", jobs_enqueued=1)
 
     def _apply_existing(
@@ -116,10 +118,14 @@ class TeamsObjectMaterializer:
         existing.metadata_ = incoming_meta
         existing.occurred_at = normalized.get("occurred_at")
         self._session.flush()
+        self._attach_media(existing)
         if semantic_changed:
             self._enqueue_embed(existing)
             return TeamsMaterializeResult(obj=existing, change="updated", jobs_enqueued=1)
         return TeamsMaterializeResult(obj=existing, change="unchanged", jobs_enqueued=0)
+
+    def _attach_media(self, obj: Object) -> None:
+        CommunicationMediaService(self._session, obj.user_id).materialize_stored(obj)
 
     def _enqueue_embed(self, obj: Object) -> None:
         enqueue_embed_object(self._session, obj.id, obj.user_id)

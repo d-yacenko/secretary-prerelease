@@ -52,6 +52,7 @@ MATTERMOST_OPTIONAL_METADATA_KEYS = frozenset(
         "mentioned_user_ids",
         "mentioned_user_ids_truncated",
         "pending_post_id",
+        "media_descriptors",
     }
 )
 MATTERMOST_METADATA_KEYS = MATTERMOST_REQUIRED_METADATA_KEYS | MATTERMOST_OPTIONAL_METADATA_KEYS
@@ -869,7 +870,9 @@ def test_system_posts_ignored_and_attachment_only_without_download(
     service = _build_sync_service(db_session, credential_key, transport, now)
     result = service.sync_account(account.id, BOOTSTRAP_USER_ID)
     assert result["created"] == 1
-    obj = db_session.scalar(select(Object).where(Object.provider == "mattermost"))
+    obj = db_session.scalar(
+        select(Object).where(Object.provider == "mattermost", Object.kind == "chat_message")
+    )
     assert obj is not None
     assert obj.external_id == build_external_id(ALLOWED_URL, "file-only")
     assert obj.metadata_["file_ids"] == ["file-1"]

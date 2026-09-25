@@ -12,6 +12,7 @@ from app.connectors.mattermost.normalize import (
 )
 from app.db.models import Object
 from app.domain.object_visibility import passive_sync_should_skip_existing
+from app.services.communication_media_service import CommunicationMediaService
 from app.services.pipeline_enqueue import enqueue_embed_object
 
 
@@ -76,6 +77,7 @@ class MattermostObjectMaterializer:
             return self._apply_existing(existing, normalized, skip_hidden=skip_hidden)
 
         self._enqueue_embed(obj)
+        self._attach_media(obj)
         return MattermostMaterializeResult(obj=obj, change="created", jobs_enqueued=1)
 
     def find_existing(self, user_id: UUID, external_id: str) -> Object | None:
@@ -127,9 +129,11 @@ class MattermostObjectMaterializer:
             return MattermostMaterializeResult(obj=existing, change="unchanged", jobs_enqueued=0)
         object_changed = self._object_changed(existing, normalized)
         if not object_changed:
+            self._attach_media(existing)
             return MattermostMaterializeResult(obj=existing, change="unchanged", jobs_enqueued=0)
         semantic_changed = self._semantic_content_changed(existing, normalized)
         self._apply_normalized(existing, normalized)
+        self._attach_media(existing)
         if semantic_changed:
             self._enqueue_embed(existing)
             return MattermostMaterializeResult(obj=existing, change="updated", jobs_enqueued=1)
@@ -157,6 +161,9 @@ class MattermostObjectMaterializer:
         obj.body = normalized.get("body")
         obj.metadata_ = normalized["metadata"]
         obj.occurred_at = normalized.get("occurred_at")
+
+    def _attach_media(self, obj: Object) -> None:
+        CommunicationMediaService(self._session, obj.user_id).materialize_stored(obj)
 
     def _enqueue_embed(self, obj: Object) -> None:
         enqueue_embed_object(self._session, obj.id, obj.user_id)

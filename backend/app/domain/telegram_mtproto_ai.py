@@ -7,6 +7,8 @@ from app.connectors.telegram.constants import TELEGRAM_KIND, TELEGRAM_PROVIDER
 from app.core.config import settings
 from app.db.models import Object, TelegramMtprotoAccount, TelegramMtprotoChatSelection
 from app.domain.telegram_mtproto_visibility import (
+    telegram_media_file_excluded,
+    telegram_media_file_sql,
     telegram_mtproto_scope_object_predicate,
     telegram_mtproto_scope_sql_fragment,
 )
@@ -52,12 +54,15 @@ def _self_authored_scope_exists(model=Object):
 def telegram_mtproto_ai_predicate(model=Object):
     """Return the AI-only gate; transport visibility remains a separate policy."""
     if not settings.telegram_mtproto_ai_enabled:
-        return or_(
-            model.provider.is_distinct_from(TELEGRAM_PROVIDER),
-            and_(
-                model.kind == TELEGRAM_KIND,
-                model.metadata_["transport"].as_string().is_not_distinct_from("mtproto"),
-                _self_authored_scope_exists(model),
+        return and_(
+            telegram_media_file_excluded(model),
+            or_(
+                model.provider.is_distinct_from(TELEGRAM_PROVIDER),
+                and_(
+                    model.kind == TELEGRAM_KIND,
+                    model.metadata_["transport"].as_string().is_not_distinct_from("mtproto"),
+                    _self_authored_scope_exists(model),
+                ),
             ),
         )
     return telegram_mtproto_scope_object_predicate(model)
@@ -68,6 +73,7 @@ def telegram_mtproto_ai_sql_fragment(alias: str = "o") -> str:
     if settings.telegram_mtproto_ai_enabled:
         return telegram_mtproto_scope_sql_fragment(alias)
     return f"""
+    AND {telegram_media_file_sql(alias)}
     AND (
         {alias}.provider IS DISTINCT FROM 'telegram'
         OR (
