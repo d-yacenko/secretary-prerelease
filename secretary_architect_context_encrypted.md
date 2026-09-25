@@ -1,6 +1,7 @@
 # Secretary Architect Context — encrypted canonical
 
 Format: SECRETARY-ARCHITECT-CONTEXT-v41
+Strategy-Supplement: secretary_architect_strategy_encrypted.md
 KDF: PBKDF2-HMAC-SHA256
 Iterations: 600000
 Compression: gzip
