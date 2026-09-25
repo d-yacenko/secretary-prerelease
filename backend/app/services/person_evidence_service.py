@@ -163,6 +163,21 @@ class PersonEvidenceService:
             self._session.flush()
         return row
 
+    def is_rejected(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
+        row = self._session.scalar(
+            select(PersonIdentityEvidence.id).where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id == person_id,
+                PersonIdentityEvidence.state == ACTIVE,
+                PersonIdentityEvidence.evidence_type == USER_REJECTED,
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+            )
+        )
+        return row is not None
+
     def score(
         self,
         person_id: UUID,

@@ -6,6 +6,7 @@ from app.assistant.action_plan_constants import MAX_ACTIONS_PER_PLAN
 from app.assistant.constants import MAX_ASSISTANT_TOOL_CALLS_PER_TURN
 from app.assistant.inbox_review_progress import InboxReviewTurnProgress
 from app.assistant.reference_ids import (
+    collect_resolved_person_id,
     collect_seen_edge_ids_from_bounded_tool,
     collect_seen_object_ids_from_bounded_tool,
     collect_seen_person_candidates,
@@ -34,6 +35,7 @@ _READ_TOOLS = frozenset(
         "list_conversation_members",
         "resolve_person",
         "find_person_communications",
+        "find_person_identity_candidates",
     }
 )
 _EVIDENCE_WRITE_TOOLS = frozenset({"create_task", "update_task", "set_task_status", "delete_task"})
@@ -54,7 +56,9 @@ _ACTIVITY_TARGET_TOOLS = frozenset({"cancel_scheduled_activity"})
 # target object and the label must have been exposed to the model this turn.
 _ANNOTATION_TARGET_TOOLS = frozenset({"assign_label", "remove_label"})
 _REVIEW_MARKER_TARGET_TOOLS = frozenset({"set_inbox_review_marker"})
-_PERSON_READ_TOOLS = frozenset({"find_person_communications"})
+_PERSON_READ_TOOLS = frozenset(
+    {"find_person_communications", "find_person_identity_candidates"}
+)
 _PERSON_FEEDBACK_TOOLS = frozenset(
     {
         "confirm_person_identity",
@@ -110,6 +114,8 @@ class PerTurnToolBudget:
         self._pending_seen_edge_ids: set[UUID] = set()
         self._seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
         self._pending_seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
+        self._resolved_person_ids: set[UUID] = set()
+        self._pending_resolved_person_ids: set[UUID] = set()
         self._staged_actions: list[dict] = []
         self._plan_sealed = False
         self._inbox_review_purpose = inbox_review_purpose
@@ -142,6 +148,8 @@ class PerTurnToolBudget:
         self._pending_seen_edge_ids.clear()
         self._seen_person_candidates.update(self._pending_seen_person_candidates)
         self._pending_seen_person_candidates.clear()
+        self._resolved_person_ids.update(self._pending_resolved_person_ids)
+        self._pending_resolved_person_ids.clear()
         if self._staged_actions:
             self._plan_sealed = True
 
@@ -292,6 +300,11 @@ class PerTurnToolBudget:
                 tool_name, model_output.model_visible_payload
             ):
                 self._pending_seen_person_candidates.add(candidate)
+            resolved_person_id = collect_resolved_person_id(
+                tool_name, model_output.model_visible_payload
+            )
+            if resolved_person_id is not None:
+                self._pending_resolved_person_ids.add(resolved_person_id)
             result = result.model_copy(
                 update={
                     "model_output_json": model_output.model_output_json,
@@ -570,11 +583,11 @@ class PerTurnToolBudget:
                 error="invalid person id",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
-        if parsed not in self._seen_object_ids:
+        if parsed not in self._resolved_person_ids:
             return ToolExecutionResult(
                 success=False,
                 tool_name=tool_name,
-                error="person was not exposed in this Assistant turn",
+                error="person was not resolved in this Assistant turn",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
         return None

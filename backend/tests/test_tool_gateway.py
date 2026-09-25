@@ -34,6 +34,7 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "list_conversation_members",
         "resolve_person",
         "find_person_communications",
+        "find_person_identity_candidates",
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
@@ -92,6 +93,7 @@ def test_registry_covers_executor_dispatch_tools():
         "list_conversation_members",
         "resolve_person",
         "find_person_communications",
+        "find_person_identity_candidates",
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
@@ -163,6 +165,7 @@ def test_permission_classifications():
         "list_conversation_members",
         "resolve_person",
         "find_person_communications",
+        "find_person_identity_candidates",
         "get_today",
     }
     internal_write = {

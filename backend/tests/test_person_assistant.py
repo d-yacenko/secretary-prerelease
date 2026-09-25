@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from app.assistant import session as assistant_session_module
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
-from app.db.models import Object, PersonIdentity, User
+from app.db.models import Object, PersonIdentity, PersonIdentityEvidence, User
 from app.domain.object_visibility import tombstone_object
 from app.domain.person_candidate_score import EXACT_IDENTIFIER
 from app.domain.person_identity import (
@@ -310,6 +310,396 @@ def test_feedback_does_not_send_or_merge() -> None:
         assert marker not in folded
 
 
+def test_rejected_attached_identity_does_not_resolve_or_retrieve(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    identity = normalize_email("olga@example.com")
+    people.attach(person.id, identity)
+    PersonEvidenceService(db_session, user_id).record_rejection(person.id, identity, "reject-olga")
+    _email(db_session, user_id, "olga@example.com")
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    resolved = service.resolve("olga@example.com")
+    page = service.find_communications(FindPersonCommunicationsInput(person_id=person.id))
+    assert resolved.state == "none"
+    assert page.objects == []
+    PersonEvidenceService(db_session, user_id).retract(
+        PersonEvidenceService(db_session, user_id).history(person.id, identity)[0].id
+    )
+    restored = service.resolve("olga@example.com")
+    again = service.find_communications(FindPersonCommunicationsInput(person_id=person.id))
+    assert restored.person_id == person.id
+    assert again.objects
+    history = PersonEvidenceService(db_session, user_id).history(person.id, identity)
+    assert any(row.state == "retracted" for row in history)
+
+
+def test_confirmation_restores_rejected_attached_identity(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    identity = normalize_email("olga@example.com")
+    people.attach(person.id, identity)
+    evidence = PersonEvidenceService(db_session, user_id)
+    evidence.record_rejection(person.id, identity, "reject-olga")
+    evidence.record_confirmation(person.id, identity, "confirm-olga")
+    resolved = PersonAssistantService(db_session, user_id, now=NOW).resolve("olga@example.com")
+    history = evidence.history(person.id, identity)
+    assert resolved.person_id == person.id
+    assert any(row.evidence_type == "user_rejected" and row.state == "retracted" for row in history)
+    assert any(row.evidence_type == "user_confirmed" and row.state == "active" for row in history)
+
+
+def test_owned_source_identity_is_conflict_not_confirmable(db_session, monkeypatch) -> None:
+    _patch_session(db_session, monkeypatch)
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    shown = people.create_person("Olga Volkova")
+    owner = people.create_person("Real Owner")
+    identity = normalize_email("owned@example.com")
+    people.attach(owner.id, identity)
+    _email(db_session, user_id, "Olga Volkova <owned@example.com>")
+    budget = PerTurnToolBudget()
+    runner = BoundAssistantToolRunner(budget, user_id)
+    runner("resolve_person", {"query": "Olga Volkova"})
+    budget.commit_model_visible_outputs()
+    listed = runner("find_person_identity_candidates", {"person_id": str(shown.id)})
+    assert listed.success is True
+    assert listed.output["candidates"][0]["confirmable"] is False
+    assert "identity_conflict" in listed.output["candidates"][0]["reasons"]
+    budget.commit_model_visible_outputs()
+    blocked = runner("confirm_person_identity", _feedback(shown.id, identity))
+    assert blocked.success is False
+
+
+def test_owner_plus_other_confirmation_is_a_conflict(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    owner = people.create_person("Olga Volkova")
+    other = people.create_person("Other Olga")
+    identity = normalize_email("olga@example.com")
+    people.attach(owner.id, identity)
+    PersonEvidenceService(db_session, user_id).record_confirmation(other.id, identity, "confirm-other")
+    resolved = PersonAssistantService(db_session, user_id, now=NOW).resolve("olga@example.com")
+    assert resolved.state == "ambiguous"
+    assert resolved.person_id is None
+    assert {item.person_id for item in resolved.candidates} == {owner.id, other.id}
+    assert all("identity_conflict" in item.reasons for item in resolved.candidates)
+
+
+def test_multiple_confirmations_with_owner_stay_ambiguous(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    owner = people.create_person("Olga Volkova")
+    other = people.create_person("Other Olga")
+    identity = normalize_email("olga@example.com")
+    people.attach(owner.id, identity)
+    evidence = PersonEvidenceService(db_session, user_id)
+    evidence.record_confirmation(owner.id, identity, "confirm-owner")
+    evidence.record_confirmation(other.id, identity, "confirm-other")
+    resolved = PersonAssistantService(db_session, user_id, now=NOW).resolve("olga@example.com")
+    assert resolved.state == "ambiguous"
+    assert resolved.person_id is None
+    assert any("multiple_user_confirmations" in item.reasons for item in resolved.candidates)
+    assert _count(db_session, PersonIdentity, user_id) == 1
+
+
+def test_ambiguous_person_cannot_retrieve_until_resolved(db_session, monkeypatch) -> None:
+    _patch_session(db_session, monkeypatch)
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    first = people.create_person("Olga Volkova")
+    second = people.create_person("Olga Volkova")
+    budget = PerTurnToolBudget()
+    runner = BoundAssistantToolRunner(budget, user_id)
+    resolved = runner("resolve_person", {"query": "Olga Volkova"})
+    assert resolved.output["state"] == "ambiguous"
+    budget.commit_model_visible_outputs()
+    for person in (first, second):
+        blocked = runner("find_person_communications", {"person_id": str(person.id)})
+        assert blocked.success is False
+        inspected = runner("get_object", {"object_id": str(person.id)})
+        assert inspected.success is True
+    exact = people.attach(first.id, normalize_email("olga@example.com"))
+    del exact
+    chosen = runner("resolve_person", {"query": "olga@example.com"})
+    assert chosen.output["state"] == "resolved"
+    budget.commit_model_visible_outputs()
+    allowed = runner("find_person_communications", {"person_id": str(first.id)})
+    assert allowed.success is True
+
+
+def test_email_retrieval_includes_both_directions(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(person.id, normalize_email("olga@example.com"))
+    inbound = _email(db_session, user_id, "olga@example.com")
+    outbound = _email(
+        db_session,
+        user_id,
+        "me@example.com",
+        labels=["SENT"],
+        metadata={"recipients": ["olga@example.com"]},
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert {item.id for item in page.objects} == {inbound.id, outbound.id}
+    inbound_only = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id, direction="inbound")
+    )
+    assert [item.id for item in inbound_only.objects] == [inbound.id]
+
+
+def test_yandex_direction_filter_uses_folder(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(person.id, normalize_email("olga@example.com"))
+    inbox = _provider_email(
+        db_session, user_id, "yandex_mail", {"sender": "olga@example.com", "folder": "Inbox"}
+    )
+    sent = _provider_email(
+        db_session,
+        user_id,
+        "yandex_mail",
+        {"sender": "me@example.com", "folder": "Sent", "recipients": ["olga@example.com"]},
+    )
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    outbound = service.find_communications(
+        FindPersonCommunicationsInput(person_id=person.id, direction="outbound")
+    )
+    inbound = service.find_communications(
+        FindPersonCommunicationsInput(person_id=person.id, direction="inbound")
+    )
+    assert [item.id for item in outbound.objects] == [sent.id]
+    assert [item.id for item in inbound.objects] == [inbox.id]
+
+
+def test_private_telegram_outbound_follows_ai_eligibility(db_session, monkeypatch) -> None:
+    from app.core.config import settings
+    from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    user_id = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user_id, telegram_user_id=424242, session_encrypted="encrypted"
+    )
+    db_session.add(account)
+    db_session.flush()
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(
+        person.id, normalize_telegram_user_id(str(account.id), 7)
+    )
+    for peer_id, peer_kind, title in ((7, "private", "Olga"), (-100, "group", "Group")):
+        db_session.add(
+            TelegramMtprotoChatSelection(
+                account_id=account.id,
+                peer_id=peer_id,
+                peer_kind=peer_kind,
+                provider_peer_reference_encrypted="encrypted",
+                title=title,
+                manual_selected=False,
+                scope_active=True,
+            )
+        )
+    db_session.flush()
+    outbound = _telegram(
+        db_session,
+        user_id,
+        peer_kind="private",
+        sender=424242,
+        peer=7,
+        direction="outbound",
+        account_id=str(account.id),
+    )
+    group = _telegram(
+        db_session,
+        user_id,
+        peer_kind="group",
+        sender=424242,
+        peer=-100,
+        direction="outbound",
+        account_id=str(account.id),
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert [item.id for item in page.objects] == [outbound.id]
+    assert group.id not in {item.id for item in page.objects}
+
+
+def test_direct_chat_outbound_requires_inbound_anchor(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    people.attach(person.id, normalize_teams_user_id(TENANT, TEAMS_USER))
+    people.attach(person.id, normalize_mattermost_user_id(SERVER, "olga-id"))
+    teams_out = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": "33333333-3333-3333-3333-333333333333",
+            "sender_kind": "user",
+            "chat_type": "oneOnOne",
+            "chat_id": "chat-1",
+            "direction": "outbound",
+        },
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert teams_out.id not in {item.id for item in page.objects}
+    teams_in = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": TEAMS_USER,
+            "sender_kind": "user",
+            "chat_type": "oneOnOne",
+            "chat_id": "chat-1",
+            "direction": "inbound",
+        },
+    )
+    group_out = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": "33333333-3333-3333-3333-333333333333",
+            "sender_kind": "user",
+            "chat_type": "group",
+            "chat_id": "group-1",
+            "direction": "outbound",
+        },
+    )
+    mm_in = _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": SERVER,
+            "author_user_id": "olga-id",
+            "channel_type": "D",
+            "channel_id": "dm-1",
+            "direction": "inbound",
+        },
+    )
+    mm_out = _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": SERVER,
+            "author_user_id": "me-id",
+            "channel_type": "D",
+            "channel_id": "dm-1",
+            "direction": "outbound",
+        },
+    )
+    public_out = _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": SERVER,
+            "author_user_id": "me-id",
+            "channel_type": "O",
+            "channel_id": "town",
+            "direction": "outbound",
+        },
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    found = {item.id for item in page.objects}
+    assert {teams_in.id, teams_out.id, mm_in.id, mm_out.id} <= found
+    assert group_out.id not in found
+    assert public_out.id not in found
+
+
+def test_source_identity_can_be_confirmed_after_read(db_session, monkeypatch) -> None:
+    _patch_session(db_session, monkeypatch)
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    _email(db_session, user_id, "Olga Volkova <new@example.com>")
+    budget = PerTurnToolBudget()
+    runner = BoundAssistantToolRunner(budget, user_id)
+    runner("resolve_person", {"query": "Olga Volkova"})
+    budget.commit_model_visible_outputs()
+    blocked = runner(
+        "confirm_person_identity",
+        _feedback(person.id, normalize_email("new@example.com")),
+    )
+    assert blocked.success is False
+    listed = runner("find_person_identity_candidates", {"person_id": str(person.id)})
+    assert listed.success is True
+    assert listed.output["candidates"][0]["confirmable"] is True
+    budget.commit_model_visible_outputs()
+    confirmed = runner(
+        "confirm_person_identity",
+        _feedback(person.id, normalize_email("new@example.com")),
+    )
+    assert confirmed.success is True
+    invented = runner(
+        "confirm_person_identity",
+        _feedback(person.id, normalize_email("invented@example.com")),
+    )
+    assert invented.success is False
+    assert _count(db_session, PersonIdentity, user_id) == 0
+
+
+def test_rejected_source_candidate_stays_hidden_until_retraction(db_session, monkeypatch) -> None:
+    _patch_session(db_session, monkeypatch)
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    identity = normalize_email("new@example.com")
+    _email(db_session, user_id, "Olga Volkova <new@example.com>")
+    budget = PerTurnToolBudget()
+    runner = BoundAssistantToolRunner(budget, user_id)
+    runner("resolve_person", {"query": "Olga Volkova"})
+    budget.commit_model_visible_outputs()
+    runner("find_person_identity_candidates", {"person_id": str(person.id)})
+    budget.commit_model_visible_outputs()
+    runner("reject_person_identity", _feedback(person.id, identity))
+    hidden = PersonAssistantService(db_session, user_id, now=NOW).find_identity_candidates(person.id)
+    assert hidden.candidates == []
+    runner("retract_person_identity_feedback", _feedback(person.id, identity))
+    restored = PersonAssistantService(db_session, user_id, now=NOW).find_identity_candidates(person.id)
+    assert restored.candidates
+    assert restored.candidates[0].confirmable is True
+
+
+def test_telegram_source_candidate_is_hidden_when_gate_is_closed(db_session, monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", False)
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    _telegram(db_session, user_id, peer_kind="private", sender=42, peer=42, direction="inbound")
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_identity_candidates(person.id)
+    assert page.candidates == []
+    assert "telegram_user_id" not in page.model_dump_json()
+
+
+def test_rejected_attached_identity_is_not_repromoted(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    identity = normalize_email("olga@example.com")
+    people.attach(person.id, identity)
+    PersonEvidenceService(db_session, user_id).record_rejection(person.id, identity, "reject-olga")
+    _email(db_session, user_id, "olga@example.com")
+    before = _count(db_session, PersonIdentityEvidence, user_id)
+    plan = PersonEnrichmentService(db_session, user_id, now=NOW).plan()
+    assert _count(db_session, PersonIdentityEvidence, user_id) == before
+    assert any("user_rejected" in item.reasons for item in plan.candidates)
+
+
 def test_person_tools_are_not_send_routes() -> None:
     from app.tools.policy import ToolPermission
     from app.tools.registry import TOOL_REGISTRY
@@ -374,7 +764,17 @@ def _user(db_session) -> uuid.UUID:
     return user_id
 
 
-def _email(db_session, user_id: uuid.UUID, sender: str) -> Object:
+def _email(
+    db_session,
+    user_id: uuid.UUID,
+    sender: str,
+    *,
+    labels: list[str] | None = None,
+    metadata: dict | None = None,
+) -> Object:
+    payload = {"sender": sender, "labels": labels or ["INBOX"]}
+    if metadata:
+        payload.update(metadata)
     obj = Object(
         user_id=user_id,
         kind="email",
@@ -383,7 +783,7 @@ def _email(db_session, user_id: uuid.UUID, sender: str) -> Object:
         origin="source",
         state="observed",
         occurred_at=NOW - timedelta(hours=1),
-        metadata_={"sender": sender, "labels": ["INBOX"]},
+        metadata_=payload,
     )
     db_session.add(obj)
     db_session.flush()
@@ -406,24 +806,49 @@ def _chat(db_session, user_id: uuid.UUID, *, provider: str, metadata: dict) -> O
     return obj
 
 
-def _telegram(db_session, user_id, *, peer_kind: str, sender: int, peer: int, direction: str) -> None:
-    db_session.add(
-        Object(
-            user_id=user_id,
-            kind="chat_message",
-            provider="telegram",
-            title="note",
-            origin="source",
-            state="observed",
-            occurred_at=NOW - timedelta(hours=1),
-            metadata_={
-                "transport": "mtproto",
-                "account_id": ACCOUNT,
-                "peer_kind": peer_kind,
-                "peer_id": peer,
-                "sender_peer_id": sender,
-                "direction": direction,
-            },
-        )
+def _provider_email(db_session, user_id: uuid.UUID, provider: str, metadata: dict) -> Object:
+    obj = Object(
+        user_id=user_id,
+        kind="email",
+        provider=provider,
+        title="mail",
+        origin="source",
+        state="observed",
+        occurred_at=NOW - timedelta(hours=1),
+        metadata_=metadata,
     )
+    db_session.add(obj)
     db_session.flush()
+    return obj
+
+
+def _telegram(
+    db_session,
+    user_id,
+    *,
+    peer_kind: str,
+    sender: int,
+    peer: int,
+    direction: str,
+    account_id: str = ACCOUNT,
+) -> Object:
+    obj = Object(
+        user_id=user_id,
+        kind="chat_message",
+        provider="telegram",
+        title="note",
+        origin="source",
+        state="observed",
+        occurred_at=NOW - timedelta(hours=1),
+        metadata_={
+            "transport": "mtproto",
+            "account_id": account_id,
+            "peer_kind": peer_kind,
+            "peer_id": peer,
+            "sender_peer_id": sender,
+            "direction": direction,
+        },
+    )
+    db_session.add(obj)
+    db_session.flush()
+    return obj

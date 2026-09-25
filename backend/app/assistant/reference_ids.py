@@ -133,6 +133,11 @@ def collect_seen_object_ids_from_bounded_tool(
         for obj in bounded.get("objects") or []:
             if isinstance(obj, dict):
                 _append_uuid(seen_ids, obj.get("id"))
+    elif tool_name == "find_person_identity_candidates":
+        for item in bounded.get("candidates") or []:
+            if isinstance(item, dict):
+                for object_id in item.get("source_object_ids") or []:
+                    _append_uuid(seen_ids, object_id)
     elif tool_name in (
         "create_task",
         "update_task",
@@ -148,13 +153,35 @@ def collect_seen_object_ids_from_bounded_tool(
     return seen_ids
 
 
+def collect_resolved_person_id(tool_name: str, bounded: dict[str, Any]) -> UUID | None:
+    if tool_name != "resolve_person" or bounded.get("state") != "resolved":
+        return None
+    try:
+        return UUID(str(bounded.get("person_id")))
+    except (ValueError, TypeError):
+        return None
+
+
 def collect_seen_person_candidates(
     tool_name: str,
     bounded: dict[str, Any],
 ) -> list[tuple[UUID, str, str, str, str]]:
-    if tool_name != "resolve_person":
+    if tool_name not in {"resolve_person", "find_person_identity_candidates"}:
         return []
     found: list[tuple[UUID, str, str, str, str]] = []
+    if tool_name == "find_person_identity_candidates":
+        try:
+            person_id = UUID(str(bounded.get("person_id")))
+        except (ValueError, TypeError):
+            return []
+        for candidate in bounded.get("candidates") or []:
+            if not isinstance(candidate, dict) or not candidate.get("confirmable"):
+                continue
+            identity = candidate.get("identity")
+            if not isinstance(identity, dict):
+                continue
+            found.append(_identity_tuple(person_id, identity))
+        return found
     for candidate in bounded.get("candidates") or []:
         if not isinstance(candidate, dict):
             continue
@@ -163,18 +190,19 @@ def collect_seen_person_candidates(
         except (ValueError, TypeError):
             continue
         for identity in candidate.get("identities") or []:
-            if not isinstance(identity, dict):
-                continue
-            found.append(
-                (
-                    person_id,
-                    str(identity.get("identity_type") or ""),
-                    str(identity.get("provider") or ""),
-                    str(identity.get("realm") or ""),
-                    str(identity.get("canonical_value") or ""),
-                )
-            )
+            if isinstance(identity, dict):
+                found.append(_identity_tuple(person_id, identity))
     return found
+
+
+def _identity_tuple(person_id: UUID, identity: dict[str, Any]) -> tuple[UUID, str, str, str, str]:
+    return (
+        person_id,
+        str(identity.get("identity_type") or ""),
+        str(identity.get("provider") or ""),
+        str(identity.get("realm") or ""),
+        str(identity.get("canonical_value") or ""),
+    )
 
 
 def collect_seen_edge_ids_from_bounded_tool(

@@ -31,7 +31,13 @@ from app.domain.person_identity import (
     normalize_email,
 )
 from app.domain.person_identity_evidence import extract_person_identity_evidence
-from app.domain.person_salience import communication_identity_keys
+from app.domain.person_salience import (
+    _email_address,
+    _email_audience,
+    _email_direction,
+    _positive_id,
+    _text,
+)
 from app.domain.telegram_mtproto_ai import (
     telegram_mtproto_ai_enabled,
     telegram_mtproto_ai_predicate,
@@ -44,11 +50,13 @@ from app.services.provenance import REJECTED_STATE
 from app.tools.schemas import (
     FindPersonCommunicationsInput,
     FindPersonCommunicationsOutput,
+    FindPersonIdentityCandidatesOutput,
     PersonCandidateOut,
     PersonCommunicationOut,
     PersonIdentityFeedbackInput,
     PersonIdentityFeedbackOutput,
     PersonIdentitySummary,
+    PersonSourceCandidateOut,
     ResolvePersonOutput,
 )
 
@@ -74,18 +82,15 @@ class PersonAssistantService:
             return self._resolve_exact(exact)
         alias_ids = self._alias_people(text)
         if alias_ids:
-            return self._finish(alias_ids, "alias", None)
+            return self._finish(alias_ids, ("alias",), None)
         matches = self._evidence.propose_candidates(None, text)
-        return self._finish([match.person_id for match in matches], "name_similarity", None)
+        return self._finish([match.person_id for match in matches], ("name_similarity",), None)
 
     def find_communications(
         self, payload: FindPersonCommunicationsInput
     ) -> FindPersonCommunicationsOutput:
         person = self._require_active_person(payload.person_id)
-        keys = {
-            (row.identity_type, row.realm, row.canonical_value)
-            for row in self._active_identity_rows(person.id)
-        }
+        keys = self._effective_keys(person.id)
         matches, truncated = self._matching_messages(keys, payload)
         return FindPersonCommunicationsOutput(
             person_id=person.id,
@@ -113,6 +118,56 @@ class PersonAssistantService:
             explanation="explicit assistant confirmation",
         )
         return _feedback_output(person.id, row)
+
+    def find_identity_candidates(self, person_id: UUID) -> FindPersonIdentityCandidatesOutput:
+        person = self._require_active_person(person_id)
+        grouped: dict[tuple[str, str, str, str], list] = {}
+        for message in self._recent_messages(None):
+            for identity in extract_person_identity_evidence(message):
+                if provider_category(identity) == "telegram" and not telegram_mtproto_ai_enabled():
+                    continue
+                if self._suppressed(person.id, identity):
+                    continue
+                grouped.setdefault(feedback_identity_key(identity), []).append((message, identity))
+        candidates: list[PersonSourceCandidateOut] = []
+        for _key, rows in sorted(grouped.items(), key=lambda item: item[0]):
+            identity = rows[0][1]
+            owner = self._people.resolve(identity)
+            if owner is not None and owner.id == person.id:
+                continue
+            source_ids = tuple(message.id for message, _identity in rows[:3])
+            if owner is not None and owner.id != person.id:
+                candidates.append(
+                    PersonSourceCandidateOut(
+                        confirmable=False,
+                        reasons=("identity_conflict",),
+                        assessment_resolution=self._evidence.score(person.id, identity).resolution,
+                        identity=_summary(identity),
+                        source_object_ids=source_ids,
+                    )
+                )
+                continue
+            proposals = self._evidence.propose_candidates(identity, identity.display_value)
+            matched = next((item for item in proposals if item.person_id == person.id), None)
+            if matched is None:
+                continue
+            candidates.append(
+                PersonSourceCandidateOut(
+                    confirmable=True,
+                    reasons=(matched.reason,),
+                    assessment_resolution=matched.assessment.resolution,
+                    identity=_summary(identity),
+                    source_object_ids=source_ids,
+                )
+            )
+            if len(candidates) > MAX_PERSON_CANDIDATES:
+                break
+        truncated = len(candidates) > MAX_PERSON_CANDIDATES
+        return FindPersonIdentityCandidatesOutput(
+            person_id=person.id,
+            candidates=candidates[:MAX_PERSON_CANDIDATES],
+            truncated=truncated,
+        )
 
     def reject_person_identity(
         self, payload: PersonIdentityFeedbackInput
@@ -145,19 +200,39 @@ class PersonAssistantService:
 
     def _resolve_exact(self, identity: NormalizedPersonIdentity) -> ResolvePersonOutput:
         owner = self._people.resolve(identity)
-        if owner is not None:
-            return self._finish([owner.id], "exact_identity", identity)
+        owner_rejected = owner is not None and self._suppressed(owner.id, identity)
+        confirmed = [
+            person_id
+            for person_id in self._confirmation_people(identity)
+            if not self._suppressed(person_id, identity)
+        ]
+        if len(confirmed) > 1:
+            reasons = ["multiple_user_confirmations"]
+            people = list(confirmed)
+            if owner is not None and not owner_rejected and owner.id not in people:
+                people.append(owner.id)
+            if owner is not None:
+                reasons.append("identity_conflict")
+            return self._finish(people, tuple(reasons), identity)
+        if owner is not None and not owner_rejected:
+            if confirmed and confirmed[0] != owner.id:
+                return self._finish([owner.id, confirmed[0]], ("identity_conflict",), identity)
+            return self._finish([owner.id], ("exact_identity",), identity)
+        if owner_rejected and confirmed:
+            return self._finish(confirmed, ("identity_conflict",), identity)
+        if owner_rejected:
+            return self._finish([], ("user_rejected",), identity)
         holders = [
             person_id
             for person_id in self._evidence_people(identity)
             if not self._suppressed(person_id, identity)
         ]
-        return self._finish(holders, "exact_identity", identity)
+        return self._finish(holders, ("exact_identity",), identity)
 
     def _finish(
         self,
         person_ids: list[UUID],
-        reason: str,
+        reasons: tuple[str, ...],
         identity: NormalizedPersonIdentity | None,
     ) -> ResolvePersonOutput:
         unique = list(dict.fromkeys(person_ids))
@@ -166,8 +241,9 @@ class PersonAssistantService:
         ordered = self._by_salience(people, ranked)
         truncated = len(ordered) > MAX_PERSON_CANDIDATES
         visible = ordered[:MAX_PERSON_CANDIDATES]
-        candidates = [self._candidate(person, reason, identity, ranked) for person in visible]
-        if len(candidates) == 1:
+        candidates = [self._candidate(person, reasons, identity, ranked) for person in visible]
+        conflict = "identity_conflict" in reasons or "multiple_user_confirmations" in reasons
+        if len(candidates) == 1 and not conflict:
             state = RESOLVED
             chosen = candidates[0].person_id
         elif candidates:
@@ -186,7 +262,7 @@ class PersonAssistantService:
     def _candidate(
         self,
         person: Object,
-        reason: str,
+        reasons: tuple[str, ...],
         identity: NormalizedPersonIdentity | None,
         ranked: dict,
     ) -> PersonCandidateOut:
@@ -199,7 +275,7 @@ class PersonAssistantService:
             title=person.title or "",
             identities=self._summaries(person.id),
             assessment_resolution=assessment,
-            reasons=(reason,),
+            reasons=reasons,
             salience_tier=None if item is None else item.tier,
             salience_score=None if item is None else item.score,
         )
@@ -268,31 +344,57 @@ class PersonAssistantService:
 
     def _is_exposed(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
         wanted = feedback_identity_key(identity)
-        return any(feedback_identity_key(item) == wanted for item in self._exposed_identities(person_id))
+        if any(feedback_identity_key(item) == wanted for item in self._exposed_identities(person_id)):
+            return True
+        if any(feedback_identity_key(_identity_from_row(row)) == wanted for row in self._active_identity_rows(person_id)):
+            return True
+        if any(
+            feedback_identity_key(_identity_from_evidence(row)) == wanted
+            for row in self._evidence_rows(person_id)
+        ):
+            return True
+        page = self.find_identity_candidates(person_id)
+        return any(
+            item.confirmable and feedback_identity_key(_identity_from_summary(item.identity)) == wanted
+            for item in page.candidates
+        )
 
     def _suppressed(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
-        row = self._session.scalar(
-            select(PersonIdentityEvidence.id).where(
-                PersonIdentityEvidence.user_id == self._user_id,
-                PersonIdentityEvidence.person_object_id == person_id,
-                PersonIdentityEvidence.state == "active",
-                PersonIdentityEvidence.evidence_type == "user_rejected",
-                PersonIdentityEvidence.provider == identity.provider,
-                PersonIdentityEvidence.identity_type == identity.identity_type,
-                PersonIdentityEvidence.realm == identity.realm,
-                PersonIdentityEvidence.canonical_value == identity.canonical_value,
-            )
-        )
-        return row is not None
+        return self._evidence.is_rejected(person_id, identity)
+
+    def _effective_keys(self, person_id: UUID) -> set[tuple[str, str, str]]:
+        keys: set[tuple[str, str, str]] = set()
+        for row in self._active_identity_rows(person_id):
+            identity = _identity_from_row(row)
+            if self._suppressed(person_id, identity):
+                continue
+            keys.add((identity.identity_type, identity.realm, identity.canonical_value))
+        return keys
 
     def _matching_messages(
         self,
         keys: set[tuple[str, str, str]],
         payload: FindPersonCommunicationsInput,
     ) -> tuple[list[Object], bool]:
+        rows, scan_truncated = self._recent_messages(payload, bounded=True)
         if not keys:
-            return [], False
-        cutoff = payload.occurred_from or (self._now - timedelta(days=PERSON_LOOKBACK_DAYS))
+            return [], scan_truncated
+        anchors = {
+            anchor
+            for obj in rows
+            if (anchor := _conversation_anchor(obj, keys)) is not None
+        }
+        matched = [obj for obj in rows if _attributable(obj, keys, anchors, payload.direction)]
+        truncated = scan_truncated or len(matched) > payload.limit
+        return matched[: payload.limit], truncated
+
+    def _recent_messages(
+        self,
+        payload: FindPersonCommunicationsInput | None,
+        *,
+        bounded: bool = False,
+    ) -> list[Object] | tuple[list[Object], bool]:
+        cutoff = self._now - timedelta(days=PERSON_LOOKBACK_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
         query = select(Object).where(
             Object.user_id == self._user_id,
@@ -302,25 +404,21 @@ class PersonAssistantService:
             stamp >= cutoff,
             telegram_mtproto_ai_predicate(),
         )
-        if payload.occurred_to is not None:
+        if payload is not None and payload.occurred_from is not None:
+            query = query.where(stamp >= payload.occurred_from)
+        if payload is not None and payload.occurred_to is not None:
             query = query.where(stamp <= payload.occurred_to)
-        if payload.provider:
+        if payload is not None and payload.provider:
             query = query.where(Object.provider == payload.provider)
         rows = list(
             self._session.scalars(
                 query.order_by(stamp.desc(), Object.id).limit(MAX_PERSON_SCAN + 1)
             )
         )
-        scan_truncated = len(rows) > MAX_PERSON_SCAN
-        matched: list[Object] = []
-        for obj in rows[:MAX_PERSON_SCAN]:
-            if not _message_matches(obj, keys, payload.direction):
-                continue
-            matched.append(obj)
-            if len(matched) > payload.limit:
-                break
-        truncated = scan_truncated or len(matched) > payload.limit
-        return matched[: payload.limit], truncated
+        visible = rows[:MAX_PERSON_SCAN]
+        if bounded:
+            return visible, len(rows) > MAX_PERSON_SCAN
+        return visible
 
     def _by_salience(self, people: list[Object], ranked: dict) -> list[Object]:
         def sort_key(person: Object) -> tuple:
@@ -357,6 +455,27 @@ class PersonAssistantService:
             if isinstance(display, str) and display.casefold() == folded and person_id not in found:
                 found.append(person_id)
         return found
+
+    def _confirmation_people(self, identity: NormalizedPersonIdentity) -> list[UUID]:
+        rows = self._session.scalars(
+            select(PersonIdentityEvidence.person_object_id)
+            .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
+            .where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type == "user_confirmed",
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+                Object.user_id == self._user_id,
+                Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
+            )
+            .distinct()
+        )
+        return list(rows)
 
     def _evidence_people(self, identity: NormalizedPersonIdentity) -> list[UUID]:
         rows = self._session.scalars(
@@ -445,33 +564,117 @@ def _identity_from_evidence(row: PersonIdentityEvidence) -> NormalizedPersonIden
     )
 
 
-def _message_matches(obj: Object, keys: set[tuple[str, str, str]], direction: str | None) -> bool:
+def _summary(identity: NormalizedPersonIdentity) -> PersonIdentitySummary:
+    return PersonIdentitySummary(
+        category=provider_category(identity) or "",
+        identity_type=identity.identity_type,
+        provider=identity.provider,
+        realm=identity.realm,
+        canonical_value=identity.canonical_value,
+        display_value=identity.display_value,
+    )
+
+
+def _identity_from_summary(summary: PersonIdentitySummary) -> NormalizedPersonIdentity:
+    return NormalizedPersonIdentity(
+        identity_type=summary.identity_type,
+        provider=summary.provider,
+        realm=summary.realm,
+        canonical_value=summary.canonical_value,
+        display_value=summary.display_value,
+    )
+
+
+def _attributable(
+    obj: Object,
+    keys: set[tuple[str, str, str]],
+    anchors: set[tuple[str, str, str]],
+    direction_filter: str | None,
+) -> bool:
+    role = _direct_role(obj, keys)
+    anchored = _conversation_key(obj) in anchors
+    if role is None and not anchored:
+        return False
+    observed = role if role is not None else _stored_direction(obj)
+    return direction_filter is None or observed == direction_filter
+
+
+def _conversation_anchor(obj: Object, keys: set[tuple[str, str, str]]) -> tuple[str, str, str] | None:
+    if _direct_role(obj, keys) != "inbound":
+        return None
+    return _conversation_key(obj)
+
+
+def _conversation_key(obj: Object) -> tuple[str, str, str] | None:
     metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    if obj.provider == "teams" and metadata.get("chat_type") == "oneOnOne":
+        tenant = _text(metadata.get("tenant_id"))
+        chat = _text(metadata.get("chat_id"))
+        if tenant and chat:
+            return ("teams", tenant.casefold(), chat)
+    if obj.provider == "mattermost" and str(metadata.get("channel_type") or "").upper() == "D":
+        raw_realm = _text(metadata.get("server_url"))
+        channel = _text(metadata.get("channel_id"))
+        if raw_realm and channel:
+            try:
+                from app.connectors.mattermost.errors import MattermostSecurityError
+                from app.connectors.mattermost.normalize import normalize_server_url
+
+                return ("mattermost", normalize_server_url(raw_realm), channel)
+            except MattermostSecurityError:
+                return None
+    return None
+
+
+def _direct_role(obj: Object, keys: set[tuple[str, str, str]]) -> str | None:
+    metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    if obj.provider in {"gmail", "yandex_mail"}:
+        direction = _email_direction(obj.provider, metadata)
+        if direction == "inbound":
+            sender = _email_address(metadata.get("sender") or metadata.get("from"))
+            if sender and ("email", "", sender) in keys:
+                return "inbound"
+        if direction == "outbound" and any(
+            ("email", "", address) in keys for address in _email_audience(metadata)
+        ):
+            return "outbound"
+        return None
+    if obj.provider == "telegram" and metadata.get("transport") == "mtproto":
+        realm = _text(metadata.get("account_id"))
+        direction = _text(metadata.get("direction"))
+        if realm is None or direction not in {"inbound", "outbound"}:
+            return None
+        peer_kind = _text(metadata.get("peer_kind")) or ""
+        if peer_kind == "private" and direction == "outbound":
+            peer = _positive_id(metadata.get("peer_id"))
+            if peer and ("telegram_user_id", realm, peer) in keys:
+                return "outbound"
+            return None
+        if direction == "outbound":
+            return None
+        sender = _positive_id(metadata.get("sender_peer_id"))
+        if sender and ("telegram_user_id", realm, sender) in keys:
+            return "inbound"
+        return None
+    direction = _stored_direction(obj)
+    if direction != "inbound":
+        return None
     extracted = {
         (item.identity_type, item.realm, item.canonical_value)
         for item in extract_person_identity_evidence(obj)
     }
-    if not extracted:
-        extracted = set(communication_identity_keys(provider=obj.provider, metadata=metadata))
-    if not extracted.intersection(keys):
-        return False
-    if direction is None:
-        return True
-    return _direction(obj) == direction
+    if extracted.intersection(keys):
+        return "inbound"
+    return None
 
 
-def _direction(obj: Object) -> str | None:
+def _stored_direction(obj: Object) -> str | None:
     metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
     value = metadata.get("direction")
     if value in {"inbound", "outbound"}:
         return value
-    if obj.provider != "gmail":
-        return None
-    labels = {str(label).upper() for label in metadata.get("labels") or []}
-    if "SENT" in labels and not ({"INBOX", "UNREAD"} & labels):
-        return "outbound"
-    if ({"INBOX", "UNREAD"} & labels) and "SENT" not in labels:
-        return "inbound"
+    if obj.provider in {"gmail", "yandex_mail"}:
+        return _email_direction(obj.provider, metadata)
     return None
 
 

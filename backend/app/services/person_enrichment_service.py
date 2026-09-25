@@ -115,6 +115,21 @@ class PersonEnrichmentService:
         if len(confirmed_ids) > 1:
             return self._confirmation_conflicts(message, identity, owner, confirmed_ids, salience)
         confirmed = confirmed_ids[0] if confirmed_ids else None
+        if (
+            owner is not None
+            and self._evidence.is_rejected(owner.id, identity)
+            and (confirmed is None or confirmed == owner.id)
+        ):
+            return [
+                self._known(
+                    owner.id,
+                    identity,
+                    message,
+                    NEEDS_CONFIRMATION,
+                    ("user_rejected",),
+                    salience,
+                )
+            ]
         if owner is not None and (confirmed is None or confirmed == owner.id):
             self._record_exact(owner.id, identity, message.id)
             return [
@@ -240,7 +255,8 @@ class PersonEnrichmentService:
         known = {
             category
             for row in rows
-            if (category := provider_category(_identity_from_row(row))) is not None
+            if not self._evidence.is_rejected(person_id, _identity_from_row(row))
+            and (category := provider_category(_identity_from_row(row))) is not None
         }
         missing = tuple(category for category in PROVIDER_CATEGORIES if category not in known)
         return PersonCoverage(person_id, tuple(sorted(known)), missing)

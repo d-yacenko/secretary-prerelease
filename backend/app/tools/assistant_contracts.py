@@ -334,7 +334,8 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "through active exact identities. person_id must come from resolve_person "
             "in this turn. Display-name similarity is not attribution. "
             "Use the returned object ids with get_object or get_context. "
-            "This does not send a message."
+            "This does not send a message. Call it only after resolve_person "
+            "returned state=resolved for this person_id."
         ),
         "parameters": {
             "type": "object",
@@ -346,6 +347,25 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "direction": {"type": "string", "enum": ["inbound", "outbound"]},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 10},
             },
+            "required": ["person_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "find_person_identity_candidates": {
+        "type": "function",
+        "name": "find_person_identity_candidates",
+        "description": (
+            "READ only. For one Person already resolved in this turn, list exact "
+            "provider identities found in recent stored messages that name evidence "
+            "links to that Person. Does not attach or write evidence. "
+            "confirmable=false means an identity conflict; do not confirm it. "
+            "Use a returned confirmable identity with confirm_person_identity or "
+            "reject_person_identity. Do not invent an identity."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"person_id": {"type": "string"}},
             "required": ["person_id"],
             "additionalProperties": False,
         },

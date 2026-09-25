@@ -69,6 +69,8 @@ from app.tools.schemas import (
     DeleteTaskOutput,
     FindPersonCommunicationsInput,
     FindPersonCommunicationsOutput,
+    FindPersonIdentityCandidatesInput,
+    FindPersonIdentityCandidatesOutput,
     GetContextInput,
     GetContextOutput,
     GetObjectInput,
@@ -707,6 +709,18 @@ class DomainToolService:
 
         try:
             return PersonAssistantService(self._session, self._user_id).find_communications(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def find_person_identity_candidates(
+        self, payload: FindPersonIdentityCandidatesInput
+    ) -> FindPersonIdentityCandidatesOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            return PersonAssistantService(self._session, self._user_id).find_identity_candidates(
+                payload.person_id
+            )
         except (ValidationError, NotFoundError) as exc:
             raise ToolError(getattr(exc, "message", str(exc))) from exc
 

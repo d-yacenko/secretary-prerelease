@@ -25,6 +25,7 @@ from app.tools.schemas import (
     DeleteLabelInput,
     DeleteTaskInput,
     FindPersonCommunicationsInput,
+    FindPersonIdentityCandidatesInput,
     GetContextInput,
     GetObjectInput,
     LinkObjectsInput,
@@ -192,6 +193,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         assistant_exposed=True,
         mcp_exposed=False,
         assistant_definition=_assistant_definition("find_person_communications"),
+    ),
+    ToolSpec(
+        name="find_person_identity_candidates",
+        permission=ToolPermission.READ,
+        input_model=FindPersonIdentityCandidatesInput,
+        service_method="find_person_identity_candidates",
+        assistant_exposed=True,
+        mcp_exposed=False,
+        assistant_definition=_assistant_definition("find_person_identity_candidates"),
     ),
     ToolSpec(
         name="confirm_person_identity",

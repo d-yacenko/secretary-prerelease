@@ -1380,6 +1380,26 @@ class FindPersonCommunicationsOutput(BaseModel):
     truncated: bool = False
 
 
+class FindPersonIdentityCandidatesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+
+
+class PersonSourceCandidateOut(BaseModel):
+    confirmable: bool
+    reasons: tuple[str, ...] = ()
+    assessment_resolution: str | None = None
+    identity: PersonIdentitySummary
+    source_object_ids: tuple[UUID, ...] = ()
+
+
+class FindPersonIdentityCandidatesOutput(BaseModel):
+    person_id: UUID
+    candidates: list[PersonSourceCandidateOut]
+    truncated: bool = False
+
+
 class PersonIdentityFeedbackInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
