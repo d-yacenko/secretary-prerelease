@@ -337,23 +337,40 @@ class PersonEvidenceService:
             )
         )
         matched = [person.id for person in people if names_match(display_name, person.title)]
-        displays = self._session.execute(
-            select(PersonIdentity.person_object_id, PersonIdentity.display_value)
+        for row in self.effective_identities():
+            if row.person_object_id not in matched and names_match(display_name, row.display_value):
+                matched.append(row.person_object_id)
+        return matched
+
+    def effective_identities(self) -> list[PersonIdentity]:
+        """Active same-user identities that an explicit rejection has not suppressed."""
+        rows = self._session.scalars(
+            select(PersonIdentity)
             .join(Object, Object.id == PersonIdentity.person_object_id)
             .where(
                 PersonIdentity.user_id == self._user_id,
                 PersonIdentity.state != REJECTED_STATE,
-                PersonIdentity.display_value.is_not(None),
                 Object.user_id == self._user_id,
                 Object.kind == PERSON_KIND,
                 Object.state != REJECTED_STATE,
                 object_is_active(),
             )
         )
-        for person_id, display_value in displays:
-            if person_id not in matched and names_match(display_name, display_value):
-                matched.append(person_id)
-        return matched
+        return [
+            row
+            for row in rows
+            if not self.is_rejected(row.person_object_id, _identity_from_identity_row(row))
+        ]
+
+
+def _identity_from_identity_row(row: PersonIdentity) -> NormalizedPersonIdentity:
+    return NormalizedPersonIdentity(
+        identity_type=row.identity_type,
+        provider=row.provider,
+        realm=row.realm,
+        canonical_value=row.canonical_value,
+        display_value=row.display_value,
+    )
 
 
 def _person_is_active(person: Object) -> bool:

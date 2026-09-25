@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object, PersonIdentity, PersonIdentityEvidence
@@ -17,9 +17,10 @@ from app.domain.person_assistant import (
     AMBIGUOUS,
     MAX_IDENTITIES_PER_PERSON,
     MAX_PERSON_CANDIDATES,
-    MAX_PERSON_SCAN,
+    MAX_PERSON_SCAN_ROWS,
     NONE,
     PERSON_LOOKBACK_DAYS,
+    PERSON_SCAN_CHUNK,
     RESOLVED,
     feedback_identity_key,
     parse_feedback_identity,
@@ -122,51 +123,33 @@ class PersonAssistantService:
     def find_identity_candidates(self, person_id: UUID) -> FindPersonIdentityCandidatesOutput:
         person = self._require_active_person(person_id)
         grouped: dict[tuple[str, str, str, str], list] = {}
-        for message in self._recent_messages(None):
-            for identity in extract_person_identity_evidence(message):
-                if provider_category(identity) == "telegram" and not telegram_mtproto_ai_enabled():
-                    continue
-                if self._suppressed(person.id, identity):
-                    continue
-                grouped.setdefault(feedback_identity_key(identity), []).append((message, identity))
         candidates: list[PersonSourceCandidateOut] = []
-        for _key, rows in sorted(grouped.items(), key=lambda item: item[0]):
-            identity = rows[0][1]
-            owner = self._people.resolve(identity)
-            if owner is not None and owner.id == person.id:
-                continue
-            source_ids = tuple(message.id for message, _identity in rows[:3])
-            if owner is not None and owner.id != person.id:
-                candidates.append(
-                    PersonSourceCandidateOut(
-                        confirmable=False,
-                        reasons=("identity_conflict",),
-                        assessment_resolution=self._evidence.score(person.id, identity).resolution,
-                        identity=_summary(identity),
-                        source_object_ids=source_ids,
-                    )
-                )
-                continue
-            proposals = self._evidence.propose_candidates(identity, identity.display_value)
-            matched = next((item for item in proposals if item.person_id == person.id), None)
-            if matched is None:
-                continue
-            candidates.append(
-                PersonSourceCandidateOut(
-                    confirmable=True,
-                    reasons=(matched.reason,),
-                    assessment_resolution=matched.assessment.resolution,
-                    identity=_summary(identity),
-                    source_object_ids=source_ids,
-                )
-            )
-            if len(candidates) > MAX_PERSON_CANDIDATES:
+        truncated = False
+        completed = False
+        saw_row = False
+        for chunk, scope_complete in self._message_chunks(None):
+            saw_row = True
+            for message in chunk:
+                for identity in extract_person_identity_evidence(message):
+                    if provider_category(identity) == "telegram" and not telegram_mtproto_ai_enabled():
+                        continue
+                    if self._suppressed(person.id, identity):
+                        continue
+                    grouped.setdefault(feedback_identity_key(identity), []).append((message, identity))
+            candidates = self._source_candidates(person.id, grouped)
+            if scope_complete:
+                completed = True
                 break
-        truncated = len(candidates) > MAX_PERSON_CANDIDATES
+            if len(candidates) >= MAX_PERSON_CANDIDATES:
+                truncated = True
+                break
+        if saw_row and not completed:
+            truncated = True
+        overflow = len(candidates) > MAX_PERSON_CANDIDATES
         return FindPersonIdentityCandidatesOutput(
             person_id=person.id,
             candidates=candidates[:MAX_PERSON_CANDIDATES],
-            truncated=truncated,
+            truncated=truncated or overflow,
         )
 
     def reject_person_identity(
@@ -371,54 +354,123 @@ class PersonAssistantService:
             keys.add((identity.identity_type, identity.realm, identity.canonical_value))
         return keys
 
+    def _source_candidates(
+        self,
+        person_id: UUID,
+        grouped: dict[tuple[str, str, str, str], list],
+    ) -> list[PersonSourceCandidateOut]:
+        candidates: list[PersonSourceCandidateOut] = []
+        for _key, rows in sorted(grouped.items(), key=lambda item: item[0]):
+            identity = rows[0][1]
+            owner = self._people.resolve(identity)
+            if owner is not None and owner.id == person_id:
+                continue
+            source_ids = tuple(message.id for message, _identity in rows[:3])
+            if owner is not None and owner.id != person_id:
+                candidates.append(
+                    PersonSourceCandidateOut(
+                        confirmable=False,
+                        reasons=("identity_conflict",),
+                        assessment_resolution=self._evidence.score(person_id, identity).resolution,
+                        identity=_summary(identity),
+                        source_object_ids=source_ids,
+                    )
+                )
+                continue
+            proposals = self._evidence.propose_candidates(identity, identity.display_value)
+            matched = next((item for item in proposals if item.person_id == person_id), None)
+            if matched is None:
+                continue
+            candidates.append(
+                PersonSourceCandidateOut(
+                    confirmable=True,
+                    reasons=(matched.reason,),
+                    assessment_resolution=matched.assessment.resolution,
+                    identity=_summary(identity),
+                    source_object_ids=source_ids,
+                )
+            )
+        return candidates
+
     def _matching_messages(
         self,
         keys: set[tuple[str, str, str]],
         payload: FindPersonCommunicationsInput,
     ) -> tuple[list[Object], bool]:
-        rows, scan_truncated = self._recent_messages(payload, bounded=True)
         if not keys:
-            return [], scan_truncated
-        anchors = {
-            anchor
-            for obj in rows
-            if (anchor := _conversation_anchor(obj, keys)) is not None
-        }
-        matched = [obj for obj in rows if _attributable(obj, keys, anchors, payload.direction)]
-        truncated = scan_truncated or len(matched) > payload.limit
-        return matched[: payload.limit], truncated
+            return [], False
+        anchors: set[tuple[str, str, str]] = set()
+        pending: list[Object] = []
+        matched: list[Object] = []
+        saw_row = False
+        for chunk, scope_complete in self._message_chunks(payload):
+            saw_row = True
+            for index, obj in enumerate(chunk):
+                _collect_match(obj, keys, anchors, pending, matched, payload.direction)
+                if len(matched) >= payload.limit:
+                    more = index + 1 < len(chunk) or not scope_complete or len(matched) > payload.limit
+                    return _newest_first(matched)[: payload.limit], more
+            if scope_complete:
+                return _newest_first(matched)[: payload.limit], False
+        return _newest_first(matched)[: payload.limit], saw_row
 
-    def _recent_messages(
+    def _message_chunks(
         self,
         payload: FindPersonCommunicationsInput | None,
-        *,
-        bounded: bool = False,
-    ) -> list[Object] | tuple[list[Object], bool]:
+    ):
         cutoff = self._now - timedelta(days=PERSON_LOOKBACK_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
-        query = select(Object).where(
-            Object.user_id == self._user_id,
-            Object.kind.in_(_COMMUNICATION_KINDS),
-            Object.state != REJECTED_STATE,
-            object_is_active(),
-            stamp >= cutoff,
-            telegram_mtproto_ai_predicate(),
-        )
-        if payload is not None and payload.occurred_from is not None:
-            query = query.where(stamp >= payload.occurred_from)
-        if payload is not None and payload.occurred_to is not None:
-            query = query.where(stamp <= payload.occurred_to)
-        if payload is not None and payload.provider:
-            query = query.where(Object.provider == payload.provider)
-        rows = list(
-            self._session.scalars(
-                query.order_by(stamp.desc(), Object.id).limit(MAX_PERSON_SCAN + 1)
+        examined = 0
+        cursor_stamp = None
+        cursor_id = None
+        while examined < MAX_PERSON_SCAN_ROWS:
+            page_limit = min(PERSON_SCAN_CHUNK, MAX_PERSON_SCAN_ROWS - examined)
+            query = select(Object).where(
+                Object.user_id == self._user_id,
+                Object.kind.in_(_COMMUNICATION_KINDS),
+                Object.state != REJECTED_STATE,
+                object_is_active(),
+                stamp >= cutoff,
+                telegram_mtproto_ai_predicate(),
             )
-        )
-        visible = rows[:MAX_PERSON_SCAN]
-        if bounded:
-            return visible, len(rows) > MAX_PERSON_SCAN
-        return visible
+            if payload is not None and payload.occurred_from is not None:
+                query = query.where(stamp >= payload.occurred_from)
+            if payload is not None and payload.occurred_to is not None:
+                query = query.where(stamp <= payload.occurred_to)
+            if payload is not None and payload.provider:
+                query = query.where(Object.provider == payload.provider)
+            if cursor_id is not None:
+                query = query.where(
+                    or_(
+                        stamp < cursor_stamp,
+                        and_(stamp == cursor_stamp, Object.id > cursor_id),
+                    )
+                )
+            rows = list(
+                self._session.scalars(query.order_by(stamp.desc(), Object.id).limit(page_limit))
+            )
+            if not rows:
+                return
+            examined += len(rows)
+            scope_complete = len(rows) < page_limit
+            if not scope_complete and examined < MAX_PERSON_SCAN_ROWS:
+                last = rows[-1]
+                cursor_stamp = last.occurred_at or last.created_at
+                cursor_id = last.id
+                continue_query = query.where(
+                    or_(
+                        stamp < cursor_stamp,
+                        and_(stamp == cursor_stamp, Object.id > cursor_id),
+                    )
+                )
+                follower = self._session.scalar(continue_query.order_by(stamp.desc(), Object.id).limit(1))
+                scope_complete = follower is None
+            yield rows, scope_complete
+            if scope_complete or examined >= MAX_PERSON_SCAN_ROWS:
+                return
+            last = rows[-1]
+            cursor_stamp = last.occurred_at or last.created_at
+            cursor_id = last.id
 
     def _by_salience(self, people: list[Object], ranked: dict) -> list[Object]:
         def sort_key(person: Object) -> tuple:
@@ -439,21 +491,10 @@ class PersonAssistantService:
             )
         )
         found = [person.id for person in people if (person.title or "").casefold() == folded]
-        displays = self._session.execute(
-            select(PersonIdentity.person_object_id, PersonIdentity.display_value)
-            .join(Object, Object.id == PersonIdentity.person_object_id)
-            .where(
-                PersonIdentity.user_id == self._user_id,
-                PersonIdentity.state != REJECTED_STATE,
-                Object.user_id == self._user_id,
-                Object.kind == PERSON_KIND,
-                Object.state != REJECTED_STATE,
-                object_is_active(),
-            )
-        )
-        for person_id, display in displays:
-            if isinstance(display, str) and display.casefold() == folded and person_id not in found:
-                found.append(person_id)
+        for row in self._evidence.effective_identities():
+            display = row.display_value
+            if isinstance(display, str) and display.casefold() == folded and row.person_object_id not in found:
+                found.append(row.person_object_id)
         return found
 
     def _confirmation_people(self, identity: NormalizedPersonIdentity) -> list[UUID]:
@@ -583,6 +624,42 @@ def _identity_from_summary(summary: PersonIdentitySummary) -> NormalizedPersonId
         canonical_value=summary.canonical_value,
         display_value=summary.display_value,
     )
+
+
+def _collect_match(
+    obj: Object,
+    keys: set[tuple[str, str, str]],
+    anchors: set[tuple[str, str, str]],
+    pending: list[Object],
+    matched: list[Object],
+    direction_filter: str | None,
+) -> None:
+    anchor = _conversation_anchor(obj, keys)
+    if anchor is not None:
+        anchors.add(anchor)
+    if _attributable(obj, keys, anchors, direction_filter):
+        matched.append(obj)
+    elif _awaiting_anchor(obj, keys):
+        pending.append(obj)
+    if anchor is None:
+        return
+    still: list[Object] = []
+    for item in pending:
+        if _attributable(item, keys, anchors, direction_filter):
+            matched.append(item)
+        else:
+            still.append(item)
+    pending[:] = still
+
+
+def _awaiting_anchor(obj: Object, keys: set[tuple[str, str, str]]) -> bool:
+    if _conversation_key(obj) is None or _direct_role(obj, keys) is not None:
+        return False
+    return _stored_direction(obj) == "outbound"
+
+
+def _newest_first(rows: list[Object]) -> list[Object]:
+    return sorted(rows, key=lambda obj: ((obj.occurred_at or obj.created_at), obj.id), reverse=True)
 
 
 def _attributable(

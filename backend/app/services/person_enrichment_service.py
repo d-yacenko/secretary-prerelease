@@ -245,17 +245,10 @@ class PersonEnrichmentService:
 
     def _coverage(self, person_id: UUID, item) -> PersonCoverage:
         del item
-        rows = self._session.scalars(
-            select(PersonIdentity).where(
-                PersonIdentity.user_id == self._user_id,
-                PersonIdentity.person_object_id == person_id,
-                PersonIdentity.state != REJECTED_STATE,
-            )
-        )
         known = {
             category
-            for row in rows
-            if not self._evidence.is_rejected(person_id, _identity_from_row(row))
+            for row in self._evidence.effective_identities()
+            if row.person_object_id == person_id
             and (category := provider_category(_identity_from_row(row))) is not None
         }
         missing = tuple(category for category in PROVIDER_CATEGORIES if category not in known)

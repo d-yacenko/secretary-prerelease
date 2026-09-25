@@ -190,6 +190,22 @@ def test_coverage_reports_known_and_missing_without_inventing_identities(db_sess
     assert _count(db_session, PersonIdentity, user_id) == before
 
 
+def test_rejected_attached_identity_is_not_provider_coverage(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    people.attach(person.id, normalize_email("olga@example.com"))
+    mattermost = normalize_mattermost_user_id(SERVER, "olga", display_value="VOA")
+    people.attach(person.id, mattermost)
+    evidence = PersonEvidenceService(db_session, user_id)
+    evidence.record_confirmation(person.id, normalize_email("olga@example.com"), "confirm-email")
+    evidence.record_rejection(person.id, mattermost, "reject-voa")
+    plan = PersonEnrichmentService(db_session, user_id, now=NOW).plan()
+    coverage = next(row for row in plan.coverage if row.person_id == person.id)
+    assert coverage.known == ("email",)
+    assert "mattermost" in coverage.missing
+
+
 def test_candidate_scan_is_bounded_and_truncation_is_explicit(db_session) -> None:
     user_id = _user(db_session)
     for index in range(MAX_ENRICHMENT_SCAN + 1):

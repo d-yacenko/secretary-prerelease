@@ -10,6 +10,7 @@ from app.assistant import session as assistant_session_module
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
 from app.db.models import Object, PersonIdentity, PersonIdentityEvidence, User
 from app.domain.object_visibility import tombstone_object
+from app.domain.person_assistant import MAX_PERSON_SCAN, MAX_PERSON_SCAN_ROWS
 from app.domain.person_candidate_score import EXACT_IDENTIFIER
 from app.domain.person_identity import (
     normalize_email,
@@ -700,6 +701,224 @@ def test_rejected_attached_identity_is_not_repromoted(db_session) -> None:
     assert any("user_rejected" in item.reasons for item in plan.candidates)
 
 
+def test_rejected_display_alias_does_not_resolve_person(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    identity = normalize_email("olga@example.com", display_value="VOA")
+    people.attach(person.id, identity)
+    evidence = PersonEvidenceService(db_session, user_id)
+    evidence.record_rejection(person.id, identity, "reject-voa")
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    hidden = service.resolve("VOA")
+    titled = service.resolve("Olga Volkova")
+    assert hidden.state == "none"
+    assert titled.person_id == person.id
+    evidence.record_confirmation(person.id, identity, "confirm-voa")
+    restored = service.resolve("VOA")
+    history = evidence.history(person.id, identity)
+    assert restored.person_id == person.id
+    assert any(row.evidence_type == "user_rejected" and row.state == "retracted" for row in history)
+    assert any(row.evidence_type == "user_confirmed" and row.state == "active" for row in history)
+
+
+def test_noise_does_not_hide_recent_email_pair(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(person.id, normalize_email("olga@example.com"))
+    _noise(db_session, user_id, MAX_PERSON_SCAN + 1)
+    inbound = _email(db_session, user_id, "olga@example.com", when=NOW - timedelta(days=2))
+    outbound = _email(
+        db_session,
+        user_id,
+        "me@example.com",
+        labels=["SENT"],
+        metadata={"recipients": ["olga@example.com"]},
+        when=NOW - timedelta(days=2, minutes=1),
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert {item.id for item in page.objects} == {inbound.id, outbound.id}
+    assert page.truncated is False
+
+
+def test_noise_does_not_hide_eligible_telegram(db_session, monkeypatch) -> None:
+    from app.core.config import settings
+    from app.db.models import TelegramMtprotoAccount, TelegramMtprotoChatSelection
+
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    user_id = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user_id, telegram_user_id=525252, session_encrypted="encrypted"
+    )
+    db_session.add(account)
+    db_session.flush()
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(
+        person.id, normalize_telegram_user_id(str(account.id), 7)
+    )
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=7,
+            peer_kind="private",
+            provider_peer_reference_encrypted="encrypted",
+            title="Olga",
+            manual_selected=False,
+            scope_active=True,
+        )
+    )
+    db_session.flush()
+    _noise(db_session, user_id, MAX_PERSON_SCAN + 1)
+    outbound = _telegram(
+        db_session,
+        user_id,
+        peer_kind="private",
+        sender=525252,
+        peer=7,
+        direction="outbound",
+        account_id=str(account.id),
+        when=NOW - timedelta(days=2),
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert [item.id for item in page.objects] == [outbound.id]
+
+
+def test_noise_does_not_hide_direct_chat_anchor(db_session) -> None:
+    user_id = _user(db_session)
+    people = PersonIdentityService(db_session, user_id)
+    person = people.create_person("Olga Volkova")
+    people.attach(person.id, normalize_teams_user_id(TENANT, TEAMS_USER))
+    people.attach(person.id, normalize_mattermost_user_id(SERVER, "olga-id"))
+    _noise(db_session, user_id, MAX_PERSON_SCAN + 1)
+    older = NOW - timedelta(days=2)
+    teams_out = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": "33333333-3333-3333-3333-333333333333",
+            "sender_kind": "user",
+            "chat_type": "oneOnOne",
+            "chat_id": "chat-1",
+            "direction": "outbound",
+        },
+        when=older,
+    )
+    teams_in = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": TEAMS_USER,
+            "sender_kind": "user",
+            "chat_type": "oneOnOne",
+            "chat_id": "chat-1",
+            "direction": "inbound",
+        },
+        when=older - timedelta(minutes=1),
+    )
+    mm_out = _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": SERVER,
+            "author_user_id": "me-id",
+            "channel_type": "D",
+            "channel_id": "dm-1",
+            "direction": "outbound",
+        },
+        when=older - timedelta(minutes=2),
+    )
+    mm_in = _chat(
+        db_session,
+        user_id,
+        provider="mattermost",
+        metadata={
+            "server_url": SERVER,
+            "author_user_id": "olga-id",
+            "channel_type": "D",
+            "channel_id": "dm-1",
+            "direction": "inbound",
+        },
+        when=older - timedelta(minutes=3),
+    )
+    group = _chat(
+        db_session,
+        user_id,
+        provider="teams",
+        metadata={
+            "tenant_id": TENANT,
+            "sender_id": "33333333-3333-3333-3333-333333333333",
+            "sender_kind": "user",
+            "chat_type": "group",
+            "chat_id": "group-1",
+            "direction": "outbound",
+        },
+        when=older - timedelta(minutes=4),
+    )
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    found = {item.id for item in page.objects}
+    assert {teams_in.id, teams_out.id, mm_in.id, mm_out.id} <= found
+    assert group.id not in found
+
+
+def test_noise_does_not_hide_source_identity_candidate(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    _noise(db_session, user_id, MAX_PERSON_SCAN + 1)
+    _email(db_session, user_id, "Olga Volkova <new@example.com>", when=NOW - timedelta(days=2))
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_identity_candidates(person.id)
+    assert page.truncated is False
+    assert page.candidates
+    assert page.candidates[0].confirmable is True
+    assert page.candidates[0].identity.canonical_value == "new@example.com"
+
+
+def test_scan_budget_exhaustion_is_truncated(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(person.id, normalize_email("olga@example.com"))
+    _noise(db_session, user_id, MAX_PERSON_SCAN_ROWS + 1)
+    hidden = _email(db_session, user_id, "olga@example.com", when=NOW - timedelta(days=3))
+    page = PersonAssistantService(db_session, user_id, now=NOW).find_communications(
+        FindPersonCommunicationsInput(person_id=person.id)
+    )
+    assert page.truncated is True
+    assert hidden.id not in {item.id for item in page.objects}
+
+
+def test_provider_and_date_filters_bound_the_scan(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(person.id, normalize_email("olga@example.com"))
+    _noise(db_session, user_id, MAX_PERSON_SCAN_ROWS + 1, provider="yandex_mail")
+    older = _email(db_session, user_id, "olga@example.com", when=NOW - timedelta(days=3))
+    newer = _email(db_session, user_id, "olga@example.com", when=NOW - timedelta(days=1))
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    gmail = service.find_communications(
+        FindPersonCommunicationsInput(person_id=person.id, provider="gmail")
+    )
+    assert [item.id for item in gmail.objects] == [newer.id, older.id]
+    assert gmail.truncated is False
+    recent = service.find_communications(
+        FindPersonCommunicationsInput(
+            person_id=person.id,
+            provider="gmail",
+            occurred_from=NOW - timedelta(days=2),
+        )
+    )
+    assert [item.id for item in recent.objects] == [newer.id]
+
+
 def test_person_tools_are_not_send_routes() -> None:
     from app.tools.policy import ToolPermission
     from app.tools.registry import TOOL_REGISTRY
@@ -764,6 +983,24 @@ def _user(db_session) -> uuid.UUID:
     return user_id
 
 
+def _noise(db_session, user_id: uuid.UUID, count: int, *, provider: str = "gmail") -> None:
+    rows = [
+        Object(
+            user_id=user_id,
+            kind="email",
+            provider=provider,
+            title="noise",
+            origin="source",
+            state="observed",
+            occurred_at=NOW - timedelta(minutes=index),
+            metadata_={"sender": f"noise-{index}@example.com", "labels": ["INBOX"]},
+        )
+        for index in range(count)
+    ]
+    db_session.add_all(rows)
+    db_session.flush()
+
+
 def _email(
     db_session,
     user_id: uuid.UUID,
@@ -771,6 +1008,7 @@ def _email(
     *,
     labels: list[str] | None = None,
     metadata: dict | None = None,
+    when: datetime | None = None,
 ) -> Object:
     payload = {"sender": sender, "labels": labels or ["INBOX"]}
     if metadata:
@@ -782,7 +1020,7 @@ def _email(
         title="mail",
         origin="source",
         state="observed",
-        occurred_at=NOW - timedelta(hours=1),
+        occurred_at=when or (NOW - timedelta(hours=1)),
         metadata_=payload,
     )
     db_session.add(obj)
@@ -790,7 +1028,14 @@ def _email(
     return obj
 
 
-def _chat(db_session, user_id: uuid.UUID, *, provider: str, metadata: dict) -> Object:
+def _chat(
+    db_session,
+    user_id: uuid.UUID,
+    *,
+    provider: str,
+    metadata: dict,
+    when: datetime | None = None,
+) -> Object:
     obj = Object(
         user_id=user_id,
         kind="chat_message",
@@ -798,7 +1043,7 @@ def _chat(db_session, user_id: uuid.UUID, *, provider: str, metadata: dict) -> O
         title="chat",
         origin="source",
         state="observed",
-        occurred_at=NOW - timedelta(hours=1),
+        occurred_at=when or (NOW - timedelta(hours=1)),
         metadata_=metadata,
     )
     db_session.add(obj)
@@ -831,6 +1076,7 @@ def _telegram(
     peer: int,
     direction: str,
     account_id: str = ACCOUNT,
+    when: datetime | None = None,
 ) -> Object:
     obj = Object(
         user_id=user_id,
@@ -839,7 +1085,7 @@ def _telegram(
         title="note",
         origin="source",
         state="observed",
-        occurred_at=NOW - timedelta(hours=1),
+        occurred_at=when or (NOW - timedelta(hours=1)),
         metadata_={
             "transport": "mtproto",
             "account_id": account_id,
