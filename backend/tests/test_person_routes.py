@@ -239,6 +239,133 @@ def test_explicit_route_choice_is_idempotent_preference(db_session) -> None:
     assert _count(db_session, PersonIdentityEvidence, user_id) == 1
 
 
+def test_teams_route_choice_stays_on_one_conversation(db_session) -> None:
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    identity = normalize_teams_user_id(TENANT, TEAMS_USER)
+    PersonIdentityService(db_session, user_id).attach(person.id, identity)
+    _teams(
+        db_session,
+        user_id,
+        chat_type="oneOnOne",
+        sender=TEAMS_USER,
+        direction="inbound",
+        chat_id="chat-a",
+        occurred_at=NOW - timedelta(hours=2),
+    )
+    _teams(
+        db_session,
+        user_id,
+        chat_type="oneOnOne",
+        sender=TEAMS_USER,
+        direction="inbound",
+        chat_id="chat-b",
+        occurred_at=NOW - timedelta(hours=1),
+    )
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    evidence = PersonEvidenceService(db_session, user_id)
+    before = service.list_routes(ListPersonRoutesInput(person_id=person.id))
+    key_a = f"teams:{TENANT}:chat-a"
+    key_b = f"teams:{TENANT}:chat-b"
+    assert {route.route_key for route in before.routes} == {key_a, key_b}
+    assert before.ambiguous is True
+    assert all(route.has_route_choice is False for route in before.routes)
+    first = service.record_route_choice(person.id, key_a)
+    score = evidence.score(person.id, identity).score
+    second = service.record_route_choice(person.id, key_a)
+    chosen = {
+        route.route_key: route
+        for route in service.list_routes(ListPersonRoutesInput(person_id=person.id)).routes
+    }
+    assert first.evidence_id == second.evidence_id
+    assert evidence.score(person.id, identity).score == score
+    assert chosen[key_a].has_route_choice is True
+    assert chosen[key_b].has_route_choice is False
+    assert next(iter(chosen)) == key_a
+    assert len(chosen) == 2
+    later = service.record_route_choice(person.id, key_b)
+    both = service.list_routes(ListPersonRoutesInput(person_id=person.id))
+    assert later.evidence_id != first.evidence_id
+    assert {route.route_key for route in both.routes if route.has_route_choice} == {key_a, key_b}
+    assert both.ambiguous is True
+    assert _count(db_session, PersonIdentityEvidence, user_id) == 2
+    assert db_session.get(PersonIdentityEvidence, first.evidence_id).state == "active"
+
+
+def test_filtered_route_choice_is_not_starved_by_other_providers(db_session) -> None:
+    from app.domain.object_visibility import tombstone_object
+    from app.domain.person_assistant import MAX_PERSON_ROUTES
+    from app.services.errors import ValidationError
+
+    user_id = _user(db_session)
+    person = PersonIdentityService(db_session, user_id).create_person("Olga Volkova")
+    PersonIdentityService(db_session, user_id).attach(
+        person.id, normalize_mattermost_user_id(SERVER, "olga-id")
+    )
+    PersonIdentityService(db_session, user_id).attach(
+        person.id, normalize_teams_user_id(TENANT, TEAMS_USER)
+    )
+    for index in range(MAX_PERSON_ROUTES):
+        _mattermost(
+            db_session,
+            user_id,
+            channel_type="D",
+            channel_id=f"dm-{index}",
+            author="olga-id",
+            post_id=f"post-{index}",
+            occurred_at=NOW - timedelta(minutes=index),
+        )
+    teams = _teams(
+        db_session,
+        user_id,
+        chat_type="oneOnOne",
+        sender=TEAMS_USER,
+        direction="inbound",
+        chat_id="chat-old",
+        occurred_at=NOW - timedelta(days=3),
+    )
+    service = PersonAssistantService(db_session, user_id, now=NOW)
+    unfiltered = service.list_routes(ListPersonRoutesInput(person_id=person.id))
+    teams_key = f"teams:{TENANT}:chat-old"
+    assert teams_key not in {route.route_key for route in unfiltered.routes}
+    assert unfiltered.truncated is True
+    filtered = service.list_routes(ListPersonRoutesInput(person_id=person.id, provider="teams"))
+    assert [route.route_key for route in filtered.routes] == [teams_key]
+    recorded = service.record_route_choice(person.id, teams_key)
+    assert recorded.evidence_type == "user_route_choice"
+    visible = service.list_routes(ListPersonRoutesInput(person_id=person.id, provider="teams"))
+    assert visible.routes[0].has_route_choice is True
+    tombstone_object(teams)
+    db_session.flush()
+    with pytest.raises(ValidationError, match="person route was not exposed"):
+        service.record_route_choice(person.id, teams_key)
+    with pytest.raises(ValidationError, match="person route was not exposed"):
+        service.record_route_choice(person.id, "not-a-route")
+
+
+def test_same_turn_allowlist_blocks_an_unexposed_route(db_session, monkeypatch) -> None:
+    _patch_session(db_session, monkeypatch)
+    user_id = _user(db_session)
+    person = _person_with_email(db_session, user_id, "olga@example.com")
+    PersonIdentityService(db_session, user_id).attach(
+        person.id, normalize_teams_user_id(TENANT, TEAMS_USER)
+    )
+    _teams(db_session, user_id, chat_type="oneOnOne", sender=TEAMS_USER, direction="inbound")
+    budget = PerTurnToolBudget()
+    runner = BoundAssistantToolRunner(budget, user_id)
+    runner("resolve_person", {"query": "olga@example.com"})
+    budget.commit_model_visible_outputs()
+    runner("list_person_routes", {"person_id": str(person.id), "provider": "email"})
+    budget.commit_model_visible_outputs()
+    blocked = runner(
+        "record_person_route_choice",
+        {"person_id": str(person.id), "route_key": f"teams:{TENANT}:chat-1"},
+    )
+    assert blocked.success is False
+    assert "not exposed" in (blocked.error or "")
+    assert _count(db_session, PersonIdentityEvidence, user_id) == 0
+
+
 def test_person_email_stages_existing_send_and_stays_frozen(
     db_session, monkeypatch, tmp_path
 ) -> None:
@@ -461,6 +588,7 @@ def _mattermost(
     author: str,
     account_id: str = ACCOUNT,
     post_id: str = "post-1",
+    occurred_at: datetime | None = None,
 ) -> Object:
     obj = Object(
         user_id=user_id,
@@ -470,7 +598,7 @@ def _mattermost(
         origin="source",
         state="observed",
         external_id=build_external_id(SERVER, post_id),
-        occurred_at=NOW - timedelta(hours=1),
+        occurred_at=NOW - timedelta(hours=1) if occurred_at is None else occurred_at,
         metadata_={
             "server_url": SERVER,
             "account_id": account_id,
@@ -487,7 +615,16 @@ def _mattermost(
     return obj
 
 
-def _teams(db_session, user_id, *, chat_type: str, sender: str, direction: str) -> Object:
+def _teams(
+    db_session,
+    user_id,
+    *,
+    chat_type: str,
+    sender: str,
+    direction: str,
+    chat_id: str = "chat-1",
+    occurred_at: datetime | None = None,
+) -> Object:
     obj = Object(
         user_id=user_id,
         kind="chat_message",
@@ -495,13 +632,13 @@ def _teams(db_session, user_id, *, chat_type: str, sender: str, direction: str) 
         title="Olga",
         origin="source",
         state="observed",
-        occurred_at=NOW - timedelta(hours=1),
+        occurred_at=NOW - timedelta(hours=1) if occurred_at is None else occurred_at,
         metadata_={
             "tenant_id": TENANT,
             "sender_id": sender,
             "sender_kind": "user",
             "chat_type": chat_type,
-            "chat_id": "chat-1",
+            "chat_id": chat_id,
             "direction": direction,
         },
     )

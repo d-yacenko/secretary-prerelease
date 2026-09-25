@@ -178,7 +178,10 @@ class PersonAssistantService:
         self, person_id: UUID, route_key: str
     ) -> PersonIdentityFeedbackOutput:
         person = self._require_active_person(person_id)
-        listed = self.list_routes(ListPersonRoutesInput(person_id=person.id))
+        category = _category_from_route_key(route_key)
+        listed = self.list_routes(
+            ListPersonRoutesInput(person_id=person.id, provider=category)
+        )
         match = next((route for route in listed.routes if route.route_key == route_key), None)
         if match is None:
             raise ValidationError("person route was not exposed")
@@ -186,7 +189,7 @@ class PersonAssistantService:
         row = self._evidence.record_route_choice(
             person.id,
             identity,
-            f"assistant:user_route_choice:{route_key}",
+            _route_choice_provenance(route_key),
             explanation="explicit assistant route choice",
         )
         return _feedback_output(person.id, row)
@@ -448,6 +451,7 @@ class PersonAssistantService:
             identity = _identity_from_row(row)
             routes.append(
                 self._route_out(
+                    person_id=person_id,
                     route_key=f"email:{identity.canonical_value}",
                     route_kind="email",
                     provider="email",
@@ -494,6 +498,7 @@ class PersonAssistantService:
             obj = inbound.get(conv_key, newest[conv_key])
             routes.append(
                 self._route_out(
+                    person_id=person_id,
                     route_key=_chat_route_key(conv_key),
                     route_kind="chat",
                     provider=conv_key[0],
@@ -509,6 +514,7 @@ class PersonAssistantService:
     def _route_out(
         self,
         *,
+        person_id: UUID,
         route_key: str,
         route_kind: str,
         provider: str,
@@ -518,7 +524,7 @@ class PersonAssistantService:
         conversation_label: str | None,
         last_used_at: datetime | None,
     ) -> PersonRouteOut:
-        chosen = self._has_route_choice(identity)
+        chosen = self._has_route_choice(person_id, identity, route_key)
         reasons = ["exact_identity"]
         if chosen:
             reasons.append("user_route_choice")
@@ -535,16 +541,20 @@ class PersonAssistantService:
             reasons=tuple(reasons),
         )
 
-    def _has_route_choice(self, identity: NormalizedPersonIdentity) -> bool:
+    def _has_route_choice(
+        self, person_id: UUID, identity: NormalizedPersonIdentity, route_key: str
+    ) -> bool:
         row = self._session.scalar(
             select(PersonIdentityEvidence.id).where(
                 PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id == person_id,
                 PersonIdentityEvidence.state == "active",
                 PersonIdentityEvidence.evidence_type == "user_route_choice",
                 PersonIdentityEvidence.provider == identity.provider,
                 PersonIdentityEvidence.identity_type == identity.identity_type,
                 PersonIdentityEvidence.realm == identity.realm,
                 PersonIdentityEvidence.canonical_value == identity.canonical_value,
+                PersonIdentityEvidence.provenance_key == _route_choice_provenance(route_key),
             )
         )
         return row is not None
@@ -798,6 +808,17 @@ def _identity_from_evidence(row: PersonIdentityEvidence) -> NormalizedPersonIden
         canonical_value=row.canonical_value,
         display_value=None,
     )
+
+
+def _route_choice_provenance(route_key: str) -> str:
+    return f"assistant:user_route_choice:{route_key}"
+
+
+def _category_from_route_key(route_key: str) -> str:
+    prefix, separator, rest = route_key.partition(":")
+    if separator and rest and prefix in {"email", "mattermost", "teams", "telegram"}:
+        return prefix
+    raise ValidationError("person route was not exposed")
 
 
 def _route_category(provider: str | None) -> str | None:
