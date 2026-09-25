@@ -10,7 +10,15 @@ from uuid import UUID
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.api.schemas import ObjectOut, TaskActorOut, TaskLinkOut, TaskProfileOut
+from app.api.schemas import (
+    ObjectOut,
+    TaskActorOut,
+    TaskLinkOut,
+    TaskOperationalDependencyOut,
+    TaskOperationalOut,
+    TaskOperationalPersonOut,
+    TaskProfileOut,
+)
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.person_candidate_score import USER_REJECTED
@@ -25,6 +33,7 @@ from app.domain.task_relations import (
 )
 from app.services.errors import NotFoundError
 from app.services.provenance import REJECTED_STATE
+from app.services.task_operational_projection_service import TaskOperationalProjectionService
 
 
 class TaskProfileService:
@@ -63,6 +72,7 @@ class TaskProfileService:
             depends_on=dependencies,
             dependent_tasks=dependents,
             evidence=evidence,
+            operational=self._operational(task),
             requested_by_truncated=requested_truncated,
             delegated_to_truncated=delegated_truncated,
             waiting_on_truncated=waiting_truncated,
@@ -70,6 +80,31 @@ class TaskProfileService:
             depends_on_truncated=dependencies_truncated,
             dependent_tasks_truncated=dependents_truncated,
             evidence_truncated=evidence_truncated,
+        )
+
+    def _operational(self, task: Object) -> TaskOperationalOut:
+        projection = TaskOperationalProjectionService(self._session, self._user_id).project(task)
+        return TaskOperationalOut(
+            operational_state=projection.operational_state,
+            is_overdue=projection.is_overdue,
+            is_scheduled_later=projection.is_scheduled_later,
+            is_planned_now=projection.is_planned_now,
+            due_at=projection.due_at,
+            planned_start_at=projection.planned_start_at,
+            planned_end_at=projection.planned_end_at,
+            blocking_dependencies=[
+                TaskOperationalDependencyOut(task_id=item.task_id, title=item.title, status=item.status)
+                for item in projection.blocking_dependencies
+            ],
+            waiting_on=[
+                TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
+                for item in projection.waiting_on
+            ],
+            delegated_to=[
+                TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
+                for item in projection.delegated_to
+            ],
+            reason_codes=list(projection.reason_codes),
         )
 
     def _actors(self, task_id: UUID, role: str) -> tuple[list[TaskActorOut], bool]:

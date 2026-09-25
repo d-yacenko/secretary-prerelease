@@ -129,6 +129,8 @@ class _TaskProfileSectionState extends State<TaskProfileSection> {
             ),
           ),
         if (_profile != null) ...[
+          if (_profile!.operational != null)
+            _OperationalCue(projection: _profile!.operational!),
           _actorGroup('Запросил', _profile!.requestedBy, _profile!.requestedByTruncated),
           _actorGroup('Поручено', _profile!.delegatedTo, _profile!.delegatedToTruncated),
           _actorGroup('Ждём', _profile!.waitingOn, _profile!.waitingOnTruncated),
@@ -477,5 +479,31 @@ class _TaskProfileSectionState extends State<TaskProfileSection> {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _OperationalCue extends StatelessWidget {
+  const _OperationalCue({required this.projection});
+
+  final TaskOperationalProjection projection;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = operationalStateLabel(projection.operationalState);
+    if (label.isEmpty && !projection.isOverdue) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Wrap(
+        spacing: 8,
+        children: [
+          if (label.isNotEmpty)
+            Text(label, key: const Key('operational-cue')),
+          if (projection.isOverdue)
+            const Text('Просрочено', key: Key('operational-overdue')),
+        ],
+      ),
+    );
   }
 }

@@ -140,8 +140,11 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         "type": "function",
         "name": "get_task_profile",
         "description": (
-            "Read one Task profile: lifecycle, explicit actor roles, dependencies, "
-            "and evidence references. Does not infer roles and does not mutate."
+            "Read one Task profile. status is the lifecycle. "
+            "operational.operational_state is the derived read-only actionability "
+            "(terminal, blocked, waiting, delegated, scheduled_later, actionable). "
+            "It is deterministic and ignores proposed relations. "
+            "overdue may coexist with blocked, waiting, or delegated. Does not mutate."
         ),
         "parameters": {
             "type": "object",

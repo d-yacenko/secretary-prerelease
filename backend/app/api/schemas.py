@@ -663,6 +663,44 @@ class TaskLinkOut(BaseModel):
     edge_confidence: float | None = None
 
 
+class TaskOperationalDependencyOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: UUID
+    title: str
+    status: str | None = None
+
+
+class TaskOperationalPersonOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    title: str
+
+
+class TaskOperationalOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operational_state: Literal[
+        "terminal",
+        "blocked",
+        "waiting",
+        "delegated",
+        "scheduled_later",
+        "actionable",
+    ]
+    is_overdue: bool
+    is_scheduled_later: bool
+    is_planned_now: bool
+    due_at: datetime | None
+    planned_start_at: datetime | None
+    planned_end_at: datetime | None
+    blocking_dependencies: list[TaskOperationalDependencyOut]
+    waiting_on: list[TaskOperationalPersonOut]
+    delegated_to: list[TaskOperationalPersonOut]
+    reason_codes: list[str]
+
+
 class TaskProfileOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -679,6 +717,7 @@ class TaskProfileOut(BaseModel):
     depends_on: list[TaskLinkOut]
     dependent_tasks: list[TaskLinkOut]
     evidence: list[TaskLinkOut]
+    operational: TaskOperationalOut
     requested_by_truncated: bool = False
     delegated_to_truncated: bool = False
     waiting_on_truncated: bool = False

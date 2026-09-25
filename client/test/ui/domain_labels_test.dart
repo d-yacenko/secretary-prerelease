@@ -59,6 +59,12 @@ void main() {
       'Предложено секретарём',
     );
     expect(taskRelationProposalLabel('user', 'confirmed'), isEmpty);
+    expect(operationalStateLabel('blocked'), 'Заблокировано');
+    expect(operationalStateLabel('waiting'), 'Ждём');
+    expect(operationalStateLabel('delegated'), 'Поручено');
+    expect(operationalStateLabel('scheduled_later'), 'Запланировано позже');
+    expect(operationalStateLabel('actionable'), 'Можно действовать');
+    expect(operationalStateLabel('terminal'), isEmpty);
     expect(relationTypeLabel('contains'), 'Содержит');
     expect(relationTypeLabel('custom_edge'), 'custom_edge');
   });

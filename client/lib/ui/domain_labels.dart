@@ -65,6 +65,23 @@ String relationTypeLabel(String type) =>
 const String dependentTasksLabel = 'От неё зависят';
 const String taskEvidenceSectionLabel = 'Основание';
 
+String operationalStateLabel(String state) {
+  switch (state) {
+    case 'blocked':
+      return 'Заблокировано';
+    case 'waiting':
+      return 'Ждём';
+    case 'delegated':
+      return 'Поручено';
+    case 'scheduled_later':
+      return 'Запланировано позже';
+    case 'actionable':
+      return 'Можно действовать';
+    default:
+      return '';
+  }
+}
+
 String taskRelationProposalLabel(String origin, String state) {
   if (state == 'proposed' && origin == 'agent') {
     return 'Предложено секретарём';

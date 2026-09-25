@@ -2793,6 +2793,74 @@ class TaskLinkItem {
   }
 }
 
+class TaskOperationalRef {
+  TaskOperationalRef({required this.id, required this.title, this.status});
+
+  final String id;
+  final String title;
+  final String? status;
+
+  factory TaskOperationalRef.fromJson(Map<String, dynamic> json) {
+    return TaskOperationalRef(
+      id: (json['task_id'] ?? json['person_id']) as String,
+      title: json['title'] as String,
+      status: json['status'] as String?,
+    );
+  }
+}
+
+class TaskOperationalProjection {
+  TaskOperationalProjection({
+    required this.operationalState,
+    required this.isOverdue,
+    required this.isScheduledLater,
+    required this.isPlannedNow,
+    this.dueAt,
+    this.plannedStartAt,
+    this.plannedEndAt,
+    required this.blockingDependencies,
+    required this.waitingOn,
+    required this.delegatedTo,
+    required this.reasonCodes,
+  });
+
+  final String operationalState;
+  final bool isOverdue;
+  final bool isScheduledLater;
+  final bool isPlannedNow;
+  final String? dueAt;
+  final String? plannedStartAt;
+  final String? plannedEndAt;
+  final List<TaskOperationalRef> blockingDependencies;
+  final List<TaskOperationalRef> waitingOn;
+  final List<TaskOperationalRef> delegatedTo;
+  final List<String> reasonCodes;
+
+  factory TaskOperationalProjection.fromJson(Map<String, dynamic> json) {
+    List<TaskOperationalRef> refs(String field) {
+      return (json[field] as List<dynamic>? ?? const [])
+          .map((item) => TaskOperationalRef.fromJson(item as Map<String, dynamic>))
+          .toList();
+    }
+
+    return TaskOperationalProjection(
+      operationalState: json['operational_state'] as String,
+      isOverdue: json['is_overdue'] as bool? ?? false,
+      isScheduledLater: json['is_scheduled_later'] as bool? ?? false,
+      isPlannedNow: json['is_planned_now'] as bool? ?? false,
+      dueAt: json['due_at'] as String?,
+      plannedStartAt: json['planned_start_at'] as String?,
+      plannedEndAt: json['planned_end_at'] as String?,
+      blockingDependencies: refs('blocking_dependencies'),
+      waitingOn: refs('waiting_on'),
+      delegatedTo: refs('delegated_to'),
+      reasonCodes: (json['reason_codes'] as List<dynamic>? ?? const [])
+          .map((item) => item as String)
+          .toList(),
+    );
+  }
+}
+
 class TaskProfile {
   TaskProfile({
     required this.task,
@@ -2808,6 +2876,7 @@ class TaskProfile {
     required this.dependsOn,
     required this.dependentTasks,
     required this.evidence,
+    this.operational,
     this.requestedByTruncated = false,
     this.delegatedToTruncated = false,
     this.waitingOnTruncated = false,
@@ -2830,6 +2899,7 @@ class TaskProfile {
   final List<TaskLinkItem> dependsOn;
   final List<TaskLinkItem> dependentTasks;
   final List<TaskLinkItem> evidence;
+  final TaskOperationalProjection? operational;
   final bool requestedByTruncated;
   final bool delegatedToTruncated;
   final bool waitingOnTruncated;
@@ -2865,6 +2935,11 @@ class TaskProfile {
       dependsOn: links('depends_on'),
       dependentTasks: links('dependent_tasks'),
       evidence: links('evidence'),
+      operational: json['operational'] is Map<String, dynamic>
+          ? TaskOperationalProjection.fromJson(
+              json['operational'] as Map<String, dynamic>,
+            )
+          : null,
       requestedByTruncated: json['requested_by_truncated'] as bool? ?? false,
       delegatedToTruncated: json['delegated_to_truncated'] as bool? ?? false,
       waitingOnTruncated: json['waiting_on_truncated'] as bool? ?? false,

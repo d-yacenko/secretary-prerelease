@@ -78,6 +78,7 @@ Map<String, dynamic> profileJson({
   List<Map<String, dynamic>> dependsOn = const [],
   List<Map<String, dynamic>> dependentTasks = const [],
   List<Map<String, dynamic>> evidence = const [],
+  Map<String, dynamic>? operational,
 }) {
   return {
     'task': graphObjectJson(id: taskId, title: title),
@@ -93,6 +94,26 @@ Map<String, dynamic> profileJson({
     'depends_on': dependsOn,
     'dependent_tasks': dependentTasks,
     'evidence': evidence,
+    if (operational != null) 'operational': operational,
+  };
+}
+
+Map<String, dynamic> operationalJson({
+  required String state,
+  bool overdue = false,
+}) {
+  return {
+    'operational_state': state,
+    'is_overdue': overdue,
+    'is_scheduled_later': state == 'scheduled_later',
+    'is_planned_now': false,
+    'due_at': null,
+    'planned_start_at': null,
+    'planned_end_at': null,
+    'blocking_dependencies': const [],
+    'waiting_on': const [],
+    'delegated_to': const [],
+    'reason_codes': const ['no_external_blocker'],
   };
 }
 
@@ -680,5 +701,59 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Профиль задачи'), findsNothing);
     expect(find.text('Добавить человека'), findsNothing);
+  });
+
+  testWidgets('operational cue uses the derived state and a separate overdue mark', (
+    tester,
+  ) async {
+    await useDesktop(tester);
+    final harness = GraphTestHarness(
+      _graphClient(
+        onProfile: (request) async => jsonUtf8Response(
+          profileJson(
+            operational: operationalJson(state: 'blocked', overdue: true),
+          ),
+        ),
+      ),
+    );
+    harness.configure();
+    await openGraph(tester, harness);
+    await showTask(tester, harness, 'task-1');
+    expect(find.byKey(const Key('operational-cue')), findsOneWidget);
+    expect(find.text('Заблокировано'), findsOneWidget);
+    expect(find.text('Просрочено'), findsOneWidget);
+    expect(find.text('Можно действовать'), findsNothing);
+  });
+
+  testWidgets('a proposed waiting relation does not change the operational cue', (
+    tester,
+  ) async {
+    await useDesktop(tester);
+    final harness = GraphTestHarness(
+      _graphClient(
+        onProfile: (request) async => jsonUtf8Response(
+          profileJson(
+            waitingOn: [
+              _actorJson(
+                edgeId: 'edge-proposed',
+                personId: 'person-1',
+                title: 'Ольга',
+                state: 'proposed',
+                origin: 'agent',
+                confidence: 0.4,
+              ),
+            ],
+            operational: operationalJson(state: 'actionable'),
+          ),
+        ),
+      ),
+    );
+    harness.configure();
+    await openGraph(tester, harness);
+    await showTask(tester, harness, 'task-1');
+    expect(find.text('Ольга'), findsOneWidget);
+    expect(find.text('Предложено секретарём'), findsOneWidget);
+    expect(find.text('Можно действовать'), findsOneWidget);
+    expect(find.byKey(const Key('operational-cue')), findsOneWidget);
   });
 }
