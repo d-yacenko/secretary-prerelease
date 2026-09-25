@@ -39,6 +39,7 @@ dependencies:
   # Android + Linux TTS playback. Plugin minSdk 19; guaranteed support >= 23.
   # Smallest maintained player with stop(); not a full media framework.
   audioplayers: ^6.1.0
+  graphview: 1.5.1
 
 dev_dependencies:
   flutter_test:

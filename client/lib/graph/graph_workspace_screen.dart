@@ -22,6 +22,8 @@ import '../ui/object_presentation.dart';
 import '../ui/object_visuals.dart' show providerBadge;
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
+import 'task_map.dart';
+import 'task_map_view.dart';
 import 'task_profile_section.dart';
 
 class GraphWorkspaceScreen extends StatefulWidget {
@@ -55,6 +57,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _searching = false;
   SearchFacetsOut? _searchFacets;
   Size? _canvasViewportSize;
+  TaskMapRenderer _taskMapRenderer = TaskMapRenderer.current;
+  TaskMapLayout _taskMapLayout = TaskMapLayout.mindmap;
+  bool _showTaskContext = false;
+  VoidCallback? _zoomTaskMap;
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
   var _bookmarkReconcileScheduled = false;
@@ -204,6 +210,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   void _fitView() {
+    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+        _taskMapRenderer == TaskMapRenderer.experiment) {
+      _zoomTaskMap?.call();
+      return;
+    }
     final viewportSize = _canvasViewportSize;
     if (viewportSize == null || viewportSize.isEmpty) {
       return;
@@ -296,6 +307,54 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               setState(() => _searchResults = []);
             },
           ),
+          if (widget.controller.mode == GraphWorkspaceMode.tasks) ...[
+            SegmentedButton<TaskMapRenderer>(
+              segments: const [
+                ButtonSegment(
+                  value: TaskMapRenderer.current,
+                  label: Text('Текущий'),
+                ),
+                ButtonSegment(
+                  value: TaskMapRenderer.experiment,
+                  label: Text('Эксперимент'),
+                ),
+              ],
+              selected: {_taskMapRenderer},
+              onSelectionChanged: (selection) {
+                setState(() => _taskMapRenderer = selection.first);
+              },
+            ),
+            if (_taskMapRenderer == TaskMapRenderer.experiment) ...[
+              SegmentedButton<TaskMapLayout>(
+                segments: const [
+                  ButtonSegment(
+                    value: TaskMapLayout.mindmap,
+                    label: Text('Mind map'),
+                  ),
+                  ButtonSegment(
+                    value: TaskMapLayout.radial,
+                    label: Text('Радиальная'),
+                  ),
+                  ButtonSegment(
+                    value: TaskMapLayout.force,
+                    label: Text('Силовая'),
+                  ),
+                ],
+                selected: {_taskMapLayout},
+                onSelectionChanged: (selection) {
+                  setState(() => _taskMapLayout = selection.first);
+                },
+              ),
+              FilterChip(
+                key: const ValueKey('task-map-context-toggle'),
+                label: const Text('Контекст'),
+                selected: _showTaskContext,
+                onSelected: widget.controller.selectedObject?.kind == 'task'
+                    ? (value) => setState(() => _showTaskContext = value)
+                    : null,
+              ),
+            ],
+          ],
           SizedBox(
             width: 220,
             child: TextField(
@@ -397,6 +456,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
     final positions = widget.controller.visiblePositions;
+    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+        _taskMapRenderer == TaskMapRenderer.experiment) {
+      return TaskMapExperiment(
+        nodes: nodes,
+        edges: edges,
+        selectedObjectId: widget.controller.selectedObjectId,
+        layout: _taskMapLayout,
+        showContext: _showTaskContext,
+        onSelect: widget.controller.selectObject,
+        onZoomToFit: (zoom) => _zoomTaskMap = zoom,
+      );
+    }
     if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
       return Center(
         child: Column(
