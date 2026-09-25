@@ -25,6 +25,7 @@ REASON_NO_EXTERNAL_BLOCKER = "no_external_blocker"
 REASON_OVERDUE = "overdue"
 
 MAX_OPERATIONAL_BATCH = 32
+MAX_OPERATIONAL_CHUNKED = 100
 
 
 class TaskOperationalState(StrEnum):

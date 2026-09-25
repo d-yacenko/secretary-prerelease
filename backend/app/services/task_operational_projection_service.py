@@ -13,6 +13,7 @@ from app.domain.object_visibility import object_is_active
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS
 from app.domain.task_operational import (
     MAX_OPERATIONAL_BATCH,
+    MAX_OPERATIONAL_CHUNKED,
     OperationalDependency,
     OperationalPerson,
     TaskOperationalProjection,
@@ -32,6 +33,25 @@ class TaskOperationalProjectionService:
         moment = now or datetime.now(UTC)
         projected = self.project_many([task], now=moment)
         return projected[task.id]
+
+    def project_chunked(
+        self,
+        tasks: list[Object],
+        *,
+        now: datetime | None = None,
+    ) -> dict[UUID, TaskOperationalProjection]:
+        """Project a bounded list in batches of MAX_OPERATIONAL_BATCH. Not one query per Task."""
+        if len(tasks) > MAX_OPERATIONAL_CHUNKED:
+            raise ValidationError(
+                f"operational projection list exceeds {MAX_OPERATIONAL_CHUNKED}"
+            )
+        moment = now or datetime.now(UTC)
+        projected: dict[UUID, TaskOperationalProjection] = {}
+        for start in range(0, len(tasks), MAX_OPERATIONAL_BATCH):
+            projected.update(
+                self.project_many(tasks[start : start + MAX_OPERATIONAL_BATCH], now=moment)
+            )
+        return projected
 
     def project_many(
         self,

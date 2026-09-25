@@ -13,6 +13,46 @@ import 'package:personal_secretary/capture/capture_controller.dart';
 import 'package:personal_secretary/objects/object_detail_screen.dart';
 import 'package:personal_secretary/today/today_screen.dart';
 
+Map<String, dynamic> _todayTask({
+  required String id,
+  required String title,
+  required String dueAt,
+  required String operationalState,
+  bool overdue = false,
+}) {
+  return {
+    'id': id,
+    'kind': 'task',
+    'title': title,
+    'body': null,
+    'provider': null,
+    'external_id': null,
+    'canonical_uri': null,
+    'status': 'open',
+    'start_at': null,
+    'due_at': dueAt,
+    'metadata': {},
+    'origin': 'user',
+    'state': 'confirmed',
+    'confidence': null,
+    'created_at': '2026-08-28T08:00:00Z',
+    'updated_at': '2026-08-28T08:00:00Z',
+    'operational': {
+      'operational_state': operationalState,
+      'is_overdue': overdue,
+      'is_scheduled_later': false,
+      'is_planned_now': false,
+      'due_at': dueAt,
+      'planned_start_at': null,
+      'planned_end_at': null,
+      'blocking_dependencies': const [],
+      'waiting_on': const [],
+      'delegated_to': const [],
+      'reason_codes': const ['no_external_blocker'],
+    },
+  };
+}
+
 void main() {
   const baseUrl = 'https://secretary.example';
   const token = 'today-token';
@@ -260,59 +300,74 @@ void main() {
     expect(find.text('Использовать как контекст задачи'), findsOneWidget);
   });
 
-  test('isTaskOverdue compares due_at against day_start instant', () {
-    final early = SecretaryObject.fromJson({
-      'id': 'task-early',
-      'kind': 'task',
-      'title': 'Early today',
-      'body': null,
-      'provider': null,
-      'external_id': null,
-      'canonical_uri': null,
-      'status': null,
-      'start_at': null,
-      'due_at': '2026-08-29T00:30:00+02:00',
-      'metadata': {},
-      'origin': 'user',
-      'state': 'confirmed',
-      'confidence': null,
-      'created_at': '2026-08-28T08:00:00Z',
-      'updated_at': '2026-08-28T08:00:00Z',
-    });
-    final late = SecretaryObject.fromJson({
-      'id': 'task-late',
-      'kind': 'task',
-      'title': 'Late yesterday',
-      'body': null,
-      'provider': null,
-      'external_id': null,
-      'canonical_uri': null,
-      'status': null,
-      'start_at': null,
-      'due_at': '2026-08-28T23:30:00+02:00',
-      'metadata': {},
-      'origin': 'user',
-      'state': 'confirmed',
-      'confidence': null,
-      'created_at': '2026-08-28T08:00:00Z',
-      'updated_at': '2026-08-28T08:00:00Z',
-    });
-
-    final todayAug29 = TodayOut.fromJson({
+  test('Today parses the shared operational projection and does not infer overdue', () {
+    final today = TodayOut.fromJson({
       'date': '2026-08-29',
       'timezone': 'Europe/Amsterdam',
       'day_start': '2026-08-29T00:00:00+02:00',
-      'tasks': [],
+      'tasks': [
+        _todayTask(
+          id: 'task-early',
+          title: 'Early today',
+          dueAt: '2026-08-29T00:30:00+02:00',
+          operationalState: 'actionable',
+          overdue: true,
+        ),
+      ],
       'calendar_events': [],
       'notifications': [],
     });
 
-    expect(todayAug29.isTaskOverdue(early), isFalse);
-    expect(todayAug29.isTaskOverdue(late), isTrue);
+    expect(today.tasks.single.operational?.operationalState, 'actionable');
+    expect(today.tasks.single.operational?.isOverdue, isTrue);
+    expect(today.tasks.single.id, 'task-early');
   });
 
-  testWidgets('overdue label uses day_start not device timezone',
-      (tester) async {
+  testWidgets('overdue cue follows operational.is_overdue', (tester) async {
+    await tester.pumpWidget(
+      buildToday(MockClient((request) async {
+        if (request.url.path == '/today') {
+          return http.Response(
+            jsonEncode({
+              'date': '2026-08-29',
+              'timezone': 'Europe/Amsterdam',
+              'day_start': '2026-08-29T00:00:00+02:00',
+              'tasks': [
+                _todayTask(
+                  id: 'task-early',
+                  title: 'Early today',
+                  dueAt: '2026-08-29T00:30:00+02:00',
+                  operationalState: 'blocked',
+                  overdue: true,
+                ),
+                _todayTask(
+                  id: 'task-before-midnight',
+                  title: 'Before midnight',
+                  dueAt: '2026-08-28T23:30:00+02:00',
+                  operationalState: 'actionable',
+                  overdue: false,
+                ),
+              ],
+              'calendar_events': [],
+              'notifications': [],
+            }),
+            200,
+          );
+        }
+        return http.Response('{}', 404);
+      })),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Заблокировано'), findsOneWidget);
+    expect(find.text('Просрочено'), findsOneWidget);
+    expect(find.text('Можно действовать'), findsOneWidget);
+    expect(find.text('Before midnight'), findsOneWidget);
+  });
+
+  testWidgets('server actionable cue ignores client-side relation hints', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       buildToday(MockClient((request) async {
         if (request.url.path == '/today') {
@@ -323,22 +378,13 @@ void main() {
               'day_start': '2026-08-29T00:00:00+02:00',
               'tasks': [
                 {
-                  'id': 'task-late',
-                  'kind': 'task',
-                  'title': 'Late yesterday',
-                  'body': null,
-                  'provider': null,
-                  'external_id': null,
-                  'canonical_uri': null,
-                  'status': null,
-                  'start_at': null,
-                  'due_at': '2026-08-28T23:30:00+02:00',
-                  'metadata': {},
-                  'origin': 'user',
-                  'state': 'confirmed',
-                  'confidence': null,
-                  'created_at': '2026-08-28T08:00:00Z',
-                  'updated_at': '2026-08-28T08:00:00Z',
+                  ..._todayTask(
+                    id: 'task-proposed',
+                    title: 'Still actionable',
+                    dueAt: '2026-08-29T18:00:00+02:00',
+                    operationalState: 'actionable',
+                  ),
+                  'proposed_waiting_on': 'Olga',
                 },
               ],
               'calendar_events': [],
@@ -352,7 +398,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Просрочено'), findsOneWidget);
+    expect(find.text('Можно действовать'), findsOneWidget);
+    expect(find.text('Ждём'), findsNothing);
+    expect(find.text('Просрочено'), findsNothing);
   });
 
   testWidgets('proposed task shows marker', (tester) async {

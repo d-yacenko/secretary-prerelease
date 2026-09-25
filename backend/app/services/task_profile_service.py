@@ -14,10 +14,9 @@ from app.api.schemas import (
     ObjectOut,
     TaskActorOut,
     TaskLinkOut,
-    TaskOperationalDependencyOut,
     TaskOperationalOut,
-    TaskOperationalPersonOut,
     TaskProfileOut,
+    task_operational_out,
 )
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
@@ -84,28 +83,7 @@ class TaskProfileService:
 
     def _operational(self, task: Object) -> TaskOperationalOut:
         projection = TaskOperationalProjectionService(self._session, self._user_id).project(task)
-        return TaskOperationalOut(
-            operational_state=projection.operational_state,
-            is_overdue=projection.is_overdue,
-            is_scheduled_later=projection.is_scheduled_later,
-            is_planned_now=projection.is_planned_now,
-            due_at=projection.due_at,
-            planned_start_at=projection.planned_start_at,
-            planned_end_at=projection.planned_end_at,
-            blocking_dependencies=[
-                TaskOperationalDependencyOut(task_id=item.task_id, title=item.title, status=item.status)
-                for item in projection.blocking_dependencies
-            ],
-            waiting_on=[
-                TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
-                for item in projection.waiting_on
-            ],
-            delegated_to=[
-                TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
-                for item in projection.delegated_to
-            ],
-            reason_codes=list(projection.reason_codes),
-        )
+        return task_operational_out(projection)
 
     def _actors(self, task_id: UUID, role: str) -> tuple[list[TaskActorOut], bool]:
         other = aliased(Object)

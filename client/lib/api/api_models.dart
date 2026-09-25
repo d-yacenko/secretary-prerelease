@@ -1324,6 +1324,25 @@ class InboxFeedPage {
   }
 }
 
+class TodayTaskItem {
+  TodayTaskItem({required this.task, this.operational});
+
+  final SecretaryObject task;
+  final TaskOperationalProjection? operational;
+
+  String get id => task.id;
+
+  factory TodayTaskItem.fromJson(Map<String, dynamic> json) {
+    final raw = json['operational'];
+    return TodayTaskItem(
+      task: SecretaryObject.fromJson(json),
+      operational: raw is Map<String, dynamic>
+          ? TaskOperationalProjection.fromJson(raw)
+          : null,
+    );
+  }
+}
+
 class TodayOut {
   TodayOut({
     required this.date,
@@ -1337,7 +1356,7 @@ class TodayOut {
   final String date;
   final String timezone;
   final String dayStart;
-  final List<SecretaryObject> tasks;
+  final List<TodayTaskItem> tasks;
   final List<SecretaryObject> calendarEvents;
   final List<NotificationOut> notifications;
 
@@ -1347,7 +1366,7 @@ class TodayOut {
       timezone: json['timezone'] as String,
       dayStart: json['day_start'] as String,
       tasks: (json['tasks'] as List<dynamic>)
-          .map((e) => SecretaryObject.fromJson(e as Map<String, dynamic>))
+          .map((e) => TodayTaskItem.fromJson(e as Map<String, dynamic>))
           .toList(),
       calendarEvents: (json['calendar_events'] as List<dynamic>)
           .map((e) => SecretaryObject.fromJson(e as Map<String, dynamic>))
@@ -1356,20 +1375,6 @@ class TodayOut {
           .map((e) => NotificationOut.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
-  }
-
-  /// Task is overdue when its due instant is before the Secretary local day start.
-  bool isTaskOverdue(SecretaryObject task) {
-    final dueAt = task.dueAt;
-    if (dueAt == null) {
-      return false;
-    }
-    final due = DateTime.tryParse(dueAt);
-    final start = DateTime.tryParse(dayStart);
-    if (due == null || start == null) {
-      return false;
-    }
-    return due.isBefore(start);
   }
 }
 

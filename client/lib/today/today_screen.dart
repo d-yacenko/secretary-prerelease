@@ -13,6 +13,7 @@ import '../navigation/secretary_navigation.dart';
 import '../sources/source_refresh_service.dart';
 import '../ui/assigned_labels_loader.dart';
 import '../ui/date_format.dart';
+import '../ui/domain_labels.dart';
 import '../ui/object_bookmark.dart';
 import '../ui/object_bookmark_controller.dart';
 import '../ui/object_label_strip.dart';
@@ -318,7 +319,6 @@ class _TodayScreenState extends State<TodayScreen> {
             else
               ...today.tasks.map((task) => _TaskRow(
                     task: task,
-                    today: today,
                     labels: _labelsByObject[task.id] ?? const [],
                     bookmarkColor: _bookmarks.colorFor(task.id),
                     onBookmarkSelect: (color) =>
@@ -432,7 +432,6 @@ Widget? _todayBookmarkSubtitle({
 class _TaskRow extends StatelessWidget {
   const _TaskRow({
     required this.task,
-    required this.today,
     required this.labels,
     this.bookmarkColor,
     required this.onBookmarkSelect,
@@ -440,8 +439,7 @@ class _TaskRow extends StatelessWidget {
     required this.onTap,
   });
 
-  final SecretaryObject task;
-  final TodayOut today;
+  final TodayTaskItem task;
   final List<LabelItem> labels;
   final String? bookmarkColor;
   final ValueChanged<String> onBookmarkSelect;
@@ -450,32 +448,45 @@ class _TaskRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final overdue = today.isTaskOverdue(task);
-    final dueAt = formatUserDateTime(task.dueAt);
+    final object = task.task;
+    final operational = task.operational;
+    final cue = operational == null
+        ? ''
+        : operationalStateLabel(operational.operationalState);
+    final overdue = operational?.isOverdue ?? false;
+    final dueAt = formatUserDateTime(object.dueAt);
     final when = dueAt.isEmpty ? 'Нет срока' : dueAt;
-    final trailing = overdue ? 'Просрочено • $when' : when;
     return ObjectBookmarkRibbon(
       color: bookmarkColor,
       onSelect: onBookmarkSelect,
       onClear: onBookmarkClear,
       child: ListTile(
       title: ObjectCompactHeaderRow(
-        title: task.title,
-        kind: task.kind,
-        provider: task.provider,
-        trailingText: trailing,
+        title: object.title,
+        kind: object.kind,
+        provider: object.provider,
+        trailingText: when,
         trailingReserve: bookmarkColor != null ? kBookmarkRibbonReserve : 0,
-        trailingBadges: task.state == 'proposed'
-            ? [
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Text(
-                    'Предложено',
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
-                ),
-              ]
-            : const [],
+        trailingBadges: [
+          if (cue.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Text(cue, key: const Key('today-operational-cue')),
+            ),
+          if (overdue)
+            const Padding(
+              padding: EdgeInsets.only(left: 6),
+              child: Text('Просрочено', key: Key('today-operational-overdue')),
+            ),
+          if (object.state == 'proposed')
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Text(
+                'Предложено',
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+        ],
       ),
       subtitle: _todayBookmarkSubtitle(
         labels: labels,

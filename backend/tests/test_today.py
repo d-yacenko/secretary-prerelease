@@ -5,13 +5,18 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import func, select
 
-from app.api.schemas import ObjectCreate
+from app.api.schemas import EdgeCreate, ObjectCreate
 from app.db.models import Job, Object, User
+from app.domain.task_operational import MAX_OPERATIONAL_BATCH, MAX_OPERATIONAL_CHUNKED
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT
 from app.notifications.constants import NOTIFICATION_STATUS_ACCEPTED
 from app.services.errors import NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.notification_service import NotificationService
+from app.services.person_identity_service import PersonIdentityService
+from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, PROPOSED_STATE, USER_ORIGIN
+from app.services.task_operational_projection_service import TaskOperationalProjectionService
+from app.services.task_relation_service import TaskRelationService
 from app.services.today_service import TODAY_MAX_TASKS, TodayService
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 
@@ -574,3 +579,126 @@ def test_http_today_includes_day_start(auth_client) -> None:
     payload = response.json()
     assert "day_start" in payload
     assert payload["timezone"] == "Europe/Amsterdam"
+
+
+def _open_task(db_session, title: str, due_at: datetime) -> Object:
+    return GraphService(db_session, BOOTSTRAP_USER_ID).create_object(
+        ObjectCreate(
+            kind="task",
+            title=title,
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+            status="open",
+            due_at=due_at,
+        )
+    )
+
+
+def test_today_tasks_include_canonical_operational_projection(db_session, auth_client) -> None:
+    reference = datetime(2026, 8, 28, 15, 0, tzinfo=AMSTERDAM)
+    day_start, _ = _local_day_bounds(reference)
+    _open_task(db_session, "Plain today", day_start + timedelta(hours=18))
+    waiting = _open_task(db_session, "Waiting today", day_start + timedelta(hours=16))
+    delegated = _open_task(db_session, "Delegated today", day_start + timedelta(hours=14))
+    blocked = _open_task(db_session, "Blocked today", day_start + timedelta(hours=12))
+    proposed = _open_task(db_session, "Proposed relation", day_start + timedelta(hours=11))
+    done_dep_parent = _open_task(db_session, "Done dependency", day_start + timedelta(hours=10))
+    early = _open_task(db_session, "Earlier today", day_start + timedelta(hours=1))
+    later = _open_task(db_session, "Later today", day_start + timedelta(hours=20))
+    _open_task(db_session, "Future day", day_start + timedelta(days=2))
+
+    olga = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Olga")
+    ivan = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Ivan")
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    relations.add_actor(waiting.id, olga.id, "waiting_on")
+    relations.add_actor(delegated.id, ivan.id, "delegated_to")
+    open_dep = _open_task(db_session, "Open dependency", day_start + timedelta(days=3))
+    relations.add_dependency(blocked.id, open_dep.id)
+    done_dep = _open_task(db_session, "Finished dependency", day_start + timedelta(days=3, hours=1))
+    done_dep.status = "done"
+    relations.add_dependency(done_dep_parent.id, done_dep.id)
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID)
+    graph.create_edge(
+        EdgeCreate(
+            source_id=proposed.id,
+            target_id=olga.id,
+            type="waiting_on",
+            origin=AGENT_ORIGIN,
+            state=PROPOSED_STATE,
+            confidence=0.4,
+        )
+    )
+    graph.create_edge(
+        EdgeCreate(
+            source_id=proposed.id,
+            target_id=open_dep.id,
+            type="depends_on",
+            origin=AGENT_ORIGIN,
+            state=PROPOSED_STATE,
+            confidence=0.4,
+        )
+    )
+
+    snapshot = TodayService(db_session, BOOTSTRAP_USER_ID).snapshot(reference_at=reference)
+    by_title = {task.title: task for task in snapshot["tasks"]}
+    assert "Future day" not in by_title
+    assert "Open dependency" not in by_title
+    states = {
+        title: snapshot["task_projections"][task.id].operational_state
+        for title, task in by_title.items()
+    }
+    assert states["Plain today"] == "actionable"
+    assert states["Waiting today"] == "waiting"
+    assert states["Delegated today"] == "delegated"
+    assert states["Blocked today"] == "blocked"
+    assert states["Proposed relation"] == "actionable"
+    assert states["Done dependency"] == "actionable"
+    assert snapshot["task_projections"][early.id].is_overdue is True
+    assert snapshot["task_projections"][later.id].is_overdue is False
+    ordered = [task.title for task in snapshot["tasks"] if task.title in {
+        "Done dependency",
+        "Blocked today",
+        "Waiting today",
+        "Plain today",
+    }]
+    assert ordered == [
+        "Done dependency",
+        "Blocked today",
+        "Waiting today",
+        "Plain today",
+    ]
+
+    response = auth_client.get("/today", params={"client_timezone_id": "Europe/Amsterdam"})
+    assert response.status_code == 200
+    body = response.json()
+    blocked_row = next(row for row in body["tasks"] if row["title"] == "Blocked today")
+    assert blocked_row["operational"]["operational_state"] == "blocked"
+    assert blocked_row["operational"]["is_overdue"] is True
+    assert "reason_codes" in blocked_row["operational"]
+    assert "blocking_dependencies" in blocked_row["operational"]
+
+
+def test_today_operational_projection_is_chunked(db_session, monkeypatch) -> None:
+    assert TODAY_MAX_TASKS <= MAX_OPERATIONAL_CHUNKED
+    reference = datetime(2026, 8, 28, 15, 0, tzinfo=AMSTERDAM)
+    day_start, _ = _local_day_bounds(reference)
+    count = MAX_OPERATIONAL_BATCH + 8
+    for index in range(count):
+        _open_task(db_session, f"Batch {index:02d}", day_start + timedelta(minutes=index + 1))
+
+    sizes: list[int] = []
+    real = TaskOperationalProjectionService.project_many
+
+    def spy(self, tasks, *, now=None):
+        sizes.append(len(tasks))
+        return real(self, tasks, now=now)
+
+    monkeypatch.setattr(TaskOperationalProjectionService, "project_many", spy)
+    snapshot = TodayService(db_session, BOOTSTRAP_USER_ID).snapshot(reference_at=reference)
+    assert len(snapshot["tasks"]) == count
+    assert sizes == [MAX_OPERATIONAL_BATCH, 8]
+    assert len(snapshot["task_projections"]) == count
+    assert all(
+        snapshot["task_projections"][task.id].operational_state == "actionable"
+        for task in snapshot["tasks"]
+    )

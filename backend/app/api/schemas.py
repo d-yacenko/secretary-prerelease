@@ -275,7 +275,7 @@ class TodayOut(BaseModel):
     date: str
     timezone: str
     day_start: datetime
-    tasks: list[ObjectOut]
+    tasks: list["TodayTaskOut"]
     calendar_events: list[ObjectOut]
     notifications: list[NotificationOut]
 
@@ -699,6 +699,45 @@ class TaskOperationalOut(BaseModel):
     waiting_on: list[TaskOperationalPersonOut]
     delegated_to: list[TaskOperationalPersonOut]
     reason_codes: list[str]
+
+
+def task_operational_out(projection: Any) -> TaskOperationalOut:
+    return TaskOperationalOut(
+        operational_state=projection.operational_state,
+        is_overdue=projection.is_overdue,
+        is_scheduled_later=projection.is_scheduled_later,
+        is_planned_now=projection.is_planned_now,
+        due_at=projection.due_at,
+        planned_start_at=projection.planned_start_at,
+        planned_end_at=projection.planned_end_at,
+        blocking_dependencies=[
+            TaskOperationalDependencyOut(
+                task_id=item.task_id, title=item.title, status=item.status
+            )
+            for item in projection.blocking_dependencies
+        ],
+        waiting_on=[
+            TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
+            for item in projection.waiting_on
+        ],
+        delegated_to=[
+            TaskOperationalPersonOut(person_id=item.person_id, title=item.title)
+            for item in projection.delegated_to
+        ],
+        reason_codes=list(projection.reason_codes),
+    )
+
+
+class TodayTaskOut(ObjectOut):
+    operational: TaskOperationalOut
+
+    @classmethod
+    def from_task(cls, obj: Any, projection: Any) -> "TodayTaskOut":
+        base = ObjectOut.from_model(obj)
+        return cls(**base.model_dump(), operational=task_operational_out(projection))
+
+
+TodayOut.model_rebuild()
 
 
 class TaskProfileOut(BaseModel):

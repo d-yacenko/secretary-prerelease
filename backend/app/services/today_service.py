@@ -15,6 +15,7 @@ from app.services.calendar_event_query import (
     active_event_predicates,
     event_overlaps_window,
 )
+from app.services.task_operational_projection_service import TaskOperationalProjectionService
 
 TODAY_MAX_TASKS = 100
 TODAY_MAX_EVENTS = 100
@@ -47,12 +48,16 @@ class TodayService:
         tasks = self._tasks_for_day(day_start, day_end)
         events = self._events_for_day(day_start, day_end)
         notifications = self._important_notifications()
+        projections = TaskOperationalProjectionService(
+            self._session, self._user_id
+        ).project_chunked(tasks, now=now_local)
 
         return {
             "date": now_local.date().isoformat(),
             "timezone": tz_name,
             "day_start": day_start,
             "tasks": tasks,
+            "task_projections": projections,
             "calendar_events": events,
             "notifications": notifications,
         }

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
-from app.api.schemas import NotificationOut, ObjectOut, TodayOut
+from app.api.schemas import NotificationOut, ObjectOut, TodayOut, TodayTaskOut
 from app.core.client_timezone import resolve_client_timezone
 from app.core.current_user import CurrentUserContext
 from app.services.errors import ValidationError
@@ -30,7 +30,10 @@ def get_today(
         date=snapshot["date"],
         timezone=snapshot["timezone"],
         day_start=snapshot["day_start"],
-        tasks=[ObjectOut.from_model(obj) for obj in snapshot["tasks"]],
+        tasks=[
+            TodayTaskOut.from_task(obj, snapshot["task_projections"][obj.id])
+            for obj in snapshot["tasks"]
+        ],
         calendar_events=[ObjectOut.from_model(obj) for obj in snapshot["calendar_events"]],
         notifications=[
             NotificationOut.from_model(notification)
