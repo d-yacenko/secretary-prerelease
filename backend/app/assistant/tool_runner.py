@@ -28,6 +28,7 @@ _READ_TOOLS = frozenset(
         "query_objects",
         "search_objects",
         "get_object",
+        "get_task_profile",
         "get_context",
         "list_neighbors",
         "list_notifications",

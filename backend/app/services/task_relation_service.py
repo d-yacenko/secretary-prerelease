@@ -1,7 +1,9 @@
 """Explicit Task actor roles, dependencies, and evidence references.
 
-Writes reuse Edge rows. An active duplicate is returned unchanged. Removal
-rejects the edge and leaves the historical row in place.
+A confirmed active edge is the current fact. A later proposal does not add
+another active row. An explicit confirmed write supersedes active proposals
+by rejecting them and creating a new confirmed edge. Removal rejects the
+edge and leaves the historical row in place.
 """
 
 from __future__ import annotations
@@ -108,17 +110,28 @@ class TaskRelationService:
         state: str,
         confidence: float | None,
     ) -> tuple[Edge, bool]:
-        existing = self._session.scalar(
-            select(Edge).where(
-                Edge.user_id == self._user_id,
-                Edge.source_id == source_id,
-                Edge.target_id == target_id,
-                Edge.type == edge_type,
-                Edge.state != REJECTED_STATE,
+        active = list(
+            self._session.scalars(
+                select(Edge)
+                .where(
+                    Edge.user_id == self._user_id,
+                    Edge.source_id == source_id,
+                    Edge.target_id == target_id,
+                    Edge.type == edge_type,
+                    Edge.state != REJECTED_STATE,
+                )
+                .order_by(Edge.id)
             )
         )
-        if existing is not None:
-            return existing, False
+        confirmed = next((edge for edge in active if edge.state == CONFIRMED_STATE), None)
+        if confirmed is not None:
+            return confirmed, False
+        if state != CONFIRMED_STATE and active:
+            return active[0], False
+        if state == CONFIRMED_STATE and active:
+            for edge in active:
+                edge.state = REJECTED_STATE
+            self._session.flush()
         edge = self._graph.create_edge(
             EdgeCreate(
                 source_id=source_id,
@@ -143,6 +156,9 @@ class TaskRelationService:
         edge.state = REJECTED_STATE
         self._session.flush()
         return edge, True
+
+    def ensure_active(self, object_id: UUID, *, kind: str) -> Object:
+        return self._require_active(object_id, kind=kind)
 
     def _require_active(self, object_id: UUID, *, kind: str) -> Object:
         obj = self._require_active_object(object_id)

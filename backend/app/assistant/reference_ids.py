@@ -250,6 +250,19 @@ def collect_seen_edge_ids_from_bounded_tool(
         edge = bounded.get("edge")
         if edge:
             _append_uuid(seen_ids, edge.get("id"))
+    elif tool_name == "get_task_profile":
+        for field in (
+            "requested_by",
+            "delegated_to",
+            "waiting_on",
+            "involves",
+            "depends_on",
+            "dependent_tasks",
+            "evidence",
+        ):
+            for item in bounded.get(field) or []:
+                if isinstance(item, dict):
+                    _append_uuid(seen_ids, item.get("edge_id"))
     return seen_ids
 
 

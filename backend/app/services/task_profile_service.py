@@ -89,6 +89,9 @@ class TaskProfileService:
                 person_id=person.id,
                 title=person.title,
                 contact_cue=cues.get(person.id),
+                edge_state=edge.state,
+                edge_origin=edge.origin,
+                edge_confidence=edge.confidence,
             )
             for edge, person in visible
         ], truncated
@@ -109,7 +112,15 @@ class TaskProfileService:
         truncated = len(rows) > MAX_PROFILE_ITEMS
         visible = rows[:MAX_PROFILE_ITEMS]
         return [
-            TaskLinkOut(edge_id=edge.id, object_id=obj.id, title=obj.title, kind=obj.kind)
+            TaskLinkOut(
+                edge_id=edge.id,
+                object_id=obj.id,
+                title=obj.title,
+                kind=obj.kind,
+                edge_state=edge.state,
+                edge_origin=edge.origin,
+                edge_confidence=edge.confidence,
+            )
             for edge, obj in visible
         ], truncated
 

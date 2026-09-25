@@ -12,7 +12,13 @@ from app.api.schemas import EdgeCreate, ObjectCreate
 from app.assistant.tool_runner import PerTurnToolBudget
 from app.db.models import Edge, Object, User
 from app.domain.object_visibility import tombstone_object
-from app.domain.task_relations import INVOLVES, MAX_PROFILE_ITEMS, REQUESTED_BY
+from app.domain.task_relations import (
+    DEPENDS_ON,
+    INVOLVES,
+    MAX_PROFILE_ITEMS,
+    REFERENCES,
+    REQUESTED_BY,
+)
 from app.main import app
 from app.services.domain_tool_service import DomainToolService
 from app.services.graph_service import GraphService
@@ -25,6 +31,7 @@ from app.services.provenance import (
     REJECTED_STATE,
     USER_ORIGIN,
 )
+from app.services.task_relation_service import TaskRelationService
 from app.tools.results import ToolExecutionStatus
 from app.tools.schemas import CreateTaskInput, GetTaskProfileInput, ToolError, UpdateTaskInput
 from app.users.bootstrap import BOOTSTRAP_USER_ID
@@ -327,3 +334,220 @@ def test_person_graph_shows_task_through_actor_edge(db_session) -> None:
     workspace = PersonGraphWorkspaceService(db_session, BOOTSTRAP_USER_ID).get_workspace(root_id=person.id)
     assert task.id in {node.id for node in workspace.nodes}
     assert REQUESTED_BY in {edge.type for edge in workspace.edges}
+
+
+def _active_edges(db_session, source_id, target_id, edge_type) -> list[Edge]:
+    return list(
+        db_session.scalars(
+            select(Edge).where(
+                Edge.source_id == source_id,
+                Edge.target_id == target_id,
+                Edge.type == edge_type,
+                Edge.state != REJECTED_STATE,
+            )
+        )
+    )
+
+
+def test_user_confirmation_supersedes_proposed_relations(task_client, db_session) -> None:
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    task = _task(db_session, "Confirm me")
+    person = _person(db_session, "Olga")
+    dependency = _task(db_session, "Blocked by")
+    evidence = _graph(db_session).create_object(
+        ObjectCreate(kind="email", title="Why", origin=USER_ORIGIN, state=CONFIRMED_STATE)
+    )
+    proposed_actor, created = relations.add_actor(
+        task.id, person.id, REQUESTED_BY, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.6
+    )
+    assert created is True
+    proposed_dependency, _ = relations.add_dependency(
+        task.id, dependency.id, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.6
+    )
+    proposed_evidence, _ = relations.attach_evidence(
+        task.id, evidence.id, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.6
+    )
+    profile = task_client.get(f"/tasks/{task.id}/profile").json()
+    assert profile["requested_by"][0]["edge_state"] == PROPOSED_STATE
+    assert profile["requested_by"][0]["edge_origin"] == AGENT_ORIGIN
+    assert profile["depends_on"][0]["edge_state"] == PROPOSED_STATE
+    assert profile["evidence"][0]["edge_origin"] == AGENT_ORIGIN
+
+    actor = task_client.post(
+        f"/tasks/{task.id}/actors",
+        json={"person_id": str(person.id), "role": "requested_by"},
+    )
+    dependency_write = task_client.post(
+        f"/tasks/{task.id}/dependencies",
+        json={"depends_on_task_id": str(dependency.id)},
+    )
+    evidence_write = task_client.post(
+        f"/tasks/{task.id}/evidence",
+        json={"object_id": str(evidence.id)},
+    )
+    assert actor.status_code == 200
+    assert dependency_write.status_code == 200
+    assert evidence_write.status_code == 200
+    assert actor.json()["created"] is True
+    assert actor.json()["edge"]["origin"] == USER_ORIGIN
+    assert actor.json()["edge"]["state"] == CONFIRMED_STATE
+    db_session.refresh(proposed_actor)
+    db_session.refresh(proposed_dependency)
+    db_session.refresh(proposed_evidence)
+    assert proposed_actor.state == REJECTED_STATE
+    assert proposed_dependency.state == REJECTED_STATE
+    assert proposed_evidence.state == REJECTED_STATE
+    assert len(_active_edges(db_session, task.id, person.id, REQUESTED_BY)) == 1
+    assert len(_active_edges(db_session, task.id, dependency.id, DEPENDS_ON)) == 1
+    assert len(_active_edges(db_session, task.id, evidence.id, REFERENCES)) == 1
+
+    repeated = task_client.post(
+        f"/tasks/{task.id}/actors",
+        json={"person_id": str(person.id), "role": "requested_by"},
+    )
+    assert repeated.json()["created"] is False
+    assert repeated.json()["edge"]["id"] == actor.json()["edge"]["id"]
+    confirmed_profile = task_client.get(f"/tasks/{task.id}/profile").json()
+    assert confirmed_profile["requested_by"][0]["edge_state"] == CONFIRMED_STATE
+    assert confirmed_profile["requested_by"][0]["edge_origin"] == USER_ORIGIN
+    assert confirmed_profile["depends_on"][0]["edge_state"] == CONFIRMED_STATE
+    assert confirmed_profile["evidence"][0]["edge_state"] == CONFIRMED_STATE
+    assert all(item["edge_id"] != str(proposed_actor.id) for item in confirmed_profile["requested_by"])
+
+    later, created_later = relations.add_actor(
+        task.id, person.id, REQUESTED_BY, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.4
+    )
+    assert created_later is False
+    assert later.state == CONFIRMED_STATE
+    assert len(_active_edges(db_session, task.id, person.id, REQUESTED_BY)) == 1
+
+    other = _task(db_session, "Proposal only")
+    first, first_created = relations.add_dependency(
+        other.id, dependency.id, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.5
+    )
+    second, second_created = relations.add_dependency(
+        other.id, dependency.id, origin=AGENT_ORIGIN, state=PROPOSED_STATE, confidence=0.5
+    )
+    assert first_created is True
+    assert second_created is False
+    assert first.id == second.id
+    proposal_profile = task_client.get(f"/tasks/{other.id}/profile").json()
+    assert proposal_profile["depends_on"][0]["edge_state"] == PROPOSED_STATE
+
+
+def test_profile_read_feeds_same_turn_relation_allowlist(
+    db_session, fake_embedding_service, monkeypatch
+) -> None:
+    class _TestSession:
+        def __init__(self) -> None:
+            self._session = db_session
+
+        def close(self) -> None:
+            return None
+
+        def __getattr__(self, name: str):
+            return getattr(db_session, name)
+
+    import app.assistant.session as assistant_session_module
+
+    monkeypatch.setattr(assistant_session_module, "SessionLocal", lambda: _TestSession())
+    tools = DomainToolService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    person = _person(db_session, "Nina")
+    dependency = _task(db_session, "Prerequisite")
+    task = tools.create_task(
+        CreateTaskInput(
+            title="Seen through profile",
+            confidence=0.7,
+            requested_by_person_id=person.id,
+            depends_on_task_ids=[dependency.id],
+        )
+    ).object
+    budget = PerTurnToolBudget()
+    budget.seed_seen_object_ids([task.id])
+    profile_result = budget.run(
+        BOOTSTRAP_USER_ID,
+        "get_task_profile",
+        {"task_id": str(task.id)},
+    )
+    assert profile_result.success is True
+    assert person.id in budget.pending_seen_object_ids
+    assert dependency.id in budget.pending_seen_object_ids
+    blocked = budget.run(
+        BOOTSTRAP_USER_ID,
+        "update_task",
+        {
+            "object_id": str(task.id),
+            "waiting_on_person_ids": [str(person.id)],
+        },
+    )
+    assert blocked.success is False
+    assert "not exposed" in (blocked.error or "")
+    budget.commit_model_visible_outputs()
+    allowed = budget.run(
+        BOOTSTRAP_USER_ID,
+        "update_task",
+        {
+            "object_id": str(task.id),
+            "waiting_on_person_ids": [str(person.id)],
+            "depends_on_task_ids": [str(dependency.id)],
+        },
+    )
+    assert allowed.status == ToolExecutionStatus.APPROVAL_REQUIRED
+    assert "not exposed" not in (allowed.error or "")
+    edge_id = profile_result.output["requested_by"][0]["edge_id"]
+    hidden_edge = budget.run(BOOTSTRAP_USER_ID, "remove_relation", {"edge_id": str(uuid.uuid4())})
+    assert hidden_edge.success is False
+    assert "not exposed" in (hidden_edge.error or "")
+    visible_edge = budget.run(BOOTSTRAP_USER_ID, "remove_relation", {"edge_id": edge_id})
+    assert visible_edge.status == ToolExecutionStatus.APPROVAL_REQUIRED
+    invented = budget.run(
+        BOOTSTRAP_USER_ID,
+        "update_task",
+        {
+            "object_id": str(task.id),
+            "involved_person_ids": [str(uuid.uuid4())],
+        },
+    )
+    assert invented.success is False
+    assert "not exposed" in (invented.error or "")
+
+
+def test_invalid_relation_target_writes_nothing(db_session, fake_embedding_service) -> None:
+    tools = DomainToolService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    person = _person(db_session, "Petr")
+    before_tasks = db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    )
+    before_edges = db_session.scalar(select(func.count()).select_from(Edge))
+    with pytest.raises(ToolError):
+        tools.create_task(
+            CreateTaskInput(
+                title="Should not exist",
+                confidence=0.4,
+                requested_by_person_id=person.id,
+                depends_on_task_ids=[uuid.uuid4()],
+            )
+        )
+    after_tasks = db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    )
+    after_edges = db_session.scalar(select(func.count()).select_from(Edge))
+    assert before_tasks == after_tasks
+    assert before_edges == after_edges
+
+    task = _task(db_session, "Keep existing")
+    before_task_edges = db_session.scalar(
+        select(func.count()).select_from(Edge).where(Edge.source_id == task.id)
+    )
+    with pytest.raises(ToolError):
+        tools.update_task(
+            UpdateTaskInput(
+                object_id=task.id,
+                delegated_to_person_ids=[person.id],
+                depends_on_task_ids=[uuid.uuid4()],
+            )
+        )
+    after_task_edges = db_session.scalar(
+        select(func.count()).select_from(Edge).where(Edge.source_id == task.id)
+    )
+    assert before_task_edges == after_task_edges

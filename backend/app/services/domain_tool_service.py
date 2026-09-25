@@ -841,6 +841,8 @@ class DomainToolService:
                 raise ToolError(f"evidence object rejected: {object_id}")
             if obj.status == "deleted":
                 raise ToolError(f"evidence object deleted: {object_id}")
+            if obj.kind == "task":
+                raise ToolError("task evidence must not be another task")
             objects.append(obj)
         return objects
 
@@ -893,6 +895,34 @@ class DomainToolService:
             or payload.involved_person_ids
             or payload.depends_on_task_ids
         )
+
+    def _prevalidate_explicit_relations(self, payload, *, task_id: UUID | None) -> None:
+        relations = TaskRelationService(self._session, self._user_id)
+        try:
+            if payload.requested_by_person_id is not None:
+                relations.ensure_active(payload.requested_by_person_id, kind="person")
+            seen_people: set[UUID] = set()
+            for person_id in (
+                *payload.delegated_to_person_ids,
+                *payload.waiting_on_person_ids,
+                *payload.involved_person_ids,
+            ):
+                if person_id in seen_people:
+                    continue
+                seen_people.add(person_id)
+                relations.ensure_active(person_id, kind="person")
+            seen_tasks: set[UUID] = set()
+            for dependency_id in payload.depends_on_task_ids:
+                if dependency_id in seen_tasks:
+                    continue
+                seen_tasks.add(dependency_id)
+                if task_id is not None and dependency_id == task_id:
+                    raise ValidationError("task cannot depend on itself")
+                relations.ensure_active(dependency_id, kind="task")
+        except NotFoundError as exc:
+            raise ToolError(f"task relation endpoint not found: {exc.entity_id}") from exc
+        except ValidationError as exc:
+            raise ToolError(exc.message) from exc
 
     def _attach_explicit_relations(self, task_id: UUID, payload, confidence: float) -> int:
         relations = TaskRelationService(self._session, self._user_id)
@@ -981,6 +1011,8 @@ class DomainToolService:
         evidence_ids = self._dedupe_evidence_ids(input.evidence_object_ids)
         if evidence_ids:
             self._validate_evidence_objects(evidence_ids)
+        if self._has_relation_input(input):
+            self._prevalidate_explicit_relations(input, task_id=None)
         due_at = normalize_tool_datetime(input.due_at)
         try:
             obj = self._write_graph.create_object(
@@ -1131,6 +1163,8 @@ class DomainToolService:
             if input.object_id in evidence_ids:
                 raise ToolError("task cannot reference itself as evidence")
             self._validate_evidence_objects(evidence_ids)
+        if self._has_relation_input(input):
+            self._prevalidate_explicit_relations(input, task_id=input.object_id)
 
         fields_set = input.model_fields_set
         field_fields = {"title", "body", "due_at"}

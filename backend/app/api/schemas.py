@@ -646,6 +646,9 @@ class TaskActorOut(BaseModel):
     person_id: UUID
     title: str
     contact_cue: str | None = None
+    edge_state: str
+    edge_origin: str
+    edge_confidence: float | None = None
 
 
 class TaskLinkOut(BaseModel):
@@ -655,6 +658,9 @@ class TaskLinkOut(BaseModel):
     object_id: UUID
     title: str
     kind: str
+    edge_state: str
+    edge_origin: str
+    edge_confidence: float | None = None
 
 
 class TaskProfileOut(BaseModel):
