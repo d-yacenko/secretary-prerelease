@@ -1267,6 +1267,7 @@ def test_proactive_allowlist_unchanged() -> None:
         "retrieve",
         "query_objects",
         "get_object",
+        "get_task_profile",
         "get_context",
         "list_neighbors",
         "list_notifications",

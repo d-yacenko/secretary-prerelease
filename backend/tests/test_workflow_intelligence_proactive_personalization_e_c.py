@@ -290,6 +290,7 @@ def test_allowlist_unchanged_and_no_mutating_tools() -> None:
         "retrieve",
         "query_objects",
         "get_object",
+        "get_task_profile",
         "get_context",
         "list_neighbors",
         "list_notifications",

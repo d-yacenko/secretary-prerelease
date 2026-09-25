@@ -50,12 +50,21 @@ from app.proactive.constants import (
     PROACTIVE_READ_TOOL_NAMES,
     PROACTIVE_SEED_OBJECT_LIMIT,
 )
+from app.proactive.instructions import PROACTIVE_SYSTEM_INSTRUCTIONS
+from app.proactive.tool_runner import ProactiveToolRunner
+from app.services.domain_tool_service import DomainToolService
 from app.services.graph_service import GraphService
 from app.services.job_queue_service import JobQueueService
 from app.services.notification_service import NotificationService
 from app.services.proactive_review_service import ProactiveReviewService
 from app.services.proactive_scheduler import ProactiveScheduler
-from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
+from app.services.provenance import (
+    AGENT_ORIGIN,
+    CONFIRMED_STATE,
+    PROPOSED_STATE,
+    REJECTED_STATE,
+    USER_ORIGIN,
+)
 from app.services.scheduled_activity_service import ScheduledActivityService
 from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS, PROACTIVE_TOOL_DEFINITIONS
 from app.users.bootstrap import BOOTSTRAP_USER_ID
@@ -1509,4 +1518,208 @@ def test_proactive_scheduler_failure_does_not_rollback_source(monkeypatch) -> No
             assert marker.payload["marker"] == "source-maintenance"
     finally:
         _cleanup_committed(user_id)
+
+
+def _notes_for_source(session: Session, source_id) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(Notification.source_object_id == source_id)
+        )
+        or 0
+    )
+
+
+def _referencing_task(
+    session: Session,
+    source: Object,
+    *,
+    status: str | None,
+    edge_state: str = CONFIRMED_STATE,
+    edge_origin: str = USER_ORIGIN,
+    task_state: str = CONFIRMED_STATE,
+    user_id=BOOTSTRAP_USER_ID,
+    tombstone: bool = False,
+) -> Object:
+    graph = GraphService(session, user_id)
+    task = graph.create_object(
+        ObjectCreate(
+            kind="task",
+            title="Existing obligation",
+            origin=USER_ORIGIN,
+            state=task_state,
+            status=status,
+        )
+    )
+    if tombstone:
+        tombstone_object(task)
+        session.flush()
+    confidence = 0.4 if edge_state == PROPOSED_STATE else None
+    graph.create_edge(
+        EdgeCreate(
+            source_id=task.id,
+            target_id=source.id,
+            type="references",
+            origin=edge_origin,
+            state=edge_state,
+            confidence=confidence,
+        )
+    )
+    return task
+
+
+def test_proactive_runner_reads_task_profile_and_rejects_writes(db_session) -> None:
+    assert "get_task_profile" in PROACTIVE_READ_TOOL_NAMES
+    assert "create_task" not in PROACTIVE_READ_TOOL_NAMES
+    assert "get_task_profile" in PROACTIVE_SYSTEM_INSTRUCTIONS
+    task = GraphService(db_session, BOOTSTRAP_USER_ID).create_object(
+        ObjectCreate(kind="task", title="Inspect me", origin=USER_ORIGIN, state=CONFIRMED_STATE, status="open")
+    )
+    runner = ProactiveToolRunner(
+        DomainToolService(db_session, BOOTSTRAP_USER_ID),
+        initial_seen_object_ids=[task.id],
+    )
+    profile = runner("get_task_profile", {"task_id": str(task.id)})
+    assert profile.success is True
+    assert profile.output["operational"]["operational_state"] == "actionable"
+    assert profile.output["status"] == "open"
+    assert task.id in runner.seen_object_ids
+    rejected = runner("create_task", {"title": "Nope"})
+    assert rejected.success is False
+    assert rejected.error == "proactive review cannot execute this tool"
+    assert "create_task" in runner.rejected_tool_names
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", None])
+def test_nonterminal_same_source_task_suppresses_reference(db_session, status) -> None:
+    source = _source_email(db_session)
+    _referencing_task(db_session, source, status=status)
+    service = ProactiveReviewService(db_session, BOOTSTRAP_USER_ID)
+    assert service._active_task_references(source.id) is True
+
+
+@pytest.mark.parametrize("status", ["done", "completed", "cancelled", "archived", "deleted"])
+def test_terminal_same_source_task_does_not_suppress(db_session, status) -> None:
+    source = _source_email(db_session)
+    _referencing_task(db_session, source, status=status)
+    service = ProactiveReviewService(db_session, BOOTSTRAP_USER_ID)
+    assert service._active_task_references(source.id) is False
+
+
+def test_tombstoned_rejected_and_unconfirmed_edges_do_not_suppress(db_session) -> None:
+    service = ProactiveReviewService(db_session, BOOTSTRAP_USER_ID)
+    tombstoned_source = _source_email(db_session, title="Tombstoned source")
+    _referencing_task(db_session, tombstoned_source, status="open", tombstone=True)
+    rejected_source = _source_email(db_session, title="Rejected source")
+    _referencing_task(db_session, rejected_source, status="open", task_state=REJECTED_STATE)
+    proposed_source = _source_email(db_session, title="Proposed edge")
+    _referencing_task(
+        db_session,
+        proposed_source,
+        status="open",
+        edge_state=PROPOSED_STATE,
+        edge_origin=AGENT_ORIGIN,
+    )
+    rejected_edge_source = _source_email(db_session, title="Rejected edge")
+    _referencing_task(db_session, rejected_edge_source, status="open", edge_state=REJECTED_STATE)
+    assert service._active_task_references(tombstoned_source.id) is False
+    assert service._active_task_references(rejected_source.id) is False
+    assert service._active_task_references(proposed_source.id) is False
+    assert service._active_task_references(rejected_edge_source.id) is False
+
+
+def test_cross_user_reference_does_not_suppress(db_session) -> None:
+    source = _source_email(db_session)
+    other = User(id=uuid.uuid4(), display_name="other")
+    db_session.add(other)
+    db_session.flush()
+    other_task = GraphService(db_session, other.id).create_object(
+        ObjectCreate(
+            kind="task",
+            title="Foreign task",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+            status="open",
+        )
+    )
+    db_session.add(
+        Edge(
+            user_id=other.id,
+            source_id=other_task.id,
+            target_id=source.id,
+            type="references",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+            metadata_={},
+        )
+    )
+    db_session.flush()
+    service = ProactiveReviewService(db_session, BOOTSTRAP_USER_ID)
+    assert service._active_task_references(source.id) is False
+
+
+def test_active_reference_drops_task_proposal_and_terminal_allows_it(
+    db_session, monkeypatch, silent_trace
+) -> None:
+    _enable(db_session)
+    active_source = _source_email(db_session, title="Active source")
+    _referencing_task(db_session, active_source, status="open")
+    _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(active_source.id)))
+    before_tasks = db_session.scalar(select(func.count()).select_from(Object).where(Object.kind == "task"))
+    ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
+    assert _notes_for_source(db_session, active_source.id) == 0
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    ) == before_tasks
+
+    done_source = _source_email(db_session, title="Done source")
+    _referencing_task(db_session, done_source, status="done")
+    before_accept = db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    )
+    _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(done_source.id)))
+    ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
+    assert _notes_for_source(db_session, done_source.id) == 1
+    note = db_session.scalar(
+        select(Notification).where(Notification.source_object_id == done_source.id)
+    )
+    assert note.proposal_["type"] == "task"
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    ) == before_accept
+    accepted = NotificationService(db_session, BOOTSTRAP_USER_ID).accept(note.id)
+    created = db_session.get(Object, accepted.result_object_id)
+    assert created.status == "open"
+    assert created.origin == "agent"
+    assert created.state == "confirmed"
+
+
+def test_task_source_cannot_produce_a_new_task_proposal(
+    db_session, monkeypatch, silent_trace
+) -> None:
+    _enable(db_session)
+    task = GraphService(db_session, BOOTSTRAP_USER_ID).create_object(
+        ObjectCreate(kind="task", title="Already a task", origin=USER_ORIGIN, state=CONFIRMED_STATE, status="open")
+    )
+    _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(task.id)))
+    before = _notes_for_source(db_session, task.id)
+    ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
+    assert _notes_for_source(db_session, task.id) == before
+
+
+def test_proactive_insight_still_creates_notification_only(
+    db_session, monkeypatch, silent_trace
+) -> None:
+    _enable(db_session)
+    source = _source_email(db_session, title="Insight source")
+    before_tasks = db_session.scalar(select(func.count()).select_from(Object).where(Object.kind == "task"))
+    _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id)))
+    ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
+    note = db_session.scalar(select(Notification).where(Notification.source_object_id == source.id))
+    assert note is not None
+    assert note.proposal_["type"] == "proactive_insight"
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    ) == before_tasks
 

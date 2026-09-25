@@ -17,7 +17,11 @@ from app.db.models import Edge, Notification, Object
 from app.domain.labels import KIND_LABEL
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.scheduled_activity import KIND_SCHEDULED_ACTIVITY
-from app.domain.task_lifecycle import TASK_STATUS_IN_PROGRESS, TASK_STATUS_OPEN
+from app.domain.task_lifecycle import (
+    TASK_STATUS_IN_PROGRESS,
+    TASK_STATUS_OPEN,
+    TERMINAL_TASK_STATUSES_FOR_READS,
+)
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.jobs.constants import JOB_TYPE_PROACTIVE_REVIEW
 from app.llm.openai_assistant_provider import OpenAIAssistantProvider
@@ -652,8 +656,11 @@ class ProactiveReviewService:
                     Object.user_id == self._user_id,
                     Object.kind == "task",
                     object_is_active(),
-                    Object.state == CONFIRMED_STATE,
-                    Object.status.in_((TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS)),
+                    Object.state != REJECTED_STATE,
+                    or_(
+                        Object.status.is_(None),
+                        Object.status.notin_(tuple(TERMINAL_TASK_STATUSES_FOR_READS)),
+                    ),
                     Edge.user_id == self._user_id,
                     Edge.type == _REFERENCES_EDGE,
                     Edge.state == CONFIRMED_STATE,

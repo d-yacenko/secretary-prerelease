@@ -957,6 +957,7 @@ def test_proactive_allowlist_exact_and_annotations_rejected_before_gateway() -> 
         "retrieve",
         "query_objects",
         "get_object",
+        "get_task_profile",
         "get_context",
         "list_neighbors",
         "list_notifications",

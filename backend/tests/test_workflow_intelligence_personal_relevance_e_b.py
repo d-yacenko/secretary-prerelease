@@ -1162,6 +1162,7 @@ def test_proactive_allowlist_and_instructions_untouched() -> None:
         "retrieve",
         "query_objects",
         "get_object",
+        "get_task_profile",
         "get_context",
         "list_neighbors",
         "list_notifications",

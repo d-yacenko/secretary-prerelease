@@ -60,6 +60,7 @@ PROACTIVE_READ_TOOL_NAMES = (
     "retrieve",
     "query_objects",
     "get_object",
+    "get_task_profile",
     "get_context",
     "list_neighbors",
     "list_notifications",
