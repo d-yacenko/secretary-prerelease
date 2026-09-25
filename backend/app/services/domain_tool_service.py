@@ -92,12 +92,15 @@ from app.tools.schemas import (
     ListNeighborsOutput,
     ListNotificationsInput,
     ListNotificationsOutput,
+    ListPersonRoutesInput,
+    ListPersonRoutesOutput,
     NeighborItem,
     PersonIdentityFeedbackInput,
     PersonIdentityFeedbackOutput,
     QueryObjectItemOut,
     QueryObjectsInput,
     QueryObjectsOutput,
+    RecordPersonRouteChoiceInput,
     RemoveLabelInput,
     RemoveLabelOutput,
     RemoveRelationInput,
@@ -724,6 +727,26 @@ class DomainToolService:
         except (ValidationError, NotFoundError) as exc:
             raise ToolError(getattr(exc, "message", str(exc))) from exc
 
+    def list_person_routes(self, payload: ListPersonRoutesInput) -> ListPersonRoutesOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            return PersonAssistantService(self._session, self._user_id).list_routes(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def record_person_route_choice(
+        self, payload: RecordPersonRouteChoiceInput
+    ) -> PersonIdentityFeedbackOutput:
+        from app.services.person_assistant_service import PersonAssistantService
+
+        try:
+            return PersonAssistantService(self._session, self._user_id).record_route_choice(
+                payload.person_id, payload.route_key
+            )
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
     def confirm_person_identity(
         self, payload: PersonIdentityFeedbackInput
     ) -> PersonIdentityFeedbackOutput:
@@ -1192,6 +1215,15 @@ class DomainToolService:
         return self._calendar_actions().create_event(payload)
 
     def prepare_send_email(self, payload: SendEmailInput) -> SendEmailCanonicalInput:
+        if payload.person_id is not None:
+            from app.services.person_assistant_service import PersonAssistantService
+
+            try:
+                PersonAssistantService(self._session, self._user_id).assert_email_route(
+                    payload.person_id, payload.to
+                )
+            except (ValidationError, NotFoundError) as exc:
+                raise ToolError(getattr(exc, "message", str(exc))) from exc
         return self._email_actions().prepare_send_email(payload)
 
     def send_email(self, payload: SendEmailCanonicalInput) -> SendEmailOutput:
@@ -1214,6 +1246,16 @@ class DomainToolService:
         return CommunicationExternalActionService(self._session, self._user_id, **kwargs)
 
     def prepare_send_message(self, payload: SendMessageInput) -> SendMessageCanonicalInput:
+        if payload.person_id is not None:
+            from app.services.person_assistant_service import PersonAssistantService
+
+            anchor = payload.conversation_object_id or payload.reply_to_object_id
+            try:
+                PersonAssistantService(self._session, self._user_id).assert_chat_anchor(
+                    payload.person_id, anchor
+                )
+            except (ValidationError, NotFoundError) as exc:
+                raise ToolError(getattr(exc, "message", str(exc))) from exc
         return self._communication_actions().prepare_send_message(payload)
 
     def send_message(self, payload: SendMessageCanonicalInput) -> SendMessageOutput:

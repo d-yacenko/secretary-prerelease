@@ -611,6 +611,7 @@ class SendEmailInput(BaseModel):
     subject: str | None = Field(default=None, max_length=MAX_EMAIL_SUBJECT_CHARS)
     body: str = Field(min_length=1, max_length=MAX_EMAIL_BODY_CHARS)
     reply_to_object_id: UUID | None = None
+    person_id: UUID | None = None
 
     @field_validator("account_email", mode="before")
     @classmethod
@@ -749,6 +750,7 @@ class SendMessageInput(BaseModel):
     body: str
     conversation_object_id: UUID | None = None
     reply_to_object_id: UUID | None = None
+    person_id: UUID | None = None
 
     @field_validator("body", mode="before")
     @classmethod
@@ -1398,6 +1400,40 @@ class FindPersonIdentityCandidatesOutput(BaseModel):
     person_id: UUID
     candidates: list[PersonSourceCandidateOut]
     truncated: bool = False
+
+
+class ListPersonRoutesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    provider: str | None = None
+
+
+class PersonRouteOut(BaseModel):
+    route_key: str
+    route_kind: Literal["email", "chat"]
+    provider: str
+    label: str
+    identity: PersonIdentitySummary
+    anchor_object_id: UUID | None = None
+    conversation_label: str | None = None
+    last_used_at: datetime | None = None
+    has_route_choice: bool = False
+    reasons: tuple[str, ...] = ()
+
+
+class ListPersonRoutesOutput(BaseModel):
+    person_id: UUID
+    routes: list[PersonRouteOut]
+    ambiguous: bool = False
+    truncated: bool = False
+
+
+class RecordPersonRouteChoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    route_key: str
 
 
 class PersonIdentityFeedbackInput(BaseModel):

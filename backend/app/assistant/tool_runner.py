@@ -10,11 +10,12 @@ from app.assistant.reference_ids import (
     collect_seen_edge_ids_from_bounded_tool,
     collect_seen_object_ids_from_bounded_tool,
     collect_seen_person_candidates,
+    collect_seen_person_routes,
 )
 from app.assistant.tool_output import serialize_tool_output_for_assistant
 from app.assistant.turn_telemetry import AssistantTurnTelemetry
 from app.domain.person_assistant import feedback_identity_key, parse_feedback_identity
-from app.domain.person_identity import PersonIdentityInputError
+from app.domain.person_identity import PersonIdentityInputError, normalize_email
 from app.tools.policy import ToolPermission
 from app.tools.registry import get_tool_spec
 from app.tools.results import ToolExecutionResult, ToolExecutionStatus
@@ -36,6 +37,7 @@ _READ_TOOLS = frozenset(
         "resolve_person",
         "find_person_communications",
         "find_person_identity_candidates",
+        "list_person_routes",
     }
 )
 _EVIDENCE_WRITE_TOOLS = frozenset({"create_task", "update_task", "set_task_status", "delete_task"})
@@ -57,7 +59,11 @@ _ACTIVITY_TARGET_TOOLS = frozenset({"cancel_scheduled_activity"})
 _ANNOTATION_TARGET_TOOLS = frozenset({"assign_label", "remove_label"})
 _REVIEW_MARKER_TARGET_TOOLS = frozenset({"set_inbox_review_marker"})
 _PERSON_READ_TOOLS = frozenset(
-    {"find_person_communications", "find_person_identity_candidates"}
+    {
+        "find_person_communications",
+        "find_person_identity_candidates",
+        "list_person_routes",
+    }
 )
 _PERSON_FEEDBACK_TOOLS = frozenset(
     {
@@ -66,6 +72,7 @@ _PERSON_FEEDBACK_TOOLS = frozenset(
         "retract_person_identity_feedback",
     }
 )
+_PERSON_ROUTE_TOOLS = frozenset({"send_email", "send_message", "record_person_route_choice"})
 _MUTATION_TOOLS = frozenset(
     {
         "create_task",
@@ -93,6 +100,7 @@ _MUTATION_TOOLS = frozenset(
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
+        "record_person_route_choice",
     }
 )
 
@@ -116,6 +124,8 @@ class PerTurnToolBudget:
         self._pending_seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
         self._resolved_person_ids: set[UUID] = set()
         self._pending_resolved_person_ids: set[UUID] = set()
+        self._seen_person_routes: set[tuple[UUID, str]] = set()
+        self._pending_seen_person_routes: set[tuple[UUID, str]] = set()
         self._staged_actions: list[dict] = []
         self._plan_sealed = False
         self._inbox_review_purpose = inbox_review_purpose
@@ -150,6 +160,8 @@ class PerTurnToolBudget:
         self._pending_seen_person_candidates.clear()
         self._resolved_person_ids.update(self._pending_resolved_person_ids)
         self._pending_resolved_person_ids.clear()
+        self._seen_person_routes.update(self._pending_seen_person_routes)
+        self._pending_seen_person_routes.clear()
         if self._staged_actions:
             self._plan_sealed = True
 
@@ -255,6 +267,13 @@ class PerTurnToolBudget:
                     self._telemetry.tool_calls += 1
                 return person_error
 
+        if tool_name in _PERSON_ROUTE_TOOLS and arguments.get("person_id"):
+            route_error = self._validate_person_route(tool_name, arguments)
+            if route_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return route_error
+
         if tool_name in _PERSON_FEEDBACK_TOOLS:
             feedback_error = self._validate_person_feedback_allowlist(tool_name, arguments)
             if feedback_error is not None:
@@ -305,6 +324,10 @@ class PerTurnToolBudget:
             )
             if resolved_person_id is not None:
                 self._pending_resolved_person_ids.add(resolved_person_id)
+            for route_token in collect_seen_person_routes(
+                tool_name, model_output.model_visible_payload
+            ):
+                self._pending_seen_person_routes.add(route_token)
             result = result.model_copy(
                 update={
                     "model_output_json": model_output.model_output_json,
@@ -568,6 +591,46 @@ class PerTurnToolBudget:
                 success=False,
                 tool_name=tool_name,
                 error="target object was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        return None
+
+    def _validate_person_route(self, tool_name: str, arguments: dict) -> ToolExecutionResult | None:
+        try:
+            person_id = UUID(str(arguments.get("person_id")))
+        except (ValueError, TypeError):
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="invalid person id",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if person_id not in self._resolved_person_ids:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person was not resolved in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if tool_name == "record_person_route_choice":
+            token = str(arguments.get("route_key") or "")
+        elif tool_name == "send_email":
+            recipients = arguments.get("to") or []
+            if not isinstance(recipients, list) or len(recipients) != 1:
+                token = ""
+            else:
+                try:
+                    token = f"email:{normalize_email(str(recipients[0])).canonical_value}"
+                except PersonIdentityInputError:
+                    token = ""
+        else:
+            raw_anchor = arguments.get("conversation_object_id") or arguments.get("reply_to_object_id")
+            token = f"anchor:{raw_anchor}"
+        if (person_id, token) not in self._seen_person_routes:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person route was not exposed in this Assistant turn",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
         return None

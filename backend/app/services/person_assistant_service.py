@@ -17,6 +17,7 @@ from app.domain.person_assistant import (
     AMBIGUOUS,
     MAX_IDENTITIES_PER_PERSON,
     MAX_PERSON_CANDIDATES,
+    MAX_PERSON_ROUTES,
     MAX_PERSON_SCAN_ROWS,
     NONE,
     PERSON_LOOKBACK_DAYS,
@@ -52,11 +53,14 @@ from app.tools.schemas import (
     FindPersonCommunicationsInput,
     FindPersonCommunicationsOutput,
     FindPersonIdentityCandidatesOutput,
+    ListPersonRoutesInput,
+    ListPersonRoutesOutput,
     PersonCandidateOut,
     PersonCommunicationOut,
     PersonIdentityFeedbackInput,
     PersonIdentityFeedbackOutput,
     PersonIdentitySummary,
+    PersonRouteOut,
     PersonSourceCandidateOut,
     ResolvePersonOutput,
 )
@@ -151,6 +155,75 @@ class PersonAssistantService:
             candidates=candidates[:MAX_PERSON_CANDIDATES],
             truncated=truncated or overflow,
         )
+
+    def list_routes(self, payload: ListPersonRoutesInput) -> ListPersonRoutesOutput:
+        person = self._require_active_person(payload.person_id)
+        category = _route_category(payload.provider)
+        routes = self._email_routes(person.id)
+        chat_routes, truncated = self._chat_routes(person.id)
+        routes.extend(chat_routes)
+        if category is not None:
+            routes = [route for route in routes if route.provider == category]
+        routes.sort(key=_route_sort_key)
+        overflow = len(routes) > MAX_PERSON_ROUTES
+        visible = routes[:MAX_PERSON_ROUTES]
+        return ListPersonRoutesOutput(
+            person_id=person.id,
+            routes=visible,
+            ambiguous=len(visible) > 1,
+            truncated=truncated or overflow,
+        )
+
+    def record_route_choice(
+        self, person_id: UUID, route_key: str
+    ) -> PersonIdentityFeedbackOutput:
+        person = self._require_active_person(person_id)
+        listed = self.list_routes(ListPersonRoutesInput(person_id=person.id))
+        match = next((route for route in listed.routes if route.route_key == route_key), None)
+        if match is None:
+            raise ValidationError("person route was not exposed")
+        identity = _identity_from_summary(match.identity)
+        row = self._evidence.record_route_choice(
+            person.id,
+            identity,
+            f"assistant:user_route_choice:{route_key}",
+            explanation="explicit assistant route choice",
+        )
+        return _feedback_output(person.id, row)
+
+    def assert_email_route(self, person_id: UUID, recipients: list[str] | None) -> None:
+        person = self._require_active_person(person_id)
+        if recipients is None or len(recipients) != 1:
+            raise ValidationError("person email route requires one recipient")
+        try:
+            identity = normalize_email(recipients[0])
+        except PersonIdentityInputError as exc:
+            raise ValidationError("person email route is not effective") from exc
+        if not self._email_is_effective(person.id, identity):
+            raise ValidationError("person email route is not effective")
+        owner = self._people.resolve(identity)
+        if owner is None or owner.id != person.id:
+            raise ValidationError("person email route is not effective")
+        others = [
+            confirmed
+            for confirmed in self._confirmation_people(identity)
+            if confirmed != person.id and not self._suppressed(confirmed, identity)
+        ]
+        if others:
+            raise ValidationError("person email route is conflicted")
+
+    def assert_chat_anchor(self, person_id: UUID, anchor_id: UUID | None) -> None:
+        person = self._require_active_person(person_id)
+        if anchor_id is None:
+            raise ValidationError("person chat route requires an anchor")
+        obj = self._session.get(Object, anchor_id)
+        if obj is None or obj.user_id != self._user_id or obj.kind != "chat_message":
+            raise ValidationError("person chat route is not effective")
+        if obj.state == REJECTED_STATE or is_object_hidden_from_active_reads(obj):
+            raise ValidationError("person chat route is not effective")
+        keys = self._effective_keys(person.id)
+        if not _chat_anchor_is_effective(obj, keys):
+            raise ValidationError("person chat route is not effective")
 
     def reject_person_identity(
         self, payload: PersonIdentityFeedbackInput
@@ -353,6 +426,128 @@ class PersonAssistantService:
                 continue
             keys.add((identity.identity_type, identity.realm, identity.canonical_value))
         return keys
+
+    def _email_is_effective(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
+        for row in self._evidence.effective_identities():
+            if row.person_object_id != person_id:
+                continue
+            if (
+                row.identity_type == identity.identity_type
+                and row.provider == identity.provider
+                and row.realm == identity.realm
+                and row.canonical_value == identity.canonical_value
+            ):
+                return True
+        return False
+
+    def _email_routes(self, person_id: UUID) -> list[PersonRouteOut]:
+        routes: list[PersonRouteOut] = []
+        for row in self._evidence.effective_identities():
+            if row.person_object_id != person_id or row.identity_type != "email":
+                continue
+            identity = _identity_from_row(row)
+            routes.append(
+                self._route_out(
+                    route_key=f"email:{identity.canonical_value}",
+                    route_kind="email",
+                    provider="email",
+                    label=identity.canonical_value,
+                    identity=identity,
+                    anchor=None,
+                    conversation_label=None,
+                    last_used_at=None,
+                )
+            )
+        return routes
+
+    def _chat_routes(self, person_id: UUID) -> tuple[list[PersonRouteOut], bool]:
+        keys = self._effective_keys(person_id)
+        identities = {
+            (row.identity_type, row.realm, row.canonical_value): _identity_from_row(row)
+            for row in self._evidence.effective_identities()
+            if row.person_object_id == person_id
+        }
+        newest: dict[tuple[str, str, str], Object] = {}
+        inbound: dict[tuple[str, str, str], Object] = {}
+        chosen: dict[tuple[str, str, str], NormalizedPersonIdentity] = {}
+        truncated = False
+        completed = False
+        saw_row = False
+        for chunk, scope_complete in self._message_chunks(None):
+            saw_row = True
+            for obj in chunk:
+                observed = _observe_chat(obj, keys, identities)
+                if observed is None:
+                    continue
+                conv_key, identity = observed
+                newest.setdefault(conv_key, obj)
+                if identity is not None:
+                    chosen[conv_key] = identity
+                    inbound.setdefault(conv_key, obj)
+            if scope_complete:
+                completed = True
+                break
+        if saw_row and not completed:
+            truncated = True
+        routes: list[PersonRouteOut] = []
+        for conv_key, identity in chosen.items():
+            obj = inbound.get(conv_key, newest[conv_key])
+            routes.append(
+                self._route_out(
+                    route_key=_chat_route_key(conv_key),
+                    route_kind="chat",
+                    provider=conv_key[0],
+                    label=_conversation_label(obj) or identity.canonical_value,
+                    identity=identity,
+                    anchor=obj,
+                    conversation_label=_conversation_label(obj),
+                    last_used_at=obj.occurred_at,
+                )
+            )
+        return routes, truncated
+
+    def _route_out(
+        self,
+        *,
+        route_key: str,
+        route_kind: str,
+        provider: str,
+        label: str,
+        identity: NormalizedPersonIdentity,
+        anchor: Object | None,
+        conversation_label: str | None,
+        last_used_at: datetime | None,
+    ) -> PersonRouteOut:
+        chosen = self._has_route_choice(identity)
+        reasons = ["exact_identity"]
+        if chosen:
+            reasons.append("user_route_choice")
+        return PersonRouteOut(
+            route_key=route_key,
+            route_kind=route_kind,  # type: ignore[arg-type]
+            provider=provider,
+            label=label,
+            identity=_summary(identity),
+            anchor_object_id=None if anchor is None else anchor.id,
+            conversation_label=conversation_label,
+            last_used_at=last_used_at,
+            has_route_choice=chosen,
+            reasons=tuple(reasons),
+        )
+
+    def _has_route_choice(self, identity: NormalizedPersonIdentity) -> bool:
+        row = self._session.scalar(
+            select(PersonIdentityEvidence.id).where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type == "user_route_choice",
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+            )
+        )
+        return row is not None
 
     def _source_candidates(
         self,
@@ -603,6 +798,96 @@ def _identity_from_evidence(row: PersonIdentityEvidence) -> NormalizedPersonIden
         canonical_value=row.canonical_value,
         display_value=None,
     )
+
+
+def _route_category(provider: str | None) -> str | None:
+    if provider is None or not provider.strip():
+        return None
+    folded = provider.strip().casefold()
+    if folded in {"email", "gmail", "google", "yandex", "yandex_mail"}:
+        return "email"
+    if folded in {"mattermost", "teams", "telegram"}:
+        return folded
+    raise ValidationError("person route provider is unknown")
+
+
+def _route_sort_key(route: PersonRouteOut) -> tuple:
+    stamp = route.last_used_at or datetime(1970, 1, 1, tzinfo=UTC)
+    return (not route.has_route_choice, -stamp.timestamp(), route.route_key)
+
+
+def _chat_route_key(conv_key: tuple[str, str, str]) -> str:
+    return ":".join(conv_key)
+
+
+def _conversation_label(obj: Object) -> str | None:
+    metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    for field in ("channel_display_name", "peer_title", "chat_display_title"):
+        value = _text(metadata.get(field))
+        if value:
+            return value[:120]
+    title = _text(obj.title)
+    return None if title is None else title[:120]
+
+
+def _identity_for(
+    identities: dict[tuple[str, str, str], NormalizedPersonIdentity],
+    identity_type: str,
+    realm: str,
+    canonical: str,
+) -> NormalizedPersonIdentity | None:
+    return identities.get((identity_type, realm, canonical))
+
+
+def _extracted_identity(
+    obj: Object,
+    identities: dict[tuple[str, str, str], NormalizedPersonIdentity],
+) -> NormalizedPersonIdentity | None:
+    for item in extract_person_identity_evidence(obj):
+        found = identities.get((item.identity_type, item.realm, item.canonical_value))
+        if found is not None:
+            return found
+    return None
+
+
+def _observe_chat(
+    obj: Object,
+    keys: set[tuple[str, str, str]],
+    identities: dict[tuple[str, str, str], NormalizedPersonIdentity],
+) -> tuple[tuple[str, str, str], NormalizedPersonIdentity | None] | None:
+    metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    if obj.provider == "telegram" and metadata.get("transport") == "mtproto":
+        if _text(metadata.get("peer_kind")) != "private":
+            return None
+        role = _direct_role(obj, keys)
+        if role not in {"inbound", "outbound"}:
+            return None
+        realm = _text(metadata.get("account_id")) or ""
+        canonical = _positive_id(metadata.get("peer_id")) if role == "outbound" else _positive_id(
+            metadata.get("sender_peer_id")
+        )
+        if not realm or not canonical:
+            return None
+        return (("telegram", realm, canonical), _identity_for(identities, "telegram_user_id", realm, canonical))
+    conv = _conversation_key(obj)
+    if conv is None:
+        return None
+    if _direct_role(obj, keys) == "inbound":
+        return (conv, _extracted_identity(obj, identities))
+    if _stored_direction(obj) == "outbound":
+        return (conv, None)
+    return None
+
+
+def _chat_anchor_is_effective(obj: Object, keys: set[tuple[str, str, str]]) -> bool:
+    metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    if obj.provider == "telegram" and metadata.get("transport") == "mtproto":
+        if _text(metadata.get("peer_kind")) != "private":
+            return False
+        return _direct_role(obj, keys) in {"inbound", "outbound"}
+    if _conversation_key(obj) is None:
+        return False
+    return _direct_role(obj, keys) == "inbound"
 
 
 def _summary(identity: NormalizedPersonIdentity) -> PersonIdentitySummary:

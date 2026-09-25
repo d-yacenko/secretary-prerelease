@@ -35,6 +35,8 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "resolve_person",
         "find_person_communications",
         "find_person_identity_candidates",
+        "list_person_routes",
+        "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
@@ -94,6 +96,8 @@ def test_registry_covers_executor_dispatch_tools():
         "resolve_person",
         "find_person_communications",
         "find_person_identity_candidates",
+        "list_person_routes",
+        "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
@@ -166,6 +170,7 @@ def test_permission_classifications():
         "resolve_person",
         "find_person_communications",
         "find_person_identity_candidates",
+        "list_person_routes",
         "get_today",
     }
     internal_write = {
@@ -187,6 +192,7 @@ def test_permission_classifications():
         "confirm_person_identity",
         "reject_person_identity",
         "retract_person_identity_feedback",
+        "record_person_route_choice",
     }
     for name in read_tools:
         assert TOOL_REGISTRY[name].permission == ToolPermission.READ

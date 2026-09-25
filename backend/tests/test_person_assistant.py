@@ -923,8 +923,11 @@ def test_person_tools_are_not_send_routes() -> None:
     from app.tools.policy import ToolPermission
     from app.tools.registry import TOOL_REGISTRY
 
-    for name in ("resolve_person", "find_person_communications"):
+    for name in ("resolve_person", "find_person_communications", "list_person_routes"):
         assert TOOL_REGISTRY[name].permission == ToolPermission.READ
+        assert TOOL_REGISTRY[name].prepare_method is None
+    assert TOOL_REGISTRY["record_person_route_choice"].permission == ToolPermission.ANNOTATE
+    assert TOOL_REGISTRY["record_person_route_choice"].prepare_method is None
     for name in (
         "confirm_person_identity",
         "reject_person_identity",

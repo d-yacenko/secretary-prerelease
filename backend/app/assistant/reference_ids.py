@@ -138,6 +138,10 @@ def collect_seen_object_ids_from_bounded_tool(
             if isinstance(item, dict):
                 for object_id in item.get("source_object_ids") or []:
                     _append_uuid(seen_ids, object_id)
+    elif tool_name == "list_person_routes":
+        for route in bounded.get("routes") or []:
+            if isinstance(route, dict):
+                _append_uuid(seen_ids, route.get("anchor_object_id"))
     elif tool_name in (
         "create_task",
         "update_task",
@@ -151,6 +155,29 @@ def collect_seen_object_ids_from_bounded_tool(
         if obj:
             _append_uuid(seen_ids, obj.get("id"))
     return seen_ids
+
+
+def collect_seen_person_routes(
+    tool_name: str,
+    bounded: dict[str, Any],
+) -> list[tuple[UUID, str]]:
+    if tool_name != "list_person_routes":
+        return []
+    try:
+        person_id = UUID(str(bounded.get("person_id")))
+    except (ValueError, TypeError):
+        return []
+    found: list[tuple[UUID, str]] = []
+    for route in bounded.get("routes") or []:
+        if not isinstance(route, dict):
+            continue
+        route_key = str(route.get("route_key") or "")
+        if route_key:
+            found.append((person_id, route_key))
+        anchor = route.get("anchor_object_id")
+        if anchor:
+            found.append((person_id, f"anchor:{anchor}"))
+    return found
 
 
 def collect_resolved_person_id(tool_name: str, bounded: dict[str, Any]) -> UUID | None:

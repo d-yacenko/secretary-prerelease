@@ -212,7 +212,12 @@ def test_send_message_normalizes_crlf_without_rewriting_content() -> None:
 def test_assistant_schema_does_not_expose_provider_routing_ids() -> None:
     schema = ASSISTANT_FUNCTION_SCHEMAS["send_message"]
     properties = schema["parameters"]["properties"]
-    assert set(properties) == {"body", "conversation_object_id", "reply_to_object_id"}
+    assert set(properties) == {
+        "body",
+        "conversation_object_id",
+        "reply_to_object_id",
+        "person_id",
+    }
     for forbidden in ("channel_id", "server_url", "account_id", "post_id", "root_id"):
         assert forbidden not in properties
     description = schema["description"].lower()
