@@ -108,6 +108,13 @@ def is_job_error_retryable(exc: BaseException) -> bool:
         (UserOpenAICredentialConfigurationError, BackgroundAIConfigurationError),
     ):
         return False
+    from app.services.communication_media_processing_service import (
+        MediaProcessingPermanentError,
+    )
+    from app.services.transcription_service import TranscriptionConfigurationError
+
+    if isinstance(exc, (MediaProcessingPermanentError, TranscriptionConfigurationError)):
+        return False
     if is_openai_quota_exhausted(exc):
         return False
     if isinstance(exc, GoogleApiError):

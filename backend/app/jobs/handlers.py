@@ -8,6 +8,7 @@ from app.ai_audit.constants import (
     WORKLOAD_BACKGROUND_CORRELATION,
     WORKLOAD_BACKGROUND_SUMMARY,
     WORKLOAD_EMBEDDING,
+    WORKLOAD_TRANSCRIPTION,
 )
 from app.ai_audit.context import ai_trace_session
 from app.content_extraction.extract_service import build_explicit_resource_content_extractor
@@ -37,6 +38,7 @@ from app.jobs.constants import (
     JOB_TYPE_SYNC_TELEGRAM_MTPROTO,
     JOB_TYPE_SYNC_YANDEX_CALENDAR,
     JOB_TYPE_SYNC_YANDEX_MAIL,
+    JOB_TYPE_TRANSCRIBE_COMMUNICATION_MEDIA,
 )
 from app.jobs.scheduled_activity_handler import handle_run_scheduled_activity
 from app.jobs.source_sync_handlers import (
@@ -591,6 +593,32 @@ def handle_extract_explicit_resource_content(
         work_session.close()
 
 
+def handle_transcribe_communication_media(
+    session: Session,
+    embedding_service,
+    payload: dict,
+    user_id: UUID,
+) -> None:
+    from app.services.communication_media_processing_service import (
+        CommunicationMediaProcessingService,
+        MediaProcessingPermanentError,
+    )
+
+    del embedding_service
+    try:
+        media_id = UUID(str(payload["media_object_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MediaProcessingPermanentError("communication media was not found") from exc
+    with ai_trace_session(
+        user_id,
+        WORKLOAD_TRANSCRIPTION,
+        session=session,
+        commit_on_exit=False,
+        object_id=media_id,
+    ):
+        CommunicationMediaProcessingService(session, user_id).process(media_id)
+
+
 def handle_proactive_review(
     session: Session,
     embedding_service,
@@ -653,6 +681,7 @@ HANDLERS: dict[str, JobHandler] = {
     JOB_TYPE_PROCESS_TEAMS_NOTIFICATION: handle_process_teams_notification,
     JOB_TYPE_RUN_SCHEDULED_ACTIVITY: handle_run_scheduled_activity,
     JOB_TYPE_PROACTIVE_REVIEW: handle_proactive_review,
+    JOB_TYPE_TRANSCRIBE_COMMUNICATION_MEDIA: handle_transcribe_communication_media,
 }
 
 

@@ -113,6 +113,9 @@ class CommunicationMediaService:
             child.occurred_at = parent.occurred_at
             self._session.flush()
         self._link_contains(parent.id, child.id)
+        from app.services.communication_media_jobs import maybe_enqueue_media_transcription
+
+        maybe_enqueue_media_transcription(self._session, parent, child)
         return child
 
     def _link_contains(self, parent_id: UUID, child_id: UUID) -> None:

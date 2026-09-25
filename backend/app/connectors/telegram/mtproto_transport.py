@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Any, Protocol
 
 from telethon import TelegramClient, utils
@@ -236,6 +237,19 @@ class TelegramMtprotoTransport(Protocol):
         peer_id: int,
         message_id: int,
     ) -> dict[str, Any] | None:
+        ...
+
+    async def download_voice_audio(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+        provider_media_id: str,
+        media_kind: str,
+        max_bytes: int,
+    ) -> bytes:
         ...
 
     async def delete_message(
@@ -805,6 +819,81 @@ class TelethonMtprotoTransport:
         finally:
             await _disconnect(client)
 
+    async def download_voice_audio(
+        self,
+        session: str,
+        provider_peer_reference: str,
+        *,
+        peer_id: int,
+        message_id: int,
+        provider_media_id: str,
+        media_kind: str,
+        max_bytes: int,
+    ) -> bytes:
+        client: TelegramClient | None = None
+        try:
+            input_peer = validate_provider_peer_reference(
+                provider_peer_reference, expected_peer_id=peer_id
+            )
+            client = TelegramClient(StringSession(session), self._api_id, self._api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise TelegramMtprotoAuthorizationInvalidError(
+                    "Telegram MTProto authorization is no longer valid"
+                )
+            message = await client.get_messages(input_peer, ids=message_id)
+            if isinstance(message, list):
+                message = message[0] if message else None
+            hint = _verified_voice_audio(message, peer_id, message_id, provider_media_id, media_kind)
+            if hint is None or (hint.size is not None and hint.size > max_bytes):
+                raise TelegramMtprotoReadRejectedError("Telegram media does not match descriptor")
+            buffer = BytesIO()
+            await client.download_media(message, file=buffer)
+            audio = buffer.getvalue()
+            if not audio or len(audio) > max_bytes:
+                raise TelegramMtprotoReadRejectedError("Telegram media exceeds size limit")
+            return audio
+        except (TelegramMtprotoAuthorizationInvalidError, TelegramMtprotoProviderReferenceInvalidError):
+            raise
+        except TelegramMtprotoReadRejectedError:
+            raise
+        except (
+            AuthKeyError,
+            AuthKeyNotFound,
+            AuthKeyUnregisteredError,
+            SessionRevokedError,
+            UnauthorizedError,
+            UserDeactivatedBanError,
+            UserDeactivatedError,
+        ):
+            raise TelegramMtprotoAuthorizationInvalidError(
+                "Telegram MTProto authorization is no longer valid"
+            ) from None
+        except (
+            ChannelInvalidError,
+            ChannelPrivateError,
+            ChatIdInvalidError,
+            PeerIdInvalidError,
+            BadRequestError,
+            ForbiddenError,
+            NotFoundError,
+        ):
+            raise TelegramMtprotoReadRejectedError("Telegram media lookup was rejected") from None
+        except FloodWaitError as exc:
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable", exc.seconds
+            ) from None
+        except (ServerError, TimedOutError):
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
+            ) from None
+        except Exception:  # noqa: BLE001 - read failure is provider transient
+            raise TelegramMtprotoProviderUnavailableError(
+                "Telegram provider is temporarily unavailable"
+            ) from None
+        finally:
+            await _disconnect(client)
+
     async def delete_message(
         self,
         session: str,
@@ -1223,6 +1312,40 @@ def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry 
         is_service=getattr(message, "action", None) is not None,
         outgoing=bool(getattr(message, "out", False)),
         media=_media_hints(message),
+    )
+
+
+def select_voice_audio_hint(
+    hints: tuple[TelegramMtprotoMediaHint, ...],
+    *,
+    provider_media_id: str,
+    media_kind: str,
+) -> TelegramMtprotoMediaHint | None:
+    if media_kind not in {"voice", "audio"}:
+        return None
+    for hint in hints:
+        if hint.media_kind == media_kind and hint.provider_media_id == provider_media_id:
+            return hint
+    return None
+
+
+def _verified_voice_audio(
+    message: object | None,
+    peer_id: int,
+    message_id: int,
+    provider_media_id: str,
+    media_kind: str,
+) -> TelegramMtprotoMediaHint | None:
+    if message is None:
+        return None
+    returned_peer = _peer_id_from_message_peer(getattr(message, "peer_id", None))
+    returned_id = getattr(message, "id", None)
+    if returned_peer != peer_id or returned_id != message_id:
+        return None
+    return select_voice_audio_hint(
+        _media_hints(message),
+        provider_media_id=provider_media_id,
+        media_kind=media_kind,
     )
 
 

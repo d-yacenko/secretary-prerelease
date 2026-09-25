@@ -6,6 +6,11 @@ from starlette.concurrency import run_in_threadpool
 from app.ai_audit.context import get_active_trace
 from app.ai_audit.instrumentation import record_simple_model_call
 from app.assistant.transcription_audio import read_bounded_transcription_audio
+from app.assistant.transcription_constants import (
+    AUDIO_EMPTY,
+    AUDIO_TOO_LARGE,
+    MAX_TRANSCRIPTION_AUDIO_BYTES,
+)
 from app.assistant.transcription_telemetry import log_transcription_telemetry
 from app.assistant.wav_inspect import inspect_wav, should_reject_wav_for_transcription
 from app.core.config import settings
@@ -17,6 +22,7 @@ from app.llm.openai_transcription_provider import (
     TranscriptionProviderError,
     TranscriptionUnrecognizedError,
 )
+from app.services.errors import ValidationError
 
 
 class TranscriptionConfigurationError(Exception):
@@ -37,22 +43,21 @@ class TranscriptionProvider:
         raise NotImplementedError
 
 
-async def transcribe_audio_upload(
-    upload: UploadFile,
+def transcribe_audio_bytes(
+    audio_bytes: bytes,
+    filename: str,
+    content_type: str | None,
     provider: TranscriptionProvider,
 ) -> str:
-    audio_bytes, filename = await read_bounded_transcription_audio(upload)
-    content_type = upload.content_type
+    if not audio_bytes:
+        raise ValidationError(AUDIO_EMPTY)
+    if len(audio_bytes) > MAX_TRANSCRIPTION_AUDIO_BYTES:
+        raise ValidationError(AUDIO_TOO_LARGE)
     _reject_locally_invalid_wav(audio_bytes, filename)
     model = _provider_model(provider)
     started = time.perf_counter()
     try:
-        text = await run_in_threadpool(
-            provider.transcribe,
-            audio_bytes,
-            filename,
-            content_type,
-        )
+        text = provider.transcribe(audio_bytes, filename, content_type)
         transcript, token_usage = _normalize_transcription_result(text)
     except (
         TranscriptionProviderError,
@@ -112,6 +117,20 @@ async def transcribe_audio_upload(
         content_type=content_type,
     )
     return transcript
+
+
+async def transcribe_audio_upload(
+    upload: UploadFile,
+    provider: TranscriptionProvider,
+) -> str:
+    audio_bytes, filename = await read_bounded_transcription_audio(upload)
+    return await run_in_threadpool(
+        transcribe_audio_bytes,
+        audio_bytes,
+        filename,
+        upload.content_type,
+        provider,
+    )
 
 
 def _normalize_transcription_result(result: object) -> tuple[str, dict[str, int]]:

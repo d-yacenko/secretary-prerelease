@@ -29,6 +29,7 @@ JOB_TYPE_SYNC_TELEGRAM_MTPROTO = "sync_telegram_mtproto"
 JOB_TYPE_PROCESS_TEAMS_NOTIFICATION = "process_teams_notification"
 JOB_TYPE_RUN_SCHEDULED_ACTIVITY = "run_scheduled_activity"
 JOB_TYPE_PROACTIVE_REVIEW = "proactive_review"
+JOB_TYPE_TRANSCRIBE_COMMUNICATION_MEDIA = "transcribe_communication_media"
 
 RECURRING_SOURCE_JOB_TYPES = frozenset(
     {
