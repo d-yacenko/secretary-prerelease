@@ -5,6 +5,7 @@ This service does not send messages, merge People, or call a provider or model.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -124,19 +125,33 @@ class PersonAssistantService:
         )
         return _feedback_output(person.id, row)
 
-    def find_identity_candidates(self, person_id: UUID) -> FindPersonIdentityCandidatesOutput:
+    def find_identity_candidates(
+        self,
+        person_id: UUID,
+        *,
+        include_quarantined_telegram: bool = False,
+    ) -> FindPersonIdentityCandidatesOutput:
         person = self._require_active_person(person_id)
         grouped: dict[tuple[str, str, str, str], list] = {}
         candidates: list[PersonSourceCandidateOut] = []
         truncated = False
         completed = False
         saw_row = False
-        for chunk, scope_complete in self._message_chunks(None):
+        for chunk, scope_complete in self._message_chunks(
+            None,
+            apply_telegram_ai_gate=not include_quarantined_telegram,
+        ):
             saw_row = True
             for message in chunk:
                 for identity in extract_person_identity_evidence(message):
-                    if provider_category(identity) == "telegram" and not telegram_mtproto_ai_enabled():
+                    if (
+                        provider_category(identity) == "telegram"
+                        and not include_quarantined_telegram
+                        and not telegram_mtproto_ai_enabled()
+                    ):
                         continue
+                    if include_quarantined_telegram:
+                        identity = _ui_telegram_display(message, identity)
                     if self._suppressed(person.id, identity):
                         continue
                     grouped.setdefault(feedback_identity_key(identity), []).append((message, identity))
@@ -156,11 +171,19 @@ class PersonAssistantService:
             truncated=truncated or overflow,
         )
 
-    def list_routes(self, payload: ListPersonRoutesInput) -> ListPersonRoutesOutput:
+    def list_routes(
+        self,
+        payload: ListPersonRoutesInput,
+        *,
+        include_quarantined_telegram: bool = False,
+    ) -> ListPersonRoutesOutput:
         person = self._require_active_person(payload.person_id)
         category = _route_category(payload.provider)
         routes = self._email_routes(person.id)
-        chat_routes, truncated = self._chat_routes(person.id)
+        chat_routes, truncated = self._chat_routes(
+            person.id,
+            include_quarantined_telegram=include_quarantined_telegram,
+        )
         routes.extend(chat_routes)
         if category is not None:
             routes = [route for route in routes if route.provider == category]
@@ -464,7 +487,12 @@ class PersonAssistantService:
             )
         return routes
 
-    def _chat_routes(self, person_id: UUID) -> tuple[list[PersonRouteOut], bool]:
+    def _chat_routes(
+        self,
+        person_id: UUID,
+        *,
+        include_quarantined_telegram: bool = False,
+    ) -> tuple[list[PersonRouteOut], bool]:
         keys = self._effective_keys(person_id)
         identities = {
             (row.identity_type, row.realm, row.canonical_value): _identity_from_row(row)
@@ -477,7 +505,10 @@ class PersonAssistantService:
         truncated = False
         completed = False
         saw_row = False
-        for chunk, scope_complete in self._message_chunks(None):
+        for chunk, scope_complete in self._message_chunks(
+            None,
+            apply_telegram_ai_gate=not include_quarantined_telegram,
+        ):
             saw_row = True
             for obj in chunk:
                 observed = _observe_chat(obj, keys, identities)
@@ -622,6 +653,8 @@ class PersonAssistantService:
     def _message_chunks(
         self,
         payload: FindPersonCommunicationsInput | None,
+        *,
+        apply_telegram_ai_gate: bool = True,
     ):
         cutoff = self._now - timedelta(days=PERSON_LOOKBACK_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
@@ -636,8 +669,9 @@ class PersonAssistantService:
                 Object.state != REJECTED_STATE,
                 object_is_active(),
                 stamp >= cutoff,
-                telegram_mtproto_ai_predicate(),
             )
+            if apply_telegram_ai_gate:
+                query = query.where(telegram_mtproto_ai_predicate())
             if payload is not None and payload.occurred_from is not None:
                 query = query.where(stamp >= payload.occurred_from)
             if payload is not None and payload.occurred_to is not None:
@@ -869,6 +903,22 @@ def _extracted_identity(
         if found is not None:
             return found
     return None
+
+
+def _ui_telegram_display(obj: Object, identity: NormalizedPersonIdentity) -> NormalizedPersonIdentity:
+    """First-party reads may use a stored private-chat label as display text.
+
+    Model-facing discovery does not call this. Group and channel messages stay unlabeled.
+    """
+    if identity.display_value or provider_category(identity) != "telegram":
+        return identity
+    metadata = obj.metadata_ if isinstance(obj.metadata_, dict) else {}
+    if _text(metadata.get("peer_kind")) != "private":
+        return identity
+    display = _text(metadata.get("sender_display_name")) or _text(metadata.get("peer_title"))
+    if display is None:
+        return identity
+    return replace(identity, display_value=display[:120])
 
 
 def _observe_chat(

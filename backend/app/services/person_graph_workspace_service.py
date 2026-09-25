@@ -9,15 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
-from app.domain.person_assistant import parse_feedback_identity
-from app.domain.person_candidate_score import USER_CONFIRMED
+from app.domain.person_assistant import feedback_identity_key, parse_feedback_identity
+from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED
 from app.domain.person_identity import NormalizedPersonIdentity, PersonIdentityInputError
-from app.domain.task_lifecycle import is_terminal_for_reads
+from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS, is_terminal_for_reads
 from app.services.errors import NotFoundError, ValidationError
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
@@ -30,7 +30,7 @@ from app.services.person_evidence_service import PersonEvidenceService, _identit
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
 from app.services.person_salience_service import PersonSalienceService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
-from app.tools.schemas import ListPersonRoutesInput, PersonIdentityFeedbackInput
+from app.tools.schemas import ListPersonRoutesInput, PersonIdentityFeedbackOutput
 
 _MAX_IDENTITIES = 8
 _MAX_ROUTES = 5
@@ -40,6 +40,9 @@ _COMMUNICATION_KINDS = frozenset({"email", "chat_message"})
 _FORBIDDEN_EDGE_TYPES = frozenset(
     {"member_of", "role_at", "manager_of", "works_with", "colleague", "manager", "friend"}
 )
+# Rooted neighbor walks stop after this many edges. Counts use SQL aggregates.
+PEOPLE_EDGE_SCAN_CAP = 64
+_FEEDBACK_TYPES = frozenset({USER_CONFIRMED, USER_REJECTED})
 
 
 @dataclass(frozen=True)
@@ -85,38 +88,73 @@ class PersonGraphWorkspaceService:
         provider: str,
         realm: str,
         canonical_value: str,
-    ):
+    ) -> PersonIdentityFeedbackOutput:
         self._require_person(person_id)
         try:
             identity = parse_feedback_identity(identity_type, provider, realm, canonical_value)
         except PersonIdentityInputError as exc:
             raise ValidationError("identity tuple is malformed") from exc
-        payload = PersonIdentityFeedbackInput(
-            person_id=person_id,
-            identity_type=identity.identity_type,
-            provider=identity.provider,
-            realm=identity.realm,
-            canonical_value=identity.canonical_value,
-        )
-        if action == "confirm":
-            self._fail_closed_confirm(person_id, identity)
-            return self._assistant.confirm_person_identity(payload)
-        if action == "reject":
-            return self._assistant.reject_person_identity(payload)
         if action == "retract":
-            return self._assistant.retract_person_identity_feedback(payload)
+            return self._retract_feedback(person_id, identity)
+        grounded = self._grounding(person_id, identity)
+        if grounded is None:
+            raise ValidationError("person identity was not exposed as a candidate")
+        if action == "confirm":
+            if grounded == "blocked":
+                raise ValidationError("person identity is conflicted")
+            self._fail_closed_confirm(person_id, identity)
+            row = self._evidence.record_confirmation(
+                person_id,
+                identity,
+                f"graph_ui:user_confirmed:{identity.canonical_value}",
+                explanation="explicit graph correction",
+            )
+            return _feedback_output(person_id, row)
+        if action == "reject":
+            row = self._evidence.record_rejection(
+                person_id,
+                identity,
+                f"graph_ui:user_rejected:{identity.canonical_value}",
+                explanation="explicit graph rejection",
+            )
+            return _feedback_output(person_id, row)
         raise ValidationError("person identity action is unknown")
 
     def _overview(self, seed_limit: int) -> PeopleWorkspaceResult:
-        ordered = self._ordered_people()
-        visible = ordered[:seed_limit]
-        return self._result(None, visible, [], [], len(ordered) > seed_limit, include_details=False)
+        scores, ranked = self._ranked_people()
+        positive = [person for person in ranked if scores.get(person.id, 0) > 0]
+        positive.sort(key=lambda person: (-scores[person.id], person.title.casefold(), str(person.id)))
+        if len(positive) >= seed_limit:
+            visible = positive[:seed_limit]
+            shown = {person.id for person in visible}
+            truncated = len(positive) > seed_limit or self._other_person_exists(shown)
+            return self._result(None, visible, [], [], truncated, include_details=False, scores=scores)
+        fill = seed_limit - len(positive)
+        rest = self._people_page(exclude={person.id for person in positive}, limit=fill + 1)
+        visible = [*positive, *rest[:fill]]
+        return self._result(None, visible, [], [], len(rest) > fill, include_details=False, scores=scores)
 
     def _search(self, query: str, seed_limit: int) -> PeopleWorkspaceResult:
         folded = query.casefold()
-        matched = [person for person in self._ordered_people() if self._matches(person, folded)]
-        visible = matched[:seed_limit]
-        return self._result(None, visible, [], [], len(matched) > seed_limit, include_details=False)
+        scores, ranked = self._ranked_people()
+        matched = {person.id for person in self._search_people(folded, only={person.id for person in ranked})}
+        positive = [
+            person for person in ranked if person.id in matched and scores.get(person.id, 0) > 0
+        ]
+        positive.sort(key=lambda person: (-scores[person.id], person.title.casefold(), str(person.id)))
+        if len(positive) >= seed_limit:
+            visible = positive[:seed_limit]
+            more = self._search_people(folded, exclude={person.id for person in visible}, limit=1)
+            truncated = len(positive) > seed_limit or bool(more)
+            return self._result(None, visible, [], [], truncated, include_details=False, scores=scores)
+        fill = seed_limit - len(positive)
+        rest = self._search_people(
+            folded,
+            exclude={person.id for person in positive},
+            limit=fill + 1,
+        )
+        visible = [*positive, *rest[:fill]]
+        return self._result(None, visible, [], [], len(rest) > fill, include_details=False, scores=scores)
 
     def _rooted(self, root_id: UUID, neighbor_limit: int) -> PeopleWorkspaceResult:
         root = self._require_person(root_id)
@@ -133,11 +171,13 @@ class PersonGraphWorkspaceService:
         truncated: bool,
         *,
         include_details: bool,
+        scores: dict[UUID, int] | None = None,
     ) -> PeopleWorkspaceResult:
         people = [person for person in nodes if person.kind == PERSON_KIND]
         if root_id is None:
             seed_ids = [person.id for person in people]
-        scores = self._scores()
+        if scores is None:
+            scores = self._scores()
         return PeopleWorkspaceResult(
             root_id=root_id,
             seed_ids=seed_ids,
@@ -150,25 +190,77 @@ class PersonGraphWorkspaceService:
             ],
         )
 
-    def _ordered_people(self) -> list[Object]:
-        scores = self._scores()
-        people = self._active_people()
-        people.sort(key=lambda person: (-scores.get(person.id, 0), person.title.casefold(), str(person.id)))
-        return people
-
     def _scores(self) -> dict[UUID, int]:
         return {item.person_id: item.score for item in PersonSalienceService(self._session, self._user_id).rank()}
 
-    def _active_people(self) -> list[Object]:
-        rows = self._session.scalars(
-            select(Object).where(
-                Object.user_id == self._user_id,
-                Object.kind == PERSON_KIND,
-                Object.state != REJECTED_STATE,
-                object_is_active(),
+    def _ranked_people(self) -> tuple[dict[UUID, int], list[Object]]:
+        scores = self._scores()
+        return scores, self._people_by_ids(list(scores))
+
+    def _active_filters(self):
+        return (
+            Object.user_id == self._user_id,
+            Object.kind == PERSON_KIND,
+            Object.state != REJECTED_STATE,
+            object_is_active(),
+        )
+
+    def _people_by_ids(self, ids: list[UUID]) -> list[Object]:
+        if not ids:
+            return []
+        return list(
+            self._session.scalars(select(Object).where(Object.id.in_(ids), *self._active_filters()))
+        )
+
+    def _people_page(self, *, exclude: set[UUID], limit: int) -> list[Object]:
+        stmt = select(Object).where(*self._active_filters())
+        if exclude:
+            stmt = stmt.where(Object.id.notin_(exclude))
+        stmt = stmt.order_by(func.lower(Object.title), Object.id).limit(limit)
+        return list(self._session.scalars(stmt))
+
+    def _other_person_exists(self, shown: set[UUID]) -> bool:
+        stmt = select(Object.id).where(*self._active_filters())
+        if shown:
+            stmt = stmt.where(Object.id.notin_(shown))
+        return self._session.scalar(stmt.limit(1)) is not None
+
+    def _search_people(
+        self,
+        folded: str,
+        *,
+        exclude: set[UUID] | None = None,
+        only: set[UUID] | None = None,
+        limit: int | None = None,
+    ) -> list[Object]:
+        if only is not None and not only:
+            return []
+        stmt = select(Object).where(*self._active_filters(), self._search_clause(folded))
+        if exclude:
+            stmt = stmt.where(Object.id.notin_(exclude))
+        if only is not None:
+            stmt = stmt.where(Object.id.in_(only))
+        stmt = stmt.order_by(func.lower(Object.title), Object.id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt))
+
+    def _search_clause(self, folded: str):
+        pattern = _like_pattern(folded)
+        title = func.lower(Object.title).like(pattern, escape="\\")
+        identity = exists(
+            select(PersonIdentity.id).where(
+                PersonIdentity.user_id == self._user_id,
+                PersonIdentity.person_object_id == Object.id,
+                PersonIdentity.state != REJECTED_STATE,
+                _identity_is_effective(),
+                or_(
+                    func.lower(PersonIdentity.canonical_value).like(pattern, escape="\\"),
+                    func.lower(func.coalesce(PersonIdentity.display_value, "")).like(pattern, escape="\\"),
+                ),
             )
         )
-        return [row for row in rows if not is_object_hidden_from_active_reads(row)]
+        return or_(title, identity)
 
     def _require_person(self, person_id: UUID) -> Object:
         person = self._session.get(Object, person_id)
@@ -182,24 +274,22 @@ class PersonGraphWorkspaceService:
             raise NotFoundError("person", person_id)
         return person
 
-    def _matches(self, person: Object, folded: str) -> bool:
-        if folded in person.title.casefold():
-            return True
-        for row in self._identity_rows(person.id):
-            display = (row.display_value or row.canonical_value).casefold()
-            if folded in display or folded in row.canonical_value.casefold():
-                return True
-        return False
-
     def _neighbors(self, person: Object, limit: int) -> tuple[list[Object], list[Edge], bool]:
-        edges = self._session.scalars(
-            select(Edge).where(
-                Edge.user_id == self._user_id,
-                Edge.state != REJECTED_STATE,
-                Edge.type.notin_(_FORBIDDEN_EDGE_TYPES),
-                or_(Edge.source_id == person.id, Edge.target_id == person.id),
+        scanned = list(
+            self._session.scalars(
+                select(Edge)
+                .where(
+                    Edge.user_id == self._user_id,
+                    Edge.state != REJECTED_STATE,
+                    Edge.type.notin_(_FORBIDDEN_EDGE_TYPES),
+                    or_(Edge.source_id == person.id, Edge.target_id == person.id),
+                )
+                .order_by(Edge.id)
+                .limit(PEOPLE_EDGE_SCAN_CAP + 1)
             )
         )
+        scan_truncated = len(scanned) > PEOPLE_EDGE_SCAN_CAP
+        edges = scanned[:PEOPLE_EDGE_SCAN_CAP]
         chosen: list[tuple[Object, Edge]] = []
         communications = 0
         for edge in edges:
@@ -218,7 +308,7 @@ class PersonGraphWorkspaceService:
                         continue
                 chosen.append((other, edge))
         chosen.sort(key=lambda item: (0 if item[0].kind == "task" else 1, item[0].title, str(item[0].id)))
-        truncated = len(chosen) > limit
+        truncated = scan_truncated or len(chosen) > limit
         visible = chosen[:limit]
         return [item[0] for item in visible], [item[1] for item in visible], truncated
 
@@ -229,7 +319,6 @@ class PersonGraphWorkspaceService:
         if include_details:
             identities.extend(self._candidates(person.id))
             conflict = conflict or any(item["state"] == "conflicted" for item in identities)
-        tasks = self._open_tasks(person.id)
         return {
             "person_id": person.id,
             "title": person.title,
@@ -237,7 +326,7 @@ class PersonGraphWorkspaceService:
             "identities": identities[: _MAX_IDENTITIES + _MAX_CANDIDATES],
             "routes": routes[:_MAX_ROUTES],
             "identity_conflict": conflict,
-            "open_task_count": len(tasks),
+            "open_task_count": self._open_task_count(person.id),
             "recent_communication_count": self._communication_count(person.id),
         }
 
@@ -253,7 +342,10 @@ class PersonGraphWorkspaceService:
         return rows[:_MAX_IDENTITIES]
 
     def _candidates(self, person_id: UUID) -> list[dict]:
-        page = self._assistant.find_identity_candidates(person_id)
+        page = self._assistant.find_identity_candidates(
+            person_id,
+            include_quarantined_telegram=True,
+        )
         found = []
         for item in page.candidates[:_MAX_CANDIDATES]:
             state = "conflicted" if "identity_conflict" in item.reasons else "candidate"
@@ -271,25 +363,35 @@ class PersonGraphWorkspaceService:
         return found
 
     def _routes(self, person_id: UUID) -> list[dict]:
-        listed = self._assistant.list_routes(ListPersonRoutesInput(person_id=person_id))
+        listed = self._assistant.list_routes(
+            ListPersonRoutesInput(person_id=person_id),
+            include_quarantined_telegram=True,
+        )
         return [
             {"provider": route.provider, "label": route.label, "route_key": route.route_key}
             for route in listed.routes[:_MAX_ROUTES]
         ]
 
     def _email_route_summaries(self, person_id: UUID) -> list[dict]:
-        routes = []
-        for row in self._evidence.effective_identities():
-            if row.person_object_id != person_id or row.identity_type != "email":
-                continue
-            routes.append(
-                {
-                    "provider": row.provider,
-                    "label": row.display_value or row.canonical_value,
-                    "route_key": f"email:{row.canonical_value}",
-                }
+        rows = self._session.scalars(
+            select(PersonIdentity)
+            .where(
+                PersonIdentity.user_id == self._user_id,
+                PersonIdentity.person_object_id == person_id,
+                PersonIdentity.state != REJECTED_STATE,
+                PersonIdentity.identity_type == "email",
+                _identity_is_effective(),
             )
-        return routes[:_MAX_ROUTES]
+            .limit(_MAX_ROUTES)
+        )
+        return [
+            {
+                "provider": row.provider,
+                "label": row.display_value or row.canonical_value,
+                "route_key": f"email:{row.canonical_value}",
+            }
+            for row in rows
+        ]
 
     def _identity_rows(self, person_id: UUID) -> list[PersonIdentity]:
         return [
@@ -298,43 +400,92 @@ class PersonGraphWorkspaceService:
             if row.state != REJECTED_STATE
         ]
 
-    def _open_tasks(self, person_id: UUID) -> list[Object]:
-        found: list[Object] = []
-        edges = self._session.scalars(
-            select(Edge).where(
+    def _open_task_count(self, person_id: UUID) -> int:
+        other = aliased(Object)
+        count = self._session.scalar(
+            select(func.count())
+            .select_from(Edge)
+            .join(other, _linked_object(person_id, other))
+            .where(
                 Edge.user_id == self._user_id,
                 Edge.state != REJECTED_STATE,
-                or_(Edge.source_id == person_id, Edge.target_id == person_id),
+                other.user_id == self._user_id,
+                other.kind == "task",
+                object_is_active(other),
+                or_(other.status.is_(None), other.status.notin_(tuple(TERMINAL_TASK_STATUSES_FOR_READS))),
             )
         )
-        for edge in edges:
-            other_id = edge.target_id if edge.source_id == person_id else edge.source_id
-            other = self._session.get(Object, other_id)
-            if other is None or other.kind != "task" or is_terminal_for_reads(other.status):
-                continue
-            if other.user_id != self._user_id or is_object_hidden_from_active_reads(other):
-                continue
-            found.append(other)
-        return found
+        return int(count or 0)
 
     def _communication_count(self, person_id: UUID) -> int:
-        count = 0
-        edges = self._session.scalars(
-            select(Edge).where(
+        other = aliased(Object)
+        count = self._session.scalar(
+            select(func.count())
+            .select_from(Edge)
+            .join(other, _linked_object(person_id, other))
+            .where(
                 Edge.user_id == self._user_id,
                 Edge.state != REJECTED_STATE,
-                or_(Edge.source_id == person_id, Edge.target_id == person_id),
+                other.user_id == self._user_id,
+                other.kind.in_(_COMMUNICATION_KINDS),
+                other.state != REJECTED_STATE,
+                object_is_active(other),
             )
         )
-        for edge in edges:
-            other_id = edge.target_id if edge.source_id == person_id else edge.source_id
-            other = self._session.get(Object, other_id)
-            if other is None or other.kind not in _COMMUNICATION_KINDS:
+        return min(int(count or 0), 20)
+
+    def _retract_feedback(
+        self,
+        person_id: UUID,
+        identity: NormalizedPersonIdentity,
+    ) -> PersonIdentityFeedbackOutput:
+        rows = [
+            row
+            for row in self._evidence.history(person_id, identity)
+            if row.state == "active" and row.evidence_type in _FEEDBACK_TYPES
+        ]
+        if not rows:
+            raise ValidationError("no active identity feedback to retract")
+        retracted = rows[0]
+        for row in rows:
+            retracted = self._evidence.retract(row.id)
+        return _feedback_output(person_id, retracted)
+
+    def _grounding(self, person_id: UUID, identity: NormalizedPersonIdentity) -> str | None:
+        wanted = feedback_identity_key(identity)
+        for row in self._identity_rows(person_id):
+            if feedback_identity_key(_identity_from_identity_row(row)) == wanted:
+                return "attached"
+        linked = self._session.scalar(
+            select(PersonIdentityEvidence.id)
+            .where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id == person_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+            )
+            .limit(1)
+        )
+        if linked is not None:
+            return "evidence"
+        page = self._assistant.find_identity_candidates(
+            person_id,
+            include_quarantined_telegram=True,
+        )
+        for item in page.candidates:
+            key = (
+                item.identity.identity_type,
+                item.identity.provider,
+                item.identity.realm,
+                item.identity.canonical_value,
+            )
+            if key != wanted:
                 continue
-            if is_object_hidden_from_active_reads(other) or other.state == REJECTED_STATE:
-                continue
-            count += 1
-        return min(count, 20)
+            return "candidate" if item.confirmable else "blocked"
+        return None
 
     def _is_conflicted(self, identity: NormalizedPersonIdentity) -> bool:
         rows = self._session.scalars(
@@ -371,3 +522,39 @@ class PersonGraphWorkspaceService:
             "state": state,
             "confirmable": confirmable,
         }
+
+
+def _like_pattern(folded: str) -> str:
+    escaped = folded.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _identity_is_effective():
+    return ~exists(
+        select(PersonIdentityEvidence.id).where(
+            PersonIdentityEvidence.user_id == PersonIdentity.user_id,
+            PersonIdentityEvidence.person_object_id == PersonIdentity.person_object_id,
+            PersonIdentityEvidence.state == "active",
+            PersonIdentityEvidence.evidence_type == USER_REJECTED,
+            PersonIdentityEvidence.provider == PersonIdentity.provider,
+            PersonIdentityEvidence.identity_type == PersonIdentity.identity_type,
+            PersonIdentityEvidence.realm == PersonIdentity.realm,
+            PersonIdentityEvidence.canonical_value == PersonIdentity.canonical_value,
+        )
+    )
+
+
+def _linked_object(person_id: UUID, other):
+    return or_(
+        and_(Edge.source_id == person_id, other.id == Edge.target_id),
+        and_(Edge.target_id == person_id, other.id == Edge.source_id),
+    )
+
+
+def _feedback_output(person_id: UUID, row: PersonIdentityEvidence) -> PersonIdentityFeedbackOutput:
+    return PersonIdentityFeedbackOutput(
+        person_id=person_id,
+        evidence_id=row.id,
+        evidence_type=row.evidence_type,
+        state=row.state,
+    )
