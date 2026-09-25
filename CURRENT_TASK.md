@@ -2,7 +2,7 @@
 
 HOLD
 
-Flow Media F1 provider-neutral media child Objects is implemented at `59f47a51f48cd08e4aaddcffb0dd60a455ea11b0`.
+Flow Media F1 provider-neutral media child Objects is implemented at `c8d8526c82ab620f11374b7835d2a92634461cc3`.
 
 A communication parent can materialize deterministic file children and one contains edge from bounded Telegram, Mattermost, and Teams descriptors. Replay stays idempotent. No bytes are downloaded and no transcription runs.
 
