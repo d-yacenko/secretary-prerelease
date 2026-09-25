@@ -4,7 +4,6 @@ from uuid import UUID
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.api.schemas import EdgeCreate, ObjectCreate
 from app.db.models import Notification, Object
 from app.notifications.constants import (
     DEFAULT_LIST_LIMIT,
@@ -18,8 +17,7 @@ from app.notifications.constants import (
     NOTIFICATION_STATUSES,
 )
 from app.services.errors import NotFoundError, ValidationError
-from app.services.graph_service import GraphService
-from app.services.pipeline_enqueue import enqueue_embed_object
+from app.services.task_proposal_acceptance import TaskProposalAcceptanceService
 
 
 def utcnow() -> datetime:
@@ -27,18 +25,10 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def _parse_optional_datetime(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    return datetime.fromisoformat(normalized)
-
-
 class NotificationService:
     def __init__(self, session: Session, user_id: UUID) -> None:
         self._session = session
         self._user_id = user_id
-        self._graph = GraphService(session, user_id)
 
     def create(
         self,
@@ -160,71 +150,10 @@ class NotificationService:
 
         proposal_type = notification.proposal_.get("type")
         if proposal_type == "task":
-            return self._accept_task_proposal(notification)
-
-        notification.status = NOTIFICATION_STATUS_ACCEPTED
-        if notification.read_at is None:
-            notification.read_at = utcnow()
-        notification.updated_at = utcnow()
-        self._session.flush()
-        return notification
-
-    def _accept_task_proposal(self, notification: Notification) -> Notification:
-        if notification.result_object_id is not None:
-            notification.status = NOTIFICATION_STATUS_ACCEPTED
-            if notification.read_at is None:
-                notification.read_at = utcnow()
-            notification.updated_at = utcnow()
-            self._session.flush()
-            return notification
-
-        if notification.status == NOTIFICATION_STATUS_ACCEPTED:
-            pass
-        elif notification.status not in (
-            NOTIFICATION_STATUS_NEW,
-            NOTIFICATION_STATUS_READ,
-        ):
-            raise ValidationError("cannot accept notification in current status")
-
-        proposal = notification.proposal_
-        title = proposal.get("title") or notification.title
-        if not title:
-            raise ValidationError("task proposal is missing title")
-
-        body = proposal.get("description") or notification.body
-        confidence = proposal.get("confidence")
-        due_at = _parse_optional_datetime(proposal.get("due_at"))
-        start_at = _parse_optional_datetime(proposal.get("start_at"))
-
-        task = self._graph.create_object(
-            ObjectCreate(
-                kind="task",
-                title=str(title),
-                body=body,
-                origin="agent",
-                state="confirmed",
-                due_at=due_at,
-                start_at=start_at,
-                confidence=confidence,
-                metadata={"accepted_from_notification_id": str(notification.id)},
-            )
-        )
-
-        if notification.source_object_id is not None:
-            self._graph.create_edge(
-                EdgeCreate(
-                    source_id=task.id,
-                    target_id=notification.source_object_id,
-                    type="references",
-                    origin="agent",
-                    state="confirmed",
-                    confidence=confidence,
-                )
+            return TaskProposalAcceptanceService(self._session, self._user_id).accept(
+                notification
             )
 
-        enqueue_embed_object(self._session, task.id, self._user_id)
-
-        notification.result_object_id = task.id
         notification.status = NOTIFICATION_STATUS_ACCEPTED
         if notification.read_at is None:
             notification.read_at = utcnow()
