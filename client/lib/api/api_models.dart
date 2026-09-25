@@ -2369,6 +2369,97 @@ extension SecretaryObjectLifecycle on SecretaryObject {
   bool get isTombstoned => deletedAt != null;
 }
 
+class PersonIdentityPresentation {
+  PersonIdentityPresentation({
+    required this.provider,
+    required this.identityType,
+    required this.displayValue,
+    required this.realm,
+    required this.canonicalValue,
+    required this.state,
+    required this.confirmable,
+  });
+
+  final String provider;
+  final String identityType;
+  final String displayValue;
+  final String realm;
+  final String canonicalValue;
+  final String state;
+  final bool confirmable;
+
+  factory PersonIdentityPresentation.fromJson(Map<String, dynamic> json) {
+    return PersonIdentityPresentation(
+      provider: json['provider'] as String? ?? '',
+      identityType: json['identity_type'] as String? ?? '',
+      displayValue: json['display_value'] as String? ?? '',
+      realm: json['realm'] as String? ?? '',
+      canonicalValue: json['canonical_value'] as String? ?? '',
+      state: json['state'] as String? ?? '',
+      confirmable: json['confirmable'] as bool? ?? false,
+    );
+  }
+}
+
+class PersonRoutePresentation {
+  PersonRoutePresentation({
+    required this.provider,
+    required this.label,
+    required this.routeKey,
+  });
+
+  final String provider;
+  final String label;
+  final String routeKey;
+
+  factory PersonRoutePresentation.fromJson(Map<String, dynamic> json) {
+    return PersonRoutePresentation(
+      provider: json['provider'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      routeKey: json['route_key'] as String? ?? '',
+    );
+  }
+}
+
+class PersonPresentation {
+  PersonPresentation({
+    required this.personId,
+    required this.title,
+    required this.salienceScore,
+    required this.identities,
+    required this.routes,
+    required this.identityConflict,
+    required this.openTaskCount,
+    required this.recentCommunicationCount,
+  });
+
+  final String personId;
+  final String title;
+  final int salienceScore;
+  final List<PersonIdentityPresentation> identities;
+  final List<PersonRoutePresentation> routes;
+  final bool identityConflict;
+  final int openTaskCount;
+  final int recentCommunicationCount;
+
+  factory PersonPresentation.fromJson(Map<String, dynamic> json) {
+    return PersonPresentation(
+      personId: json['person_id'] as String,
+      title: json['title'] as String? ?? '',
+      salienceScore: json['salience_score'] as int? ?? 0,
+      identities: (json['identities'] as List<dynamic>? ?? [])
+          .map((item) => PersonIdentityPresentation.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      routes: (json['routes'] as List<dynamic>? ?? [])
+          .map((item) => PersonRoutePresentation.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      identityConflict: json['identity_conflict'] as bool? ?? false,
+      openTaskCount: json['open_task_count'] as int? ?? 0,
+      recentCommunicationCount: json['recent_communication_count'] as int? ?? 0,
+    );
+  }
+}
+
 class GraphWorkspaceOut {
   GraphWorkspaceOut({
     this.rootId,
@@ -2376,6 +2467,7 @@ class GraphWorkspaceOut {
     required this.nodes,
     required this.edges,
     required this.truncated,
+    this.people = const [],
   });
 
   final String? rootId;
@@ -2383,6 +2475,7 @@ class GraphWorkspaceOut {
   final List<SecretaryObject> nodes;
   final List<SecretaryEdge> edges;
   final bool truncated;
+  final List<PersonPresentation> people;
 
   factory GraphWorkspaceOut.fromJson(Map<String, dynamic> json) {
     return GraphWorkspaceOut(
@@ -2397,6 +2490,9 @@ class GraphWorkspaceOut {
           .map((e) => SecretaryEdge.fromJson(e as Map<String, dynamic>))
           .toList(),
       truncated: json['truncated'] as bool? ?? false,
+      people: (json['people'] as List<dynamic>? ?? [])
+          .map((item) => PersonPresentation.fromJson(item as Map<String, dynamic>))
+          .toList(),
     );
   }
 }

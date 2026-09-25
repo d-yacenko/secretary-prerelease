@@ -7,6 +7,7 @@ import 'provider_icon.dart';
 
 const Map<String, String> objectKindLabels = {
   'task': 'Задача',
+  'person': 'Человек',
   'email': 'Письмо',
   'calendar_event': 'Событие',
   'event': 'Событие',
@@ -81,6 +82,8 @@ IconData iconForObjectKind(String kind) {
   switch (kind) {
     case 'task':
       return Icons.task_alt_outlined;
+    case 'person':
+      return Icons.person_outline;
     case 'email':
       return Icons.email_outlined;
     case 'event':

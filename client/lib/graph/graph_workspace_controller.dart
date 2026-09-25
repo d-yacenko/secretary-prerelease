@@ -8,6 +8,8 @@ import 'graph_layout.dart';
 
 enum GraphWorkspaceLoadState { idle, loading, ready, error }
 
+enum GraphWorkspaceMode { tasks, people }
+
 const Set<String> _terminalTaskStatusesForReads = {
   'done',
   'completed',
@@ -27,6 +29,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   final AuthController _authController;
 
   GraphWorkspaceLoadState loadState = GraphWorkspaceLoadState.idle;
+  GraphWorkspaceMode mode = GraphWorkspaceMode.tasks;
   String? errorMessage;
   String? rootId;
   bool truncated = false;
@@ -38,6 +41,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   bool shouldFitAfterLayout = false;
 
   final Map<String, SecretaryObject> _nodes = {};
+  final Map<String, PersonPresentation> _people = {};
   final List<SecretaryEdge> _edges = [];
   final Map<String, Offset> _positions = {};
 
@@ -65,6 +69,8 @@ class GraphWorkspaceController extends ChangeNotifier {
       _positions.entries.where((entry) => visibleIds.contains(entry.key)),
     );
   }
+
+  PersonPresentation? personFor(String id) => _people[id];
 
   SecretaryObject? get selectedObject =>
       selectedObjectId == null ? null : _nodes[selectedObjectId!];
@@ -95,7 +101,28 @@ class GraphWorkspaceController extends ChangeNotifier {
     _nodes.clear();
     _edges.clear();
     _positions.clear();
+    _people.clear();
+    mode = GraphWorkspaceMode.tasks;
     notifyListeners();
+  }
+
+  Future<void> setMode(GraphWorkspaceMode next) async {
+    if (mode == next || loadState == GraphWorkspaceLoadState.loading) {
+      return;
+    }
+    mode = next;
+    selectedObjectId = null;
+    selectedEdgeId = null;
+    searchKindFilter = null;
+    searchProviderFilter = null;
+    await loadOverview();
+  }
+
+  Future<GraphWorkspaceOut> _fetchWorkspace({String? rootId, String? query}) {
+    if (mode == GraphWorkspaceMode.people) {
+      return _apiClient.getPeopleWorkspace(rootId: rootId, query: query);
+    }
+    return _apiClient.getGraphWorkspace(rootId: rootId);
   }
 
   Future<void> refreshCurrentWorkspace() async {
@@ -118,7 +145,7 @@ class GraphWorkspaceController extends ChangeNotifier {
 
   Future<void> _loadOverviewFromMissingRoot() async {
     try {
-      final workspace = await _apiClient.getGraphWorkspace();
+      final workspace = await _fetchWorkspace();
       _replaceWorkspaceState(
         workspace: workspace,
         layoutRoot: null,
@@ -148,7 +175,7 @@ class GraphWorkspaceController extends ChangeNotifier {
       notifyListeners();
     }
     try {
-      final workspace = await _apiClient.getGraphWorkspace();
+      final workspace = await _fetchWorkspace();
       _replaceWorkspaceState(
         workspace: workspace,
         layoutRoot: null,
@@ -178,7 +205,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final workspace = await _apiClient.getGraphWorkspace(rootId: objectId);
+      final workspace = await _fetchWorkspace(rootId: objectId);
       _replaceWorkspaceState(
         workspace: workspace,
         layoutRoot: objectId,
@@ -208,7 +235,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final workspace = await _apiClient.getGraphWorkspace(rootId: objectId);
+      final workspace = await _fetchWorkspace(rootId: objectId);
       SecretaryObject? rootNode;
       for (final node in workspace.nodes) {
         if (node.id == objectId) {
@@ -259,7 +286,7 @@ class GraphWorkspaceController extends ChangeNotifier {
       return;
     }
     try {
-      final workspace = await _apiClient.getGraphWorkspace(rootId: selected.id);
+      final workspace = await _fetchWorkspace(rootId: selected.id);
       _mergeWorkspace(workspace, expandAround: selected.id);
       errorMessage = null;
     } on AuthenticationException {
@@ -284,7 +311,7 @@ class GraphWorkspaceController extends ChangeNotifier {
       _nodes[target.id] = target;
     }
     try {
-      final workspace = await _apiClient.getGraphWorkspace(rootId: sourceId);
+      final workspace = await _fetchWorkspace(rootId: sourceId);
       _mergeWorkspace(workspace, expandAround: sourceId);
       errorMessage = null;
     } on AuthenticationException {
@@ -461,6 +488,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _nodes.clear();
     _edges.clear();
     _positions.clear();
+    _people.clear();
     _applyWorkspace(workspace, layoutRoot: layoutRoot, freshRoot: freshRoot);
     rootId = rootIdAfter;
     truncated = workspace.truncated;
@@ -473,6 +501,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     truncated = workspace.truncated;
     for (final node in workspace.nodes) {
       _nodes[node.id] = node;
+    }
+    for (final person in workspace.people) {
+      _people[person.personId] = person;
     }
     for (final edge in workspace.edges) {
       final exists = _edges.any((item) => item.id == edge.id);
@@ -500,6 +531,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     truncated = workspace.truncated;
     for (final node in workspace.nodes) {
       _nodes[node.id] = node;
+    }
+    for (final person in workspace.people) {
+      _people[person.personId] = person;
     }
     for (final edge in workspace.edges) {
       final exists = _edges.any((item) => item.id == edge.id);

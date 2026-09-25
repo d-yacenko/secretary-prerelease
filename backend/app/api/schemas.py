@@ -560,6 +560,52 @@ class GraphWorkspaceOut(BaseModel):
     truncated: bool
 
 
+class PersonIdentityPresentation(BaseModel):
+    provider: str
+    identity_type: str
+    display_value: str
+    realm: str = ""
+    canonical_value: str
+    state: str
+    confirmable: bool = False
+
+
+class PersonRoutePresentation(BaseModel):
+    provider: str
+    label: str
+    route_key: str
+
+
+class PersonPresentation(BaseModel):
+    person_id: UUID
+    title: str
+    salience_score: int
+    identities: list[PersonIdentityPresentation]
+    routes: list[PersonRoutePresentation]
+    identity_conflict: bool
+    open_task_count: int
+    recent_communication_count: int
+
+
+class PeopleWorkspaceOut(BaseModel):
+    root_id: UUID | None
+    seed_ids: list[UUID]
+    nodes: list[ObjectOut]
+    edges: list[EdgeOut]
+    truncated: bool
+    people: list[PersonPresentation]
+
+
+class PersonIdentityCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["confirm", "reject", "retract"]
+    identity_type: str
+    provider: str
+    realm: str = ""
+    canonical_value: str
+
+
 class OpenTargetOut(BaseModel):
     available: bool
     action: str

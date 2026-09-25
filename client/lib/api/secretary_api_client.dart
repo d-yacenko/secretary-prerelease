@@ -735,6 +735,54 @@ class SecretaryApiClient {
     return GraphWorkspaceOut.fromJson(body);
   }
 
+  Future<GraphWorkspaceOut> getPeopleWorkspace({
+    String? rootId,
+    String? query,
+    int? seedLimit,
+    int? neighborLimit,
+  }) async {
+    final queryParameters = <String, String>{};
+    if (rootId != null) {
+      queryParameters['root_id'] = rootId;
+    }
+    if (query != null && query.isNotEmpty) {
+      queryParameters['q'] = query;
+    }
+    if (seedLimit != null) {
+      queryParameters['seed_limit'] = '$seedLimit';
+    }
+    if (neighborLimit != null) {
+      queryParameters['neighbor_limit'] = '$neighborLimit';
+    }
+    final body = await _request(
+      'GET',
+      '/graph/people-workspace',
+      queryParameters: queryParameters,
+    );
+    return GraphWorkspaceOut.fromJson(body);
+  }
+
+  Future<void> correctPersonIdentity({
+    required String personId,
+    required String action,
+    required String identityType,
+    required String provider,
+    required String realm,
+    required String canonicalValue,
+  }) async {
+    await _request(
+      'POST',
+      '/graph/people/$personId/identity-correction',
+      jsonBody: {
+        'action': action,
+        'identity_type': identityType,
+        'provider': provider,
+        'realm': realm,
+        'canonical_value': canonicalValue,
+      },
+    );
+  }
+
   Future<TaskMutationResponse> patchTask(
     String taskId,
     TaskPatchRequest request,

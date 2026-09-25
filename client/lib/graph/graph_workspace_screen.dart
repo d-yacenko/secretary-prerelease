@@ -179,12 +179,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     setState(() => _searching = true);
     try {
-      final results = await widget.apiClient.searchObjects(
-        query: query.trim(),
-        kind: widget.controller.searchKindFilter,
-        provider: widget.controller.searchProviderFilter,
-        sort: 'relevance',
-      );
+      final List<SecretaryObject> results;
+      if (widget.controller.mode == GraphWorkspaceMode.people) {
+        final workspace = await widget.apiClient.getPeopleWorkspace(query: query.trim());
+        results = workspace.nodes.where((node) => node.kind == 'person').toList();
+      } else {
+        results = await widget.apiClient.searchObjects(
+          query: query.trim(),
+          kind: widget.controller.searchKindFilter,
+          provider: widget.controller.searchProviderFilter,
+          sort: 'relevance',
+        );
+      }
       setState(() {
         _searchResults = results;
         _searching = false;
@@ -277,12 +283,26 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          SegmentedButton<GraphWorkspaceMode>(
+            segments: const [
+              ButtonSegment(value: GraphWorkspaceMode.tasks, label: Text('Задачи')),
+              ButtonSegment(value: GraphWorkspaceMode.people, label: Text('Люди')),
+            ],
+            selected: {widget.controller.mode},
+            onSelectionChanged: (selection) {
+              widget.controller.setMode(selection.first);
+              _searchController.clear();
+              setState(() => _searchResults = []);
+            },
+          ),
           SizedBox(
             width: 220,
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Поиск по графу',
+                hintText: widget.controller.mode == GraphWorkspaceMode.people
+                    ? 'Поиск человека'
+                    : 'Поиск по графу',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searching
                     ? const Padding(
@@ -299,6 +319,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               onSubmitted: (value) => _runSearch(value),
             ),
           ),
+          if (widget.controller.mode == GraphWorkspaceMode.tasks)
           CompactObjectFilters(
             facets: _searchFacets,
             selectedKind: widget.controller.searchKindFilter,
@@ -458,6 +479,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                       object: node,
                       selected: selected,
                       focusDimmed: focusMode && !emphasized,
+                      person: widget.controller.personFor(node.id),
                       bookmarkColor:
                           widget.bookmarkController?.colorFor(node.id),
                       onTap: () => widget.controller.selectObject(node.id),
@@ -650,6 +672,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           compact: compact,
           onTaskUpdated: widget.controller.applyTaskMutation,
         ),
+        if (widget.controller.personFor(object.id) != null) ...[
+          const SizedBox(height: 12),
+          _PersonDetailSection(
+            person: widget.controller.personFor(object.id)!,
+            apiClient: widget.apiClient,
+            onChanged: widget.controller.refreshCurrentWorkspace,
+          ),
+        ],
         const SizedBox(height: 12),
         _DetailSectionHeader(title: 'Связи'),
         ...relatedEdges.map((edge) {
@@ -965,12 +995,105 @@ class _DetailSectionHeader extends StatelessWidget {
   }
 }
 
+class _PersonDetailSection extends StatelessWidget {
+  const _PersonDetailSection({
+    required this.person,
+    required this.apiClient,
+    required this.onChanged,
+  });
+
+  final PersonPresentation person;
+  final SecretaryApiClient apiClient;
+  final Future<void> Function() onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _DetailSectionHeader(title: 'Известные контакты'),
+        if (person.identityConflict)
+          Text(
+            'Есть конфликт идентичности',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ...person.identities.map((identity) {
+          return ListTile(
+            dense: true,
+            title: Text(identity.displayValue),
+            subtitle: Text('${providerLabel(identity.provider)} · ${_identityStateLabel(identity.state)}'),
+            trailing: Wrap(
+              spacing: 4,
+              children: [
+                if (identity.confirmable)
+                  TextButton(
+                    onPressed: () => _correct(identity, 'confirm'),
+                    child: const Text('Подтвердить'),
+                  ),
+                if (identity.state == 'effective' || identity.state == 'conflicted')
+                  TextButton(
+                    onPressed: () => _correct(identity, 'reject'),
+                    child: const Text('Отклонить'),
+                  ),
+                if (identity.state == 'rejected')
+                  TextButton(
+                    onPressed: () => _correct(identity, 'retract'),
+                    child: const Text('Вернуть'),
+                  ),
+              ],
+            ),
+          );
+        }),
+        if (person.routes.isNotEmpty) ...[
+          const _DetailSectionHeader(title: 'Маршруты'),
+          ...person.routes.map(
+            (route) => ListTile(
+              dense: true,
+              title: Text(route.label),
+              subtitle: Text(providerLabel(route.provider)),
+            ),
+          ),
+        ],
+        Text('Открытые задачи: ${person.openTaskCount}'),
+      ],
+    );
+  }
+
+  Future<void> _correct(PersonIdentityPresentation identity, String action) async {
+    await apiClient.correctPersonIdentity(
+      personId: person.personId,
+      action: action,
+      identityType: identity.identityType,
+      provider: identity.provider,
+      realm: identity.realm,
+      canonicalValue: identity.canonicalValue,
+    );
+    await onChanged();
+  }
+}
+
+String _identityStateLabel(String state) {
+  switch (state) {
+    case 'effective':
+      return 'подтверждено';
+    case 'conflicted':
+      return 'конфликт';
+    case 'rejected':
+      return 'отклонено';
+    case 'candidate':
+      return 'кандидат';
+    default:
+      return state;
+  }
+}
+
 class _GraphNodeCard extends StatelessWidget {
   const _GraphNodeCard({
     required this.object,
     required this.selected,
     required this.focusDimmed,
     required this.onTap,
+    this.person,
     this.bookmarkColor,
   });
 
@@ -978,6 +1101,7 @@ class _GraphNodeCard extends StatelessWidget {
   final bool selected;
   final bool focusDimmed;
   final VoidCallback onTap;
+  final PersonPresentation? person;
   final String? bookmarkColor;
 
   @override
@@ -1022,7 +1146,22 @@ class _GraphNodeCard extends StatelessWidget {
                       style: Theme.of(context).textTheme.labelSmall,
                     ),
                   ),
-                  if (object.provider != null)
+                  if (person?.identityConflict == true)
+                    Icon(Icons.report_outlined, size: 16, color: scheme.error),
+                  if (person != null && person!.identities.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        person!.identities
+                            .where((item) => item.state == 'effective')
+                            .map((item) => providerLabel(item.provider))
+                            .take(2)
+                            .join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    )
+                  else if (object.provider != null)
                     SizedBox(
                       width: 18,
                       height: 18,
