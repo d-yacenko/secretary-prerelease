@@ -212,3 +212,18 @@ Task Refinement should eventually support, where justified by real workflows:
 The architectural test for every future feature is: **does it help understand Actors, keep Tasks correct, interpret Flow, or direct attention to consequential state changes?** If not, it should face a high bar for inclusion.
 
 This document is a strategic description, not Executor authorization. `CURRENT_TASK.md` remains the only active implementation task.
+
+
+## Backlog: Person Graph View
+
+**Status:** backlog only; not Executor authorization. Target placement: after media/voice Flow work and before major Task Refinement, unless reprioritized.
+
+Add a second Graph workspace mode, conceptually `Tasks | People`, reusing the existing graph UI/layout.
+
+The first bounded People view should expose only grounded Person knowledge already held by Secretary: canonical Person, name/title, effective identities and safe contact routes, salience where useful, linked Tasks and communication/evidence on inspection, search, identity conflict state, and reversible correction of mistaken identity links/confirmations/rejections.
+
+The purpose is to help the user find, understand, and correct important People. It must not become a CRM or a giant social graph.
+
+Do not initially infer organizational hierarchy, job titles, or Person-to-Person relations from weak communication evidence. If real use later demonstrates value, add only a small grounded relation vocabulary (for example organization membership, role in organization, manager relation, collaboration relation) based on explicit/provider facts or user confirmation. Organizations remain contextual graph Objects, not a new primary managed entity.
+
+This backlog item closes the human-side projection of People & Identity under the principle **one ontology, two interfaces**, and should prepare for Task Refinement: Person -> open commitments/tasks; Task -> participating Actors and evidence.
