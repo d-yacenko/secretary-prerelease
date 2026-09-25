@@ -137,6 +137,54 @@ Person salience, content relevance, deadlines, Task state/risk, source semantics
 
 The UI and automation should therefore prefer **focus, explanation, and reliable closure** over exposing every internal capability.
 
+## One ontology, two interfaces
+
+The domain ontology is the semantic contract shared by the human user and the Secretary model.
+
+The center of the product is not the UI and not the LLM. It is the same domain reality:
+
+`Actor <-> Task`, observed and changed through `Flow`, across `Time`.
+
+That reality has two projections.
+
+### Human projection — UI / UX
+
+The UI should expose the smallest useful set of affordances for understanding and managing:
+- consequential Actors;
+- consequential Tasks and their state;
+- the Flow evidence needed to explain what happened and why the Task exists or changed.
+
+Flow should normally support understanding and action rather than become another large workload the user must curate.
+
+### Model projection — Harness / Toolset / MCP
+
+The LLM should receive machine-operable affordances over the same semantics:
+- resolve/read Actors;
+- read relevant Flow;
+- create/read/update/close Tasks and their relations when authorized;
+- inspect provenance, time, dependencies, and state;
+- perform external actions only through the existing safety/approval boundaries.
+
+Prompts define the Secretary's behavioral policy over the ontology: when to ask, when to stay quiet, how to handle ambiguity, what requires approval, and how to avoid guessing. Prompts should not invent a parallel domain model.
+
+The symmetry is **semantic, not one-to-one UI/tool mirroring**. One screen may aggregate many domain reads; one user gesture may map to several safe tool calls; a low-level tool may have no dedicated button. What must remain aligned is meaning, state, provenance, and safety.
+
+### Feature acceptance gate
+
+A proposed feature should normally pass all of the following questions before it becomes product scope:
+
+1. **Ontology fit.** Can it be expressed cleanly as understanding an Actor, maintaining a Task, interpreting Flow, or using Time across those concepts?
+2. **Human affordance.** What concrete user problem does it solve, and does the UI reduce or increase what the user must consciously manage?
+3. **Model affordance.** What corresponding capability does the Secretary need through Harness/Tools/MCP to act on the same domain meaning?
+4. **Shared semantics.** Do UI and LLM paths use the same canonical domain services/state/provenance rather than creating parallel implementations?
+5. **Focus test.** Does the feature help compress noisy reality into fewer consequential decisions/tasks, or does it merely expose more information and controls?
+6. **Safety test.** Are ambiguity, reversibility, external side effects, privacy/eligibility gates, and approval boundaries explicit?
+7. **Complexity test.** Could the capability be represented as a composition/view/state of existing Actor/Task/Flow semantics instead of introducing a new top-level entity or workflow?
+
+Failure of one question does not make a feature impossible, but it creates a high bar: the independent lifecycle and user value must be demonstrated by repeated real workflows.
+
+This principle is intentionally restrictive. Secretary should gain power mainly by improving the shared domain model and its two interfaces, not by accumulating unrelated feature silos.
+
 ## Strategic roadmap
 
 1. Finish **Graph Refined / People & Identity** to a trustworthy operational level.
