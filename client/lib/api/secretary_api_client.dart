@@ -809,6 +809,52 @@ class SecretaryApiClient {
     return TaskStatusResponse.fromJson(body);
   }
 
+  Future<TaskProfile> getTaskProfile(String taskId) async {
+    final body = await _request('GET', '/tasks/$taskId/profile');
+    return TaskProfile.fromJson(body);
+  }
+
+  Future<TaskRelationMutation> addTaskActor({
+    required String taskId,
+    required String personId,
+    required String role,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/tasks/$taskId/actors',
+      jsonBody: {'person_id': personId, 'role': role},
+    );
+    return TaskRelationMutation.fromJson(body);
+  }
+
+  Future<TaskRelationMutation> removeTaskActor({
+    required String taskId,
+    required String edgeId,
+  }) async {
+    final body = await _request('DELETE', '/tasks/$taskId/actors/$edgeId');
+    return TaskRelationMutation.fromJson(body);
+  }
+
+  Future<TaskRelationMutation> addTaskDependency({
+    required String taskId,
+    required String dependsOnTaskId,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/tasks/$taskId/dependencies',
+      jsonBody: {'depends_on_task_id': dependsOnTaskId},
+    );
+    return TaskRelationMutation.fromJson(body);
+  }
+
+  Future<TaskRelationMutation> removeTaskDependency({
+    required String taskId,
+    required String edgeId,
+  }) async {
+    final body = await _request('DELETE', '/tasks/$taskId/dependencies/$edgeId');
+    return TaskRelationMutation.fromJson(body);
+  }
+
   Future<ObjectDeleteResponse> deleteObject(String objectId) async {
     final body = await _request('DELETE', '/objects/$objectId');
     return ObjectDeleteResponse.fromJson(body);

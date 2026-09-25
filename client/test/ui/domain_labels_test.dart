@@ -51,6 +51,14 @@ void main() {
     expect(relationTypeLabel('delegated_to'), 'Поручено');
     expect(relationTypeLabel('waiting_on'), 'Ждём');
     expect(relationTypeLabel('involves'), 'Участвует');
+    expect(relationTypeLabel('depends_on'), 'Зависит от');
+    expect(dependentTasksLabel, 'От неё зависят');
+    expect(taskEvidenceSectionLabel, 'Основание');
+    expect(
+      taskRelationProposalLabel('agent', 'proposed'),
+      'Предложено секретарём',
+    );
+    expect(taskRelationProposalLabel('user', 'confirmed'), isEmpty);
     expect(relationTypeLabel('contains'), 'Содержит');
     expect(relationTypeLabel('custom_edge'), 'custom_edge');
   });

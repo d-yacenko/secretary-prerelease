@@ -2729,6 +2729,173 @@ class RelationDecisionResponse {
   }
 }
 
+class TaskActorItem {
+  TaskActorItem({
+    required this.edgeId,
+    required this.personId,
+    required this.title,
+    this.contactCue,
+    required this.edgeState,
+    required this.edgeOrigin,
+    this.edgeConfidence,
+  });
+
+  final String edgeId;
+  final String personId;
+  final String title;
+  final String? contactCue;
+  final String edgeState;
+  final String edgeOrigin;
+  final double? edgeConfidence;
+
+  factory TaskActorItem.fromJson(Map<String, dynamic> json) {
+    return TaskActorItem(
+      edgeId: json['edge_id'] as String,
+      personId: json['person_id'] as String,
+      title: json['title'] as String,
+      contactCue: json['contact_cue'] as String?,
+      edgeState: json['edge_state'] as String,
+      edgeOrigin: json['edge_origin'] as String,
+      edgeConfidence: (json['edge_confidence'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class TaskLinkItem {
+  TaskLinkItem({
+    required this.edgeId,
+    required this.objectId,
+    required this.title,
+    required this.kind,
+    required this.edgeState,
+    required this.edgeOrigin,
+    this.edgeConfidence,
+  });
+
+  final String edgeId;
+  final String objectId;
+  final String title;
+  final String kind;
+  final String edgeState;
+  final String edgeOrigin;
+  final double? edgeConfidence;
+
+  factory TaskLinkItem.fromJson(Map<String, dynamic> json) {
+    return TaskLinkItem(
+      edgeId: json['edge_id'] as String,
+      objectId: json['object_id'] as String,
+      title: json['title'] as String,
+      kind: json['kind'] as String,
+      edgeState: json['edge_state'] as String,
+      edgeOrigin: json['edge_origin'] as String,
+      edgeConfidence: (json['edge_confidence'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class TaskProfile {
+  TaskProfile({
+    required this.task,
+    this.status,
+    this.startAt,
+    this.dueAt,
+    this.plannedStartAt,
+    this.plannedEndAt,
+    required this.requestedBy,
+    required this.delegatedTo,
+    required this.waitingOn,
+    required this.involves,
+    required this.dependsOn,
+    required this.dependentTasks,
+    required this.evidence,
+    this.requestedByTruncated = false,
+    this.delegatedToTruncated = false,
+    this.waitingOnTruncated = false,
+    this.involvesTruncated = false,
+    this.dependsOnTruncated = false,
+    this.dependentTasksTruncated = false,
+    this.evidenceTruncated = false,
+  });
+
+  final SecretaryObject task;
+  final String? status;
+  final String? startAt;
+  final String? dueAt;
+  final String? plannedStartAt;
+  final String? plannedEndAt;
+  final List<TaskActorItem> requestedBy;
+  final List<TaskActorItem> delegatedTo;
+  final List<TaskActorItem> waitingOn;
+  final List<TaskActorItem> involves;
+  final List<TaskLinkItem> dependsOn;
+  final List<TaskLinkItem> dependentTasks;
+  final List<TaskLinkItem> evidence;
+  final bool requestedByTruncated;
+  final bool delegatedToTruncated;
+  final bool waitingOnTruncated;
+  final bool involvesTruncated;
+  final bool dependsOnTruncated;
+  final bool dependentTasksTruncated;
+  final bool evidenceTruncated;
+
+  factory TaskProfile.fromJson(Map<String, dynamic> json) {
+    List<TaskActorItem> actors(String field) {
+      return (json[field] as List<dynamic>? ?? const [])
+          .map((item) => TaskActorItem.fromJson(item as Map<String, dynamic>))
+          .toList();
+    }
+
+    List<TaskLinkItem> links(String field) {
+      return (json[field] as List<dynamic>? ?? const [])
+          .map((item) => TaskLinkItem.fromJson(item as Map<String, dynamic>))
+          .toList();
+    }
+
+    return TaskProfile(
+      task: SecretaryObject.fromJson(json['task'] as Map<String, dynamic>),
+      status: json['status'] as String?,
+      startAt: json['start_at'] as String?,
+      dueAt: json['due_at'] as String?,
+      plannedStartAt: json['planned_start_at'] as String?,
+      plannedEndAt: json['planned_end_at'] as String?,
+      requestedBy: actors('requested_by'),
+      delegatedTo: actors('delegated_to'),
+      waitingOn: actors('waiting_on'),
+      involves: actors('involves'),
+      dependsOn: links('depends_on'),
+      dependentTasks: links('dependent_tasks'),
+      evidence: links('evidence'),
+      requestedByTruncated: json['requested_by_truncated'] as bool? ?? false,
+      delegatedToTruncated: json['delegated_to_truncated'] as bool? ?? false,
+      waitingOnTruncated: json['waiting_on_truncated'] as bool? ?? false,
+      involvesTruncated: json['involves_truncated'] as bool? ?? false,
+      dependsOnTruncated: json['depends_on_truncated'] as bool? ?? false,
+      dependentTasksTruncated: json['dependent_tasks_truncated'] as bool? ?? false,
+      evidenceTruncated: json['evidence_truncated'] as bool? ?? false,
+    );
+  }
+}
+
+class TaskRelationMutation {
+  TaskRelationMutation({
+    required this.edge,
+    required this.created,
+    required this.changed,
+  });
+
+  final SecretaryEdge edge;
+  final bool created;
+  final bool changed;
+
+  factory TaskRelationMutation.fromJson(Map<String, dynamic> json) {
+    return TaskRelationMutation(
+      edge: SecretaryEdge.fromJson(json['edge'] as Map<String, dynamic>),
+      created: json['created'] as bool? ?? false,
+      changed: json['changed'] as bool? ?? false,
+    );
+  }
+}
+
 class SearchFacetValue {
   SearchFacetValue({required this.value, required this.count});
 

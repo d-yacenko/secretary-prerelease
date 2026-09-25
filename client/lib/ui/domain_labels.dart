@@ -62,6 +62,19 @@ String provenanceStateLabel(String state) =>
 String relationTypeLabel(String type) =>
     _relationTypeLabels[type] ?? _fallback(type);
 
+const String dependentTasksLabel = 'От неё зависят';
+const String taskEvidenceSectionLabel = 'Основание';
+
+String taskRelationProposalLabel(String origin, String state) {
+  if (state == 'proposed' && origin == 'agent') {
+    return 'Предложено секретарём';
+  }
+  if (state == 'proposed') {
+    return 'Предложено';
+  }
+  return '';
+}
+
 String originLabel(String origin) =>
     _originLabels[origin] ?? _fallback(origin);
 

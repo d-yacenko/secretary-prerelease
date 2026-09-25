@@ -22,6 +22,7 @@ import '../ui/object_presentation.dart';
 import '../ui/object_visuals.dart' show providerBadge;
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
+import 'task_profile_section.dart';
 
 class GraphWorkspaceScreen extends StatefulWidget {
   const GraphWorkspaceScreen({
@@ -703,6 +704,39 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             trailing: _relationTrailing(context, edge),
           );
         }),
+        if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+            object.kind == 'task' &&
+            !object.isDeletedTask) ...[
+          const SizedBox(height: 12),
+          TaskProfileSection(
+            key: ValueKey('task-profile-${object.id}'),
+            taskId: object.id,
+            apiClient: widget.apiClient,
+            authController: widget.authController,
+            onOpenPerson: (personId) async {
+              await widget.controller.setMode(GraphWorkspaceMode.people);
+              if (!mounted) {
+                return;
+              }
+              await widget.controller.reRoot(personId);
+            },
+            onOpenTask: widget.controller.reRoot,
+            onOpenEvidence: (objectId) {
+              return openObjectDetail(
+                context,
+                objectId: objectId,
+                apiClient: widget.apiClient,
+                authController: widget.authController,
+                captureController: widget.captureController,
+                assistantController: widget.assistantController,
+                onAskSecretary: widget.onAskSecretary,
+                onShowInGraph: widget.controller.reRoot,
+                onTaskUpdated: widget.controller.applyTaskMutation,
+                bookmarkController: widget.bookmarkController,
+              );
+            },
+          ),
+        ],
       ],
     );
   }
