@@ -2,7 +2,7 @@
 
 HOLD
 
-Flow Media F2 is implemented at `452fe86ad55fb6f3df0faf000b340fa5fdbbddd5`.
+Flow Media F2 is implemented at `8f0cc34a730b9d9448e75ba20483f1db724724dd`.
 
 `CommunicationMediaProcessingService` transcribes an existing voice or audio media child through the shared transcription provider, per-user OpenAI credential, daily budget guard, and `WORKLOAD_TRANSCRIPTION` audit. Telegram MTProto is the only fetch adapter. Bytes are read in memory for the message named by persisted provenance, and only when the parent message is currently AI-eligible. The transcript is one `transcript` Representation on the child. Replay of the same bytes and model does not call the provider again. A changed byte hash replaces that row. Ineligible, deleted, or rejected parents and children finish without download or a model call. Permanent validation mismatches do not retry. Budget exhaustion uses the existing worker park. Mattermost and Teams children stay metadata-only. No migration.
 
