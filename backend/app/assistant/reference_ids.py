@@ -21,6 +21,8 @@ def collect_object_ids_from_bounded_tool(
         obj = bounded.get("object")
         if obj:
             _append_uuid(candidate_ids, obj.get("id"))
+    elif tool_name == "get_task_profile":
+        _append_profile_ids(candidate_ids, bounded)
     elif tool_name == "get_context":
         for item in bounded.get("items", []):
             _append_uuid(candidate_ids, item.get("object_id"))
@@ -95,6 +97,8 @@ def collect_seen_object_ids_from_bounded_tool(
         obj = bounded.get("object")
         if obj:
             _append_uuid(seen_ids, obj.get("id"))
+    elif tool_name == "get_task_profile":
+        _append_profile_ids(seen_ids, bounded)
     elif tool_name == "get_context":
         for item in bounded.get("items", []):
             _append_uuid(seen_ids, item.get("object_id"))
@@ -272,6 +276,20 @@ def cap_reference_candidate_ids(
         if object_id not in mandatory_unique
     ]
     return (mandatory_unique + rest)[:max_refs]
+
+
+def _append_profile_ids(target: list[UUID], bounded: dict[str, Any]) -> None:
+    task = bounded.get("task")
+    if isinstance(task, dict):
+        _append_uuid(target, task.get("id"))
+    for field in ("requested_by", "delegated_to", "waiting_on", "involves"):
+        for item in bounded.get(field) or []:
+            if isinstance(item, dict):
+                _append_uuid(target, item.get("person_id"))
+    for field in ("depends_on", "dependent_tasks", "evidence"):
+        for item in bounded.get(field) or []:
+            if isinstance(item, dict):
+                _append_uuid(target, item.get("object_id"))
 
 
 def _append_uuid(target: list[UUID], value: object) -> None:

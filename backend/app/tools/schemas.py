@@ -5,7 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.api.schemas import ContextItem, EdgeOut, NotificationOut, ObjectOut
+from app.api.schemas import ContextItem, EdgeOut, NotificationOut, ObjectOut, TaskProfileOut
+from app.domain.task_relations import MAX_TASK_ACTOR_IDS, MAX_TASK_DEPENDENCY_IDS
 
 MAX_CONTEXT_CHARS = 12000
 DEFAULT_CONTEXT_CHARS = 8000
@@ -155,6 +156,11 @@ class CreateTaskInput(BaseModel):
     body: str | None = None
     due_at: datetime | None = None
     evidence_object_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_EVIDENCE_IDS)
+    requested_by_person_id: UUID | None = None
+    delegated_to_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    waiting_on_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
 
 
 class CreateTaskOutput(BaseModel):
@@ -167,6 +173,11 @@ class UpdateTaskInput(BaseModel):
     body: str | None = None
     due_at: datetime | None = None
     evidence_object_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_EVIDENCE_IDS)
+    requested_by_person_id: UUID | None = None
+    delegated_to_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    waiting_on_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
+    depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
 
     @model_validator(mode="after")
     def reject_invalid_title(self) -> Self:
@@ -181,6 +192,15 @@ class UpdateTaskOutput(BaseModel):
     evidence_edges_created: int = 0
     evidence_added_object_ids: list[UUID] = Field(default_factory=list)
     evidence_already_linked_object_ids: list[UUID] = Field(default_factory=list)
+    relation_edges_created: int = 0
+
+
+class GetTaskProfileInput(BaseModel):
+    task_id: UUID
+
+
+class GetTaskProfileOutput(TaskProfileOut):
+    pass
 
 
 SetTaskStatusValue = Literal["open", "in_progress", "done", "cancelled", "archived"]

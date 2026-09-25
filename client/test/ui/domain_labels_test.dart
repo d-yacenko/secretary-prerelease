@@ -47,6 +47,10 @@ void main() {
 
   test('relation type labels', () {
     expect(relationTypeLabel('related_to'), 'Связано с');
+    expect(relationTypeLabel('requested_by'), 'Запросил');
+    expect(relationTypeLabel('delegated_to'), 'Поручено');
+    expect(relationTypeLabel('waiting_on'), 'Ждём');
+    expect(relationTypeLabel('involves'), 'Участвует');
     expect(relationTypeLabel('contains'), 'Содержит');
     expect(relationTypeLabel('custom_edge'), 'custom_edge');
   });

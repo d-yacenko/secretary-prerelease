@@ -637,3 +637,71 @@ class RelationDecisionRequest(BaseModel):
 
 class RelationDecisionResponse(BaseModel):
     edge: EdgeOut
+
+
+class TaskActorOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edge_id: UUID
+    person_id: UUID
+    title: str
+    contact_cue: str | None = None
+
+
+class TaskLinkOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edge_id: UUID
+    object_id: UUID
+    title: str
+    kind: str
+
+
+class TaskProfileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task: ObjectOut
+    status: str | None
+    start_at: datetime | None
+    due_at: datetime | None
+    planned_start_at: datetime | None
+    planned_end_at: datetime | None
+    requested_by: list[TaskActorOut]
+    delegated_to: list[TaskActorOut]
+    waiting_on: list[TaskActorOut]
+    involves: list[TaskActorOut]
+    depends_on: list[TaskLinkOut]
+    dependent_tasks: list[TaskLinkOut]
+    evidence: list[TaskLinkOut]
+    requested_by_truncated: bool = False
+    delegated_to_truncated: bool = False
+    waiting_on_truncated: bool = False
+    involves_truncated: bool = False
+    depends_on_truncated: bool = False
+    dependent_tasks_truncated: bool = False
+    evidence_truncated: bool = False
+
+
+class TaskActorAttachRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    role: Literal["requested_by", "delegated_to", "waiting_on", "involves"]
+
+
+class TaskDependencyAttachRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    depends_on_task_id: UUID
+
+
+class TaskEvidenceAttachRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    object_id: UUID
+
+
+class TaskRelationMutationResponse(BaseModel):
+    edge: EdgeOut
+    created: bool = False
+    changed: bool = False

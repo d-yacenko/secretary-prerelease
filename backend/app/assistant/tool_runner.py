@@ -217,6 +217,21 @@ class PerTurnToolBudget:
                 if self._telemetry is not None:
                     self._telemetry.tool_calls += 1
                 return evidence_error
+            relation_error = self._validate_task_relation_allowlist(tool_name, arguments)
+            if relation_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return relation_error
+
+        if tool_name == "get_task_profile":
+            target_error = self._validate_object_target_allowlist(
+                tool_name,
+                {"object_id": arguments.get("task_id")},
+            )
+            if target_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return target_error
 
         if tool_name in _OBJECT_TARGET_TOOLS:
             target_error = self._validate_object_target_allowlist(tool_name, arguments)
@@ -414,6 +429,41 @@ class PerTurnToolBudget:
                     success=False,
                     tool_name=tool_name,
                     error="evidence object was not exposed in this Assistant turn",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+        return None
+
+    def _validate_task_relation_allowlist(
+        self, tool_name: str, arguments: dict
+    ) -> ToolExecutionResult | None:
+        raw_ids = []
+        single = arguments.get("requested_by_person_id")
+        if single:
+            raw_ids.append(single)
+        for field in (
+            "delegated_to_person_ids",
+            "waiting_on_person_ids",
+            "involved_person_ids",
+            "depends_on_task_ids",
+        ):
+            values = arguments.get(field) or []
+            if isinstance(values, list):
+                raw_ids.extend(values)
+        for raw_id in raw_ids:
+            try:
+                parsed = UUID(str(raw_id))
+            except (ValueError, TypeError):
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="invalid task relation object id",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            if parsed not in self._seen_object_ids:
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="task relation object was not exposed in this Assistant turn",
                     status=ToolExecutionStatus.TOOL_ERROR,
                 )
         return None

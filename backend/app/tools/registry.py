@@ -28,6 +28,7 @@ from app.tools.schemas import (
     FindPersonIdentityCandidatesInput,
     GetContextInput,
     GetObjectInput,
+    GetTaskProfileInput,
     LinkObjectsInput,
     ListConversationMembersInput,
     ListInboxSinceReviewMarkerInput,
@@ -123,6 +124,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         assistant_exposed=True,
         mcp_exposed=True,
         assistant_definition=_assistant_definition("get_object"),
+    ),
+    ToolSpec(
+        name="get_task_profile",
+        permission=ToolPermission.READ,
+        input_model=GetTaskProfileInput,
+        service_method="get_task_profile",
+        assistant_exposed=True,
+        mcp_exposed=True,
+        assistant_definition=_assistant_definition("get_task_profile"),
     ),
     ToolSpec(
         name="get_context",

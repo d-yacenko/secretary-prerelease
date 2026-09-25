@@ -21,6 +21,12 @@ from app.domain.task_lifecycle import (
     TASK_STATUS_OPEN,
     canonical_task_status_for_model,
 )
+from app.domain.task_relations import (
+    DELEGATED_TO,
+    INVOLVES,
+    REQUESTED_BY,
+    WAITING_ON,
+)
 from app.llm.embedding_service import EmbeddingService
 from app.services.context_service import ContextService
 from app.services.domain_write_mode import DomainWriteMode
@@ -41,6 +47,8 @@ from app.services.relation_removal import is_edge_removable, removable_edge_reje
 from app.services.retrieval_service import RetrievalService
 from app.services.search_service import SearchService
 from app.services.task_mutation_service import TaskMutationService
+from app.services.task_profile_service import TaskProfileService
+from app.services.task_relation_service import TaskRelationService
 from app.tools.datetime_utils import normalize_tool_datetime
 from app.tools.schemas import (
     MAX_TASK_EVIDENCE_IDS,
@@ -75,6 +83,7 @@ from app.tools.schemas import (
     GetContextOutput,
     GetObjectInput,
     GetObjectOutput,
+    GetTaskProfileInput,
     GetTodayOutput,
     InboxReviewCompactItemOut,
     InboxReviewStackOut,
@@ -876,6 +885,85 @@ class DomainToolService:
             created += 1
         return created, added_ids, already_linked_ids
 
+    def _has_relation_input(self, payload) -> bool:
+        return bool(
+            payload.requested_by_person_id
+            or payload.delegated_to_person_ids
+            or payload.waiting_on_person_ids
+            or payload.involved_person_ids
+            or payload.depends_on_task_ids
+        )
+
+    def _attach_explicit_relations(self, task_id: UUID, payload, confidence: float) -> int:
+        relations = TaskRelationService(self._session, self._user_id)
+        state = self._new_artifact_state()
+        edge_confidence = confidence if state == PROPOSED_STATE else None
+        created = 0
+        try:
+            if payload.requested_by_person_id is not None:
+                _, was_new = relations.add_actor(
+                    task_id,
+                    payload.requested_by_person_id,
+                    REQUESTED_BY,
+                    origin=AGENT_ORIGIN,
+                    state=state,
+                    confidence=edge_confidence,
+                )
+                created += int(was_new)
+            created += self._add_actor_ids(
+                relations, task_id, payload.delegated_to_person_ids, DELEGATED_TO, state, edge_confidence
+            )
+            created += self._add_actor_ids(
+                relations, task_id, payload.waiting_on_person_ids, WAITING_ON, state, edge_confidence
+            )
+            created += self._add_actor_ids(
+                relations, task_id, payload.involved_person_ids, INVOLVES, state, edge_confidence
+            )
+            seen: set[UUID] = set()
+            for dependency_id in payload.depends_on_task_ids:
+                if dependency_id in seen:
+                    continue
+                seen.add(dependency_id)
+                _, was_new = relations.add_dependency(
+                    task_id,
+                    dependency_id,
+                    origin=AGENT_ORIGIN,
+                    state=state,
+                    confidence=edge_confidence,
+                )
+                created += int(was_new)
+        except NotFoundError as exc:
+            raise ToolError(f"task relation endpoint not found: {exc.entity_id}") from exc
+        except ValidationError as exc:
+            raise ToolError(exc.message) from exc
+        return created
+
+    def _add_actor_ids(
+        self,
+        relations: TaskRelationService,
+        task_id: UUID,
+        person_ids: list[UUID],
+        role: str,
+        state: str,
+        confidence: float | None,
+    ) -> int:
+        created = 0
+        seen: set[UUID] = set()
+        for person_id in person_ids:
+            if person_id in seen:
+                continue
+            seen.add(person_id)
+            _, was_new = relations.add_actor(
+                task_id,
+                person_id,
+                role,
+                origin=AGENT_ORIGIN,
+                state=state,
+                confidence=confidence,
+            )
+            created += int(was_new)
+        return created
+
     def _get_task_for_mutation(self, object_id: UUID, *, allow_deleted: bool = False) -> Object:
         try:
             obj = self._graph.get_object(object_id)
@@ -915,8 +1003,15 @@ class DomainToolService:
             _, _, _ = self._attach_evidence_references(
                 obj.id, evidence_ids, input.confidence
             )
+        self._attach_explicit_relations(obj.id, input, input.confidence)
         self._enqueue_object_embedding(obj.id)
         return CreateTaskOutput(object=ObjectOut.from_model(obj))
+
+    def get_task_profile(self, payload: GetTaskProfileInput):
+        try:
+            return TaskProfileService(self._session, self._user_id).get_profile(payload.task_id)
+        except NotFoundError as exc:
+            raise ToolError(f"task not found: {exc.entity_id}") from exc
 
     def _scheduled_activities(self):
         from app.services.scheduled_activity_service import ScheduledActivityService
@@ -1056,7 +1151,7 @@ class DomainToolService:
                 raise self._tool_error_from_mutation(exc) from exc
             updated = patch_result.object
             fields_changed = patch_result.changed
-        elif not evidence_ids:
+        elif not evidence_ids and not self._has_relation_input(input):
             raise ToolError("update_task requires at least one field to update")
 
         evidence_edges_created = 0
@@ -1069,7 +1164,14 @@ class DomainToolService:
                 evidence_added_object_ids,
                 evidence_already_linked_object_ids,
             ) = self._attach_evidence_references(updated.id, evidence_ids, confidence)
-        changed = fields_changed or evidence_edges_created > 0
+        relation_edges_created = 0
+        if self._has_relation_input(input):
+            relation_edges_created = self._attach_explicit_relations(
+                updated.id,
+                input,
+                updated.confidence if updated.confidence is not None else 0.5,
+            )
+        changed = fields_changed or evidence_edges_created > 0 or relation_edges_created > 0
         if fields_changed:
             self._enqueue_object_embedding(updated.id)
         return UpdateTaskOutput(
@@ -1078,6 +1180,7 @@ class DomainToolService:
             evidence_edges_created=evidence_edges_created,
             evidence_added_object_ids=evidence_added_object_ids,
             evidence_already_linked_object_ids=evidence_already_linked_object_ids,
+            relation_edges_created=relation_edges_created,
         )
 
     def set_task_status(self, input: SetTaskStatusInput) -> SetTaskStatusOutput:

@@ -136,6 +136,21 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         },
         "strict": False,
     },
+    "get_task_profile": {
+        "type": "function",
+        "name": "get_task_profile",
+        "description": (
+            "Read one Task profile: lifecycle, explicit actor roles, dependencies, "
+            "and evidence references. Does not infer roles and does not mutate."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
     "get_context": {
         "type": "function",
         "name": "get_context",
@@ -490,7 +505,9 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         "description": (
             "Create a proposed agent-origin task for the authenticated user. "
             "New tasks always start with status=open. "
-            "Pass evidence_object_ids from source objects discovered this turn."
+            "Pass evidence_object_ids from source objects discovered this turn. "
+            "Optional actor and dependency ids must also be objects from this turn. "
+            "Omitting a role does not create one."
         ),
         "parameters": {
             "type": "object",
@@ -500,6 +517,27 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "body": {"type": "string"},
                 "due_at": {"type": "string"},
                 "evidence_object_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "requested_by_person_id": {"type": "string"},
+                "delegated_to_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "waiting_on_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "involved_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "depends_on_task_ids": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 8,
@@ -517,6 +555,7 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "Update task title, body, due date, or attach evidence references. "
             "evidence_object_ids is ADDITIVE only: attach these evidence objects if not "
             "already attached. Omitting an existing evidence object never removes it. "
+            "Actor role and dependency id lists are also additive. "
             "To remove a relation, use remove_relation(edge_id) after list_neighbors. "
             "Does not change lifecycle status — use set_task_status for that."
         ),
@@ -528,6 +567,27 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "body": {"type": ["string", "null"]},
                 "due_at": {"type": ["string", "null"]},
                 "evidence_object_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "requested_by_person_id": {"type": "string"},
+                "delegated_to_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "waiting_on_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "involved_person_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 8,
+                },
+                "depends_on_task_ids": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 8,

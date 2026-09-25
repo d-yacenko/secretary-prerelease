@@ -7,7 +7,17 @@ from app.services.provenance import (
     USER_ORIGIN,
 )
 
-REMOVABLE_EDGE_TYPES = frozenset({"references", "related_to", "depends_on"})
+REMOVABLE_EDGE_TYPES = frozenset(
+    {
+        "references",
+        "related_to",
+        "depends_on",
+        "requested_by",
+        "delegated_to",
+        "waiting_on",
+        "involves",
+    }
+)
 PROTECTED_EDGE_TYPES = frozenset({"contains", "labeled_with"})
 REMOVABLE_EDGE_ORIGINS = frozenset({AGENT_ORIGIN, USER_ORIGIN})
 
