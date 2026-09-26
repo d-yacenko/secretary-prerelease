@@ -386,6 +386,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               onSubmitted: (value) => _runSearch(value),
             ),
           ),
+          if (widget.controller.mode == GraphWorkspaceMode.people)
+            OutlinedButton.icon(
+              onPressed: _openAddPerson,
+              icon: const Icon(Icons.person_add_alt_1_outlined),
+              label: const Text('Добавить человека'),
+            ),
           if (widget.controller.mode == GraphWorkspaceMode.tasks)
             CompactObjectFilters(
               facets: _searchFacets,
@@ -440,6 +446,19 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     );
   }
 
+  Future<void> _openAddPerson() async {
+    final created = await showDialog<SecretaryObject>(
+      context: context,
+      builder: (context) => _AddPersonDialog(
+        onSubmit: (title) => widget.apiClient.createPerson(title: title),
+      ),
+    );
+    if (created == null || !mounted) {
+      return;
+    }
+    await widget.controller.reRoot(created.id);
+  }
+
   Widget _buildCanvas(BuildContext context) {
     if (widget.controller.loadState == GraphWorkspaceLoadState.loading) {
       return const Center(child: CircularProgressIndicator());
@@ -475,6 +494,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           rootId: widget.controller.rootId,
         ),
       );
+    }
+    if (widget.controller.mode == GraphWorkspaceMode.people && nodes.isEmpty) {
+      return const Center(child: Text('Добавьте человека, чтобы начать.'));
     }
     if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
       return Center(
@@ -1942,5 +1964,76 @@ class _GraphOpenSourceActionState extends State<_GraphOpenSourceAction> {
       );
     }
     return const SizedBox.shrink();
+  }
+}
+
+class _AddPersonDialog extends StatefulWidget {
+  const _AddPersonDialog({required this.onSubmit});
+
+  final Future<SecretaryObject> Function(String title) onSubmit;
+
+  @override
+  State<_AddPersonDialog> createState() => _AddPersonDialogState();
+}
+
+class _AddPersonDialogState extends State<_AddPersonDialog> {
+  final _name = TextEditingController();
+  var _submitting = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final title = _name.text.trim();
+    if (title.isEmpty || _submitting) {
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      final created = await widget.onSubmit(title);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(created);
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+      setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSubmit = _name.text.trim().isNotEmpty && !_submitting;
+    return AlertDialog(
+      title: const Text('Добавить человека'),
+      content: TextField(
+        controller: _name,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'Имя',
+          helperText: 'Контакты и связанные аккаунты можно подтвердить после создания.',
+        ),
+        onChanged: (_) => setState(() {}),
+        onSubmitted: canSubmit ? (_) => _submit() : null,
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          onPressed: canSubmit ? _submit : null,
+          child: const Text('Добавить'),
+        ),
+      ],
+    );
   }
 }

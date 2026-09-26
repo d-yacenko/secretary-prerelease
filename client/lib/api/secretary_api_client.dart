@@ -735,6 +735,15 @@ class SecretaryApiClient {
     return GraphWorkspaceOut.fromJson(body);
   }
 
+  Future<SecretaryObject> createPerson({required String title}) async {
+    final body = await _request(
+      'POST',
+      '/graph/people',
+      jsonBody: {'title': title},
+    );
+    return SecretaryObject.fromJson(body);
+  }
+
   Future<GraphWorkspaceOut> getPeopleWorkspace({
     String? rootId,
     String? query,

@@ -9,6 +9,7 @@ from app.api.schemas import (
     GraphWorkspaceOut,
     ObjectOut,
     PeopleWorkspaceOut,
+    PersonCreateRequest,
     PersonIdentityCorrectionRequest,
     PersonPresentation,
 )
@@ -24,6 +25,7 @@ from app.services.graph_workspace_service import (
     GraphWorkspaceService,
 )
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
+from app.services.person_identity_service import PersonIdentityService
 
 router = APIRouter()
 
@@ -64,11 +66,33 @@ def get_graph_workspace(
     )
 
 
+def _person_identity_service(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> PersonIdentityService:
+    return PersonIdentityService(session, current_user.user_id)
+
+
 def _people_service(
     session: Session = Depends(get_db),
     current_user: CurrentUserContext = Depends(get_current_user),
 ) -> PersonGraphWorkspaceService:
     return PersonGraphWorkspaceService(session, current_user.user_id)
+
+
+@router.post("/graph/people", response_model=ObjectOut)
+def create_person(
+    body: PersonCreateRequest,
+    service: PersonIdentityService = Depends(_person_identity_service),
+) -> ObjectOut:
+    try:
+        person = service.create_person(body.title)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
+        ) from exc
+    return ObjectOut.from_model(person)
 
 
 @router.get("/graph/people-workspace", response_model=PeopleWorkspaceOut)

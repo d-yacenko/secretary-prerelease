@@ -606,6 +606,12 @@ class PeopleWorkspaceOut(BaseModel):
     people: list[PersonPresentation]
 
 
+class PersonCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+
 class PersonIdentityCorrectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
