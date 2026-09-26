@@ -20,6 +20,8 @@ import '../ui/object_bookmark.dart';
 import '../ui/object_bookmark_controller.dart';
 import '../ui/object_presentation.dart';
 import '../ui/object_visuals.dart' show providerBadge;
+import 'fcose_graph_refiner.dart';
+import 'graph_geometry.dart';
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
 import 'task_map.dart';
@@ -37,6 +39,7 @@ class GraphWorkspaceScreen extends StatefulWidget {
     required this.assistantController,
     required this.onAskSecretary,
     this.bookmarkController,
+    this.geometryRefiner,
   });
 
   final GraphWorkspaceController controller;
@@ -46,6 +49,9 @@ class GraphWorkspaceScreen extends StatefulWidget {
   final AssistantController assistantController;
   final void Function(SecretaryObject object) onAskSecretary;
   final ObjectBookmarkController? bookmarkController;
+
+  /// Test hook. Production uses [FcoseGraphRefiner] for the selected submode.
+  final GraphGeometryRefiner? geometryRefiner;
 
   @override
   State<GraphWorkspaceScreen> createState() => _GraphWorkspaceScreenState();
@@ -61,6 +67,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   TaskMapRenderer _taskMapRenderer = TaskMapRenderer.current;
   TaskMapLayout _taskMapLayout = TaskMapLayout.mindmap;
   bool _showTaskContext = false;
+  FcoseRefinementMode _fcoseMode = FcoseRefinementMode.preserve;
+  String? _fcoseWarning;
   VoidCallback? _zoomTaskMap;
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
@@ -324,12 +332,34 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   value: TaskMapRenderer.elk,
                   label: Text('ELK'),
                 ),
+                ButtonSegment(
+                  value: TaskMapRenderer.fcose,
+                  label: Text('fCoSE'),
+                ),
               ],
               selected: {_taskMapRenderer},
               onSelectionChanged: (selection) {
                 setState(() => _taskMapRenderer = selection.first);
               },
             ),
+            if (_taskMapRenderer == TaskMapRenderer.fcose) ...[
+              SegmentedButton<FcoseRefinementMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: FcoseRefinementMode.preserve,
+                    label: Text('Preserve'),
+                  ),
+                  ButtonSegment(
+                    value: FcoseRefinementMode.relax,
+                    label: Text('Relax'),
+                  ),
+                ],
+                selected: {_fcoseMode},
+                onSelectionChanged: (selection) {
+                  setState(() => _fcoseMode = selection.first);
+                },
+              ),
+            ],
             if (_taskMapRenderer == TaskMapRenderer.experiment) ...[
               SegmentedButton<TaskMapLayout>(
                 segments: const [
@@ -461,7 +491,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
-    final positions = widget.controller.visiblePositions;
+    final positions = _displayPositions(
+      nodes,
+      edges,
+      widget.controller.visiblePositions,
+    );
     if (widget.controller.mode == GraphWorkspaceMode.tasks &&
         _taskMapRenderer == TaskMapRenderer.elk) {
       return TaskMapElkView(
@@ -529,7 +563,82 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             widget.controller.clearFitRequest();
           });
         }
-        return InteractiveViewer(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_fcoseWarning != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                child: Text(
+                  _fcoseWarning!,
+                  key: const ValueKey('graph-fcose-fallback'),
+                ),
+              ),
+            Expanded(
+              child: _graphViewport(
+                context,
+                positions,
+                nodes,
+                edges,
+                bounds,
+                canvasWidth,
+                canvasHeight,
+                selectedObjectId,
+                focusMode,
+                focusNeighborIds,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Map<String, Offset> _displayPositions(
+    List<SecretaryObject> nodes,
+    List<SecretaryEdge> edges,
+    Map<String, Offset> positions,
+  ) {
+    _fcoseWarning = null;
+    if (widget.controller.mode != GraphWorkspaceMode.tasks ||
+        _taskMapRenderer != TaskMapRenderer.fcose) {
+      return positions;
+    }
+    final scene = buildGraphGeometryScene(
+      nodes: nodes,
+      edges: edges,
+      positions: positions,
+      selectedObjectId: widget.controller.selectedObjectId,
+    );
+    if (scene == null) {
+      return positions;
+    }
+    final refiner = widget.geometryRefiner ?? FcoseGraphRefiner(mode: _fcoseMode);
+    final result = refiner.refine(scene);
+    if (!result.completed) {
+      _fcoseWarning = result.error ?? 'Не удалось уточнить локальную карту fCoSE';
+      return positions;
+    }
+    final display = Map<String, Offset>.from(positions);
+    for (final entry in result.nodes.entries) {
+      display[entry.key] = entry.value.topLeft;
+    }
+    return display;
+  }
+
+  Widget _graphViewport(
+    BuildContext context,
+    Map<String, Offset> positions,
+    List<SecretaryObject> nodes,
+    List<SecretaryEdge> edges,
+    Rect bounds,
+    double canvasWidth,
+    double canvasHeight,
+    String? selectedObjectId,
+    bool focusMode,
+    Set<String> focusNeighborIds,
+  ) {
+    return InteractiveViewer(
           constrained: false,
           transformationController: _transform,
           minScale: kGraphMinScale,
@@ -578,8 +687,6 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             ),
           ),
         );
-      },
-    );
   }
 
   Widget _buildDetailPanel(BuildContext context, {required bool compact}) {

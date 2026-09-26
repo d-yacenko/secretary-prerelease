@@ -42,6 +42,8 @@ dependencies:
   graphview: 1.5.1
   # V2 geometry only. The current renderer and V1 GraphView stay in place.
   elk: 0.2.0
+  # V3B local refinement only. The current GraphLayout stays the global map.
+  fcose: 0.1.0
 
 dev_dependencies:
   flutter_test:
