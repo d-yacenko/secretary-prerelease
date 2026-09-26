@@ -27,6 +27,7 @@ import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
+import 'task_map_hierarchy.dart';
 import 'task_profile_section.dart';
 
 class GraphWorkspaceScreen extends StatefulWidget {
@@ -448,7 +449,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
-    final positions = widget.controller.visiblePositions;
+    final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
+    if (widget.controller.mode == GraphWorkspaceMode.tasks) {
+      positions.addAll(
+        projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
+      );
+    }
     if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
       return Center(
         child: Column(
