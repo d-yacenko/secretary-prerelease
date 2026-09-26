@@ -67,6 +67,8 @@ class HybridHairline {
     required this.end,
     this.directed = false,
     this.arrowAtMark = false,
+    this.proposed = false,
+    this.dashed = false,
   });
 
   final String anchorTaskId;
@@ -79,6 +81,12 @@ class HybridHairline {
 
   /// When directed, the arrow sits on the Flow mark. Otherwise it sits on the Task.
   final bool arrowAtMark;
+
+  /// Review state. Does not change direction or dash.
+  final bool proposed;
+
+  /// `depends_on` stays dashed when collapsed.
+  final bool dashed;
 }
 
 class HybridFocusPresentation {
@@ -471,32 +479,68 @@ class HybridHairlinePainter extends CustomPainter {
     required this.padding,
     required this.color,
     required this.dimmed,
+    this.proposalColor,
   });
 
   final List<HybridHairline> hairlines;
   final Rect bounds;
   final double padding;
   final Color color;
+  final Color? proposalColor;
   final bool dimmed;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = kHybridHairlineWidth
-      ..color = color.withValues(
-        alpha: kHybridHairlineOpacity * (dimmed ? 0.35 : 1),
-      );
     for (final hairline in hairlines) {
+      final proposed = hairline.proposed;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = proposed ? kProposedHairlineStroke : kHybridHairlineWidth
+        ..color = proposed
+            ? (proposalColor ?? color).withValues(
+                alpha: proposedRelationOpacity(dimmed: dimmed),
+              )
+            : color.withValues(
+                alpha: kHybridHairlineOpacity * (dimmed ? 0.35 : 1),
+              );
       final start = _canvas(hairline.start);
       final end = _canvas(hairline.end);
-      canvas.drawLine(start, end, paint);
+      if (hairline.dashed) {
+        _drawDashed(canvas, start, end, paint);
+      } else {
+        canvas.drawLine(start, end, paint);
+      }
+      if (proposed) {
+        paintRelationDiamond(
+          canvas,
+          relationSegmentMidpoint(start, end),
+          kProposedHairlineDiamond,
+          paint,
+        );
+      }
       if (!hairline.directed) {
         continue;
       }
       final tip = hairline.arrowAtMark ? end : start;
       final from = hairline.arrowAtMark ? start : end;
       _drawHairlineArrow(canvas, tip, from, paint);
+    }
+  }
+
+  void _drawDashed(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dash = 5.0;
+    const gap = 3.0;
+    final delta = end - start;
+    final length = delta.distance;
+    if (length == 0) {
+      return;
+    }
+    final direction = delta / length;
+    var drawn = 0.0;
+    while (drawn < length) {
+      final next = math.min(drawn + dash, length);
+      canvas.drawLine(start + direction * drawn, start + direction * next, paint);
+      drawn = next + gap;
     }
   }
 
@@ -1359,7 +1403,7 @@ HybridHairline _withCanonicalArrow(
     sourceKind: byId[edge.sourceId]?.kind,
     targetKind: byId[edge.targetId]?.kind,
   );
-  if (!presentation.directed || !presentation.visibleOnTasksMap) {
+  if (!presentation.visibleOnTasksMap) {
     return line;
   }
   return HybridHairline(
@@ -1367,8 +1411,10 @@ HybridHairline _withCanonicalArrow(
     markId: line.markId,
     start: line.start,
     end: line.end,
-    directed: true,
-    arrowAtMark: edge.targetId == line.markId,
+    directed: presentation.directed,
+    arrowAtMark: presentation.directed && edge.targetId == line.markId,
+    proposed: presentation.proposed,
+    dashed: presentation.dashed,
   );
 }
 

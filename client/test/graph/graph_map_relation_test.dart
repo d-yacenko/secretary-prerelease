@@ -5,6 +5,7 @@ import 'package:personal_secretary/api/api_models.dart';
 import 'package:personal_secretary/graph/graph_geometry.dart';
 import 'package:personal_secretary/graph/graph_map_edge_presentation.dart';
 import 'package:personal_secretary/graph/hybrid_focus_lod.dart';
+import 'package:personal_secretary/graph/task_map_hierarchy.dart';
 
 void main() {
   test('relation grammar keeps canonical direction', () {
@@ -118,6 +119,123 @@ void main() {
       );
     },
   );
+
+  test('proposed relations keep type semantics and a midpoint cue', () {
+    final related = _present('related_to', state: 'proposed');
+    expect(related.proposed, isTrue);
+    expect(related.directed, isFalse);
+    expect(related.dashed, isFalse);
+
+    final references = _present('references', state: 'proposed');
+    expect(references.proposed, isTrue);
+    expect(references.directed, isTrue);
+    expect(references.light, isTrue);
+    expect(references.dashed, isFalse);
+
+    final depends = _present(
+      'depends_on',
+      state: 'proposed',
+      sourceKind: 'task',
+      targetKind: 'task',
+    );
+    expect(depends.proposed, isTrue);
+    expect(depends.dashed, isTrue);
+    expect(depends.directed, isTrue);
+
+    final partOf = _present(
+      'part_of',
+      state: 'proposed',
+      sourceKind: 'task',
+      targetKind: 'task',
+    );
+    expect(partOf.proposed, isTrue);
+    expect(partOf.directed, isTrue);
+    expect(partOf.structural, isTrue);
+    expect(partOf.dashed, isFalse);
+    expect(partOf.label, 'входит в');
+
+    expect(kProposedFullStroke, greaterThanOrEqualTo(2.5));
+    expect(kProposedFullDiamond, 8);
+    expect(kProposedHairlineStroke, inInclusiveRange(1.8, 2.0));
+    expect(kProposedHairlineDiamond, inInclusiveRange(5, 6));
+    expect(proposedRelationOpacity(dimmed: true), greaterThanOrEqualTo(0.65));
+    expect(proposedRelationOpacity(dimmed: false), greaterThanOrEqualTo(0.65));
+    expect(
+      relationSegmentMidpoint(Offset.zero, const Offset(10, 4)),
+      const Offset(5, 2),
+    );
+
+    final proposedReference = _show(
+      edges: [_edge('task', 'mail', 'references', state: 'proposed')],
+    );
+    expect(proposedReference.hairlines.single.proposed, isTrue);
+    expect(proposedReference.hairlines.single.directed, isTrue);
+    expect(proposedReference.hairlines.single.arrowAtMark, isTrue);
+    expect(proposedReference.hairlines.single.dashed, isFalse);
+
+    final proposedRelated = _show(
+      edges: [_edge('task', 'mail', 'related_to', state: 'proposed')],
+    );
+    expect(proposedRelated.hairlines.single.proposed, isTrue);
+    expect(proposedRelated.hairlines.single.directed, isFalse);
+    expect(proposedRelated.hairlines.single.dashed, isFalse);
+
+    final proposedDepends = _show(
+      edges: [_edge('task', 'mail', 'depends_on', state: 'proposed')],
+    );
+    expect(proposedDepends.hairlines.single.proposed, isTrue);
+    expect(proposedDepends.hairlines.single.dashed, isTrue);
+    expect(proposedDepends.hairlines.single.directed, isTrue);
+    expect(proposedDepends.hairlines.single.arrowAtMark, isTrue);
+
+    final confirmed = _show(edges: [_edge('task', 'mail', 'references')]);
+    expect(confirmed.hairlines.single.proposed, isFalse);
+    expect(confirmed.hairlines.single.dashed, isFalse);
+    expect(
+      proposedReference.displayTopLeft['task'],
+      confirmed.displayTopLeft['task'],
+    );
+
+    final tasks = [_object('child', 'Часть'), _object('parent', 'Целое')];
+    final absent = projectTaskMapHierarchy(nodes: tasks, edges: const []);
+    final proposedPart = projectTaskMapHierarchy(
+      nodes: tasks,
+      edges: [_edge('child', 'parent', 'part_of', state: 'proposed')],
+    );
+    expect(proposedPart.positions, absent.positions);
+
+    final crowded = _show(
+      nodes: [
+        _object('task', 'Задача'),
+        for (var index = 0; index < 21; index++)
+          _object('mail-$index', 'Письмо $index', kind: 'email'),
+      ],
+      edges: [
+        for (var index = 0; index < 21; index++)
+          _edge(
+            'task',
+            'mail-$index',
+            'references',
+            id: 'mail-$index',
+            state: 'proposed',
+          ),
+      ],
+      positions: {
+        'task': Offset.zero,
+        for (var index = 0; index < 21; index++)
+          'mail-$index': Offset(8000, 100.0 * index),
+      },
+    );
+    final overflow = crowded.hairlines.where(
+      (line) => line.markId.startsWith('hybrid-overflow:'),
+    );
+    expect(overflow, isNotEmpty);
+    for (final line in overflow) {
+      expect(line.proposed, isFalse);
+      expect(line.directed, isFalse);
+      expect(line.dashed, isFalse);
+    }
+  });
 
   test('compact hairline follows the chosen canonical edge', () {
     final forward = _show(edges: [_edge('task', 'mail', 'references')]);

@@ -639,6 +639,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     bounds: bounds,
                     padding: canvasPad,
                     color: Theme.of(context).colorScheme.outline,
+                    proposalColor: Theme.of(context).colorScheme.tertiary,
                     dimmed: focusMode,
                   ),
                 ),
@@ -1007,6 +1008,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 widget.controller.selectObject(other.id);
               }
             },
+            leading: edge.state == 'proposed'
+                ? Icon(
+                    Icons.diamond_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.tertiary,
+                    key: ValueKey('graph-relation-proposed-${edge.id}'),
+                  )
+                : null,
             title: Text(
               graphRelationAuditText(
                 edge: edge,
@@ -1675,13 +1684,16 @@ class _GraphEdgePainter extends CustomPainter {
       final focusEdge = focusMode && _isFocusEdge(edge);
       final dimmed = focusMode && !focusEdge;
       final emphasized = edge.id == selectedEdgeId || focusEdge;
-      final proposed = presentation?.proposed ?? edge.state == 'proposed';
+      final productProposed = presentation?.proposed ?? false;
+      final proposed = productProposed || edge.state == 'proposed';
       final secondary = presentation?.secondary ?? false;
       final light = presentation?.light ?? false;
       final structural = presentation?.structural ?? false;
 
       var paint = Paint()
-        ..strokeWidth = emphasized
+        ..strokeWidth = productProposed
+            ? kProposedFullStroke
+            : emphasized
             ? 2.5
             : (structural ? 2.0 : (secondary || light ? 1.2 : 1.5))
         ..color = proposed
@@ -1691,12 +1703,17 @@ class _GraphEdgePainter extends CustomPainter {
             : colorScheme.outline
         ..style = PaintingStyle.stroke;
 
-      if (secondary && !emphasized) {
+      if (!productProposed && secondary && !emphasized) {
         paint = paint..color = paint.color.withValues(alpha: 0.55);
-      } else if (light && !emphasized) {
+      } else if (!productProposed && light && !emphasized) {
         paint = paint..color = paint.color.withValues(alpha: 0.7);
       }
-      if (dimmed) {
+      if (productProposed) {
+        paint = paint
+          ..color = colorScheme.tertiary.withValues(
+            alpha: proposedRelationOpacity(dimmed: dimmed),
+          );
+      } else if (dimmed) {
         paint = paint..color = paint.color.withValues(alpha: 0.35);
       }
 
@@ -1706,10 +1723,28 @@ class _GraphEdgePainter extends CustomPainter {
       final targetSize = _nodeSize(edge.targetId);
       final start = _borderPoint(sourceCenter, targetCenter, sourceSize);
       final end = _borderPoint(targetCenter, sourceCenter, targetSize);
+      if (productProposed && presentation?.dashed != true) {
+        canvas.drawLine(
+          start,
+          end,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = kProposedFullStroke + kProposedUnderExtra
+            ..color = colorScheme.tertiary.withValues(alpha: dimmed ? 0.28 : 0.34),
+        );
+      }
       if (presentation?.dashed ?? false) {
         _drawDashed(canvas, start, end, paint);
       } else {
         canvas.drawLine(start, end, paint);
+      }
+      if (productProposed) {
+        paintRelationDiamond(
+          canvas,
+          relationSegmentMidpoint(start, end),
+          kProposedFullDiamond,
+          paint,
+        );
       }
       if (presentation != null && !presentation.directed) {
         continue;

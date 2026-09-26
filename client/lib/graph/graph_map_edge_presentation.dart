@@ -1,6 +1,43 @@
+import 'dart:ui';
+
 import '../api/api_models.dart';
 import '../ui/domain_labels.dart';
 import 'focus_lod.dart';
+
+/// Full proposed edge. Stroke stays at least 2.5 px. Diamond is hollow.
+const double kProposedFullStroke = 2.8;
+const double kProposedFullDiamond = 8;
+const double kProposedUnderExtra = 3.2;
+
+/// Compact proposed hairline. Stroke stays in the 1.8–2.0 px band.
+const double kProposedHairlineStroke = 1.9;
+const double kProposedHairlineDiamond = 6;
+
+/// Undimmed proposal ink. Dimmed focus keeps the cue above 0.65.
+const double kProposedOpacity = 0.95;
+const double kProposedDimmedOpacity = 0.72;
+
+double proposedRelationOpacity({required bool dimmed}) {
+  return dimmed ? kProposedDimmedOpacity : kProposedOpacity;
+}
+
+Offset relationSegmentMidpoint(Offset start, Offset end) {
+  return Offset((start.dx + end.dx) / 2, (start.dy + end.dy) / 2);
+}
+
+void paintRelationDiamond(Canvas canvas, Offset center, double size, Paint paint) {
+  final half = size / 2;
+  final diamond = Path()
+    ..moveTo(center.dx, center.dy - half)
+    ..lineTo(center.dx + half, center.dy)
+    ..lineTo(center.dx, center.dy + half)
+    ..lineTo(center.dx - half, center.dy)
+    ..close();
+  canvas.drawPath(
+    diamond,
+    Paint.from(paint)..style = PaintingStyle.stroke,
+  );
+}
 
 /// `part_of` means child/source -> parent/target. It is a structural solid
 /// arrow, stronger than `references` and not dashed like `depends_on`.
