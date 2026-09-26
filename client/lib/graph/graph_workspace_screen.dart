@@ -72,6 +72,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   FcoseRefinementMode _fcoseMode = FcoseRefinementMode.preserve;
   String? _fcoseWarning;
   String? _hybridWarning;
+  Rect? _hybridGraphBounds;
   VoidCallback? _zoomTaskMap;
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
@@ -235,6 +236,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     final viewportSize = _canvasViewportSize;
     if (viewportSize == null || viewportSize.isEmpty) {
+      return;
+    }
+    final hybridBounds = _hybridGraphBounds;
+    if (_taskMapRenderer == TaskMapRenderer.hybrid && hybridBounds != null) {
+      _transform.value = hybridFitTransform(
+        graphBounds: hybridBounds,
+        viewportSize: viewportSize,
+      );
       return;
     }
     _transform.value = GraphLayout.fitTransform(
@@ -583,8 +592,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ),
               )
               .toList();
-    final bounds = GraphLayout.computeBounds(positions);
-    final canvasPad = focusLod || hybridActive
+    final bounds = hybrid != null
+        ? hybridPresentationBounds(hybrid)
+        : GraphLayout.computeBounds(positions);
+    _hybridGraphBounds = hybrid != null ? bounds : null;
+    final canvasPad = focusLod
         ? kGraphCanvasPadding + kFocusLodCanvasMargin
         : kGraphCanvasPadding;
     final canvasWidth = bounds.width + canvasPad * 2;
@@ -604,10 +616,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             if (!mounted) {
               return;
             }
-            _transform.value = GraphLayout.fitTransform(
-              positions: positions,
-              viewportSize: viewportSize,
-            );
+            _transform.value = hybrid != null
+                ? hybridFitTransform(
+                    graphBounds: bounds,
+                    viewportSize: viewportSize,
+                  )
+                : GraphLayout.fitTransform(
+                    positions: positions,
+                    viewportSize: viewportSize,
+                  );
             widget.controller.clearFitRequest();
           });
         }
@@ -702,6 +719,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     FocusLodProjection? projection,
     HybridFocusPresentation? hybrid,
   ) {
+    final edgePositions = Map<String, Offset>.from(positions);
+    final nodeSizes = <String, Size>{};
+    if (hybrid != null) {
+      for (final node in hybrid.scene.nodes) {
+        edgePositions[node.id] =
+            hybrid.displayTopLeft[node.id] ?? node.topLeft;
+        nodeSizes[node.id] = Size(node.width, node.height);
+      }
+    }
     return InteractiveViewer(
       constrained: false,
       transformationController: _transform,
@@ -718,7 +744,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               size: Size(canvasWidth, canvasHeight),
               painter: _GraphEdgePainter(
                 edges: edges,
-                positions: positions,
+                positions: edgePositions,
+                nodeSizes: nodeSizes,
                 bounds: bounds,
                 padding: canvasPad,
                 selectedEdgeId: widget.controller.selectedEdgeId,
@@ -740,23 +767,41 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ),
               ),
             ...nodes.map((node) {
+              final focusedFlow =
+                  hybrid != null &&
+                  hybrid.scene.nodeById(node.id)?.width ==
+                      kHybridFocusedCardWidth;
               final position = hybrid == null || node.kind == 'task'
                   ? positions[node.id] ?? const Offset(0, 0)
                   : hybrid.topLeftFor(node.id, positions);
               final selected = selectedObjectId == node.id;
               final emphasized =
                   !focusMode || selected || focusNeighborIds.contains(node.id);
+              final bookmarkColor = widget.bookmarkController?.colorFor(
+                node.id,
+              );
               return Positioned(
                 left: position.dx - bounds.left + canvasPad,
                 top: position.dy - bounds.top + canvasPad,
-                child: _GraphNodeCard(
-                  object: node,
-                  selected: selected,
-                  focusDimmed: focusMode && !emphasized,
-                  person: widget.controller.personFor(node.id),
-                  bookmarkColor: widget.bookmarkController?.colorFor(node.id),
-                  onTap: () => widget.controller.selectObject(node.id),
-                ),
+                child: focusedFlow
+                    ? KeyedSubtree(
+                        key: Key('graph_node_${node.id}'),
+                        child: HybridFocusedFlowCard(
+                          object: node,
+                          selected: selected,
+                          focusDimmed: focusMode && !emphasized,
+                          bookmarkColor: bookmarkColor,
+                          onTap: () => widget.controller.selectObject(node.id),
+                        ),
+                      )
+                    : _GraphNodeCard(
+                        object: node,
+                        selected: selected,
+                        focusDimmed: focusMode && !emphasized,
+                        person: widget.controller.personFor(node.id),
+                        bookmarkColor: bookmarkColor,
+                        onTap: () => widget.controller.selectObject(node.id),
+                      ),
               );
             }),
             if (projection != null && hybrid == null) ...[
@@ -1693,10 +1738,12 @@ class _GraphEdgePainter extends CustomPainter {
     required this.selectedObjectId,
     required this.focusMode,
     required this.colorScheme,
+    this.nodeSizes = const {},
   });
 
   final List<SecretaryEdge> edges;
   final Map<String, Offset> positions;
+  final Map<String, Size> nodeSizes;
   final Rect bounds;
   final double padding;
   final String? selectedEdgeId;
@@ -1704,11 +1751,17 @@ class _GraphEdgePainter extends CustomPainter {
   final bool focusMode;
   final ColorScheme colorScheme;
 
+  Size _nodeSize(String objectId) {
+    return nodeSizes[objectId] ??
+        const Size(kGraphNodeWidth, kGraphNodeHeight);
+  }
+
   Offset _nodeCenter(String objectId) {
     final position = positions[objectId] ?? const Offset(0, 0);
+    final size = _nodeSize(objectId);
     return Offset(
-      position.dx - bounds.left + padding + kGraphNodeWidth / 2,
-      position.dy - bounds.top + padding + kGraphNodeHeight / 2,
+      position.dx - bounds.left + padding + size.width / 2,
+      position.dy - bounds.top + padding + size.height / 2,
     );
   }
 
@@ -1747,12 +1800,20 @@ class _GraphEdgePainter extends CustomPainter {
 
       final sourceCenter = _nodeCenter(edge.sourceId);
       final targetCenter = _nodeCenter(edge.targetId);
-      final endpoints = GraphLayout.computeEdgeEndpoints(
+      final sourceSize = _nodeSize(edge.sourceId);
+      final targetSize = _nodeSize(edge.targetId);
+      final start = GraphLayout.computeEdgeEndpoints(
         sourceCenter: sourceCenter,
         targetCenter: targetCenter,
-      );
-      final start = endpoints.start;
-      final end = endpoints.end;
+        nodeWidth: sourceSize.width,
+        nodeHeight: sourceSize.height,
+      ).start;
+      final end = GraphLayout.computeEdgeEndpoints(
+        sourceCenter: targetCenter,
+        targetCenter: sourceCenter,
+        nodeWidth: targetSize.width,
+        nodeHeight: targetSize.height,
+      ).start;
       canvas.drawLine(start, end, paint);
 
       final angle = math.atan2(end.dy - start.dy, end.dx - start.dx);

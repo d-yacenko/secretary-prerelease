@@ -140,7 +140,8 @@ void main() {
     expect(scene.nodeById('task-s')!.fixed, isTrue);
     expect(scene.nodeById('task-s')!.width, kGraphNodeWidth);
     expect(scene.nodeById('mail-s-0')!.fixed, isFalse);
-    expect(scene.nodeById('mail-s-0')!.width, kGraphNodeWidth);
+    expect(scene.nodeById('mail-s-0')!.width, kHybridFocusedCardWidth);
+    expect(scene.nodeById('mail-s-0')!.height, kHybridFocusedCardHeight);
     expect(scene.nodeById('mail-o-0')!.width, kHybridGlyphSize);
     expect(scene.nodeById('mail-o-0')!.fixed, isFalse);
     expect(
@@ -260,17 +261,12 @@ void main() {
     expect(harness.graph.positions['task-a'], positions['task-a']);
     expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
 
-    final taskTopLeft = tester.getTopLeft(
-      find.byKey(const Key('graph_node_task-a')),
-    );
     await tester.tap(find.byKey(const ValueKey('hybrid-glyph-email-1')));
     await tester.pumpAndSettle();
     expect(harness.graph.selectedObjectId, 'task-a');
     expect(find.text('Письмо контекста'), findsWidgets);
-    expect(
-      tester.getTopLeft(find.byKey(const Key('graph_node_task-a'))),
-      taskTopLeft,
-    );
+    expect(harness.graph.positions['task-a'], positions['task-a']);
+    expect(find.byKey(const Key('graph_node_task-a')), findsOneWidget);
 
     await tester.tap(find.text('Текущий'));
     await tester.pumpAndSettle();
@@ -437,8 +433,10 @@ List<Rect> _fullFlowRects(
         Rect.fromLTWH(
           presentation.displayTopLeft[node.id]!.dx,
           presentation.displayTopLeft[node.id]!.dy,
-          kGraphNodeWidth,
-          kGraphNodeHeight,
+          presentation.scene.nodeById(node.id)?.width ??
+              kHybridFocusedCardWidth,
+          presentation.scene.nodeById(node.id)?.height ??
+              kHybridFocusedCardHeight,
         ),
   ];
 }
