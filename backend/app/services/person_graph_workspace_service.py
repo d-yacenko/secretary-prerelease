@@ -182,6 +182,7 @@ class PersonGraphWorkspaceService:
             seed_ids = [person.id for person in people]
         if scores is None:
             scores = self._scores()
+        communication_counts = self._communication_counts([person.id for person in people])
         return PeopleWorkspaceResult(
             root_id=root_id,
             seed_ids=seed_ids,
@@ -189,7 +190,12 @@ class PersonGraphWorkspaceService:
             edges=edges,
             truncated=truncated,
             people=[
-                self._presentation(person, scores.get(person.id, 0), include_details=include_details)
+                self._presentation(
+                    person,
+                    scores.get(person.id, 0),
+                    include_details=include_details,
+                    communication_count=communication_counts.get(person.id, 0),
+                )
                 for person in people
             ],
         )
@@ -316,7 +322,14 @@ class PersonGraphWorkspaceService:
         visible = chosen[:limit]
         return [item[0] for item in visible], [item[1] for item in visible], truncated
 
-    def _presentation(self, person: Object, score: int, *, include_details: bool) -> dict:
+    def _presentation(
+        self,
+        person: Object,
+        score: int,
+        *,
+        include_details: bool,
+        communication_count: int,
+    ) -> dict:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
         conflict = any(item["state"] == "conflicted" for item in identities)
         routes = self._routes(person.id) if include_details else self._email_route_summaries(person.id)
@@ -331,7 +344,7 @@ class PersonGraphWorkspaceService:
             "routes": routes[:_MAX_ROUTES],
             "identity_conflict": conflict,
             "open_task_count": self._open_task_count(person.id),
-            "recent_communication_count": self._communication_count(person.id),
+            "recent_communication_count": communication_count,
         }
 
     def _identity_presentations(self, person_id: UUID, *, include_rejected: bool) -> list[dict]:
@@ -421,22 +434,12 @@ class PersonGraphWorkspaceService:
         )
         return int(count or 0)
 
-    def _communication_count(self, person_id: UUID) -> int:
-        other = aliased(Object)
-        count = self._session.scalar(
-            select(func.count())
-            .select_from(Edge)
-            .join(other, _linked_object(person_id, other))
-            .where(
-                Edge.user_id == self._user_id,
-                Edge.state != REJECTED_STATE,
-                other.user_id == self._user_id,
-                other.kind.in_(_COMMUNICATION_KINDS),
-                other.state != REJECTED_STATE,
-                object_is_active(other),
-            )
+    def _communication_counts(self, person_ids: list[UUID]) -> dict[UUID, int]:
+        # Identity-grounded count from one shared bounded scan, not graph edges.
+        return self._assistant.count_attributable_communications(
+            person_ids,
+            include_quarantined_telegram=True,
         )
-        return min(int(count or 0), 20)
 
     def _retract_feedback(
         self,

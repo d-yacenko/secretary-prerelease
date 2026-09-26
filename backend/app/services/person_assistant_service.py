@@ -113,6 +113,40 @@ class PersonAssistantService:
             truncated=truncated,
         )
 
+    def count_attributable_communications(
+        self,
+        person_ids: list[UUID],
+        *,
+        include_quarantined_telegram: bool = False,
+    ) -> dict[UUID, int]:
+        """Count stored communications attributed by effective identity keys.
+
+        One scan covers at most MAX_PERSON_SCAN_ROWS active messages inside
+        PERSON_LOOKBACK_DAYS. A truncated scan counts only examined rows.
+        This is not an edge count, a lifetime total, or live provider data.
+        The model-facing Telegram gate stays on unless the caller is the
+        first-party People surface.
+        """
+        keys_by_person = {person_id: self._effective_keys(person_id) for person_id in person_ids}
+        if not any(keys_by_person.values()):
+            return {person_id: 0 for person_id in person_ids}
+        messages = self._bounded_messages(
+            apply_telegram_ai_gate=not include_quarantined_telegram,
+        )
+        return {
+            person_id: _count_attributable(messages, keys)
+            for person_id, keys in keys_by_person.items()
+        }
+
+    def _bounded_messages(self, *, apply_telegram_ai_gate: bool) -> list[Object]:
+        messages: list[Object] = []
+        for chunk, _scope_complete in self._message_chunks(
+            None,
+            apply_telegram_ai_gate=apply_telegram_ai_gate,
+        ):
+            messages.extend(chunk)
+        return messages
+
     def confirm_person_identity(
         self, payload: PersonIdentityFeedbackInput
     ) -> PersonIdentityFeedbackOutput:
@@ -980,6 +1014,17 @@ def _identity_from_summary(summary: PersonIdentitySummary) -> NormalizedPersonId
         canonical_value=summary.canonical_value,
         display_value=summary.display_value,
     )
+
+
+def _count_attributable(messages: list[Object], keys: set[tuple[str, str, str]]) -> int:
+    if not keys:
+        return 0
+    anchors: set[tuple[str, str, str]] = set()
+    pending: list[Object] = []
+    matched: list[Object] = []
+    for obj in messages:
+        _collect_match(obj, keys, anchors, pending, matched, None)
+    return len(matched)
 
 
 def _collect_match(
