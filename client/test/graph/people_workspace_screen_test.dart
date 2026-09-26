@@ -88,12 +88,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(harness.graph.selectedObjectId, isNull);
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
+    expect(find.text('Выберите объект для просмотра.'), findsNothing);
     expect(find.text('Olga'), findsWidgets);
     expect(find.textContaining('email'), findsWidgets);
     expect(paths.any((path) => path.contains('/graph/people-workspace')), isTrue);
 
     await tester.tap(find.text('Olga').first);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsOneWidget);
+    expect(tester.getSize(find.byKey(const ValueKey('graph-desktop-detail-pane'))).width, 360);
     expect(find.text('olga@example.com'), findsWidgets);
     expect(find.text('Reply to Olga'), findsOneWidget);
     expect(find.text('Открытые задачи: 1'), findsOneWidget);

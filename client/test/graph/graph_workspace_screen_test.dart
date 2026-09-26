@@ -12,6 +12,7 @@ import 'package:personal_secretary/auth/server_url_store.dart';
 import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/assistant/fake_voice_recorder.dart';
 import 'package:personal_secretary/assistant/voice_temp_files.dart';
+import 'package:personal_secretary/graph/fcose_graph_refiner.dart';
 import 'package:personal_secretary/graph/graph_layout.dart';
 import 'package:personal_secretary/graph/graph_workspace_controller.dart';
 import 'package:personal_secretary/graph/graph_workspace_screen.dart';
@@ -957,5 +958,131 @@ void main() {
     expect(harness.graph.selectedObject?.body, multilineBody);
     expect(find.textContaining('Первая строка'), findsWidgets);
     expect(find.textContaining('Второй абзац'), findsWidgets);
+  });
+
+  testWidgets('wide graph hides the detail pane until an object is selected', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final harness = GraphTestHarness(
+      MockClient((request) async {
+        if (request.url.path == '/notifications') {
+          return jsonUtf8Response({'notifications': []});
+        }
+        if (request.url.path == '/today') {
+          return jsonUtf8Response({
+            'date': '2026-08-28',
+            'timezone': 'Europe/Amsterdam',
+            'day_start': '2026-08-28T08:00:00+02:00',
+            'tasks': [],
+            'calendar_events': [],
+            'notifications': [],
+          });
+        }
+        if (request.url.path == '/graph/workspace') {
+          return jsonUtf8Response(
+            graphWorkspaceJson(
+              nodes: [
+                graphObjectJson(id: 'task-1', title: 'Graph task'),
+                graphObjectJson(id: 'task-2', title: 'Second task'),
+              ],
+            ),
+          );
+        }
+        return jsonUtf8Response({}, statusCode: 404);
+      }),
+    );
+    harness.configure();
+    await openGraph(tester, harness);
+
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
+    expect(find.text('Выберите объект для просмотра.'), findsNothing);
+    final openWidth = tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).width;
+    final positions = Map<String, Offset>.from(harness.graph.visiblePositions);
+    final rootId = harness.graph.rootId;
+    final kindFilter = harness.graph.searchKindFilter;
+    expect(harness.graph.shouldFitAfterLayout, isFalse);
+    final preserve = tester.widget<SegmentedButton<FcoseRefinementMode>>(
+      find.byType(SegmentedButton<FcoseRefinementMode>),
+    );
+    expect(preserve.selected, {FcoseRefinementMode.preserve});
+
+    harness.graph.selectObject('task-1');
+    await tester.pumpAndSettle();
+
+    final pane = find.byKey(const ValueKey('graph-desktop-detail-pane'));
+    expect(pane, findsOneWidget);
+    expect(tester.getSize(pane).width, 360);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).width,
+      openWidth - 360,
+    );
+    expect(
+      find.descendant(of: pane, matching: find.text('Graph task')),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: pane, matching: find.text('Second task')), findsNothing);
+    expect(harness.graph.visiblePositions, positions);
+    expect(harness.graph.rootId, rootId);
+    expect(harness.graph.searchKindFilter, kindFilter);
+    expect(harness.graph.shouldFitAfterLayout, isFalse);
+    expect(
+      tester.widget<SegmentedButton<FcoseRefinementMode>>(
+        find.byType(SegmentedButton<FcoseRefinementMode>),
+      ).selected,
+      {FcoseRefinementMode.preserve},
+    );
+
+    harness.graph.selectObject('task-2');
+    await tester.pumpAndSettle();
+    expect(pane, findsOneWidget);
+    expect(
+      find.descendant(of: pane, matching: find.text('Second task')),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: pane, matching: find.text('Graph task')), findsNothing);
+
+    await tester.tap(find.byTooltip('Закрыть'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
+    expect(find.text('Выберите объект для просмотра.'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).width,
+      openWidth,
+    );
+    expect(harness.graph.visiblePositions, positions);
+    expect(harness.graph.shouldFitAfterLayout, isFalse);
+  });
+
+  testWidgets('narrow graph keeps the bottom overlay and does not reserve a side pane', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final harness = GraphTestHarness(overviewMock());
+    harness.configure();
+    await openGraph(tester, harness);
+
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
+    expect(find.text('Выберите объект для просмотра.'), findsNothing);
+    expect(find.text('Спросить секретаря'), findsNothing);
+    final openWidth = tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).width;
+
+    harness.graph.selectObject('task-1');
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
+    expect(find.text('Спросить секретаря'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).width,
+      openWidth,
+    );
   });
 }

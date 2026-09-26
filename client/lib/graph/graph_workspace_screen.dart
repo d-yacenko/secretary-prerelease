@@ -244,8 +244,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.sizeOf(context).width >= 900;
-    final canvas = _buildCanvas(context);
-    final details = _buildDetailPanel(context, compact: !isWide);
+    final selected = widget.controller.selectedObject;
+    final showDesktopPane = isWide && selected != null;
+    final canvas = KeyedSubtree(
+      key: const ValueKey('graph-canvas-region'),
+      child: _buildCanvas(context),
+    );
+    final details = selected == null
+        ? null
+        : _buildDetailPanel(context, compact: !isWide);
 
     return Column(
       children: [
@@ -275,13 +282,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               ? Row(
                   children: [
                     Expanded(child: canvas),
-                    SizedBox(width: 360, child: details),
+                    if (showDesktopPane)
+                      SizedBox(
+                        key: const ValueKey('graph-desktop-detail-pane'),
+                        width: 360,
+                        child: details,
+                      ),
                   ],
                 )
               : Stack(
                   children: [
                     Positioned.fill(child: canvas),
-                    if (widget.controller.selectedObject != null)
+                    if (selected != null)
                       Positioned(
                         left: 0,
                         right: 0,
