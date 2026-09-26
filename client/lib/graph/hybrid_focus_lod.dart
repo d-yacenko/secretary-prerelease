@@ -10,7 +10,7 @@ import 'focus_lod.dart';
 import 'graph_geometry.dart';
 import 'graph_layout.dart';
 
-/// Compact semantic glyph. Rings stay the V4 start; fCoSE may move the glyph.
+/// Compact semantic glyph. Hybrid rings use this size, not the V4 24 px mark.
 const double kHybridGlyphSize = 32;
 
 const double kHybridKindGlyphSize = 24;
@@ -33,7 +33,8 @@ const double kHybridOngoingSize = 144;
 
 Rect hybridOngoingRect(Offset canonicalTopLeft) {
   return Rect.fromCenter(
-    center: canonicalTopLeft +
+    center:
+        canonicalTopLeft +
         const Offset(kGraphNodeWidth / 2, kGraphNodeHeight / 2),
     width: kHybridOngoingSize,
     height: kHybridOngoingSize,
@@ -42,7 +43,17 @@ Rect hybridOngoingRect(Offset canonicalTopLeft) {
 
 const double _focusedGap = 8;
 const int _focusedSlots = 8;
-const int _focusedMaxRings = 24;
+const int kHybridCompactNominalSlots = 12;
+const double kHybridCompactGap = 4;
+
+/// Half of the 8-slot 45° focused reference.
+const double kHybridFocusedOwnRayRadians = math.pi / 8;
+
+/// Quarter of the 8-slot 45° focused reference.
+const double kHybridFocusedMinSeparationRadians = math.pi / 16;
+
+/// The 12-slot 30° compact reference.
+const double kHybridCompactOwnRayRadians = math.pi / 6;
 
 /// Synthetic geometry id for one halo's `+N` mark. Not an object id.
 String hybridOverflowId(String anchorTaskId) => 'hybrid-overflow:$anchorTaskId';
@@ -146,23 +157,21 @@ HybridFocusPresentation presentHybridFocus({
       return _fallback(lod, scene, result);
     }
     merged.addAll(result.nodes);
-    if (_focusedStaysLocal(
+    if (_focusedPassAccepted(
       taskId: selectedObjectId,
       scene: scene,
       focused: focused,
       result: result,
     )) {
       for (final node in focused) {
-        final refined = result.nodes[node.id];
-        if (refined == null) {
-          return _fallback(
-            lod,
-            scene,
-            const GraphGeometryResult.failure('fCoSE omitted a focused Flow card'),
-          );
-        }
-        display[node.id] = refined.topLeft;
+        display[node.id] = result.nodes[node.id]!.topLeft;
       }
+    } else if (focused.any((node) => result.nodes[node.id] == null)) {
+      return _fallback(
+        lod,
+        scene,
+        const GraphGeometryResult.failure('fCoSE omitted a focused Flow card'),
+      );
     } else {
       warning = 'Локальное соцветие оставлено на стартовых позициях';
     }
@@ -195,16 +204,18 @@ HybridFocusPresentation presentHybridFocus({
     final result = refiner.refine(pass);
     if (!result.completed) {
       warning ??= result.error ?? 'Не удалось уточнить компактные гало';
-    } else {
+    } else if (_compactPassAccepted(
+      scene: scene,
+      compact: compact,
+      result: result,
+      display: display,
+    )) {
       merged.addAll(result.nodes);
       for (final node in compact) {
-        final refined = result.nodes[node.id];
-        if (refined == null) {
-          warning ??= 'Не удалось уточнить компактные гало';
-          break;
-        }
-        display[node.id] = refined.topLeft;
+        display[node.id] = result.nodes[node.id]!.topLeft;
       }
+    } else {
+      warning ??= 'Компактные гало оставлены на сбалансированных позициях';
     }
   }
 
@@ -251,6 +262,13 @@ GraphGeometryScene buildHybridGeometryScene({
     selectedObjectId: selectedObjectId,
     bookmarked: bookmarked,
   );
+  final compactStarts = _balancedCompactStarts(
+    nodes: nodes,
+    lod: lod,
+    positions: positions,
+    bookmarked: bookmarked,
+    focusedStarts: focusedStarts,
+  );
   final geometryNodes = <GraphGeometryNode>[];
   final geometryEdges = <GraphGeometryEdge>[];
 
@@ -262,7 +280,10 @@ GraphGeometryScene buildHybridGeometryScene({
           id: node.id,
           width: kHybridGlyphSize,
           height: kHybridGlyphSize,
-          topLeft: _glyphTopLeft(satellite.rect.center),
+          topLeft:
+              compactStarts[node.id] ??
+              (satellite.rect.center -
+                  const Offset(kHybridGlyphSize / 2, kHybridGlyphSize / 2)),
           fixed: false,
         ),
       );
@@ -325,7 +346,10 @@ GraphGeometryScene buildHybridGeometryScene({
         id: id,
         width: kHybridGlyphSize,
         height: kHybridGlyphSize,
-        topLeft: _glyphTopLeft(overflow.rect.center),
+        topLeft:
+            compactStarts[id] ??
+            (overflow.rect.center -
+                const Offset(kHybridGlyphSize / 2, kHybridGlyphSize / 2)),
         fixed: false,
       ),
     );
@@ -365,7 +389,18 @@ double hybridFocusedLocalityLimit(int count) {
     return 0;
   }
   final lastRing = (count - 1) ~/ _focusedSlots;
-  return _focusedBaseRadius() + (lastRing + 1) * _focusedStep();
+  final onRing = math.min(count, _focusedSlots);
+  final span = _markSpan(
+    kHybridFocusedCardWidth,
+    kHybridFocusedCardHeight,
+    _focusedGap,
+  );
+  final angular = onRing <= 1 ? 0.0 : span / (2 * math.sin(math.pi / onRing));
+  return math.max(_focusedBaseRadius(), angular) + (lastRing + 1) * span;
+}
+
+double _markSpan(double width, double height, double gap) {
+  return math.sqrt(width * width + height * height) + gap;
 }
 
 Rect hybridPresentationBounds(HybridFocusPresentation presentation) {
@@ -391,7 +426,9 @@ Matrix4 hybridFitTransform({
   required Size viewportSize,
   double padding = kGraphCanvasPadding,
 }) {
-  if (viewportSize.isEmpty || graphBounds.width <= 0 || graphBounds.height <= 0) {
+  if (viewportSize.isEmpty ||
+      graphBounds.width <= 0 ||
+      graphBounds.height <= 0) {
     return Matrix4.identity();
   }
   final scaleX = (viewportSize.width - padding * 2) / graphBounds.width;
@@ -674,7 +711,10 @@ class HybridOngoingTaskNode extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.all_inclusive, key: ValueKey('hybrid-ongoing-${object.id}')),
+                Icon(
+                  Icons.all_inclusive,
+                  key: ValueKey('hybrid-ongoing-${object.id}'),
+                ),
                 Text(
                   'Направление',
                   style: Theme.of(context).textTheme.labelSmall,
@@ -719,7 +759,9 @@ Map<String, Offset> _focusedStarts({
   if (selectedObjectId == null || !positions.containsKey(selectedObjectId)) {
     return const {};
   }
-  final selected = nodes.where((node) => node.id == selectedObjectId).firstOrNull;
+  final selected = nodes
+      .where((node) => node.id == selectedObjectId)
+      .firstOrNull;
   if (selected == null || selected.kind != 'task') {
     return const {};
   }
@@ -737,36 +779,229 @@ Map<String, Offset> _focusedStarts({
             ? hybridOngoingRect(positions[node.id]!)
             : GraphLayout.nodeRectAt(positions[node.id]!),
   ];
-  final placed = <Rect>[];
-  final starts = <String, Offset>{};
   final anchor = positions[selectedObjectId]!;
-  for (var index = 0; index < focused.length; index++) {
-    final slot =
-        _nextFocusedSlot(anchor: anchor, blocked: [...occupied, ...placed]) ??
-        _forcedFocusedSlot(anchor, index);
-    placed.add(slot);
-    starts[focused[index].id] = slot.topLeft;
-  }
-  return starts;
-}
-
-Rect _forcedFocusedSlot(Offset anchor, int index) {
   final anchorCenter = Offset(
     anchor.dx + kGraphNodeWidth / 2,
     anchor.dy + kGraphNodeHeight / 2,
   );
-  final ring = index ~/ _focusedSlots;
-  final slot = index % _focusedSlots;
-  final radius = _focusedBaseRadius() + ring * _focusedStep();
-  final angle = (2 * math.pi) * slot / _focusedSlots - math.pi / 2;
+  final placed = _placeBalanced(
+    anchorCenter: anchorCenter,
+    anchorHalfWidth: kGraphNodeWidth / 2,
+    anchorHalfHeight: kGraphNodeHeight / 2,
+    count: focused.length,
+    markWidth: kHybridFocusedCardWidth,
+    markHeight: kHybridFocusedCardHeight,
+    gap: _focusedGap,
+    nominalSlots: _focusedSlots,
+    blocked: occupied,
+  );
+  return {
+    for (var index = 0; index < focused.length; index++)
+      focused[index].id: placed[index].topLeft,
+  };
+}
+
+Map<String, Offset> _balancedCompactStarts({
+  required List<SecretaryObject> nodes,
+  required FocusLodProjection lod,
+  required Map<String, Offset> positions,
+  required bool Function(String objectId) bookmarked,
+  required Map<String, Offset> focusedStarts,
+}) {
+  final byId = {for (final node in nodes) node.id: node};
+  final grouped = <String, List<SecretaryObject>>{};
+  for (final satellite in lod.satellites) {
+    final object = byId[satellite.objectId];
+    if (object == null) {
+      continue;
+    }
+    grouped.putIfAbsent(satellite.anchorTaskId, () => []).add(object);
+  }
+  final anchors = grouped.keys.toList()..sort();
+  for (final overflow in lod.overflows) {
+    anchors.add(overflow.anchorTaskId);
+  }
+  final orderedAnchors = anchors.toSet().toList()..sort();
+  final blocked = <Rect>[
+    for (final node in nodes)
+      if (node.kind == 'task' && positions.containsKey(node.id))
+        node.isOngoingTask
+            ? hybridOngoingRect(positions[node.id]!)
+            : GraphLayout.nodeRectAt(positions[node.id]!),
+    for (final entry in focusedStarts.entries)
+      Rect.fromLTWH(
+        entry.value.dx,
+        entry.value.dy,
+        kHybridFocusedCardWidth,
+        kHybridFocusedCardHeight,
+      ),
+  ];
+  final starts = <String, Offset>{};
+  for (final anchorId in orderedAnchors) {
+    final task = byId[anchorId];
+    final topLeft = positions[anchorId];
+    if (task == null || topLeft == null) {
+      continue;
+    }
+    final members = [...?grouped[anchorId]]
+      ..sort((left, right) => _focusOrder(left, right, bookmarked));
+    final overflow = lod.overflows
+        .where((item) => item.anchorTaskId == anchorId)
+        .firstOrNull;
+    final count = members.length + (overflow == null ? 0 : 1);
+    final anchorRect = task.isOngoingTask
+        ? hybridOngoingRect(topLeft)
+        : GraphLayout.nodeRectAt(topLeft);
+    final placed = _placeBalanced(
+      anchorCenter: anchorRect.center,
+      anchorHalfWidth: anchorRect.width / 2,
+      anchorHalfHeight: anchorRect.height / 2,
+      count: count,
+      markWidth: kHybridGlyphSize,
+      markHeight: kHybridGlyphSize,
+      gap: kHybridCompactGap,
+      nominalSlots: kHybridCompactNominalSlots,
+      blocked: blocked,
+    );
+    for (var index = 0; index < members.length; index++) {
+      starts[members[index].id] = placed[index].topLeft;
+      blocked.add(placed[index]);
+    }
+    if (overflow != null) {
+      final rect = placed[members.length];
+      starts[hybridOverflowId(anchorId)] = rect.topLeft;
+      blocked.add(rect);
+    }
+  }
+  return starts;
+}
+
+class _PlannedSlot {
+  const _PlannedSlot(this.ring, this.angle, this.slotAngle);
+
+  final int ring;
+  final double angle;
+  final double slotAngle;
+}
+
+List<Rect> _placeBalanced({
+  required Offset anchorCenter,
+  required double anchorHalfWidth,
+  required double anchorHalfHeight,
+  required int count,
+  required double markWidth,
+  required double markHeight,
+  required double gap,
+  required int nominalSlots,
+  required List<Rect> blocked,
+}) {
+  if (count <= 0) {
+    return const [];
+  }
+  final base = math.sqrt(
+    math.pow(anchorHalfWidth + markWidth / 2 + gap, 2) +
+        math.pow(anchorHalfHeight + markHeight / 2 + gap, 2),
+  );
+  final step = _markSpan(markWidth, markHeight, gap);
+  final reserved = [...blocked];
+  final placed = <Rect>[];
+  for (final slot in _balancedPlan(count, nominalSlots)) {
+    final rect = _resolveBalancedSlot(
+      slot: slot,
+      nominalSlots: nominalSlots,
+      anchorCenter: anchorCenter,
+      base: base,
+      step: step,
+      gap: gap,
+      markWidth: markWidth,
+      markHeight: markHeight,
+      blocked: reserved,
+    );
+    placed.add(rect);
+    reserved.add(rect);
+  }
+  return placed;
+}
+
+List<_PlannedSlot> _balancedPlan(int count, int nominalSlots) {
+  if (count <= nominalSlots) {
+    final slotAngle = 2 * math.pi / count;
+    return [
+      for (var index = 0; index < count; index++)
+        _PlannedSlot(0, -math.pi / 2 + index * slotAngle, slotAngle),
+    ];
+  }
+  final slotAngle = 2 * math.pi / nominalSlots;
+  final plan = <_PlannedSlot>[];
+  var phase = -math.pi / 2;
+  var left = count;
+  var ring = 0;
+  while (left > 0) {
+    final onRing = math.min(left, nominalSlots);
+    for (var index = 0; index < onRing; index++) {
+      plan.add(_PlannedSlot(ring, phase + index * slotAngle, slotAngle));
+    }
+    phase += slotAngle / 2;
+    left -= onRing;
+    ring += 1;
+  }
+  return plan;
+}
+
+Rect _resolveBalancedSlot({
+  required _PlannedSlot slot,
+  required int nominalSlots,
+  required Offset anchorCenter,
+  required double base,
+  required double step,
+  required double gap,
+  required double markWidth,
+  required double markHeight,
+  required List<Rect> blocked,
+}) {
+  final nominal = 2 * math.pi / nominalSlots;
+  final onRing = math.max(1, (2 * math.pi / slot.slotAngle).round());
+  final neighbor = _markSpan(markWidth, markHeight, gap);
+  final angular = onRing <= 1
+      ? 0.0
+      : neighbor / (2 * math.sin(math.pi / onRing));
+  for (var extra = 0; extra < 12; extra++) {
+    final radius = math.max(base, angular) + (slot.ring + extra) * step;
+    final shift = extra * (nominal / 2);
+    for (final angle in _ringSweep(slot.angle + shift, slot.slotAngle)) {
+      final rect = Rect.fromCenter(
+        center: Offset(
+          anchorCenter.dx + math.cos(angle) * radius,
+          anchorCenter.dy + math.sin(angle) * radius,
+        ),
+        width: markWidth,
+        height: markHeight,
+      );
+      if (!_hits(rect, blocked)) {
+        return rect;
+      }
+    }
+  }
+  final fallbackRadius = math.max(base, angular) + (slot.ring + 12) * step;
   return Rect.fromCenter(
     center: Offset(
-      anchorCenter.dx + math.cos(angle) * radius,
-      anchorCenter.dy + math.sin(angle) * radius,
+      anchorCenter.dx + math.cos(slot.angle) * fallbackRadius,
+      anchorCenter.dy + math.sin(slot.angle) * fallbackRadius,
     ),
-    width: kHybridFocusedCardWidth,
-    height: kHybridFocusedCardHeight,
+    width: markWidth,
+    height: markHeight,
   );
+}
+
+List<double> _ringSweep(double preferred, double slotAngle) {
+  final step = math.max(slotAngle / 12, 2 * math.pi / 96);
+  final turns = (2 * math.pi / step).ceil();
+  final angles = <double>[preferred];
+  for (var k = 1; k <= turns; k++) {
+    angles.add(preferred + step * k);
+    angles.add(preferred - step * k);
+  }
+  return angles;
 }
 
 int _focusOrder(
@@ -784,37 +1019,6 @@ int _focusOrder(
     return recency;
   }
   return left.id.compareTo(right.id);
-}
-
-Rect? _nextFocusedSlot({
-  required Offset anchor,
-  required List<Rect> blocked,
-}) {
-  final anchorCenter = Offset(
-    anchor.dx + kGraphNodeWidth / 2,
-    anchor.dy + kGraphNodeHeight / 2,
-  );
-  final angleStep = (2 * math.pi) / _focusedSlots;
-  for (var ring = 0; ring < _focusedMaxRings; ring++) {
-    final radius = _focusedBaseRadius() + ring * _focusedStep();
-    for (var slot = 0; slot < _focusedSlots; slot++) {
-      final angle = angleStep * slot - math.pi / 2;
-      final center = Offset(
-        anchorCenter.dx + math.cos(angle) * radius,
-        anchorCenter.dy + math.sin(angle) * radius,
-      );
-      final rect = Rect.fromCenter(
-        center: center,
-        width: kHybridFocusedCardWidth,
-        height: kHybridFocusedCardHeight,
-      );
-      if (_hits(rect, blocked)) {
-        continue;
-      }
-      return rect;
-    }
-  }
-  return null;
 }
 
 bool _hits(Rect rect, List<Rect> others) {
@@ -843,11 +1047,7 @@ double _focusedBaseRadius() {
   );
 }
 
-double _focusedStep() {
-  return math.min(kHybridFocusedCardWidth, kHybridFocusedCardHeight) + _focusedGap;
-}
-
-bool _focusedStaysLocal({
+bool _focusedPassAccepted({
   required String? taskId,
   required GraphGeometryScene scene,
   required List<GraphGeometryNode> focused,
@@ -860,25 +1060,159 @@ bool _focusedStaysLocal({
   if (task == null) {
     return false;
   }
+  final refined = <Rect>[];
+  final starts = <Rect>[];
   final limit = hybridFocusedLocalityLimit(focused.length);
   for (final node in focused) {
-    final refined = result.nodes[node.id];
-    if (refined == null) {
+    final next = result.nodes[node.id];
+    if (next == null) {
       return false;
     }
-    if ((refined.center - task.center).distance > limit) {
+    if ((next.center - task.center).distance > limit) {
+      return false;
+    }
+    final drift = _angleDelta(
+      _rayAngle(task.center, node.center),
+      _rayAngle(task.center, next.center),
+    );
+    if (drift > kHybridFocusedOwnRayRadians + 1e-6) {
+      return false;
+    }
+    refined.add(next);
+    starts.add(node.rect);
+  }
+  if (focused.length > 1 &&
+      _minAngularGap(task.center, refined) + 1e-6 <
+          kHybridFocusedMinSeparationRadians) {
+    return false;
+  }
+  final obstacles = [
+    for (final node in scene.nodes)
+      if (node.fixed) node.rect,
+  ];
+  return _overlapCount(refined, refined) <= _overlapCount(starts, starts) &&
+      _overlapCount(refined, obstacles) <= _overlapCount(starts, obstacles);
+}
+
+bool _compactPassAccepted({
+  required GraphGeometryScene scene,
+  required List<GraphGeometryNode> compact,
+  required GraphGeometryResult result,
+  required Map<String, Offset> display,
+}) {
+  final anchors = <String, String>{};
+  for (final edge in scene.edges) {
+    if (edge.id.startsWith('hybrid-anchor-') ||
+        edge.id.startsWith('hybrid-overflow-edge-')) {
+      anchors[edge.targetId] = edge.sourceId;
+    }
+  }
+  final byAnchor = <String, List<GraphGeometryNode>>{};
+  final refined = <Rect>[];
+  final starts = <Rect>[];
+  for (final node in compact) {
+    final next = result.nodes[node.id];
+    final anchorId = anchors[node.id];
+    final anchor = anchorId == null ? null : scene.nodeById(anchorId);
+    if (next == null || anchor == null) {
+      return false;
+    }
+    final drift = _angleDelta(
+      _rayAngle(anchor.center, node.center),
+      _rayAngle(anchor.center, next.center),
+    );
+    if (drift > kHybridCompactOwnRayRadians + 1e-6) {
+      return false;
+    }
+    byAnchor.putIfAbsent(anchorId!, () => []).add(node);
+    refined.add(next);
+    starts.add(node.rect);
+  }
+  for (final entry in byAnchor.entries) {
+    final anchor = scene.nodeById(entry.key);
+    if (anchor == null) {
+      return false;
+    }
+    final centers = [
+      for (final node in entry.value) result.nodes[node.id]!.center,
+    ];
+    final quadrants = centers
+        .map((center) => _quadrant(anchor.center, center))
+        .toSet();
+    if (entry.value.length >= 6 && quadrants.length < 4) {
+      return false;
+    }
+    if (entry.value.length >= 4 && quadrants.length < 3) {
       return false;
     }
   }
-  return true;
+  final obstacles = [
+    for (final node in scene.nodes)
+      if (node.width != kHybridGlyphSize)
+        Rect.fromLTWH(
+          (display[node.id] ?? node.topLeft).dx,
+          (display[node.id] ?? node.topLeft).dy,
+          node.width,
+          node.height,
+        ),
+  ];
+  return _overlapCount(refined, refined) <= _overlapCount(starts, starts) &&
+      _overlapCount(refined, obstacles) <= _overlapCount(starts, obstacles);
+}
+
+double _rayAngle(Offset origin, Offset point) {
+  return math.atan2(point.dy - origin.dy, point.dx - origin.dx);
+}
+
+double _angleDelta(double left, double right) {
+  var delta = (left - right) % (2 * math.pi);
+  if (delta > math.pi) {
+    delta -= 2 * math.pi;
+  }
+  if (delta < -math.pi) {
+    delta += 2 * math.pi;
+  }
+  return delta.abs();
+}
+
+int _quadrant(Offset origin, Offset point) {
+  var angle = _rayAngle(origin, point) % (2 * math.pi);
+  if (angle < 0) {
+    angle += 2 * math.pi;
+  }
+  return (angle * 2 / math.pi).floor().clamp(0, 3);
+}
+
+double _minAngularGap(Offset origin, List<Rect> rects) {
+  final angles = [for (final rect in rects) _rayAngle(origin, rect.center)]
+    ..sort();
+  var minGap = double.infinity;
+  for (var index = 0; index < angles.length; index++) {
+    final next = index + 1 == angles.length
+        ? angles.first + 2 * math.pi
+        : angles[index + 1];
+    minGap = math.min(minGap, next - angles[index]);
+  }
+  return minGap;
+}
+
+int _overlapCount(List<Rect> left, List<Rect> right) {
+  var count = 0;
+  for (var i = 0; i < left.length; i++) {
+    for (var j = 0; j < right.length; j++) {
+      if (identical(left, right) && j <= i) {
+        continue;
+      }
+      if (_hits(left[i], [right[j]])) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 Map<String, Offset> _startTopLefts(GraphGeometryScene scene) {
   return {for (final node in scene.nodes) node.id: node.topLeft};
-}
-
-Offset _glyphTopLeft(Offset v4Center) {
-  return v4Center - const Offset(kHybridGlyphSize / 2, kHybridGlyphSize / 2);
 }
 
 List<HybridHairline> _hairlines(

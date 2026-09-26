@@ -159,11 +159,14 @@ void main() {
       selectedObjectId: 'task-s',
     );
     final compact = start.satellites.first;
-    expect(
-      scene.nodeById(compact.objectId)!.topLeft,
-      compact.rect.center -
-          const Offset(kHybridGlyphSize / 2, kHybridGlyphSize / 2),
+    final glyph = scene.nodeById(compact.objectId)!;
+    final anchorEdge = scene.edges.firstWhere(
+      (edge) => edge.targetId == compact.objectId,
     );
+    expect(glyph.width, kHybridGlyphSize);
+    expect(glyph.height, kHybridGlyphSize);
+    expect(glyph.rect.overlaps(scene.nodeById(anchorEdge.sourceId)!.rect), isFalse);
+    expect(glyph.width, isNot(kFocusLodSatelliteSize));
 
     final failed = presentHybridFocus(
       nodes: flower.nodes,
