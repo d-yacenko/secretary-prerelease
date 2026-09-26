@@ -10,7 +10,8 @@ from app.db.models import User
 from app.main import app
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
-from tests.conftest import apply_embedding_service_overrides, AuthTestClient, BOOTSTRAP_USER_ID
+from app.services.task_mutation_service import TaskMutationService
+from tests.conftest import BOOTSTRAP_USER_ID, AuthTestClient, apply_embedding_service_overrides
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def graph_user_b_id(db_session) -> uuid.UUID:
 
 @pytest.fixture
 def graph_client(db_session, fake_embedding_service, auth_headers):
-    from app.api.deps import get_db, get_embedding_service
+    from app.api.deps import get_db
 
     def override_get_db():
         yield db_session
@@ -95,9 +96,7 @@ def test_deleted_neighbor_excluded_from_overview_expansion(
     assert "Deleted neighbor" not in titles
 
 
-def test_rooted_workspace_allows_terminal_task(
-    db_session, fake_embedding_service, graph_client
-):
+def test_rooted_workspace_allows_terminal_task(db_session, fake_embedding_service, graph_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     done = _task(graph, "DONE-ROOT", status="done")
     db_session.flush()
@@ -109,21 +108,34 @@ def test_rooted_workspace_allows_terminal_task(
     assert any(node["id"] == str(done.id) for node in body["nodes"])
 
 
-def test_rooted_deleted_task_can_be_inspected(
-    db_session, fake_embedding_service, graph_client
-):
+def test_rooted_legacy_deleted_task_is_not_found(db_session, fake_embedding_service, graph_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     deleted = _task(graph, "DELETED-ROOT", status="deleted")
     db_session.flush()
 
     response = graph_client.get(f"/graph/workspace?root_id={deleted.id}")
-    assert response.status_code == 200
-    assert response.json()["nodes"][0]["status"] == "deleted"
+    assert response.status_code == 404
 
 
-def test_workspace_no_duplicate_ids(
-    db_session, fake_embedding_service, graph_client
-):
+def test_rooted_tombstoned_task_is_not_found(db_session, fake_embedding_service, graph_client):
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    task = _task(graph, "TOMBSTONE-ROOT")
+    db_session.flush()
+    deleted = TaskMutationService(
+        db_session, BOOTSTRAP_USER_ID, fake_embedding_service
+    ).soft_delete_task(task.id)
+    db_session.flush()
+    assert deleted.object.deleted_at is not None
+    assert deleted.object.status == "deleted"
+
+    response = graph_client.get(f"/graph/workspace?root_id={task.id}")
+    assert response.status_code == 404
+    overview = graph_client.get("/graph/workspace")
+    assert overview.status_code == 200
+    assert str(task.id) not in {node["id"] for node in overview.json()["nodes"]}
+
+
+def test_workspace_no_duplicate_ids(db_session, fake_embedding_service, graph_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     a = _task(graph, "A")
     b = _task(graph, "B")
@@ -155,9 +167,7 @@ def test_workspace_no_duplicate_ids(
     assert len(edge_ids) == len(set(edge_ids))
 
 
-def test_workspace_edges_have_endpoints_in_nodes(
-    db_session, fake_embedding_service, graph_client
-):
+def test_workspace_edges_have_endpoints_in_nodes(db_session, fake_embedding_service, graph_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     task = _task(graph, "EDGE-ENDPOINTS")
     note = graph.create_object(
@@ -181,9 +191,7 @@ def test_workspace_edges_have_endpoints_in_nodes(
         assert edge["target_id"] in node_ids
 
 
-def test_rejected_objects_and_edges_excluded(
-    db_session, fake_embedding_service, graph_client
-):
+def test_rejected_objects_and_edges_excluded(db_session, fake_embedding_service, graph_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     task = _task(graph, "REJECT-FILTER")
     rejected = graph.create_object(
@@ -216,7 +224,7 @@ def test_wrong_user_root_returns_404(
     task = _task(foreign_graph, "FOREIGN")
     db_session.flush()
 
-    from app.api.deps import get_db, get_embedding_service
+    from app.api.deps import get_db
 
     def override_get_db():
         yield db_session
