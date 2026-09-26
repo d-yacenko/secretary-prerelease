@@ -765,6 +765,9 @@ class TaskProfileOut(BaseModel):
     involves: list[TaskActorOut]
     depends_on: list[TaskLinkOut]
     dependent_tasks: list[TaskLinkOut]
+    parent_task: TaskLinkOut | None = None
+    child_tasks: list[TaskLinkOut] = Field(default_factory=list)
+    child_tasks_truncated: bool = False
     evidence: list[TaskLinkOut]
     operational: TaskOperationalOut
     requested_by_truncated: bool = False

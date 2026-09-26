@@ -77,6 +77,9 @@ Map<String, dynamic> profileJson({
   List<Map<String, dynamic>> waitingOn = const [],
   List<Map<String, dynamic>> dependsOn = const [],
   List<Map<String, dynamic>> dependentTasks = const [],
+  Map<String, dynamic>? parentTask,
+  List<Map<String, dynamic>> childTasks = const [],
+  bool childTasksTruncated = false,
   List<Map<String, dynamic>> evidence = const [],
   Map<String, dynamic>? operational,
 }) {
@@ -93,6 +96,9 @@ Map<String, dynamic> profileJson({
     'involves': const [],
     'depends_on': dependsOn,
     'dependent_tasks': dependentTasks,
+    if (parentTask != null) 'parent_task': parentTask,
+    'child_tasks': childTasks,
+    'child_tasks_truncated': childTasksTruncated,
     'evidence': evidence,
     if (operational != null) 'operational': operational,
   };
@@ -120,6 +126,7 @@ Map<String, dynamic> operationalJson({
 MockClient _graphClient({
   required Future<http.Response> Function(http.Request request) onProfile,
   Future<http.Response> Function(http.Request request)? onOther,
+  List<String>? workspaceRoots,
 }) {
   return MockClient((request) async {
     if (request.url.path == '/notifications') {
@@ -141,6 +148,9 @@ MockClient _graphClient({
         return onOther(request);
       }
       final root = request.url.queryParameters['root_id'];
+      if (root != null) {
+        workspaceRoots?.add(root);
+      }
       if (root == 'person-1') {
         return jsonUtf8Response(
           graphWorkspaceJson(
@@ -239,6 +249,100 @@ void main() {
     expect(profile.dependsOn.single.edgeOrigin, 'user');
     expect(profile.evidence.single.kind, 'email');
     expect(profile.evidence.single.edgeConfidence, 0.4);
+    expect(profile.parentTask, isNull);
+    expect(profile.childTasks, isEmpty);
+  });
+
+  test('Task Profile decodes composition parent and children', () {
+    final profile = TaskProfile.fromJson(
+      profileJson(
+        parentTask: _linkJson(
+          edgeId: 'edge-parent',
+          objectId: 'parent-1',
+          title: 'Целое',
+          kind: 'task',
+          state: 'confirmed',
+          origin: 'user',
+        ),
+        childTasks: [
+          _linkJson(
+            edgeId: 'edge-child',
+            objectId: 'child-1',
+            title: 'Часть',
+            kind: 'task',
+            state: 'proposed',
+            origin: 'agent',
+          ),
+        ],
+        childTasksTruncated: true,
+      ),
+    );
+    expect(profile.parentTask!.objectId, 'parent-1');
+    expect(profile.parentTask!.edgeState, 'confirmed');
+    expect(profile.childTasks.single.title, 'Часть');
+    expect(profile.childTasks.single.edgeOrigin, 'agent');
+    expect(profile.childTasksTruncated, isTrue);
+    expect(profile.dependsOn, isEmpty);
+  });
+
+  testWidgets('composition sections navigate without treating a dependency as a parent',
+      (tester) async {
+    await useDesktop(tester);
+    final roots = <String>[];
+    final harness = GraphTestHarness(
+      _graphClient(
+        workspaceRoots: roots,
+        onProfile: (request) async {
+          if (request.url.path != '/tasks/task-1/profile') {
+            return jsonUtf8Response({}, statusCode: 404);
+          }
+          return jsonUtf8Response(
+            profileJson(
+              parentTask: _linkJson(
+                edgeId: 'edge-parent',
+                objectId: 'parent-1',
+                title: 'Целое',
+                kind: 'task',
+                state: 'confirmed',
+                origin: 'user',
+              ),
+              childTasks: [
+                _linkJson(
+                  edgeId: 'edge-child',
+                  objectId: 'child-1',
+                  title: 'Часть',
+                  kind: 'task',
+                  state: 'proposed',
+                  origin: 'agent',
+                ),
+              ],
+              dependsOn: [
+                _linkJson(
+                  edgeId: 'edge-dep',
+                  objectId: 'task-2',
+                  title: 'Блокер',
+                  kind: 'task',
+                  state: 'confirmed',
+                  origin: 'user',
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    harness.configure();
+    await openGraph(tester, harness);
+    await showTask(tester, harness, 'task-1');
+    expect(find.text('Входит в'), findsOneWidget);
+    expect(find.text('Состав'), findsOneWidget);
+    expect(find.text('Зависит от'), findsOneWidget);
+    expect(find.text('Целое'), findsOneWidget);
+    expect(find.text('Часть'), findsOneWidget);
+    await tester.ensureVisible(find.text('Целое'));
+    await tester.tap(find.text('Целое'));
+    await tester.pumpAndSettle();
+    expect(roots, contains('parent-1'));
   });
 
   test('self-dependency is rejected before a request', () {

@@ -10,8 +10,11 @@ from app.domain.object_visibility import is_object_hidden_from_active_reads, obj
 from app.domain.task_completion import (
     TASK_COMPLETION_FINITE,
     completion_mode_for_storage,
+    effective_task_completion_mode,
     reject_done_status_for_ongoing,
 )
+from app.domain.task_composition import validate_completion_mode_change, validate_part_of_edge
+from app.domain.task_relations import PART_OF
 from app.domain.planned_execution import validate_planned_execution_interval
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
@@ -25,6 +28,8 @@ from app.services.label_service import (
     reserved_labeled_with_reason,
 )
 from app.services.provenance import (
+    CONFIRMED_STATE,
+    REJECTED_STATE,
     default_object_state,
     validate_agent_proposal,
     validate_edge_state_transition,
@@ -175,6 +180,16 @@ class GraphService:
             )
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        if next_kind == "task" and obj.kind == "task":
+            current_mode = effective_task_completion_mode(obj.kind, obj.completion_mode)
+            upcoming_mode = effective_task_completion_mode("task", next_mode)
+            if current_mode != upcoming_mode and upcoming_mode is not None:
+                validate_completion_mode_change(
+                    self._session,
+                    self._user_id,
+                    obj,
+                    upcoming_mode,
+                )
         for field, value in updates.items():
             setattr(obj, field, value)
         if next_kind != "task" or "kind" in updates or "completion_mode" in updates:
@@ -236,6 +251,8 @@ class GraphService:
         target = self._get_object_row(data.target_id)
         if target is None:
             raise NotFoundError("object", data.target_id)
+        if data.type == PART_OF and data.state != REJECTED_STATE:
+            validate_part_of_edge(self._session, self._user_id, source, target)
 
         edge = Edge(
             user_id=self._user_id,
@@ -276,6 +293,18 @@ class GraphService:
             validate_edge_state_transition(edge.state, state)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        if edge.type == PART_OF and state == CONFIRMED_STATE:
+            source = self._get_object_row(edge.source_id)
+            target = self._get_object_row(edge.target_id)
+            if source is None or target is None:
+                raise ValidationError("part_of endpoints must both be tasks")
+            validate_part_of_edge(
+                self._session,
+                self._user_id,
+                source,
+                target,
+                ignore_edge_id=edge.id,
+            )
         edge.state = state
         self._session.flush()
         return edge

@@ -27,6 +27,15 @@ void main() {
     expect(contains.directed, isTrue);
     expect(contains.dashed, isFalse);
 
+    final partOf = _present('part_of', sourceKind: 'task', targetKind: 'task');
+    expect(partOf.visibleOnTasksMap, isTrue);
+    expect(partOf.directed, isTrue);
+    expect(partOf.dashed, isFalse);
+    expect(partOf.light, isFalse);
+    expect(partOf.secondary, isFalse);
+    expect(partOf.structural, isTrue);
+    expect(partOf.label, 'входит в');
+
     final proposed = _present('references', state: 'proposed');
     expect(proposed.directed, isTrue);
     expect(proposed.proposed, isTrue);
@@ -70,6 +79,24 @@ void main() {
           selectedObjectId: 'mail',
         ),
         'Задача —[Ссылается на]→ Этот объект',
+      );
+      expect(
+        graphRelationAuditText(
+          edge: _edge('child', 'parent', 'part_of'),
+          sourceTitle: 'Часть',
+          targetTitle: 'Целое',
+          selectedObjectId: 'child',
+        ),
+        'Этот объект —[входит в]→ Целое',
+      );
+      expect(
+        graphRelationAuditText(
+          edge: _edge('child', 'parent', 'part_of'),
+          sourceTitle: 'Часть',
+          targetTitle: 'Целое',
+          selectedObjectId: 'parent',
+        ),
+        'Часть —[входит в]→ Этот объект',
       );
       expect(
         graphRelationAuditText(

@@ -1672,9 +1672,12 @@ class _GraphEdgePainter extends CustomPainter {
       final proposed = presentation?.proposed ?? edge.state == 'proposed';
       final secondary = presentation?.secondary ?? false;
       final light = presentation?.light ?? false;
+      final structural = presentation?.structural ?? false;
 
       var paint = Paint()
-        ..strokeWidth = emphasized ? 2.5 : (secondary || light ? 1.2 : 1.5)
+        ..strokeWidth = emphasized
+            ? 2.5
+            : (structural ? 2.0 : (secondary || light ? 1.2 : 1.5))
         ..color = proposed
             ? colorScheme.tertiary
             : emphasized

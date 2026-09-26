@@ -12,6 +12,7 @@ REMOVABLE_EDGE_TYPES = frozenset(
         "references",
         "related_to",
         "depends_on",
+        "part_of",
         "requested_by",
         "delegated_to",
         "waiting_on",

@@ -2,9 +2,9 @@ import '../api/api_models.dart';
 import '../ui/domain_labels.dart';
 import 'focus_lod.dart';
 
-/// Future `part_of` means child/source -> parent/target.
-/// It is not implemented. Legacy `contains` keeps its own source -> target
-/// arrow and is not reversed to imitate `part_of`.
+/// `part_of` means child/source -> parent/target. It is a structural solid
+/// arrow, stronger than `references` and not dashed like `depends_on`.
+/// Legacy `contains` keeps its own source -> target arrow and is not reversed.
 
 const Set<String> kGraphMapHiddenRelationTypes = {
   'requested_by',
@@ -23,6 +23,7 @@ class GraphMapEdgePresentation {
     required this.dashed,
     required this.light,
     required this.secondary,
+    required this.structural,
     required this.proposed,
     required this.label,
   });
@@ -32,6 +33,7 @@ class GraphMapEdgePresentation {
   final bool dashed;
   final bool light;
   final bool secondary;
+  final bool structural;
   final bool proposed;
   final String label;
 }
@@ -50,6 +52,7 @@ GraphMapEdgePresentation presentGraphMapEdge({
     dashed: edge.type == 'depends_on',
     light: edge.type == 'references',
     secondary: edge.type == 'depends_on',
+    structural: edge.type == 'part_of',
     proposed: edge.state == 'proposed',
     label: relationTypeLabel(edge.type),
   );

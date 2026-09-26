@@ -137,6 +137,21 @@ class _TaskProfileSectionState extends State<TaskProfileSection> {
           _actorGroup('Поручено', _profile!.delegatedTo, _profile!.delegatedToTruncated),
           _actorGroup('Ждём', _profile!.waitingOn, _profile!.waitingOnTruncated),
           _actorGroup('Участвует', _profile!.involves, _profile!.involvesTruncated),
+          if (_profile!.parentTask != null)
+            _linkGroup(
+              'Входит в',
+              [_profile!.parentTask!],
+              truncated: false,
+              removable: false,
+              onOpen: widget.onOpenTask,
+            ),
+          _linkGroup(
+            'Состав',
+            _profile!.childTasks,
+            truncated: _profile!.childTasksTruncated,
+            removable: false,
+            onOpen: widget.onOpenTask,
+          ),
           _linkGroup(
             'Зависит от',
             _profile!.dependsOn,

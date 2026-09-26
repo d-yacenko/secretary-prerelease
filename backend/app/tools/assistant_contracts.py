@@ -640,7 +640,12 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
     "link_objects": {
         "type": "function",
         "name": "link_objects",
-        "description": "Create a proposed relation edge between two objects.",
+        "description": (
+            "Create a relation edge between two objects. "
+            "part_of means composition, not dependency: source is the child task and "
+            "target is the parent task. Both endpoints must be tasks. A task has at most "
+            "one active parent, including a proposed part_of edge. Do not infer part_of."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

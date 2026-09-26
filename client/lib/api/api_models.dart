@@ -2898,6 +2898,8 @@ class TaskProfile {
     required this.involves,
     required this.dependsOn,
     required this.dependentTasks,
+    this.parentTask,
+    this.childTasks = const [],
     required this.evidence,
     this.operational,
     this.requestedByTruncated = false,
@@ -2906,6 +2908,7 @@ class TaskProfile {
     this.involvesTruncated = false,
     this.dependsOnTruncated = false,
     this.dependentTasksTruncated = false,
+    this.childTasksTruncated = false,
     this.evidenceTruncated = false,
   });
 
@@ -2921,6 +2924,8 @@ class TaskProfile {
   final List<TaskActorItem> involves;
   final List<TaskLinkItem> dependsOn;
   final List<TaskLinkItem> dependentTasks;
+  final TaskLinkItem? parentTask;
+  final List<TaskLinkItem> childTasks;
   final List<TaskLinkItem> evidence;
   final TaskOperationalProjection? operational;
   final bool requestedByTruncated;
@@ -2929,6 +2934,7 @@ class TaskProfile {
   final bool involvesTruncated;
   final bool dependsOnTruncated;
   final bool dependentTasksTruncated;
+  final bool childTasksTruncated;
   final bool evidenceTruncated;
 
   factory TaskProfile.fromJson(Map<String, dynamic> json) {
@@ -2957,6 +2963,10 @@ class TaskProfile {
       involves: actors('involves'),
       dependsOn: links('depends_on'),
       dependentTasks: links('dependent_tasks'),
+      parentTask: json['parent_task'] is Map<String, dynamic>
+          ? TaskLinkItem.fromJson(json['parent_task'] as Map<String, dynamic>)
+          : null,
+      childTasks: links('child_tasks'),
       evidence: links('evidence'),
       operational: json['operational'] is Map<String, dynamic>
           ? TaskOperationalProjection.fromJson(
@@ -2969,6 +2979,7 @@ class TaskProfile {
       involvesTruncated: json['involves_truncated'] as bool? ?? false,
       dependsOnTruncated: json['depends_on_truncated'] as bool? ?? false,
       dependentTasksTruncated: json['dependent_tasks_truncated'] as bool? ?? false,
+      childTasksTruncated: json['child_tasks_truncated'] as bool? ?? false,
       evidenceTruncated: json['evidence_truncated'] as bool? ?? false,
     );
   }

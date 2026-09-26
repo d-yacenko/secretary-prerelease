@@ -258,11 +258,15 @@ def collect_seen_edge_ids_from_bounded_tool(
             "involves",
             "depends_on",
             "dependent_tasks",
+            "child_tasks",
             "evidence",
         ):
             for item in bounded.get(field) or []:
                 if isinstance(item, dict):
                     _append_uuid(seen_ids, item.get("edge_id"))
+        parent = bounded.get("parent_task")
+        if isinstance(parent, dict):
+            _append_uuid(seen_ids, parent.get("edge_id"))
     return seen_ids
 
 
@@ -299,10 +303,13 @@ def _append_profile_ids(target: list[UUID], bounded: dict[str, Any]) -> None:
         for item in bounded.get(field) or []:
             if isinstance(item, dict):
                 _append_uuid(target, item.get("person_id"))
-    for field in ("depends_on", "dependent_tasks", "evidence"):
+    for field in ("depends_on", "dependent_tasks", "child_tasks", "evidence"):
         for item in bounded.get(field) or []:
             if isinstance(item, dict):
                 _append_uuid(target, item.get("object_id"))
+    parent = bounded.get("parent_task")
+    if isinstance(parent, dict):
+        _append_uuid(target, parent.get("object_id"))
 
 
 def _append_uuid(target: list[UUID], value: object) -> None:

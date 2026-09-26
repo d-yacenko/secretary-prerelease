@@ -13,7 +13,7 @@ from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
 
-USER_RELATION_TYPES = frozenset({"related_to", "references", "depends_on"})
+USER_RELATION_TYPES = frozenset({"related_to", "references", "depends_on", "part_of"})
 USER_ORIGIN = "user"
 
 

@@ -25,6 +25,7 @@ const Map<String, String> _relationTypeLabels = {
   'related_to': 'Связано с',
   'references': 'Ссылается на',
   'depends_on': 'Зависит от',
+  'part_of': 'входит в',
   'requested_by': 'Запросил',
   'delegated_to': 'Поручено',
   'waiting_on': 'Ждём',

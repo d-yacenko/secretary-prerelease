@@ -26,6 +26,7 @@ from app.domain.task_relations import (
     DEPENDS_ON,
     INVOLVES,
     MAX_PROFILE_ITEMS,
+    PART_OF,
     REFERENCES,
     REQUESTED_BY,
     WAITING_ON,
@@ -56,6 +57,8 @@ class TaskProfileService:
         involved, involved_truncated = self._actors(task.id, INVOLVES)
         dependencies, dependencies_truncated = self._links(task.id, DEPENDS_ON, outgoing=True, kind="task")
         dependents, dependents_truncated = self._links(task.id, DEPENDS_ON, outgoing=False, kind="task")
+        parents, _parents_truncated = self._links(task.id, PART_OF, outgoing=True, kind="task")
+        children, children_truncated = self._links(task.id, PART_OF, outgoing=False, kind="task")
         evidence, evidence_truncated = self._links(task.id, REFERENCES, outgoing=True, kind=None)
         return TaskProfileOut(
             task=ObjectOut.from_model(task),
@@ -70,6 +73,9 @@ class TaskProfileService:
             involves=involved,
             depends_on=dependencies,
             dependent_tasks=dependents,
+            parent_task=parents[0] if parents else None,
+            child_tasks=children,
+            child_tasks_truncated=children_truncated,
             evidence=evidence,
             operational=self._operational(task),
             requested_by_truncated=requested_truncated,
