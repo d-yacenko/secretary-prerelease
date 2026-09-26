@@ -148,3 +148,7 @@ Manager, member-of, and organization edges are not canonical. `person_graph_work
 1. The current Harness is sufficient for a People visual prototype without an ontology change. Resolve, identity feedback, routes, communications, and Task actor reads already use the canonical Person and actor edges.
 2. No H2 fix should block that prototype. `completion_mode` and the `link_objects` allowlist are Task-contract hardening. They do not change who a Person is or which actor edge is canonical.
 3. Before a later Task stabilization pass, do the blocking `completion_mode` field and the `link_objects` allowlist. Prompt/description sentences and planned-interval fields can wait in the same pass. Organization edges stay out until a separate ontology decision.
+
+## H2A closure
+
+H2A closes only the `completion_mode` write gap. `create_task` and `update_task` accept optional `finite` or `ongoing` on Assistant and MCP, and the existing domain guards still reject an ongoing Task marked done and an incompatible `part_of` change. Omitting the field on create stays finite; omitting it on update changes nothing. The free-form `link_objects.relation_type` finding stays open for H2B.

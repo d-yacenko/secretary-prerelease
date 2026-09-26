@@ -1025,6 +1025,7 @@ class DomainToolService:
                     status=TASK_STATUS_OPEN,
                     due_at=due_at,
                     confidence=input.confidence,
+                    completion_mode=input.completion_mode,
                 )
             )
         except ValidationError as exc:
@@ -1167,7 +1168,7 @@ class DomainToolService:
             self._prevalidate_explicit_relations(input, task_id=input.object_id)
 
         fields_set = input.model_fields_set
-        field_fields = {"title", "body", "due_at"}
+        field_fields = {"title", "body", "due_at", "completion_mode"}
         has_field_updates = any(field in fields_set for field in field_fields)
 
         updated = obj
@@ -1179,6 +1180,7 @@ class DomainToolService:
                     title=input.title if "title" in fields_set else None,
                     body=input.body if "body" in fields_set else None,
                     due_at=input.due_at if "due_at" in fields_set else None,
+                    completion_mode=input.completion_mode if "completion_mode" in fields_set else None,
                     fields_set=fields_set,
                 )
             except (NotFoundError, ValidationError) as exc:

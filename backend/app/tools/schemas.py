@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.schemas import ContextItem, EdgeOut, NotificationOut, ObjectOut, TaskProfileOut
+from app.domain.task_completion import TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING
 from app.domain.task_relations import MAX_TASK_ACTOR_IDS, MAX_TASK_DEPENDENCY_IDS
 
 MAX_CONTEXT_CHARS = 12000
@@ -161,6 +162,13 @@ class CreateTaskInput(BaseModel):
     waiting_on_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
+    completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
+
+    @model_validator(mode="after")
+    def reject_null_completion_mode(self) -> Self:
+        if "completion_mode" in self.model_fields_set and self.completion_mode is None:
+            raise ValueError("completion_mode must be finite or ongoing")
+        return self
 
 
 class CreateTaskOutput(BaseModel):
@@ -178,11 +186,14 @@ class UpdateTaskInput(BaseModel):
     waiting_on_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
+    completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
 
     @model_validator(mode="after")
     def reject_invalid_title(self) -> Self:
         if "title" in self.model_fields_set and self.title is None:
             raise ValueError("title must be a non-empty string when provided")
+        if "completion_mode" in self.model_fields_set and self.completion_mode is None:
+            raise ValueError("completion_mode must be finite or ongoing")
         return self
 
 

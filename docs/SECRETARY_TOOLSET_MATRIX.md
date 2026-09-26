@@ -24,12 +24,12 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 
 | Capability | Status | Primary tools | Notes |
 |------------|--------|---------------|-------|
-| Create task | SUPPORTED | `create_task` | Agent-proposed until an approved plan confirms. No `completion_mode` field |
-| Edit task fields (title, body, due) | SUPPORTED | `update_task` | Does not change lifecycle status or `completion_mode` |
+| Create task | SUPPORTED | `create_task` | Agent-proposed until an approved plan confirms. Optional `completion_mode` `finite` or `ongoing`; omit means finite |
+| Edit task fields (title, body, due, completion_mode) | SUPPORTED | `update_task` | Does not change lifecycle status. Omitted `completion_mode` is unchanged |
 | Add task evidence | SUPPORTED | `update_task(evidence_object_ids=…)` | **Additive only** — attaches `references`; never removes |
 | Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, `depends_on` |
 | Task composition `part_of` | SUPPORTED | `link_objects` | Child/source → parent/target. Not a field on `create_task` |
-| `completion_mode` finite/ongoing | PARTIAL | Human editor; read via `get_object` / `get_task_profile` | Tools cannot set it |
+| `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done`. `link_objects.relation_type` remains unrestricted |
 | Planned start/end | PARTIAL | Human editor; read on Task Profile | Tools cannot set it |
 | Task lifecycle status | SUPPORTED | `set_task_status` | open / in_progress / done / cancelled / archived |
 | Soft-delete task | SUPPORTED | `delete_task` | Tombstone; graph history preserved |

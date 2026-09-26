@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError as McpToolError
@@ -21,8 +22,8 @@ from app.tools.schemas import (
     GetObjectOutput,
     GetTodayOutput,
     LinkObjectsOutput,
-    ListInboxSinceReviewMarkerOutput,
     ListConversationMembersOutput,
+    ListInboxSinceReviewMarkerOutput,
     ListLabelsOutput,
     ListNeighborsOutput,
     ListNotificationsOutput,
@@ -170,19 +171,19 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
+        completion_mode: Literal["finite", "ongoing"] | None = None,
     ) -> CreateTaskOutput:
         """Create an agent-proposed task with required confidence."""
-        return _run_tool(
-            "create_task",
-            "create_task",
-            {
-                "title": title,
-                "confidence": confidence,
-                "body": body,
-                "due_at": due_at,
-                "evidence_object_ids": evidence_object_ids or [],
-            },
-        )
+        arguments = {
+            "title": title,
+            "confidence": confidence,
+            "body": body,
+            "due_at": due_at,
+            "evidence_object_ids": evidence_object_ids or [],
+        }
+        if completion_mode is not None:
+            arguments["completion_mode"] = completion_mode
+        return _run_tool("create_task", "create_task", arguments)
 
     @mcp.tool()
     def update_task(
@@ -191,6 +192,7 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
+        completion_mode: Literal["finite", "ongoing"] | None = None,
     ) -> UpdateTaskOutput:
         """Update task fields or attach evidence without changing lifecycle status."""
         arguments: dict = {"object_id": object_id}
@@ -202,6 +204,8 @@ def create_mcp_server() -> MCPServer:
             arguments["due_at"] = due_at
         if evidence_object_ids is not None:
             arguments["evidence_object_ids"] = evidence_object_ids
+        if completion_mode is not None:
+            arguments["completion_mode"] = completion_mode
         return _run_tool("update_task", "update_task", arguments)
 
     @mcp.tool()

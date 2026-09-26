@@ -510,7 +510,11 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "New tasks always start with status=open. "
             "Pass evidence_object_ids from source objects discovered this turn. "
             "Optional actor and dependency ids must also be objects from this turn. "
-            "Omitting a role does not create one."
+            "Omitting a role does not create one. "
+            "completion_mode finite is a completable Task; ongoing is a continuing "
+            "Direction/Activity and cannot be marked done. Omit completion_mode when "
+            "the user has not expressed the distinction. Do not infer ongoing from a "
+            "due date or long duration."
         ),
         "parameters": {
             "type": "object",
@@ -545,6 +549,10 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
+                "completion_mode": {
+                    "type": "string",
+                    "enum": ["finite", "ongoing"],
+                },
             },
             "required": ["title", "confidence"],
             "additionalProperties": False,
@@ -560,7 +568,11 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "already attached. Omitting an existing evidence object never removes it. "
             "Actor role and dependency id lists are also additive. "
             "To remove a relation, use remove_relation(edge_id) after list_neighbors. "
-            "Does not change lifecycle status — use set_task_status for that."
+            "Does not change lifecycle status — use set_task_status for that. "
+            "completion_mode finite is a completable Task; ongoing is a continuing "
+            "Direction/Activity and cannot be marked done. Omit completion_mode when "
+            "the user has not expressed the distinction. Do not infer ongoing from a "
+            "due date or long duration."
         ),
         "parameters": {
             "type": "object",
@@ -594,6 +606,10 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 8,
+                },
+                "completion_mode": {
+                    "type": "string",
+                    "enum": ["finite", "ongoing"],
                 },
             },
             "required": ["object_id"],
