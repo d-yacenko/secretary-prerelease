@@ -117,6 +117,42 @@ def test_gmail_in_reply_to_creates_references(db_session) -> None:
     assert edge.type == "references"
 
 
+def test_gmail_references_header_points_from_citing_message(db_session) -> None:
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID)
+    cited = _create_email(
+        graph,
+        "Cited",
+        {"headers": {"message-id": "<cited@example.com>"}},
+        external_id="cited",
+    )
+    citing = _create_email(
+        graph,
+        "Citing",
+        {"headers": {"references": "<cited@example.com>"}},
+        external_id="citing",
+    )
+    DeterministicRelationService(db_session, BOOTSTRAP_USER_ID).apply_source_relations(citing.id)
+    edge = db_session.scalar(
+        select(Edge).where(
+            Edge.source_id == citing.id,
+            Edge.target_id == cited.id,
+            Edge.type == "references",
+        )
+    )
+    assert edge is not None
+    assert edge.origin == "source"
+    assert edge.state == "observed"
+    assert edge.metadata_["source_fact"] == "mail_reference"
+    reverse = db_session.scalar(
+        select(Edge).where(
+            Edge.source_id == cited.id,
+            Edge.target_id == citing.id,
+            Edge.type == "references",
+        )
+    )
+    assert reverse is None
+
+
 def test_candidate_service_caps_and_excludes_rejected(db_session) -> None:
     graph = GraphService(db_session, BOOTSTRAP_USER_ID)
     trigger = graph.create_object(

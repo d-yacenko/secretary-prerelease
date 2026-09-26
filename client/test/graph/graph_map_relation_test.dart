@@ -110,6 +110,24 @@ void main() {
       );
       expect(
         graphRelationAuditText(
+          edge: _edge('dependent', 'prerequisite', 'depends_on'),
+          sourceTitle: 'Зависимая',
+          targetTitle: 'Предпосылка',
+          selectedObjectId: 'dependent',
+        ),
+        'Этот объект —[Зависит от]→ Предпосылка',
+      );
+      expect(
+        graphRelationAuditText(
+          edge: _edge('dependent', 'prerequisite', 'depends_on', state: 'proposed'),
+          sourceTitle: 'Зависимая',
+          targetTitle: 'Предпосылка',
+          selectedObjectId: 'prerequisite',
+        ),
+        'Зависимая —[Зависит от]→ Этот объект',
+      );
+      expect(
+        graphRelationAuditText(
           edge: _edge('person', 'task', 'requested_by'),
           sourceTitle: 'Анна',
           targetTitle: 'Задача',
@@ -256,6 +274,28 @@ void main() {
 
     final again = _show(edges: [_edge('task', 'mail', 'references')]);
     expect(again.hairlines.single.arrowAtMark, line.arrowAtMark);
+  });
+
+  test('compact depends_on arrow follows the canonical target', () {
+    final towardFlow = _show(
+      edges: [_edge('task', 'mail', 'depends_on')],
+    );
+    expect(towardFlow.hairlines.single.directed, isTrue);
+    expect(towardFlow.hairlines.single.dashed, isTrue);
+    expect(towardFlow.hairlines.single.arrowAtMark, isTrue);
+
+    final towardTask = _show(
+      edges: [_edge('mail', 'task', 'depends_on', id: 'mail-task')],
+    );
+    expect(towardTask.hairlines.single.directed, isTrue);
+    expect(towardTask.hairlines.single.dashed, isTrue);
+    expect(towardTask.hairlines.single.arrowAtMark, isFalse);
+
+    final proposed = _show(
+      edges: [_edge('task', 'mail', 'depends_on', state: 'proposed')],
+    );
+    expect(proposed.hairlines.single.arrowAtMark, isTrue);
+    expect(proposed.hairlines.single.proposed, isTrue);
   });
 
   test('multi-task hairline uses the anchor edge, not the other task', () {
