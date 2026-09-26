@@ -8,7 +8,7 @@ import '../ui/domain_labels.dart';
 import '../ui/object_dates.dart';
 
 /// Experimental Task Map presentation. The current Graph renderer stays default.
-enum TaskMapRenderer { current, experiment }
+enum TaskMapRenderer { current, experiment, elk }
 
 /// GraphView 1.5.1 algorithms used by the V1 spike.
 ///

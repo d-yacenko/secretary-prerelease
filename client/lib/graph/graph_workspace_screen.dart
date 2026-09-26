@@ -23,6 +23,7 @@ import '../ui/object_visuals.dart' show providerBadge;
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
 import 'task_map.dart';
+import 'task_map_elk_view.dart';
 import 'task_map_view.dart';
 import 'task_profile_section.dart';
 
@@ -211,7 +212,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   void _fitView() {
     if (widget.controller.mode == GraphWorkspaceMode.tasks &&
-        _taskMapRenderer == TaskMapRenderer.experiment) {
+        (_taskMapRenderer == TaskMapRenderer.experiment ||
+            _taskMapRenderer == TaskMapRenderer.elk)) {
       _zoomTaskMap?.call();
       return;
     }
@@ -317,6 +319,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ButtonSegment(
                   value: TaskMapRenderer.experiment,
                   label: Text('Эксперимент'),
+                ),
+                ButtonSegment(
+                  value: TaskMapRenderer.elk,
+                  label: Text('ELK'),
                 ),
               ],
               selected: {_taskMapRenderer},
@@ -456,6 +462,16 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
     final positions = widget.controller.visiblePositions;
+    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+        _taskMapRenderer == TaskMapRenderer.elk) {
+      return TaskMapElkView(
+        nodes: nodes,
+        edges: edges,
+        selectedObjectId: widget.controller.selectedObjectId,
+        onSelect: widget.controller.selectObject,
+        onZoomToFit: (zoom) => _zoomTaskMap = zoom,
+      );
+    }
     if (widget.controller.mode == GraphWorkspaceMode.tasks &&
         _taskMapRenderer == TaskMapRenderer.experiment) {
       return TaskMapExperiment(
