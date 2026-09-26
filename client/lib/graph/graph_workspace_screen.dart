@@ -23,6 +23,7 @@ import '../ui/object_visuals.dart' show providerBadge;
 import 'fcose_graph_refiner.dart';
 import 'focus_lod.dart';
 import 'graph_geometry.dart';
+import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
 import 'task_map.dart';
@@ -70,6 +71,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _showTaskContext = false;
   FcoseRefinementMode _fcoseMode = FcoseRefinementMode.preserve;
   String? _fcoseWarning;
+  String? _hybridWarning;
   VoidCallback? _zoomTaskMap;
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
@@ -335,7 +337,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               selected: _taskMapRenderer,
               onSelected: (value) => setState(() => _taskMapRenderer = value),
             ),
-            if (_taskMapRenderer == TaskMapRenderer.fcose) ...[
+            if (_taskMapRenderer == TaskMapRenderer.fcose ||
+                _taskMapRenderer == TaskMapRenderer.hybrid) ...[
               SegmentedButton<FcoseRefinementMode>(
                 segments: const [
                   ButtonSegment(
@@ -536,16 +539,35 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final focusLod =
         widget.controller.mode == GraphWorkspaceMode.tasks &&
         _taskMapRenderer == TaskMapRenderer.focusLod;
-    final projection = focusLod
-        ? projectFocusLod(
+    final hybridActive =
+        widget.controller.mode == GraphWorkspaceMode.tasks &&
+        _taskMapRenderer == TaskMapRenderer.hybrid;
+    _hybridWarning = null;
+    final hybrid = hybridActive
+        ? presentHybridFocus(
             nodes: nodes,
             edges: edges,
             positions: positions,
             selectedObjectId: widget.controller.selectedObjectId,
+            refiner:
+                widget.geometryRefiner ?? FcoseGraphRefiner(mode: _fcoseMode),
             isBookmarked: (objectId) =>
                 widget.bookmarkController?.colorFor(objectId) != null,
           )
         : null;
+    _hybridWarning = hybrid?.warning;
+    final projection =
+        hybrid?.lod ??
+        (focusLod
+            ? projectFocusLod(
+                nodes: nodes,
+                edges: edges,
+                positions: positions,
+                selectedObjectId: widget.controller.selectedObjectId,
+                isBookmarked: (objectId) =>
+                    widget.bookmarkController?.colorFor(objectId) != null,
+              )
+            : null);
     final drawnNodes = projection == null
         ? nodes
         : nodes
@@ -562,7 +584,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               )
               .toList();
     final bounds = GraphLayout.computeBounds(positions);
-    final canvasPad = focusLod
+    final canvasPad = focusLod || hybridActive
         ? kGraphCanvasPadding + kFocusLodCanvasMargin
         : kGraphCanvasPadding;
     final canvasWidth = bounds.width + canvasPad * 2;
@@ -600,6 +622,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   key: const ValueKey('graph-fcose-fallback'),
                 ),
               ),
+            if (_hybridWarning != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                child: Text(
+                  _hybridWarning!,
+                  key: const ValueKey('graph-hybrid-fallback'),
+                ),
+              ),
             Expanded(
               child: _graphViewport(
                 context,
@@ -614,6 +644,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 focusMode,
                 focusNeighborIds,
                 projection,
+                hybrid,
               ),
             ),
           ],
@@ -669,6 +700,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     bool focusMode,
     Set<String> focusNeighborIds,
     FocusLodProjection? projection,
+    HybridFocusPresentation? hybrid,
   ) {
     return InteractiveViewer(
       constrained: false,
@@ -695,8 +727,22 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 colorScheme: Theme.of(context).colorScheme,
               ),
             ),
+            if (hybrid != null)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: HybridHairlinePainter(
+                    hairlines: hybrid.hairlines,
+                    bounds: bounds,
+                    padding: canvasPad,
+                    color: Theme.of(context).colorScheme.outline,
+                    dimmed: focusMode,
+                  ),
+                ),
+              ),
             ...nodes.map((node) {
-              final position = positions[node.id] ?? const Offset(0, 0);
+              final position = hybrid == null || node.kind == 'task'
+                  ? positions[node.id] ?? const Offset(0, 0)
+                  : hybrid.topLeftFor(node.id, positions);
               final selected = selectedObjectId == node.id;
               final emphasized =
                   !focusMode || selected || focusNeighborIds.contains(node.id);
@@ -713,7 +759,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ),
               );
             }),
-            if (projection != null) ...[
+            if (projection != null && hybrid == null) ...[
               for (final satellite in projection.satellites)
                 _focusLodMark(
                   topLeft: satellite.topLeft,
@@ -749,6 +795,49 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     key: ValueKey(
                       'focus-lod-overflow-${overflow.anchorTaskId}',
                     ),
+                    remainder: overflow.remainder,
+                    onTap: () =>
+                        widget.controller.selectObject(overflow.anchorTaskId),
+                  ),
+                ),
+            ],
+            if (hybrid != null) ...[
+              for (final satellite in hybrid.lod.satellites)
+                _focusLodMark(
+                  topLeft: hybrid.topLeftFor(satellite.objectId, positions),
+                  bounds: bounds,
+                  canvasPad: canvasPad,
+                  dimmed: focusMode,
+                  child: HybridFlowGlyph(
+                    key: ValueKey('hybrid-glyph-${satellite.objectId}'),
+                    objectId: satellite.objectId,
+                    kind:
+                        widget.controller.nodeById(satellite.objectId)?.kind ??
+                        'note',
+                    title:
+                        widget.controller.nodeById(satellite.objectId)?.title ??
+                        '',
+                    provider: widget.controller
+                        .nodeById(satellite.objectId)
+                        ?.provider,
+                    bookmarkColor: widget.bookmarkController?.colorFor(
+                      satellite.objectId,
+                    ),
+                    onTap: () =>
+                        widget.controller.selectObject(satellite.anchorTaskId),
+                  ),
+                ),
+              for (final overflow in hybrid.lod.overflows)
+                _focusLodMark(
+                  topLeft: hybrid.topLeftFor(
+                    hybridOverflowId(overflow.anchorTaskId),
+                    positions,
+                  ),
+                  bounds: bounds,
+                  canvasPad: canvasPad,
+                  dimmed: focusMode,
+                  child: HybridOverflowGlyph(
+                    key: ValueKey('hybrid-overflow-${overflow.anchorTaskId}'),
                     remainder: overflow.remainder,
                     onTap: () =>
                         widget.controller.selectObject(overflow.anchorTaskId),
@@ -1442,6 +1531,7 @@ class _TaskMapRendererBar extends StatelessWidget {
       (TaskMapRenderer.elk, 'ELK'),
       (TaskMapRenderer.fcose, 'fCoSE'),
       (TaskMapRenderer.focusLod, 'Фокус LOD'),
+      (TaskMapRenderer.hybrid, 'LOD+fCoSE'),
     ];
     return Wrap(
       spacing: 0,
