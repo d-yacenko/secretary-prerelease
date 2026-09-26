@@ -10,7 +10,6 @@ import 'package:personal_secretary/graph/graph_geometry.dart';
 import 'package:personal_secretary/graph/graph_layout.dart';
 import 'package:personal_secretary/graph/graph_workspace_screen.dart';
 import 'package:personal_secretary/graph/task_map_scene.dart';
-import 'package:personal_secretary/graph/task_profile_section.dart';
 
 import 'graph_test_harness.dart';
 
@@ -22,49 +21,61 @@ void main() {
         .where((file) => file.path.endsWith('.dart'));
     final importers = [
       for (final file in files)
-        if (file.readAsStringSync().contains('package:fcose/fcose.dart')) file.path,
+        if (file.readAsStringSync().contains('package:fcose/fcose.dart'))
+          file.path,
     ];
     expect(importers, ['lib/graph/fcose_graph_refiner.dart']);
     expect(
-      File('lib/api/api_models.dart').readAsStringSync().contains('package:fcose'),
+      File('lib/api/api_models.dart')
+          .readAsStringSync()
+          .contains('package:fcose'),
       isFalse,
     );
     expect(
-      File('lib/graph/graph_geometry.dart').readAsStringSync().contains('package:fcose'),
+      File('lib/graph/graph_geometry.dart')
+          .readAsStringSync()
+          .contains('package:fcose'),
       isFalse,
     );
   });
 
-  test('local scene is the selected task, direct neighbors, and band obstacles', () {
-    final fixture = taskMapFlowerFixture();
-    final positions = _positions(fixture);
-    final scene = buildGraphGeometryScene(
-      nodes: fixture.nodes,
-      edges: fixture.edges,
-      positions: positions,
-      selectedObjectId: fixture.rootId,
-    );
-    expect(scene, isNotNull);
-    final ids = scene!.nodes.map((node) => node.id).toSet();
-    expect(ids, contains(fixture.rootId));
-    expect(ids, contains('flower-neighbor-0'));
-    expect(ids, contains('flower-evidence-0'));
-    expect(scene.nodeById(fixture.rootId)!.fixed, isTrue);
-    expect(scene.nodeById('flower-neighbor-0')!.fixed, isFalse);
-    expect(scene.nodeById('flower-evidence-0')!.fixed, isFalse);
-    expect(
-      scene.edges.every((edge) => edge.sourceId == fixture.rootId || edge.targetId == fixture.rootId),
-      isTrue,
-    );
-    expect(
-      applyGraphGeometry(
+  test(
+    'local scene is the selected task, direct neighbors, and band obstacles',
+    () {
+      final fixture = taskMapFlowerFixture();
+      final positions = _positions(fixture);
+      final scene = buildGraphGeometryScene(
+        nodes: fixture.nodes,
+        edges: fixture.edges,
         positions: positions,
-        scene: null,
-        refiner: const FcoseGraphRefiner(),
-      ),
-      same(positions),
-    );
-  });
+        selectedObjectId: fixture.rootId,
+      );
+      expect(scene, isNotNull);
+      final ids = scene!.nodes.map((node) => node.id).toSet();
+      expect(ids, contains(fixture.rootId));
+      expect(ids, contains('flower-neighbor-0'));
+      expect(ids, contains('flower-evidence-0'));
+      expect(scene.nodeById(fixture.rootId)!.fixed, isTrue);
+      expect(scene.nodeById('flower-neighbor-0')!.fixed, isFalse);
+      expect(scene.nodeById('flower-evidence-0')!.fixed, isFalse);
+      expect(
+        scene.edges.every(
+          (edge) =>
+              edge.sourceId == fixture.rootId ||
+              edge.targetId == fixture.rootId,
+        ),
+        isTrue,
+      );
+      expect(
+        applyGraphGeometry(
+          positions: positions,
+          scene: null,
+          refiner: const FcoseGraphRefiner(),
+        ),
+        same(positions),
+      );
+    },
+  );
 
   test('preserve and relax metrics on shared fixtures', () {
     final cases = <String, TaskMapFixture>{
@@ -74,7 +85,11 @@ void main() {
     };
     for (final mode in FcoseRefinementMode.values) {
       for (final entry in cases.entries) {
-        final observation = _observe(mode, entry.value, overlapStress: entry.key == 'overlap');
+        final observation = _observe(
+          mode,
+          entry.value,
+          overlapStress: entry.key == 'overlap',
+        );
         // ignore: avoid_print
         print('FCOSE_${mode.name}_${entry.key} $observation');
         expect(observation.completed, isTrue, reason: observation.error);
@@ -97,55 +112,26 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: GraphWorkspaceScreen(
-          controller: harness.graph,
-          apiClient: harness.auth.apiClient,
-          authController: harness.auth,
-          captureController: harness.capture,
-          assistantController: harness.assistant,
-          onAskSecretary: (_) {},
-          geometryRefiner: _FailingRefiner(),
-        ),
+            controller: harness.graph,
+            apiClient: harness.auth.apiClient,
+            authController: harness.auth,
+            captureController: harness.capture,
+            assistantController: harness.assistant,
+            onAskSecretary: (_) {},
+            geometryRefiner: _FailingRefiner(),
+          ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Текущий'), findsOneWidget);
-    expect(find.text('Эксперимент'), findsOneWidget);
-    expect(find.text('ELK'), findsOneWidget);
-    expect(find.text('fCoSE'), findsOneWidget);
-    expect(find.text('Preserve'), findsNothing);
-
-    final before = harness.graph.nodes.map((node) => node.id).toList();
-    await tester.tap(find.text('fCoSE'));
-    await tester.pumpAndSettle();
+    expect(find.text('fCoSE'), findsNothing);
+    expect(find.text('Текущий'), findsNothing);
     expect(find.text('Preserve'), findsOneWidget);
     expect(find.text('Relax'), findsOneWidget);
-    expect(find.byKey(const ValueKey('graph-fcose-fallback')), findsNothing);
+    expect(find.byKey(const ValueKey('graph-hybrid-fallback')), findsOneWidget);
+    final before = harness.graph.nodes.map((node) => node.id).toList();
     expect(harness.graph.nodes.map((node) => node.id).toList(), before);
-
-    await tester.tap(find.text('Задача А'));
-    await tester.pump();
-    expect(harness.graph.selectedObjectId, 'task-a');
-    expect(find.byKey(const ValueKey('graph-fcose-fallback')), findsOneWidget);
-    expect(harness.graph.nodes.map((node) => node.id).toList(), before);
-    expect(find.text('Спросить секретаря'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byType(TaskProfileSection),
-      200,
-      scrollable: find
-          .ancestor(
-            of: find.text('Спросить секретаря'),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    expect(find.byType(TaskProfileSection), findsOneWidget);
-
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('graph-fcose-fallback')), findsNothing);
-    expect(find.text('Чужой файл'), findsWidgets);
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
@@ -240,8 +226,14 @@ _Observation _observe(
   final afterRects = first.nodes;
   final beforeTop = graphGeometryInputTopLefts(scene);
   final afterTop = graphGeometryTopLefts(first);
-  final fixed = [for (final node in scene.nodes) if (node.fixed) node.id];
-  final movable = [for (final node in scene.nodes) if (!node.fixed) node.id];
+  final fixed = [
+    for (final node in scene.nodes)
+      if (node.fixed) node.id,
+  ];
+  final movable = [
+    for (final node in scene.nodes)
+      if (!node.fixed) node.id,
+  ];
   final beforeOverlap = graphGeometryOverlaps(beforeRects.values);
   final afterOverlap = graphGeometryOverlaps(afterRects.values);
   final leafMovable = [
@@ -260,8 +252,14 @@ _Observation _observe(
     overlapsAfter: afterOverlap.count,
     maxOverlapBefore: beforeOverlap.maxArea,
     maxOverlapAfter: afterOverlap.maxArea,
-    intersectionsBefore: graphGeometryStraightIntersections(rects: beforeRects, edges: scene.edges),
-    intersectionsAfter: graphGeometryStraightIntersections(rects: afterRects, edges: scene.edges),
+    intersectionsBefore: graphGeometryStraightIntersections(
+      rects: beforeRects,
+      edges: scene.edges,
+    ),
+    intersectionsAfter: graphGeometryStraightIntersections(
+      rects: afterRects,
+      edges: scene.edges,
+    ),
     repeatable: _same(first, second),
     leafMoved: graphGeometryChangedCount(
       afterTop,
@@ -274,19 +272,25 @@ _Observation _observe(
 }
 
 bool _same(GraphGeometryResult left, GraphGeometryResult right) {
-  if (!left.completed || !right.completed || left.nodes.length != right.nodes.length) {
+  if (!left.completed ||
+      !right.completed ||
+      left.nodes.length != right.nodes.length) {
     return false;
   }
   for (final entry in left.nodes.entries) {
     final other = right.nodes[entry.key];
-    if (other == null || (entry.value.topLeft - other.topLeft).distance > 0.01) {
+    if (other == null ||
+        (entry.value.topLeft - other.topLeft).distance > 0.01) {
       return false;
     }
   }
   return true;
 }
 
-Map<String, Offset> _positions(TaskMapFixture fixture, {bool overlapStress = false}) {
+Map<String, Offset> _positions(
+  TaskMapFixture fixture, {
+  bool overlapStress = false,
+}) {
   final positions = GraphLayout.computePositions(
     nodes: fixture.nodes,
     edges: fixture.edges,
@@ -372,7 +376,9 @@ MockClient _workspaceMock() {
     if (request.url.path == '/graph/people-workspace') {
       return jsonUtf8Response(
         graphWorkspaceJson(
-          nodes: [graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person')],
+          nodes: [
+            graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person'),
+          ],
         ),
       );
     }
@@ -382,7 +388,11 @@ MockClient _workspaceMock() {
           nodes: [
             graphObjectJson(id: 'task-a', title: 'Задача А'),
             graphObjectJson(id: 'task-b', title: 'Задача Б'),
-            graphObjectJson(id: 'email-1', title: 'Письмо контекста', kind: 'email'),
+            graphObjectJson(
+              id: 'email-1',
+              title: 'Письмо контекста',
+              kind: 'email',
+            ),
             graphObjectJson(id: 'file-1', title: 'Чужой файл', kind: 'file'),
           ],
           edges: [

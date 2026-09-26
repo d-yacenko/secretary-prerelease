@@ -9,6 +9,7 @@ import '../ui/object_visuals.dart';
 import 'focus_lod.dart';
 import 'graph_geometry.dart';
 import 'graph_layout.dart';
+import 'graph_map_edge_presentation.dart';
 
 /// Compact semantic glyph. Hybrid rings use this size, not the V4 24 px mark.
 const double kHybridGlyphSize = 32;
@@ -64,12 +65,20 @@ class HybridHairline {
     required this.markId,
     required this.start,
     required this.end,
+    this.directed = false,
+    this.arrowAtMark = false,
   });
 
   final String anchorTaskId;
   final String markId;
   final Offset start;
   final Offset end;
+
+  /// Canonical source -> target arrow. Overflow marks stay undirected.
+  final bool directed;
+
+  /// When directed, the arrow sits on the Flow mark. Otherwise it sits on the Task.
+  final bool arrowAtMark;
 }
 
 class HybridFocusPresentation {
@@ -80,6 +89,7 @@ class HybridFocusPresentation {
     required this.displayTopLeft,
     required this.hairlines,
     this.warning,
+    this.topologyNote,
   });
 
   final FocusLodProjection lod;
@@ -89,7 +99,10 @@ class HybridFocusPresentation {
   /// Drawn top-lefts. Tasks and other fixed cards stay on [GraphLayout].
   final Map<String, Offset> displayTopLeft;
   final List<HybridHairline> hairlines;
+
+  /// Genuine refinement failure. Ordinary topology fallback is [topologyNote].
   final String? warning;
+  final String? topologyNote;
 
   Offset topLeftFor(String id, Map<String, Offset> graphPositions) {
     return displayTopLeft[id] ?? graphPositions[id] ?? Offset.zero;
@@ -128,6 +141,7 @@ HybridFocusPresentation presentHybridFocus({
   );
   final scene = buildHybridGeometryScene(
     nodes: nodes,
+    edges: edges,
     lod: lod,
     positions: positions,
     selectedObjectId: selectedObjectId,
@@ -136,6 +150,7 @@ HybridFocusPresentation presentHybridFocus({
   final display = _startTopLefts(scene);
   final merged = <String, Rect>{};
   String? warning;
+  String? topologyNote;
 
   final focused = [
     for (final node in scene.nodes)
@@ -154,7 +169,7 @@ HybridFocusPresentation presentHybridFocus({
     );
     final result = refiner.refine(pass);
     if (!result.completed) {
-      return _fallback(lod, scene, result);
+      return _fallback(lod, scene, result, nodes, edges);
     }
     merged.addAll(result.nodes);
     if (_focusedPassAccepted(
@@ -171,9 +186,11 @@ HybridFocusPresentation presentHybridFocus({
         lod,
         scene,
         const GraphGeometryResult.failure('fCoSE omitted a focused Flow card'),
+        nodes,
+        edges,
       );
     } else {
-      warning = 'Локальное соцветие оставлено на стартовых позициях';
+      topologyNote = 'Локальное соцветие оставлено на стартовых позициях';
     }
   }
 
@@ -215,7 +232,7 @@ HybridFocusPresentation presentHybridFocus({
         display[node.id] = result.nodes[node.id]!.topLeft;
       }
     } else {
-      warning ??= 'Компактные гало оставлены на сбалансированных позициях';
+      topologyNote ??= 'Компактные гало оставлены на сбалансированных позициях';
     }
   }
 
@@ -224,8 +241,9 @@ HybridFocusPresentation presentHybridFocus({
     scene: scene,
     result: GraphGeometryResult.success(nodes: merged),
     displayTopLeft: display,
-    hairlines: _hairlines(scene, display),
+    hairlines: _semanticHairlines(scene, display, nodes, edges),
     warning: warning,
+    topologyNote: topologyNote,
   );
 }
 
@@ -233,6 +251,8 @@ HybridFocusPresentation _fallback(
   FocusLodProjection lod,
   GraphGeometryScene scene,
   GraphGeometryResult result,
+  List<SecretaryObject> nodes,
+  List<SecretaryEdge> edges,
 ) {
   final starts = _startTopLefts(scene);
   return HybridFocusPresentation(
@@ -240,13 +260,14 @@ HybridFocusPresentation _fallback(
     scene: scene,
     result: result,
     displayTopLeft: starts,
-    hairlines: _hairlines(scene, starts),
+    hairlines: _semanticHairlines(scene, starts, nodes, edges),
     warning: result.error ?? 'Не удалось уточнить гибридную карту fCoSE',
   );
 }
 
 GraphGeometryScene buildHybridGeometryScene({
   required List<SecretaryObject> nodes,
+  required List<SecretaryEdge> edges,
   required FocusLodProjection lod,
   required Map<String, Offset> positions,
   required String? selectedObjectId,
@@ -264,6 +285,7 @@ GraphGeometryScene buildHybridGeometryScene({
   );
   final compactStarts = _balancedCompactStarts(
     nodes: nodes,
+    edges: edges,
     lod: lod,
     positions: positions,
     bookmarked: bookmarked,
@@ -466,8 +488,35 @@ class HybridHairlinePainter extends CustomPainter {
         alpha: kHybridHairlineOpacity * (dimmed ? 0.35 : 1),
       );
     for (final hairline in hairlines) {
-      canvas.drawLine(_canvas(hairline.start), _canvas(hairline.end), paint);
+      final start = _canvas(hairline.start);
+      final end = _canvas(hairline.end);
+      canvas.drawLine(start, end, paint);
+      if (!hairline.directed) {
+        continue;
+      }
+      final tip = hairline.arrowAtMark ? end : start;
+      final from = hairline.arrowAtMark ? start : end;
+      _drawHairlineArrow(canvas, tip, from, paint);
     }
+  }
+
+  void _drawHairlineArrow(Canvas canvas, Offset tip, Offset from, Paint paint) {
+    final angle = math.atan2(tip.dy - from.dy, tip.dx - from.dx);
+    const arrow = 6.0;
+    final left = Offset(
+      tip.dx - arrow * math.cos(angle - 0.45),
+      tip.dy - arrow * math.sin(angle - 0.45),
+    );
+    final right = Offset(
+      tip.dx - arrow * math.cos(angle + 0.45),
+      tip.dy - arrow * math.sin(angle + 0.45),
+    );
+    final path = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(left.dx, left.dy)
+      ..lineTo(right.dx, right.dy)
+      ..close();
+    canvas.drawPath(path, Paint.from(paint)..style = PaintingStyle.fill);
   }
 
   Offset _canvas(Offset graph) {
@@ -803,6 +852,7 @@ Map<String, Offset> _focusedStarts({
 
 Map<String, Offset> _balancedCompactStarts({
   required List<SecretaryObject> nodes,
+  required List<SecretaryEdge> edges,
   required FocusLodProjection lod,
   required Map<String, Offset> positions,
   required bool Function(String objectId) bookmarked,
@@ -862,6 +912,13 @@ Map<String, Offset> _balancedCompactStarts({
       gap: kHybridCompactGap,
       nominalSlots: kHybridCompactNominalSlots,
       blocked: blocked,
+      reservedRays: _visibleTaskRays(
+        anchorId: anchorId,
+        anchorCenter: anchorRect.center,
+        edges: edges,
+        byId: byId,
+        positions: positions,
+      ),
     );
     for (var index = 0; index < members.length; index++) {
       starts[members[index].id] = placed[index].topLeft;
@@ -894,6 +951,7 @@ List<Rect> _placeBalanced({
   required double gap,
   required int nominalSlots,
   required List<Rect> blocked,
+  List<double> reservedRays = const [],
 }) {
   if (count <= 0) {
     return const [];
@@ -916,6 +974,7 @@ List<Rect> _placeBalanced({
       markWidth: markWidth,
       markHeight: markHeight,
       blocked: reserved,
+      reservedRays: reservedRays,
     );
     placed.add(rect);
     reserved.add(rect);
@@ -958,6 +1017,7 @@ Rect _resolveBalancedSlot({
   required double markWidth,
   required double markHeight,
   required List<Rect> blocked,
+  List<double> reservedRays = const [],
 }) {
   final nominal = 2 * math.pi / nominalSlots;
   final onRing = math.max(1, (2 * math.pi / slot.slotAngle).round());
@@ -977,7 +1037,7 @@ Rect _resolveBalancedSlot({
         width: markWidth,
         height: markHeight,
       );
-      if (!_hits(rect, blocked)) {
+      if (!_hits(rect, blocked) && !_inReservedRay(angle, reservedRays)) {
         return rect;
       }
     }
@@ -1213,6 +1273,103 @@ int _overlapCount(List<Rect> left, List<Rect> right) {
 
 Map<String, Offset> _startTopLefts(GraphGeometryScene scene) {
   return {for (final node in scene.nodes) node.id: node.topLeft};
+}
+
+const double kHybridTaskRayCorridor = 15 * math.pi / 180;
+
+List<double> _visibleTaskRays({
+  required String anchorId,
+  required Offset anchorCenter,
+  required List<SecretaryEdge> edges,
+  required Map<String, SecretaryObject> byId,
+  required Map<String, Offset> positions,
+}) {
+  final rays = <double>[];
+  for (final edge in edges) {
+    final source = byId[edge.sourceId];
+    final target = byId[edge.targetId];
+    if (source == null || target == null) {
+      continue;
+    }
+    if (!presentGraphMapEdge(
+      edge: edge,
+      sourceKind: source.kind,
+      targetKind: target.kind,
+    ).visibleOnTasksMap) {
+      continue;
+    }
+    final otherId = edge.sourceId == anchorId
+        ? edge.targetId
+        : edge.targetId == anchorId
+        ? edge.sourceId
+        : null;
+    final other = otherId == null ? null : byId[otherId];
+    final otherTop = otherId == null ? null : positions[otherId];
+    if (other == null || other.kind != 'task' || otherTop == null) {
+      continue;
+    }
+    final otherCenter = other.isOngoingTask
+        ? hybridOngoingRect(otherTop).center
+        : GraphLayout.nodeRectAt(otherTop).center;
+    rays.add(_rayAngle(anchorCenter, otherCenter));
+  }
+  return rays;
+}
+
+bool _inReservedRay(double angle, List<double> rays) {
+  for (final ray in rays) {
+    if (_angleDelta(angle, ray) <= kHybridTaskRayCorridor + 1e-9) {
+      return true;
+    }
+  }
+  return false;
+}
+
+List<HybridHairline> _semanticHairlines(
+  GraphGeometryScene scene,
+  Map<String, Offset> topLefts,
+  List<SecretaryObject> nodes,
+  List<SecretaryEdge> edges,
+) {
+  final byId = {for (final node in nodes) node.id: node};
+  return [
+    for (final line in _hairlines(scene, topLefts))
+      _withCanonicalArrow(line, edges, byId),
+  ];
+}
+
+HybridHairline _withCanonicalArrow(
+  HybridHairline line,
+  List<SecretaryEdge> edges,
+  Map<String, SecretaryObject> byId,
+) {
+  if (line.markId.startsWith('hybrid-overflow:')) {
+    return line;
+  }
+  final edge = graphMapAnchorEdge(
+    edges: edges,
+    taskId: line.anchorTaskId,
+    flowId: line.markId,
+  );
+  if (edge == null) {
+    return line;
+  }
+  final presentation = presentGraphMapEdge(
+    edge: edge,
+    sourceKind: byId[edge.sourceId]?.kind,
+    targetKind: byId[edge.targetId]?.kind,
+  );
+  if (!presentation.directed || !presentation.visibleOnTasksMap) {
+    return line;
+  }
+  return HybridHairline(
+    anchorTaskId: line.anchorTaskId,
+    markId: line.markId,
+    start: line.start,
+    end: line.end,
+    directed: true,
+    arrowAtMark: edge.targetId == line.markId,
+  );
 }
 
 List<HybridHairline> _hairlines(

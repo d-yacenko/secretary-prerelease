@@ -195,12 +195,13 @@ void main() {
     final rotated = _present(fixture, 'task', _RotateRefiner(40));
     final starts = _present(fixture, 'task', _IdentityRefiner());
     expect(
-      rotated.warning,
+      rotated.topologyNote,
       'Локальное соцветие оставлено на стартовых позициях',
     );
     expect(_same(rotated, starts), isTrue);
 
     final gentle = _present(fixture, 'task', _RotateRefiner(10));
+    expect(gentle.topologyNote, isNull);
     expect(gentle.warning, isNull);
     expect(_same(gentle, starts), isFalse);
     expect(
@@ -221,7 +222,7 @@ void main() {
     );
     final compactStarts = _present(pair, null, _IdentityRefiner());
     expect(
-      partial.warning,
+      partial.topologyNote,
       'Компактные гало оставлены на сбалансированных позициях',
     );
     expect(_same(partial, compactStarts), isTrue);
@@ -257,7 +258,7 @@ void main() {
         if (shown.lod.satellites.isNotEmpty || shown.lod.overflows.isNotEmpty) {
           if (compactMoved) {
             compactAccepted += 1;
-          } else if ((shown.warning ?? '').contains('Компактные')) {
+          } else if ((shown.topologyNote ?? '').contains('Компактные')) {
             compactFallback += 1;
           }
         }
@@ -266,7 +267,7 @@ void main() {
         )) {
           if (focusedMoved) {
             focusedAccepted += 1;
-          } else if ((shown.warning ?? '').contains('соцветие')) {
+          } else if ((shown.topologyNote ?? '').contains('соцветие')) {
             focusedFallback += 1;
           }
         }
@@ -274,7 +275,7 @@ void main() {
         expect(_duplicates(entry.value, shown), 0);
         // ignore: avoid_print
         print(
-          'V7B_${mode.name}_${entry.key} warning=${shown.warning} '
+          'V7B_${mode.name}_${entry.key} warning=${shown.topologyNote} '
           'focusedMoved=$focusedMoved compactMoved=$compactMoved '
           'bounds=${hybridPresentationBounds(shown).size}',
         );

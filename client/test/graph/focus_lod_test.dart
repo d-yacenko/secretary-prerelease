@@ -215,68 +215,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Текущий'), findsOneWidget);
-    expect(find.text('Эксперимент'), findsOneWidget);
-    expect(find.text('ELK'), findsOneWidget);
-    expect(find.text('fCoSE'), findsOneWidget);
-    expect(find.text('Фокус LOD'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-email-1')),
-      findsNothing,
-    );
-    expect(find.text('Письмо контекста'), findsWidgets);
-
-    final nodeIds = harness.graph.nodes.map((node) => node.id).toList();
-    final edgeIds = harness.graph.edges.map((edge) => edge.id).toList();
-    final positions = Map<String, Offset>.from(harness.graph.positions);
-    await tester.tap(find.text('Фокус LOD'));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-email-1')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-file-1')),
-      findsOneWidget,
-    );
-    expect(find.text('Письмо контекста'), findsNothing);
-    expect(find.text('Чужой файл'), findsNothing);
-    expect(find.text('Задача А'), findsWidgets);
-    expect(harness.graph.positions['task-a'], positions['task-a']);
-    expect(harness.graph.positions['task-b'], positions['task-b']);
-
-    final taskTopLeft = tester.getTopLeft(
-      find.byKey(const Key('graph_node_task-a')),
-    );
-    await tester.tap(find.byKey(const ValueKey('focus-lod-satellite-email-1')));
-    await tester.pumpAndSettle();
-    expect(harness.graph.selectedObjectId, 'task-a');
-    expect(find.text('Письмо контекста'), findsWidgets);
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-email-1')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-file-1')),
-      findsOneWidget,
-    );
-    expect(
-      tester.getTopLeft(find.byKey(const Key('graph_node_task-a'))),
-      taskTopLeft,
-    );
-    expect(harness.graph.positions['task-a'], positions['task-a']);
-    expect(harness.graph.positions['task-b'], positions['task-b']);
-    expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
-    expect(harness.graph.edges.map((edge) => edge.id).toList(), edgeIds);
-
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('focus-lod-satellite-file-1')),
-      findsNothing,
-    );
-    expect(find.text('Чужой файл'), findsWidgets);
-    expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
+    expect(find.text('Фокус LOD'), findsNothing);
+    expect(find.text('Текущий'), findsNothing);
+    expect(find.text('Preserve'), findsOneWidget);
+    expect(find.byKey(const ValueKey('hybrid-glyph-email-1')), findsOneWidget);
+    expect(harness.graph.positions['task-a'], isNotNull);
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();

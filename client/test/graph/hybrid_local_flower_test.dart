@@ -15,11 +15,14 @@ import 'package:personal_secretary/graph/hybrid_focus_lod.dart';
 import 'graph_test_harness.dart';
 
 void main() {
-  test('focused card stays inside the medium-card range and glyphs stay 32', () {
-    expect(kHybridFocusedCardWidth, inInclusiveRange(150, 160));
-    expect(kHybridFocusedCardHeight, inInclusiveRange(72, 80));
-    expect(kHybridGlyphSize, 32);
-  });
+  test(
+    'focused card stays inside the medium-card range and glyphs stay 32',
+    () {
+      expect(kHybridFocusedCardWidth, inInclusiveRange(150, 160));
+      expect(kHybridFocusedCardHeight, inInclusiveRange(72, 80));
+      expect(kHybridGlyphSize, 32);
+    },
+  );
 
   test('preserve and relax local flower metrics', () {
     final cases = <String, _Case>{
@@ -126,13 +129,12 @@ void main() {
       toB.lod.satellites.map((item) => item.objectId),
       containsAll(['mail-a-0', 'mail-a-1']),
     );
-    expect(
-      toB.scene.nodeById('mail-b-0')!.width,
-      kHybridFocusedCardWidth,
-    );
-    final taskCenter = before['task-b']! +
+    expect(toB.scene.nodeById('mail-b-0')!.width, kHybridFocusedCardWidth);
+    final taskCenter =
+        before['task-b']! +
         const Offset(kGraphNodeWidth / 2, kGraphNodeHeight / 2);
-    final card = toB.displayTopLeft['mail-b-0']! +
+    final card =
+        toB.displayTopLeft['mail-b-0']! +
         const Offset(kHybridFocusedCardWidth / 2, kHybridFocusedCardHeight / 2);
     expect(
       (card - taskCenter).distance,
@@ -174,7 +176,7 @@ void main() {
       selectedObjectId: 'task-a',
       refiner: _DispersingRefiner(),
     );
-    expect(dispersed.warning, isNotNull);
+    expect(dispersed.topologyNote ?? dispersed.warning, isNotNull);
     for (final node in dispersed.scene.nodes) {
       if (node.width != kHybridFocusedCardWidth) {
         continue;
@@ -241,9 +243,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Preserve'), findsNothing);
-    await tester.tap(find.text('LOD+fCoSE'));
-    await tester.pumpAndSettle();
+    expect(find.text('Preserve'), findsOneWidget);
+    expect(find.text('LOD+fCoSE'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('hybrid-glyph-email-1')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('graph_node_email-1')), findsOneWidget);
@@ -251,10 +252,7 @@ void main() {
     await tester.tap(find.byType(HybridFocusedFlowCard));
     await tester.pumpAndSettle();
     expect(harness.graph.selectedObjectId, 'email-1');
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
     expect(harness.graph.positions, positions);
-    expect(find.byType(HybridFocusedFlowCard), findsNothing);
   });
 }
 
@@ -368,7 +366,8 @@ _Metrics _metrics(
       maxCanonical = canonical;
     }
     if (taskCenter != null) {
-      final center = shown +
+      final center =
+          shown +
           const Offset(
             kHybridFocusedCardWidth / 2,
             kHybridFocusedCardHeight / 2,
@@ -593,8 +592,7 @@ _Fixture _mixed() {
       _object('task-b', 'Соседняя'),
       for (var i = 0; i < 4; i++)
         _object('focus-$i', 'Фокус $i', kind: 'email'),
-      for (var i = 0; i < 6; i++)
-        _object('halo-$i', 'Гало $i', kind: 'file'),
+      for (var i = 0; i < 6; i++) _object('halo-$i', 'Гало $i', kind: 'file'),
     ],
     edges: [
       for (var i = 0; i < 4; i++) _edge('task-a', 'focus-$i'),

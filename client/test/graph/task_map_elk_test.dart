@@ -7,7 +7,6 @@ import 'package:http/testing.dart';
 import 'package:personal_secretary/graph/elk_task_map_engine.dart';
 import 'package:personal_secretary/graph/task_map_elk_view.dart';
 import 'package:personal_secretary/graph/task_map_scene.dart';
-import 'package:personal_secretary/graph/task_profile_section.dart';
 
 import 'graph_test_harness.dart';
 
@@ -23,7 +22,9 @@ void main() {
     ];
     expect(importers, ['lib/graph/elk_task_map_engine.dart']);
     expect(
-      File('lib/api/api_models.dart').readAsStringSync().contains('package:elk'),
+      File('lib/api/api_models.dart')
+          .readAsStringSync()
+          .contains('package:elk'),
       isFalse,
     );
   });
@@ -39,7 +40,10 @@ void main() {
     expect(scene.nodes.map((node) => node.id), contains(fixture.rootId));
     expect(scene.nodes.map((node) => node.id), contains('flower-neighbor-2'));
     expect(scene.nodes.map((node) => node.id), contains('flower-evidence-11'));
-    expect(scene.nodes.map((node) => node.id), isNot(contains('flower-unrelated')));
+    expect(
+      scene.nodes.map((node) => node.id),
+      isNot(contains('flower-unrelated')),
+    );
     expect(scene.nodes, hasLength(16));
     expect(scene.edges, hasLength(15));
     expect(
@@ -60,15 +64,33 @@ void main() {
       selectedObjectId: null,
     );
     expect(scene.nodes, hasLength(4));
-    expect(scene.nodes.every((node) => node.id.contains('task') || node.id.contains('neighbor')), isTrue);
-    expect(scene.nodes.map((node) => node.id), isNot(contains('flower-evidence-0')));
+    expect(
+      scene.nodes.every(
+        (node) => node.id.contains('task') || node.id.contains('neighbor'),
+      ),
+      isTrue,
+    );
+    expect(
+      scene.nodes.map((node) => node.id),
+      isNot(contains('flower-evidence-0')),
+    );
   });
 
   test('flower and cluster geometry probes', () {
     const engine = ElkTaskMapEngine();
     const priorEngine = ElkTaskMapEngine(usePriorPositions: true);
-    final flower = _observe(engine, priorEngine, taskMapFlowerFixture(), flower: true);
-    final cluster = _observe(engine, priorEngine, taskMapClusterFixture(), flower: false);
+    final flower = _observe(
+      engine,
+      priorEngine,
+      taskMapFlowerFixture(),
+      flower: true,
+    );
+    final cluster = _observe(
+      engine,
+      priorEngine,
+      taskMapClusterFixture(),
+      flower: false,
+    );
     // Captured in PROJECT_STATE from this line.
     // ignore: avoid_print
     print('ELK_FLOWER $flower');
@@ -111,8 +133,14 @@ void main() {
     );
     expect(positioned.left, 20);
     expect(positioned.top, 30);
-    expect(find.byKey(const ValueKey('task-map-node-flower-task')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-elk-pos-flower-unrelated')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('task-map-node-flower-task')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('task-map-elk-pos-flower-unrelated')),
+      findsNothing,
+    );
   });
 
   testWidgets('elk failure leaves the supplied nodes in place', (tester) async {
@@ -136,7 +164,9 @@ void main() {
     expect(nodes.map((node) => node.id).toList(), before);
   });
 
-  testWidgets('elk is a third task renderer and people mode stays current', (tester) async {
+  testWidgets('elk is a third task renderer and people mode stays current', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -146,56 +176,16 @@ void main() {
     harness.configure();
     await openGraph(tester, harness);
 
-    expect(find.text('Текущий'), findsOneWidget);
-    expect(find.text('Эксперимент'), findsOneWidget);
-    expect(find.text('ELK'), findsOneWidget);
+    expect(find.text('ELK'), findsNothing);
+    expect(find.text('Текущий'), findsNothing);
+    expect(find.text('Эксперимент'), findsNothing);
+    expect(find.text('Preserve'), findsOneWidget);
     expect(find.byKey(const ValueKey('task-map-elk-label')), findsNothing);
-    expect(find.text('Экспериментальная карта'), findsNothing);
-
-    final nodeIds = harness.graph.nodes.map((node) => node.id).toList();
-    await tester.tap(find.text('ELK'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('task-map-elk-label')), findsOneWidget);
-    expect(find.text('Mind map'), findsNothing);
-    expect(find.byKey(const ValueKey('task-map-node-task-a')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-node-email-1')), findsNothing);
-    expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
-
-    await tester.tap(find.byKey(const ValueKey('task-map-node-task-a')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    expect(harness.graph.selectedObjectId, 'task-a');
-    expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
-    expect(find.byKey(const ValueKey('task-map-node-email-1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-node-file-1')), findsNothing);
-    expect(find.text('Спросить секретаря'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byType(TaskProfileSection),
-      200,
-      scrollable: find
-          .ancestor(
-            of: find.text('Спросить секретаря'),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    expect(find.byType(TaskProfileSection), findsOneWidget);
-
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('task-map-elk-label')), findsNothing);
-    expect(find.text('Чужой файл'), findsWidgets);
-
-    await tester.tap(find.text('Эксперимент'));
-    await tester.pumpAndSettle();
-    expect(find.text('Экспериментальная карта'), findsOneWidget);
-    expect(find.text('Mind map'), findsOneWidget);
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
     expect(harness.graph.mode.name, 'people');
     expect(find.text('ELK'), findsNothing);
-    expect(find.byKey(const ValueKey('task-map-elk-label')), findsNothing);
     expect(find.text('Анна'), findsOneWidget);
   });
 }
@@ -259,7 +249,9 @@ _Geometry _observe(
   final scene = sceneFor(fixture);
   final first = engine.layout(scene);
   final second = engine.layout(scene);
-  final added = engine.layout(sceneFor(taskMapFixtureWithEvidenceLeaf(fixture)));
+  final added = engine.layout(
+    sceneFor(taskMapFixtureWithEvidenceLeaf(fixture)),
+  );
   final hinted = priorEngine.layout(sceneWithPriors(scene, first));
   final shifted = priorEngine.layout(
     TaskMapScene(
@@ -297,7 +289,12 @@ class _FixedEngine implements TaskMapLayoutEngine {
     return TaskMapSceneLayout.success(
       nodes: {
         for (var index = 0; index < scene.nodes.length; index++)
-          scene.nodes[index].id: Rect.fromLTWH(20.0 + index * 200, 30, 168, 104),
+          scene.nodes[index].id: Rect.fromLTWH(
+            20.0 + index * 200,
+            30,
+            168,
+            104,
+          ),
       },
       edges: [
         if (scene.edges.isNotEmpty)
@@ -342,7 +339,9 @@ MockClient _workspaceMock() {
     if (request.url.path == '/graph/people-workspace') {
       return jsonUtf8Response(
         graphWorkspaceJson(
-          nodes: [graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person')],
+          nodes: [
+            graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person'),
+          ],
         ),
       );
     }
@@ -352,7 +351,11 @@ MockClient _workspaceMock() {
           nodes: [
             graphObjectJson(id: 'task-a', title: 'Задача А'),
             graphObjectJson(id: 'task-b', title: 'Задача Б'),
-            graphObjectJson(id: 'email-1', title: 'Письмо контекста', kind: 'email'),
+            graphObjectJson(
+              id: 'email-1',
+              title: 'Письмо контекста',
+              kind: 'email',
+            ),
             graphObjectJson(id: 'file-1', title: 'Чужой файл', kind: 'file'),
           ],
           edges: [

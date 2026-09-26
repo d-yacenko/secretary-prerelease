@@ -6,7 +6,6 @@ import 'package:personal_secretary/api/api_models.dart';
 import 'package:personal_secretary/graph/graph_workspace_screen.dart';
 import 'package:personal_secretary/graph/task_map.dart';
 import 'package:personal_secretary/graph/task_map_view.dart';
-import 'package:personal_secretary/graph/task_profile_section.dart';
 
 import 'graph_test_harness.dart';
 
@@ -17,12 +16,7 @@ SecretaryObject _object({
   String? dueAt,
   String? operationalState,
 }) {
-  final json = graphObjectJson(
-    id: id,
-    title: title,
-    kind: kind,
-    dueAt: dueAt,
-  );
+  final json = graphObjectJson(id: id, title: title, kind: kind, dueAt: dueAt);
   if (operationalState != null) {
     json['metadata'] = {'operational_state': operationalState};
   }
@@ -52,7 +46,8 @@ List<SecretaryObject> _chain(int count, {String titlePrefix = 'Задача'}) {
 
 List<SecretaryEdge> _chainEdges(int count) {
   return [
-    for (var index = 0; index < count - 1; index++) _edge('n$index', 'n${index + 1}'),
+    for (var index = 0; index < count - 1; index++)
+      _edge('n$index', 'n${index + 1}'),
   ];
 }
 
@@ -86,7 +81,10 @@ void main() {
       showContext: true,
     );
     expect(shown.nodes.map((node) => node.id), ['task-a', 'task-b', 'email-1']);
-    expect(shown.edges.map((edge) => edge.id), ['task-a-task-b', 'task-a-email-1']);
+    expect(shown.edges.map((edge) => edge.id), [
+      'task-a-task-b',
+      'task-a-email-1',
+    ]);
     expect(shown.nodes.any((node) => node.id == 'file-1'), isFalse);
 
     final restored = projectTaskMap(
@@ -95,8 +93,14 @@ void main() {
       selectedObjectId: 'task-a',
       showContext: false,
     );
-    expect(restored.nodes.map((node) => node.id), hidden.nodes.map((node) => node.id));
-    expect(restored.edges.map((edge) => edge.id), hidden.edges.map((edge) => edge.id));
+    expect(
+      restored.nodes.map((node) => node.id),
+      hidden.nodes.map((node) => node.id),
+    );
+    expect(
+      restored.edges.map((edge) => edge.id),
+      hidden.edges.map((edge) => edge.id),
+    );
   });
 
   test('semantic zoom presentation', () {
@@ -191,14 +195,26 @@ void main() {
       ];
 
       for (final layout in TaskMapLayout.values) {
-        final base = layoutTaskMap(layout: layout, nodes: baseNodes, edges: baseEdges);
-        final added = layoutTaskMap(layout: layout, nodes: addedNodes, edges: addedEdges);
+        final base = layoutTaskMap(
+          layout: layout,
+          nodes: baseNodes,
+          edges: baseEdges,
+        );
+        final added = layoutTaskMap(
+          layout: layout,
+          nodes: addedNodes,
+          edges: addedEdges,
+        );
         final context = layoutTaskMap(
           layout: layout,
           nodes: contextNodes,
           edges: contextEdges,
         );
-        final reroot = layoutTaskMap(layout: layout, nodes: baseNodes, edges: reversed);
+        final reroot = layoutTaskMap(
+          layout: layout,
+          nodes: baseNodes,
+          edges: reversed,
+        );
         expect(base.completed, isTrue, reason: '${layout.name} $count');
         expect(added.completed, isTrue, reason: '${layout.name} $count');
         expect(context.completed, isTrue, reason: '${layout.name} $count');
@@ -248,74 +264,26 @@ void main() {
     expect(find.text('Подготовить длинный отчёт'), findsNothing);
   });
 
-  testWidgets('experimental map uses workspace data and keeps the current default', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1280, 800);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets(
+    'experimental map uses workspace data and keeps the current default',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-    final harness = GraphTestHarness(_workspaceMock());
-    harness.configure();
-    await openGraph(tester, harness);
+      final harness = GraphTestHarness(_workspaceMock());
+      harness.configure();
+      await openGraph(tester, harness);
 
-    expect(find.byType(GraphWorkspaceScreen), findsOneWidget);
-    expect(find.text('Текущий'), findsOneWidget);
-    expect(find.text('Экспериментальная карта'), findsNothing);
-    expect(find.text('Задача А'), findsOneWidget);
-    expect(find.text('Письмо контекста'), findsOneWidget);
-
-    await tester.tap(find.text('Эксперимент'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Экспериментальная карта'), findsOneWidget);
-    expect(find.text('Mind map'), findsOneWidget);
-    expect(find.text('Радиальная'), findsOneWidget);
-    expect(find.text('Силовая'), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-node-task-a')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-node-email-1')), findsNothing);
-
-    final nodeIds = harness.graph.nodes.map((node) => node.id).toList();
-    final edgeIds = harness.graph.edges.map((edge) => edge.id).toList();
-    await tester.tap(find.text('Радиальная'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Силовая'));
-    await tester.pumpAndSettle();
-    expect(harness.graph.nodes.map((node) => node.id).toList(), nodeIds);
-    expect(harness.graph.edges.map((edge) => edge.id).toList(), edgeIds);
-
-    await tester.tap(find.byKey(const ValueKey('task-map-node-task-a')));
-    await tester.pump();
-    expect(harness.graph.selectedObjectId, 'task-a');
-    expect(find.text('Спросить секретаря'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.byType(TaskProfileSection),
-      200,
-      scrollable: find
-          .ancestor(
-            of: find.text('Спросить секретаря'),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    expect(find.byType(TaskProfileSection), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('task-map-context-toggle')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('task-map-node-email-1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-map-node-file-1')), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('task-map-context-toggle')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('task-map-node-email-1')), findsNothing);
-
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
-    expect(find.text('Экспериментальная карта'), findsNothing);
-    expect(find.text('Письмо контекста'), findsWidgets);
-    expect(harness.graph.rootId, isNull);
-  });
+      expect(find.byType(GraphWorkspaceScreen), findsOneWidget);
+      expect(find.text('Эксперимент'), findsNothing);
+      expect(find.text('Экспериментальная карта'), findsNothing);
+      expect(find.text('Preserve'), findsOneWidget);
+      expect(find.text('Задача А'), findsWidgets);
+      expect(harness.graph.rootId, isNull);
+    },
+  );
 
   testWidgets('people mode keeps the current renderer', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
@@ -326,10 +294,6 @@ void main() {
     final harness = GraphTestHarness(_workspaceMock());
     harness.configure();
     await openGraph(tester, harness);
-
-    await tester.tap(find.text('Эксперимент'));
-    await tester.pumpAndSettle();
-    expect(find.text('Экспериментальная карта'), findsOneWidget);
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
@@ -348,11 +312,27 @@ void main() {
 
     final harness = GraphTestHarness(_cycleMock());
     harness.configure();
-    await openGraph(tester, harness);
-    await tester.tap(find.text('Эксперимент'));
+    await harness.graph.loadOverview();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TaskMapExperiment(
+            nodes: harness.graph.nodes,
+            edges: harness.graph.edges,
+            selectedObjectId: null,
+            layout: TaskMapLayout.mindmap,
+            showContext: false,
+            onSelect: (_) {},
+          ),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('task-map-layout-fallback')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('task-map-layout-fallback')),
+      findsOneWidget,
+    );
     expect(find.text('Цикл А'), findsWidgets);
     expect(find.text('Цикл Б'), findsWidgets);
     expect(harness.graph.nodes, hasLength(2));
@@ -406,7 +386,9 @@ MockClient _workspaceMock() {
     if (request.url.path == '/graph/people-workspace') {
       return jsonUtf8Response(
         graphWorkspaceJson(
-          nodes: [graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person')],
+          nodes: [
+            graphObjectJson(id: 'person-1', title: 'Анна', kind: 'person'),
+          ],
         ),
       );
     }
@@ -416,7 +398,11 @@ MockClient _workspaceMock() {
           nodes: [
             graphObjectJson(id: 'task-a', title: 'Задача А'),
             graphObjectJson(id: 'task-b', title: 'Задача Б'),
-            graphObjectJson(id: 'email-1', title: 'Письмо контекста', kind: 'email'),
+            graphObjectJson(
+              id: 'email-1',
+              title: 'Письмо контекста',
+              kind: 'email',
+            ),
             graphObjectJson(id: 'file-1', title: 'Чужой файл', kind: 'file'),
           ],
           edges: [

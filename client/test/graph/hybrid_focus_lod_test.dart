@@ -20,7 +20,7 @@ void main() {
     final source = File('lib/graph/hybrid_focus_lod.dart').readAsStringSync();
     expect(source.contains('package:fcose'), isFalse);
     expect(source.contains('drawLine'), isTrue);
-    expect(source.contains('arrow'), isFalse);
+    expect(source.contains('arrowAtMark'), isTrue);
   });
 
   test('preserve and relax metrics on hybrid fixtures', () {
@@ -165,7 +165,10 @@ void main() {
     );
     expect(glyph.width, kHybridGlyphSize);
     expect(glyph.height, kHybridGlyphSize);
-    expect(glyph.rect.overlaps(scene.nodeById(anchorEdge.sourceId)!.rect), isFalse);
+    expect(
+      glyph.rect.overlaps(scene.nodeById(anchorEdge.sourceId)!.rect),
+      isFalse,
+    );
     expect(glyph.width, isNot(kFocusLodSatelliteSize));
 
     final failed = presentHybridFocus(
@@ -236,21 +239,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Текущий'), findsOneWidget);
-    expect(find.text('Эксперимент'), findsOneWidget);
-    expect(find.text('ELK'), findsOneWidget);
-    expect(find.text('fCoSE'), findsOneWidget);
-    expect(find.text('Фокус LOD'), findsOneWidget);
-    expect(find.text('LOD+fCoSE'), findsOneWidget);
-    expect(find.text('Preserve'), findsNothing);
-    expect(find.byKey(const ValueKey('hybrid-glyph-email-1')), findsNothing);
+    for (final label in [
+      'Текущий',
+      'Эксперимент',
+      'ELK',
+      'fCoSE',
+      'Фокус LOD',
+      'LOD+fCoSE',
+    ]) {
+      expect(find.text(label), findsNothing);
+    }
+    expect(find.text('Preserve'), findsOneWidget);
+    expect(find.text('Relax'), findsOneWidget);
 
     final positions = Map<String, Offset>.from(harness.graph.positions);
     final nodeIds = harness.graph.nodes.map((node) => node.id).toList();
-    await tester.tap(find.text('LOD+fCoSE'));
-    await tester.pumpAndSettle();
-    expect(find.text('Preserve'), findsOneWidget);
-    expect(find.text('Relax'), findsOneWidget);
     expect(find.byKey(const ValueKey('graph-hybrid-fallback')), findsOneWidget);
     expect(find.byKey(const ValueKey('hybrid-glyph-email-1')), findsOneWidget);
     expect(find.text('Письмо контекста'), findsNothing);
@@ -268,17 +271,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(harness.graph.selectedObjectId, 'task-a');
     expect(find.text('Письмо контекста'), findsWidgets);
+    expect(
+      find.text('Этот объект —[Ссылается на]→ Письмо контекста'),
+      findsOneWidget,
+    );
+    expect(find.text('Этот объект —[Зависит от]→ Задача Б'), findsOneWidget);
     expect(harness.graph.positions['task-a'], positions['task-a']);
     expect(find.byKey(const Key('graph_node_task-a')), findsOneWidget);
 
-    await tester.tap(find.text('Текущий'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('hybrid-glyph-file-1')), findsNothing);
-    expect(find.text('Чужой файл'), findsWidgets);
-
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
-    expect(find.text('LOD+fCoSE'), findsNothing);
+    expect(find.text('Preserve'), findsNothing);
     expect(find.text('Анна'), findsOneWidget);
   });
 }

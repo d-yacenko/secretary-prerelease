@@ -23,12 +23,10 @@ import '../ui/object_visuals.dart' show providerBadge;
 import 'fcose_graph_refiner.dart';
 import 'focus_lod.dart';
 import 'graph_geometry.dart';
+import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
-import 'task_map.dart';
-import 'task_map_elk_view.dart';
-import 'task_map_view.dart';
 import 'task_profile_section.dart';
 
 class GraphWorkspaceScreen extends StatefulWidget {
@@ -66,14 +64,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _searching = false;
   SearchFacetsOut? _searchFacets;
   Size? _canvasViewportSize;
-  TaskMapRenderer _taskMapRenderer = TaskMapRenderer.current;
-  TaskMapLayout _taskMapLayout = TaskMapLayout.mindmap;
-  bool _showTaskContext = false;
   FcoseRefinementMode _fcoseMode = FcoseRefinementMode.preserve;
-  String? _fcoseWarning;
   String? _hybridWarning;
   Rect? _hybridGraphBounds;
-  VoidCallback? _zoomTaskMap;
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
   var _bookmarkReconcileScheduled = false;
@@ -228,18 +221,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   void _fitView() {
-    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
-        (_taskMapRenderer == TaskMapRenderer.experiment ||
-            _taskMapRenderer == TaskMapRenderer.elk)) {
-      _zoomTaskMap?.call();
-      return;
-    }
     final viewportSize = _canvasViewportSize;
     if (viewportSize == null || viewportSize.isEmpty) {
       return;
     }
     final hybridBounds = _hybridGraphBounds;
-    if (_taskMapRenderer == TaskMapRenderer.hybrid && hybridBounds != null) {
+    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+        hybridBounds != null) {
       _transform.value = hybridFitTransform(
         graphBounds: hybridBounds,
         viewportSize: viewportSize,
@@ -341,61 +329,23 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               setState(() => _searchResults = []);
             },
           ),
-          if (widget.controller.mode == GraphWorkspaceMode.tasks) ...[
-            _TaskMapRendererBar(
-              selected: _taskMapRenderer,
-              onSelected: (value) => setState(() => _taskMapRenderer = value),
+          if (widget.controller.mode == GraphWorkspaceMode.tasks)
+            SegmentedButton<FcoseRefinementMode>(
+              segments: const [
+                ButtonSegment(
+                  value: FcoseRefinementMode.preserve,
+                  label: Text('Preserve'),
+                ),
+                ButtonSegment(
+                  value: FcoseRefinementMode.relax,
+                  label: Text('Relax'),
+                ),
+              ],
+              selected: {_fcoseMode},
+              onSelectionChanged: (selection) {
+                setState(() => _fcoseMode = selection.first);
+              },
             ),
-            if (_taskMapRenderer == TaskMapRenderer.fcose ||
-                _taskMapRenderer == TaskMapRenderer.hybrid) ...[
-              SegmentedButton<FcoseRefinementMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: FcoseRefinementMode.preserve,
-                    label: Text('Preserve'),
-                  ),
-                  ButtonSegment(
-                    value: FcoseRefinementMode.relax,
-                    label: Text('Relax'),
-                  ),
-                ],
-                selected: {_fcoseMode},
-                onSelectionChanged: (selection) {
-                  setState(() => _fcoseMode = selection.first);
-                },
-              ),
-            ],
-            if (_taskMapRenderer == TaskMapRenderer.experiment) ...[
-              SegmentedButton<TaskMapLayout>(
-                segments: const [
-                  ButtonSegment(
-                    value: TaskMapLayout.mindmap,
-                    label: Text('Mind map'),
-                  ),
-                  ButtonSegment(
-                    value: TaskMapLayout.radial,
-                    label: Text('Радиальная'),
-                  ),
-                  ButtonSegment(
-                    value: TaskMapLayout.force,
-                    label: Text('Силовая'),
-                  ),
-                ],
-                selected: {_taskMapLayout},
-                onSelectionChanged: (selection) {
-                  setState(() => _taskMapLayout = selection.first);
-                },
-              ),
-              FilterChip(
-                key: const ValueKey('task-map-context-toggle'),
-                label: const Text('Контекст'),
-                selected: _showTaskContext,
-                onSelected: widget.controller.selectedObject?.kind == 'task'
-                    ? (value) => setState(() => _showTaskContext = value)
-                    : null,
-              ),
-            ],
-          ],
           SizedBox(
             width: widget.controller.mode == GraphWorkspaceMode.tasks
                 ? 140
@@ -498,33 +448,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
-    final positions = _displayPositions(
-      nodes,
-      edges,
-      widget.controller.visiblePositions,
-    );
-    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
-        _taskMapRenderer == TaskMapRenderer.elk) {
-      return TaskMapElkView(
-        nodes: nodes,
-        edges: edges,
-        selectedObjectId: widget.controller.selectedObjectId,
-        onSelect: widget.controller.selectObject,
-        onZoomToFit: (zoom) => _zoomTaskMap = zoom,
-      );
-    }
-    if (widget.controller.mode == GraphWorkspaceMode.tasks &&
-        _taskMapRenderer == TaskMapRenderer.experiment) {
-      return TaskMapExperiment(
-        nodes: nodes,
-        edges: edges,
-        selectedObjectId: widget.controller.selectedObjectId,
-        layout: _taskMapLayout,
-        showContext: _showTaskContext,
-        onSelect: widget.controller.selectObject,
-        onZoomToFit: (zoom) => _zoomTaskMap = zoom,
-      );
-    }
+    final positions = widget.controller.visiblePositions;
     if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
       return Center(
         child: Column(
@@ -545,14 +469,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ),
       );
     }
-    final focusLod =
-        widget.controller.mode == GraphWorkspaceMode.tasks &&
-        _taskMapRenderer == TaskMapRenderer.focusLod;
-    final hybridActive =
-        widget.controller.mode == GraphWorkspaceMode.tasks &&
-        _taskMapRenderer == TaskMapRenderer.hybrid;
     _hybridWarning = null;
-    final hybrid = hybridActive
+    final hybrid = widget.controller.mode == GraphWorkspaceMode.tasks
         ? presentHybridFocus(
             nodes: nodes,
             edges: edges,
@@ -565,40 +483,34 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           )
         : null;
     _hybridWarning = hybrid?.warning;
-    final projection =
-        hybrid?.lod ??
-        (focusLod
-            ? projectFocusLod(
-                nodes: nodes,
-                edges: edges,
-                positions: positions,
-                selectedObjectId: widget.controller.selectedObjectId,
-                isBookmarked: (objectId) =>
-                    widget.bookmarkController?.colorFor(objectId) != null,
-              )
-            : null);
+    final projection = hybrid?.lod;
     final drawnNodes = projection == null
         ? nodes
         : nodes
               .where((node) => projection.fullCardIds.contains(node.id))
               .toList();
+    final byId = {for (final node in nodes) node.id: node};
     final drawnEdges = projection == null
         ? edges
         : edges
               .where(
-                (edge) => focusLodEdgeIsVisible(
-                  edge: edge,
-                  fullCardIds: projection.fullCardIds,
-                ),
+                (edge) =>
+                    focusLodEdgeIsVisible(
+                      edge: edge,
+                      fullCardIds: projection.fullCardIds,
+                    ) &&
+                    presentGraphMapEdge(
+                      edge: edge,
+                      sourceKind: byId[edge.sourceId]?.kind,
+                      targetKind: byId[edge.targetId]?.kind,
+                    ).visibleOnTasksMap,
               )
               .toList();
     final bounds = hybrid != null
         ? hybridPresentationBounds(hybrid)
         : GraphLayout.computeBounds(positions);
     _hybridGraphBounds = hybrid != null ? bounds : null;
-    final canvasPad = focusLod
-        ? kGraphCanvasPadding + kFocusLodCanvasMargin
-        : kGraphCanvasPadding;
+    const canvasPad = kGraphCanvasPadding;
     final canvasWidth = bounds.width + canvasPad * 2;
     final canvasHeight = bounds.height + canvasPad * 2;
     final selectedObjectId = widget.controller.selectedObjectId;
@@ -631,14 +543,6 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (_fcoseWarning != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-                child: Text(
-                  _fcoseWarning!,
-                  key: const ValueKey('graph-fcose-fallback'),
-                ),
-              ),
             if (_hybridWarning != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -670,40 +574,6 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     );
   }
 
-  Map<String, Offset> _displayPositions(
-    List<SecretaryObject> nodes,
-    List<SecretaryEdge> edges,
-    Map<String, Offset> positions,
-  ) {
-    _fcoseWarning = null;
-    if (widget.controller.mode != GraphWorkspaceMode.tasks ||
-        _taskMapRenderer != TaskMapRenderer.fcose) {
-      return positions;
-    }
-    final scene = buildGraphGeometryScene(
-      nodes: nodes,
-      edges: edges,
-      positions: positions,
-      selectedObjectId: widget.controller.selectedObjectId,
-    );
-    if (scene == null) {
-      return positions;
-    }
-    final refiner =
-        widget.geometryRefiner ?? FcoseGraphRefiner(mode: _fcoseMode);
-    final result = refiner.refine(scene);
-    if (!result.completed) {
-      _fcoseWarning =
-          result.error ?? 'Не удалось уточнить локальную карту fCoSE';
-      return positions;
-    }
-    final display = Map<String, Offset>.from(positions);
-    for (final entry in result.nodes.entries) {
-      display[entry.key] = entry.value.topLeft;
-    }
-    return display;
-  }
-
   Widget _graphViewport(
     BuildContext context,
     Map<String, Offset> positions,
@@ -723,8 +593,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final nodeSizes = <String, Size>{};
     if (hybrid != null) {
       for (final node in hybrid.scene.nodes) {
-        edgePositions[node.id] =
-            hybrid.displayTopLeft[node.id] ?? node.topLeft;
+        edgePositions[node.id] = hybrid.displayTopLeft[node.id] ?? node.topLeft;
         nodeSizes[node.id] = Size(node.width, node.height);
       }
     }
@@ -746,6 +615,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 edges: edges,
                 positions: edgePositions,
                 nodeSizes: nodeSizes,
+                nodeKinds: {for (final node in nodes) node.id: node.kind},
+                useProductRelations: hybrid != null,
                 bounds: bounds,
                 padding: canvasPad,
                 selectedEdgeId: widget.controller.selectedEdgeId,
@@ -772,8 +643,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   hybrid.scene.nodeById(node.id)?.width ==
                       kHybridFocusedCardWidth;
               final ongoingAnchor = hybrid != null && node.isOngoingTask;
-              final position = hybrid == null ||
-                      (node.kind == 'task' && !ongoingAnchor)
+              final position =
+                  hybrid == null || (node.kind == 'task' && !ongoingAnchor)
                   ? positions[node.id] ?? const Offset(0, 0)
                   : hybrid.topLeftFor(node.id, positions);
               final selected = selectedObjectId == node.id;
@@ -1114,11 +985,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         const SizedBox(height: 12),
         _DetailSectionHeader(title: 'Связи'),
         ...relatedEdges.map((edge) {
+          final source = widget.controller.nodeById(edge.sourceId);
+          final target = widget.controller.nodeById(edge.targetId);
           final otherId = edge.sourceId == object.id
               ? edge.targetId
               : edge.sourceId;
           final other = widget.controller.nodeById(otherId);
           return ListTile(
+            key: ValueKey('graph-relation-${edge.id}'),
             dense: true,
             selected: widget.controller.selectedEdgeId == edge.id,
             onTap: () {
@@ -1127,11 +1001,17 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 widget.controller.selectObject(other.id);
               }
             },
-            title: Text(relationTypeLabel(edge.type)),
+            title: Text(
+              graphRelationAuditText(
+                edge: edge,
+                sourceTitle: source?.title ?? edge.sourceId,
+                targetTitle: target?.title ?? edge.targetId,
+                selectedObjectId: object.id,
+              ),
+              key: ValueKey('graph-relation-audit-${edge.id}'),
+            ),
             subtitle: Text(
-              edge.origin == 'agent' && edge.state == 'proposed'
-                  ? '${provenanceStateLabel(edge.state)} • ${other?.title ?? otherId}'
-                  : other?.title ?? otherId,
+              '${originLabel(edge.origin)} · ${provenanceStateLabel(edge.state)}',
             ),
             trailing: _relationTrailing(context, edge),
           );
@@ -1574,49 +1454,6 @@ String _identityStateLabel(String state) {
   }
 }
 
-class _TaskMapRendererBar extends StatelessWidget {
-  const _TaskMapRendererBar({required this.selected, required this.onSelected});
-
-  final TaskMapRenderer selected;
-  final ValueChanged<TaskMapRenderer> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    const choices = <(TaskMapRenderer, String)>[
-      (TaskMapRenderer.current, 'Текущий'),
-      (TaskMapRenderer.experiment, 'Эксперимент'),
-      (TaskMapRenderer.elk, 'ELK'),
-      (TaskMapRenderer.fcose, 'fCoSE'),
-      (TaskMapRenderer.focusLod, 'Фокус LOD'),
-      (TaskMapRenderer.hybrid, 'LOD+fCoSE'),
-    ];
-    return Wrap(
-      spacing: 0,
-      runSpacing: 0,
-      children: [
-        for (final choice in choices)
-          TextButton(
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              minimumSize: const Size(0, 32),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              backgroundColor: choice.$1 == selected
-                  ? scheme.secondaryContainer
-                  : null,
-              foregroundColor: choice.$1 == selected
-                  ? scheme.onSecondaryContainer
-                  : null,
-            ),
-            onPressed: () => onSelected(choice.$1),
-            child: Text(choice.$2),
-          ),
-      ],
-    );
-  }
-}
-
 class _GraphNodeCard extends StatelessWidget {
   const _GraphNodeCard({
     required this.object,
@@ -1752,11 +1589,15 @@ class _GraphEdgePainter extends CustomPainter {
     required this.focusMode,
     required this.colorScheme,
     this.nodeSizes = const {},
+    this.nodeKinds = const {},
+    this.useProductRelations = false,
   });
 
   final List<SecretaryEdge> edges;
   final Map<String, Offset> positions;
   final Map<String, Size> nodeSizes;
+  final Map<String, String> nodeKinds;
+  final bool useProductRelations;
   final Rect bounds;
   final double padding;
   final String? selectedEdgeId;
@@ -1765,8 +1606,7 @@ class _GraphEdgePainter extends CustomPainter {
   final ColorScheme colorScheme;
 
   Size _nodeSize(String objectId) {
-    return nodeSizes[objectId] ??
-        const Size(kGraphNodeWidth, kGraphNodeHeight);
+    return nodeSizes[objectId] ?? const Size(kGraphNodeWidth, kGraphNodeHeight);
   }
 
   Offset _borderPoint(Offset center, Offset toward, Size size) {
@@ -1816,19 +1656,37 @@ class _GraphEdgePainter extends CustomPainter {
         continue;
       }
 
+      final presentation = useProductRelations
+          ? presentGraphMapEdge(
+              edge: edge,
+              sourceKind: nodeKinds[edge.sourceId],
+              targetKind: nodeKinds[edge.targetId],
+            )
+          : null;
+      if (presentation != null && !presentation.visibleOnTasksMap) {
+        continue;
+      }
       final focusEdge = focusMode && _isFocusEdge(edge);
       final dimmed = focusMode && !focusEdge;
       final emphasized = edge.id == selectedEdgeId || focusEdge;
+      final proposed = presentation?.proposed ?? edge.state == 'proposed';
+      final secondary = presentation?.secondary ?? false;
+      final light = presentation?.light ?? false;
 
       var paint = Paint()
-        ..strokeWidth = emphasized ? 2.5 : 1.5
-        ..color = edge.state == 'proposed'
+        ..strokeWidth = emphasized ? 2.5 : (secondary || light ? 1.2 : 1.5)
+        ..color = proposed
             ? colorScheme.tertiary
             : emphasized
             ? colorScheme.primary
             : colorScheme.outline
         ..style = PaintingStyle.stroke;
 
+      if (secondary && !emphasized) {
+        paint = paint..color = paint.color.withValues(alpha: 0.55);
+      } else if (light && !emphasized) {
+        paint = paint..color = paint.color.withValues(alpha: 0.7);
+      }
       if (dimmed) {
         paint = paint..color = paint.color.withValues(alpha: 0.35);
       }
@@ -1837,17 +1695,16 @@ class _GraphEdgePainter extends CustomPainter {
       final targetCenter = _nodeCenter(edge.targetId);
       final sourceSize = _nodeSize(edge.sourceId);
       final targetSize = _nodeSize(edge.targetId);
-      final start = _borderPoint(
-        sourceCenter,
-        targetCenter,
-        sourceSize,
-      );
-      final end = _borderPoint(
-        targetCenter,
-        sourceCenter,
-        targetSize,
-      );
-      canvas.drawLine(start, end, paint);
+      final start = _borderPoint(sourceCenter, targetCenter, sourceSize);
+      final end = _borderPoint(targetCenter, sourceCenter, targetSize);
+      if (presentation?.dashed ?? false) {
+        _drawDashed(canvas, start, end, paint);
+      } else {
+        canvas.drawLine(start, end, paint);
+      }
+      if (presentation != null && !presentation.directed) {
+        continue;
+      }
 
       final angle = math.atan2(end.dy - start.dy, end.dx - start.dx);
       const arrow = 10.0;
@@ -1866,6 +1723,27 @@ class _GraphEdgePainter extends CustomPainter {
         ..lineTo(right.dx, right.dy)
         ..close();
       canvas.drawPath(path, paint);
+    }
+  }
+
+  void _drawDashed(Canvas canvas, Offset start, Offset end, Paint paint) {
+    const dash = 6.0;
+    const gap = 4.0;
+    final delta = end - start;
+    final length = delta.distance;
+    if (length == 0) {
+      return;
+    }
+    final direction = delta / length;
+    var drawn = 0.0;
+    while (drawn < length) {
+      final next = math.min(drawn + dash, length);
+      canvas.drawLine(
+        start + direction * drawn,
+        start + direction * next,
+        paint,
+      );
+      drawn = next + gap;
     }
   }
 
