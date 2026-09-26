@@ -1,12 +1,18 @@
-# Current task — Visual Task Map V8A: Productize hybrid renderer + simplify edge grammar
+# Current task — Visual Task Map V8A-R: Productize hybrid renderer + preserve semantic relation direction
 
 V7B near-field geometry is accepted as the working product-map base.
 
-This task is productization/cleanup only.
+The previous V8A edge simplification policy is superseded.
 
-Promote the accepted `LOD+fCoSE` hybrid renderer to the single visible Tasks-map implementation and simplify the visual language of edges.
+This task productizes the accepted hybrid renderer AND makes map relation presentation faithful to canonical relation semantics.
 
-Do NOT implement `part_of`.
+Core invariant:
+
+> If Secretary can reason over a relation type and source/target direction, the human must be able to inspect the same type and direction.
+
+Do NOT reverse arrows to point toward a visual center.
+Do NOT infer direction from layout.
+Do NOT implement `part_of` yet.
 Do NOT change backend relation semantics.
 Do NOT deploy production.
 
@@ -14,7 +20,7 @@ No new dependency.
 
 ## 1. One visible Tasks renderer
 
-In Tasks mode, remove the visible renderer experiment selector/buttons:
+In Tasks mode remove the visible experiment selector/buttons:
 
 - `Текущий`;
 - `Эксперимент`;
@@ -23,236 +29,292 @@ In Tasks mode, remove the visible renderer experiment selector/buttons:
 - `Фокус LOD`;
 - `LOD+fCoSE`.
 
-The product Tasks graph should directly render the accepted hybrid LOD+fCoSE presentation.
+The Tasks graph should directly render the accepted hybrid LOD+fCoSE presentation.
 
 Keep:
-- Tasks / People mode switch;
+- Tasks / People switch;
 - search and existing graph actions;
 - Preserve / Relax selector for now.
 
 People mode remains unchanged.
 
-Do not add a new renderer selector.
+Old experiment implementations may remain in source if deleting them broadens risk, but they must not be reachable from normal product UI.
 
-## 2. Preserve/Relax stays
+## 2. Preserve / Relax stays
 
-Keep the current two fCoSE refinement modes:
+Keep:
 - Preserve;
 - Relax.
 
-Default remains Preserve unless current behavior already intentionally differs.
+Default remains current behavior.
 
-Do not parameter-search or rename them in this task.
+Do not tune parameters in this task.
 
-## 3. Experimental implementation cleanup boundary
+## 3. Remove normal topology-fallback banners
 
-The old experimental implementations may remain in source temporarily if removing them would broaden risk.
+Balanced deterministic fallback is expected behavior.
 
-But:
-- they must not be reachable from normal product UI;
-- no visible labels/toggles for them remain;
-- the product screen should no longer depend on a user-selected `TaskMapRenderer` mode to decide the Tasks canvas.
+Do not show ordinary product banners such as:
+- compact halo kept at balanced positions;
+- local flower kept at start positions.
 
-Do not delete graphview/ELK dependencies or experiment files unless removal is trivial and all focused tests stay green.
+Keep diagnostics internally/testably.
 
-Prefer UI/product cleanup over broad code deletion.
+Only genuine refinement failure may show a concise warning.
 
-## 4. Remove normal experimental fallback banners
+## 4. Add semantic edge presentation metadata
 
-Topology-guard fallback to balanced deterministic positions is now expected behavior, not a product error.
+Introduce a client presentation helper equivalent to a `GraphMapEdgePresentation` that derives from canonical edge type and endpoint kinds:
 
-Do not show user-facing banners such as:
-- `Компактные гало оставлены на сбалансированных позициях`;
-- `Локальное соцветие оставлено на стартовых позициях`.
+- whether edge is visible in Tasks map;
+- whether relation is directed;
+- line style;
+- arrowhead policy;
+- relative emphasis;
+- human-facing relation label.
 
-Keep diagnostics internally/testably if useful.
+Do not mutate `SecretaryEdge`.
 
-Show a concise warning only for a genuine refinement failure where product geometry cannot be produced normally.
+Raw `source_id -> target_id` is canonical direction, but arrow visibility depends on the semantic type.
 
-Do not remove actual error handling.
+## 5. Initial Tasks-map relation grammar
 
-## 5. Add an engine-neutral edge presentation role
+Implement this initial vocabulary.
 
-Introduce a small client presentation helper equivalent to:
+### `related_to`
+Semantically symmetric for map purposes.
 
-- `GraphMapEdgeRole.attachment`
-- `GraphMapEdgeRole.structural`
-- `GraphMapEdgeRole.dependency`
-- `GraphMapEdgeRole.hidden`
+Render:
+- solid normal line;
+- no arrowhead.
 
-The helper classifies visible Tasks-map edges from:
-- edge type;
-- source object kind;
-- target object kind;
-- current selected object id when needed for visibility.
+Detail panel:
+- show both endpoints with an undirected separator.
 
-Do not mutate canonical `SecretaryEdge`.
+### `references`
+Directed:
+- source -> target.
 
-The primary map must NOT equate raw `source_id -> target_id` with “draw an arrow”.
+Typical Task evidence is:
+- Task -> Flow.
 
-## 6. Attachment edges: no arrow
+Render:
+- light solid line;
+- arrowhead at target;
+- in compact LOD use a small low-emphasis arrowhead on the Task->Flow hairline;
+- in selected expanded flower use normal visible arrowhead.
 
-Task ↔ compactable Flow context/evidence is an attachment in this map.
+Do not reverse based on visual center.
 
-For:
-- compact Flow hairlines;
-- selected finite Task -> expanded focused Flow;
-- equivalent Task/Flow context edges shown by the hybrid renderer;
+### `depends_on`
+Directed:
+- dependent/source -> prerequisite/target.
 
-render:
-- solid low/normal-emphasis line;
-- NO arrowhead.
+Render:
+- dashed line;
+- arrowhead at target;
+- visually secondary compared with structural/current-focus edges;
+- may be dimmed outside focus, but if the line is shown its direction must remain visible.
 
-Canonical edge direction remains unchanged in data/details.
+Do not use it as hierarchy/layout parentage.
 
-The user can inspect exact relation type in the detail panel.
+### legacy `contains`
+Directed according to actual canonical:
+- source -> target.
 
-## 7. Generic Task↔Task structural/context links: no arrow
+Render:
+- solid structural line;
+- arrowhead at target.
 
-For visible Task↔Task edges that are not `depends_on`, including current:
-- `related_to`;
-- legacy `contains`;
-- `references` if such an edge exists between Tasks;
-- other non-operational contextual Task↔Task links;
+Do NOT reinterpret or reverse it as future `part_of`.
 
-render a plain line with no arrowhead.
+### future `part_of`
+DOCUMENT ONLY in this task:
+- child/source -> parent/target.
 
-Keep existing selected/emphasized styling where practical.
+No backend/API/schema implementation yet.
 
-Do not reinterpret the canonical edge.
+## 6. Other relation types
 
-## 8. depends_on: directional cross-link only
+Task actor roles:
+- `requested_by`;
+- `delegated_to`;
+- `waiting_on`;
+- `involves`.
 
-`depends_on` retains directional semantics:
-
-- source Task depends on target Task;
-- arrow points source -> target.
-
-But in the primary Tasks map:
-- hide/dim the dependency cross-link in normal overview;
-- show it clearly when the selected Task is either endpoint;
-- use a visually distinct dashed or similarly secondary style;
-- keep one arrowhead at the target end.
-
-Do not use dependency edges as hierarchy/layout parentage.
-
-Do not change Task operational semantics.
-
-## 9. Hide non-map relation classes from Tasks canvas
-
-In Tasks mode, do not continuously draw canvas edges for:
-
-- Task↔Person actor-role relations:
-  - `requested_by`;
-  - `delegated_to`;
-  - `waiting_on`;
-  - `involves`;
+Label/temporal:
 - `labeled_with`;
 - `temporal_evidence`;
-- `temporal_confirmation`;
-- Flow↔Flow source-local relations such as email thread/reference edges.
+- `temporal_confirmation`.
 
-Their data must remain unchanged and visible in the appropriate detail/Task Profile/People contexts.
+Flow↔Flow source-local relations may remain hidden from the primary Tasks canvas to avoid clutter.
 
-People mode behavior stays unchanged.
+But:
+- do not mutate/remove them;
+- detail/Task Profile/People views must keep them;
+- when shown in any relation detail row, source/target direction must be explicit.
 
-## 10. Proposed edge styling
+Do not invent a separate map style for every internal relation in this task.
 
-If a visible edge is proposed:
-- preserve the current proposed/dashed provenance cue where practical;
-- edge role still decides whether an arrowhead exists.
+## 7. Relation detail panel becomes semantic audit view
 
-A proposed generic link does NOT get an arrow merely because it has source/target orientation.
+The selected-object side panel currently shows relation type and the other object but not enough canonical orientation.
 
-## 11. Reserve compact-halo angles around major Task rays
+Update each relation row so the human can see:
 
-Fix the screenshot defect where a compact Flow hairline lies directly on top of a Task↔Task line.
+- relation type label;
+- canonical source;
+- canonical target;
+- direction;
+- provenance/origin when available;
+- state/proposed/confirmed cue when available.
 
-For each Task anchor during HYBRID compact balanced placement:
+For directed relations show text equivalent to:
 
-- collect rays from that Task center to visible Task neighbors whose map edge role is `structural`;
-- treat a symmetric angular corridor around each such ray as unavailable for compact preferred slots;
-- use ±15° as the initial reserved corridor (half of the existing 30° compact reference slot);
-- if a compact preferred slot falls inside a reserved corridor, search the existing deterministic nearby angular alternatives / next ring;
+`Source title —[relation type]→ Target title`
+
+For symmetric `related_to` show equivalent to:
+
+`Source title — Target title`
+
+The selected object may be source OR target; do not rewrite the underlying orientation.
+
+Make it obvious which endpoint is the currently selected object, using wording/style equivalent to `Этот объект` if helpful.
+
+Keep existing confirm/reject/remove actions.
+
+## 8. Directional truth must match map and detail
+
+For every visible directed map edge:
+
+- arrow direction must match the exact canonical source -> target shown in the side panel;
+- no layout/root/focus code may reverse it;
+- changing focus must not flip an arrow.
+
+Add test helpers around this invariant.
+
+## 9. Proposed relation styling
+
+Keep current proposed provenance cue.
+
+A proposed directed relation:
+- keeps its semantic arrow direction;
+- also keeps proposed styling.
+
+A proposed `related_to` stays non-directional.
+
+Do not let dash style alone ambiguously encode both proposal state and dependency type without another distinguishing cue.
+
+Use color/opacity/line pattern combination already available, minimally.
+
+## 10. Compact Task→Flow hairlines
+
+Compact Flow remains LOD presentation of a real canonical relation.
+
+For a compact Flow whose presentation anchor edge is a directed `references` Task->Flow relation:
+
+- draw thin hairline;
+- add a small arrowhead at the Flow end;
+- keep arrow visually subtle;
+- provider/kind/bookmark glyph remains primary.
+
+If the compact visual is anchored through a symmetric `related_to` relation:
+- no arrowhead.
+
+Do not fabricate direction for presentation-anchor geometry if no canonical directed anchor edge exists.
+
+## 11. Multi-Task compact Flow
+
+One Flow still renders once at its deterministic presentation anchor.
+
+Its compact hairline must correspond to the actual chosen canonical edge between the anchor Task and Flow.
+
+If that canonical edge is directed:
+- preserve its actual direction.
+
+Do not infer ownership from the presentation anchor.
+
+Other non-anchor relations remain visible in the detail panel even if not simultaneously drawn as compact long edges.
+
+## 12. Reserve compact-halo angles around major visible Task rays
+
+Keep/finalize the geometry polish from prior V8A intent.
+
+For each Task anchor:
+- collect visible Task↔Task map-edge rays;
+- reserve ±15° around each such ray for compact preferred slots;
+- if a compact preferred slot falls there, use deterministic alternate angle / next ring;
 - do not move Tasks;
-- do not add an edge router.
+- no edge router.
 
-This is presentation-only.
+This prevents compact Flow hairlines from visually merging with Task↔Task edges.
 
-Do not reserve corridors for hidden relations.
+Reserve only rays that are actually visible in the Tasks canvas.
 
-For `depends_on`, reserve its ray only while that dependency edge is currently visible due to focus.
+## 13. Hairline / line collision clarity
 
-## 12. Hairline clarity
-
-Compact Flow hairlines:
-- remain thin and non-directional;
-- use final accepted compact positions;
+Compact hairlines:
 - should not intentionally coincide with a visible Task↔Task edge for a meaningful length;
-- can cross another line at a non-parallel angle if unavoidable.
+- can cross at a clear angle if unavoidable.
 
-Do not build a full segment-routing engine.
+Do not implement general routing.
 
-## 13. Preserve current finite/ongoing behavior
+## 14. Preserve finite / ongoing behavior
 
 Finite Task:
-- current rectangular presentation;
-- selected finite opens local focused Flow flower.
+- rectangular;
+- selected finite opens local Flow flower.
 
 Ongoing Task:
-- current 144×144 circular `∞` presentation;
+- 144×144 circular infinity presentation;
 - selected ongoing keeps Flow compact.
 
-No completion-mode changes.
+No completion-mode change.
 
-## 14. Future hierarchy invariant — document only
-
-Do NOT add `part_of` in this task.
-
-Add one concise code/project comment where appropriate documenting the future convention:
-
-- canonical `part_of`: child/source -> parent/target;
-- normal overview is expected to use a structural line;
-- any future arrow affordance may therefore point rootward without inventing layout-based direction.
-
-No API/backend/schema code for `part_of`.
+Task center drift stays 0 px.
 
 ## 15. Tests / focused proof
 
 Add/update tests proving at minimum:
 
-1. Tasks UI no longer shows renderer labels:
+1. Tasks UI no longer shows:
    - Текущий;
    - Эксперимент;
    - ELK;
    - fCoSE;
    - Фокус LOD;
    - LOD+fCoSE.
-2. Tasks mode renders hybrid presentation directly.
+2. Tasks mode directly renders accepted hybrid.
 3. People mode unchanged.
-4. Preserve/Relax remains visible in Tasks mode.
-5. Balanced/topology fallback does not show a normal product warning banner.
-6. Genuine refiner failure still has safe fallback/error cue.
-7. Task↔Flow attachment edge has no arrowhead.
-8. Generic Task↔Task edge has no arrowhead.
-9. `depends_on` arrow is source -> target.
-10. `depends_on` is not prominent/visible in overview but appears when one endpoint is selected.
-11. Actor-role/label/temporal/Flow↔Flow edges are hidden from Tasks canvas.
-12. Detail/Task Profile relation data remains unchanged.
-13. Proposed visible generic edge remains proposed-styled but non-directional.
-14. Compact balanced placement avoids ±15° structural Task-edge corridor in fixture.
-15. Compact hairline does not coincide with the structural Task edge in the screenshot-style fixture.
-16. Task center drift remains 0 px.
-17. Finite/ongoing focus behavior remains unchanged.
-18. Preserve/Relax geometry behavior remains at V7B baseline.
-19. No backend/schema/relation-data changes.
-20. Current known unrelated UI/detail test failures are not expanded.
+4. Preserve/Relax remains visible.
+5. Normal topology fallback banners are gone.
+6. Genuine refinement failure remains safe.
+7. `related_to` renders without arrow.
+8. `references` renders source -> target arrow.
+9. Selected Task->Flow references arrow points Task -> Flow in both compact and expanded presentation.
+10. `depends_on` renders dashed source -> target arrow.
+11. legacy `contains` preserves canonical source -> target arrow.
+12. Focus/root changes do not reverse any semantic arrow.
+13. Detail relation row shows canonical source, relation type, target, origin/state.
+14. Detail orientation matches canvas orientation.
+15. Selected object may be target and still sees the true source -> target relation.
+16. Proposed directed relation preserves both proposal cue and arrow direction.
+17. Hidden actor/label/temporal/source-local relations remain present in canonical/detail data.
+18. Multi-Task compact Flow hairline uses the actual chosen anchor edge semantics.
+19. Compact balanced placement avoids ±15° visible Task-edge corridor.
+20. Screenshot-style hairline does not lie on top of the major Task edge.
+21. Task center drift remains 0 px.
+22. Finite/ongoing focus behavior remains unchanged.
+23. V7B geometry baseline remains intact.
+24. No backend/schema/relation-data changes.
+25. Known unrelated UI/detail failures do not expand.
 
 Run:
-- current Graph workspace/controller tests;
-- V7A completion-mode/ongoing graph tests;
+- graph workspace/controller tests;
+- relation/detail-panel tests;
+- V7A completion-mode/ongoing tests;
 - V7B dandelion/angular tests;
-- new edge-presentation/product-toolbar tests;
+- new semantic-edge/product-toolbar tests;
 - Task Profile UI regression tests;
 - Flutter analyze touched files;
 - `flutter build linux --debug`;
@@ -262,14 +324,14 @@ Run:
 
 When complete:
 - record implementation SHA;
-- record which renderer UI was removed/hidden;
-- record edge-role mapping used by the Tasks map;
-- record arrow policy;
-- record ±15° Task-ray corridor result;
+- record removed/hidden renderer UI;
+- record final relation-to-line/arrow mapping;
+- record side-panel canonical relation format;
+- record ±15° corridor result;
 - record known remaining visual polish;
 - do not begin `part_of` automatically;
 - return `CURRENT_TASK.md` to HOLD;
 - push to `origin/main`;
 - STOP.
 
-Human/architect review decides whether to begin Task composition/hierarchy next.
+Architect/human review decides whether to begin Task composition/hierarchy next.
