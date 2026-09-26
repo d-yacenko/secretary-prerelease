@@ -8,7 +8,7 @@ import '../ui/domain_labels.dart';
 import '../ui/object_dates.dart';
 
 /// Experimental Task Map presentation. The current Graph renderer stays default.
-enum TaskMapRenderer { current, experiment, elk, fcose }
+enum TaskMapRenderer { current, experiment, elk, fcose, focusLod }
 
 /// GraphView 1.5.1 algorithms used by the V1 spike.
 ///
@@ -71,10 +71,14 @@ TaskMapProjection projectTaskMap({
     }
   }
   return TaskMapProjection(
-    nodes: [for (final node in nodes) if (visible.contains(node.id)) node],
+    nodes: [
+      for (final node in nodes)
+        if (visible.contains(node.id)) node,
+    ],
     edges: [
       for (final edge in edges)
-        if (visible.contains(edge.sourceId) && visible.contains(edge.targetId)) edge,
+        if (visible.contains(edge.sourceId) && visible.contains(edge.targetId))
+          edge,
     ],
   );
 }
@@ -260,10 +264,7 @@ Algorithm taskMapAlgorithm(TaskMapLayout layout) {
       return RadialTreeLayoutAlgorithm(config, null);
     case TaskMapLayout.force:
       return _SeededFruchtermanReingoldAlgorithm(
-        FruchtermanReingoldConfiguration(
-          iterations: 40,
-          shuffleNodes: false,
-        ),
+        FruchtermanReingoldConfiguration(iterations: 40, shuffleNodes: false),
       );
   }
 }

@@ -21,6 +21,7 @@ import '../ui/object_bookmark_controller.dart';
 import '../ui/object_presentation.dart';
 import '../ui/object_visuals.dart' show providerBadge;
 import 'fcose_graph_refiner.dart';
+import 'focus_lod.dart';
 import 'graph_geometry.dart';
 import 'graph_layout.dart';
 import 'graph_workspace_controller.dart';
@@ -167,8 +168,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       if (!mounted) {
         return;
       }
-      final current =
-          widget.controller.visibleNodes.map((node) => node.id).toSet();
+      final current = widget.controller.visibleNodes
+          .map((node) => node.id)
+          .toSet();
       if (!ok) {
         if (!setEquals(current, requested)) {
           _scheduleVisibleBookmarkReconcile();
@@ -197,8 +199,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     try {
       final List<SecretaryObject> results;
       if (widget.controller.mode == GraphWorkspaceMode.people) {
-        final workspace = await widget.apiClient.getPeopleWorkspace(query: query.trim());
-        results = workspace.nodes.where((node) => node.kind == 'person').toList();
+        final workspace = await widget.apiClient.getPeopleWorkspace(
+          query: query.trim(),
+        );
+        results = workspace.nodes
+            .where((node) => node.kind == 'person')
+            .toList();
       } else {
         results = await widget.apiClient.searchObjects(
           query: query.trim(),
@@ -284,7 +290,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           elevation: 4,
                           child: ConstrainedBox(
                             constraints: BoxConstraints(
-                              maxHeight: MediaQuery.sizeOf(context).height * 0.45,
+                              maxHeight:
+                                  MediaQuery.sizeOf(context).height * 0.45,
                             ),
                             child: details,
                           ),
@@ -307,8 +314,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         children: [
           SegmentedButton<GraphWorkspaceMode>(
             segments: const [
-              ButtonSegment(value: GraphWorkspaceMode.tasks, label: Text('Задачи')),
-              ButtonSegment(value: GraphWorkspaceMode.people, label: Text('Люди')),
+              ButtonSegment(
+                value: GraphWorkspaceMode.tasks,
+                label: Text('Задачи'),
+              ),
+              ButtonSegment(
+                value: GraphWorkspaceMode.people,
+                label: Text('Люди'),
+              ),
             ],
             selected: {widget.controller.mode},
             onSelectionChanged: (selection) {
@@ -318,29 +331,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             },
           ),
           if (widget.controller.mode == GraphWorkspaceMode.tasks) ...[
-            SegmentedButton<TaskMapRenderer>(
-              segments: const [
-                ButtonSegment(
-                  value: TaskMapRenderer.current,
-                  label: Text('Текущий'),
-                ),
-                ButtonSegment(
-                  value: TaskMapRenderer.experiment,
-                  label: Text('Эксперимент'),
-                ),
-                ButtonSegment(
-                  value: TaskMapRenderer.elk,
-                  label: Text('ELK'),
-                ),
-                ButtonSegment(
-                  value: TaskMapRenderer.fcose,
-                  label: Text('fCoSE'),
-                ),
-              ],
-              selected: {_taskMapRenderer},
-              onSelectionChanged: (selection) {
-                setState(() => _taskMapRenderer = selection.first);
-              },
+            _TaskMapRendererBar(
+              selected: _taskMapRenderer,
+              onSelected: (value) => setState(() => _taskMapRenderer = value),
             ),
             if (_taskMapRenderer == TaskMapRenderer.fcose) ...[
               SegmentedButton<FcoseRefinementMode>(
@@ -392,7 +385,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             ],
           ],
           SizedBox(
-            width: 220,
+            width: widget.controller.mode == GraphWorkspaceMode.tasks
+                ? 140
+                : 220,
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -416,24 +411,24 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             ),
           ),
           if (widget.controller.mode == GraphWorkspaceMode.tasks)
-          CompactObjectFilters(
-            facets: _searchFacets,
-            selectedKind: widget.controller.searchKindFilter,
-            selectedProvider: widget.controller.searchProviderFilter,
-            selectedSort: 'relevance',
-            showSort: false,
-            onKindChanged: (value) {
-              widget.controller.searchKindFilter = value;
-              widget.controller.applyDisplayFilters();
-              _runSearch(_searchController.text);
-            },
-            onProviderChanged: (value) {
-              widget.controller.searchProviderFilter = value;
-              widget.controller.applyDisplayFilters();
-              _runSearch(_searchController.text);
-            },
-            onSortChanged: (_) {},
-          ),
+            CompactObjectFilters(
+              facets: _searchFacets,
+              selectedKind: widget.controller.searchKindFilter,
+              selectedProvider: widget.controller.searchProviderFilter,
+              selectedSort: 'relevance',
+              showSort: false,
+              onKindChanged: (value) {
+                widget.controller.searchKindFilter = value;
+                widget.controller.applyDisplayFilters();
+                _runSearch(_searchController.text);
+              },
+              onProviderChanged: (value) {
+                widget.controller.searchProviderFilter = value;
+                widget.controller.applyDisplayFilters();
+                _runSearch(_searchController.text);
+              },
+              onSortChanged: (_) {},
+            ),
           if (_searchResults.isNotEmpty)
             SizedBox(
               height: 40,
@@ -538,9 +533,40 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ),
       );
     }
+    final focusLod =
+        widget.controller.mode == GraphWorkspaceMode.tasks &&
+        _taskMapRenderer == TaskMapRenderer.focusLod;
+    final projection = focusLod
+        ? projectFocusLod(
+            nodes: nodes,
+            edges: edges,
+            positions: positions,
+            selectedObjectId: widget.controller.selectedObjectId,
+            isBookmarked: (objectId) =>
+                widget.bookmarkController?.colorFor(objectId) != null,
+          )
+        : null;
+    final drawnNodes = projection == null
+        ? nodes
+        : nodes
+              .where((node) => projection.fullCardIds.contains(node.id))
+              .toList();
+    final drawnEdges = projection == null
+        ? edges
+        : edges
+              .where(
+                (edge) => focusLodEdgeIsVisible(
+                  edge: edge,
+                  fullCardIds: projection.fullCardIds,
+                ),
+              )
+              .toList();
     final bounds = GraphLayout.computeBounds(positions);
-    final canvasWidth = bounds.width + kGraphCanvasPadding * 2;
-    final canvasHeight = bounds.height + kGraphCanvasPadding * 2;
+    final canvasPad = focusLod
+        ? kGraphCanvasPadding + kFocusLodCanvasMargin
+        : kGraphCanvasPadding;
+    final canvasWidth = bounds.width + canvasPad * 2;
+    final canvasHeight = bounds.height + canvasPad * 2;
     final selectedObjectId = widget.controller.selectedObjectId;
     final focusMode = selectedObjectId != null;
     final focusNeighborIds = _focusNeighborIds(edges, selectedObjectId);
@@ -578,14 +604,16 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               child: _graphViewport(
                 context,
                 positions,
-                nodes,
-                edges,
+                drawnNodes,
+                drawnEdges,
                 bounds,
                 canvasWidth,
                 canvasHeight,
+                canvasPad,
                 selectedObjectId,
                 focusMode,
                 focusNeighborIds,
+                projection,
               ),
             ),
           ],
@@ -613,10 +641,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     if (scene == null) {
       return positions;
     }
-    final refiner = widget.geometryRefiner ?? FcoseGraphRefiner(mode: _fcoseMode);
+    final refiner =
+        widget.geometryRefiner ?? FcoseGraphRefiner(mode: _fcoseMode);
     final result = refiner.refine(scene);
     if (!result.completed) {
-      _fcoseWarning = result.error ?? 'Не удалось уточнить локальную карту fCoSE';
+      _fcoseWarning =
+          result.error ?? 'Не удалось уточнить локальную карту fCoSE';
       return positions;
     }
     final display = Map<String, Offset>.from(positions);
@@ -634,59 +664,115 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     Rect bounds,
     double canvasWidth,
     double canvasHeight,
+    double canvasPad,
     String? selectedObjectId,
     bool focusMode,
     Set<String> focusNeighborIds,
+    FocusLodProjection? projection,
   ) {
     return InteractiveViewer(
-          constrained: false,
-          transformationController: _transform,
-          minScale: kGraphMinScale,
-          maxScale: kGraphMaxScale,
-          boundaryMargin: const EdgeInsets.all(200),
-          child: SizedBox(
-            width: canvasWidth,
-            height: canvasHeight,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                CustomPaint(
-                  size: Size(canvasWidth, canvasHeight),
-                  painter: _GraphEdgePainter(
-                    edges: edges,
-                    positions: positions,
-                    bounds: bounds,
-                    padding: kGraphCanvasPadding,
-                    selectedEdgeId: widget.controller.selectedEdgeId,
-                    selectedObjectId: selectedObjectId,
-                    focusMode: focusMode,
-                    colorScheme: Theme.of(context).colorScheme,
+      constrained: false,
+      transformationController: _transform,
+      minScale: kGraphMinScale,
+      maxScale: kGraphMaxScale,
+      boundaryMargin: const EdgeInsets.all(200),
+      child: SizedBox(
+        width: canvasWidth,
+        height: canvasHeight,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            CustomPaint(
+              size: Size(canvasWidth, canvasHeight),
+              painter: _GraphEdgePainter(
+                edges: edges,
+                positions: positions,
+                bounds: bounds,
+                padding: canvasPad,
+                selectedEdgeId: widget.controller.selectedEdgeId,
+                selectedObjectId: selectedObjectId,
+                focusMode: focusMode,
+                colorScheme: Theme.of(context).colorScheme,
+              ),
+            ),
+            ...nodes.map((node) {
+              final position = positions[node.id] ?? const Offset(0, 0);
+              final selected = selectedObjectId == node.id;
+              final emphasized =
+                  !focusMode || selected || focusNeighborIds.contains(node.id);
+              return Positioned(
+                left: position.dx - bounds.left + canvasPad,
+                top: position.dy - bounds.top + canvasPad,
+                child: _GraphNodeCard(
+                  object: node,
+                  selected: selected,
+                  focusDimmed: focusMode && !emphasized,
+                  person: widget.controller.personFor(node.id),
+                  bookmarkColor: widget.bookmarkController?.colorFor(node.id),
+                  onTap: () => widget.controller.selectObject(node.id),
+                ),
+              );
+            }),
+            if (projection != null) ...[
+              for (final satellite in projection.satellites)
+                _focusLodMark(
+                  topLeft: satellite.topLeft,
+                  bounds: bounds,
+                  canvasPad: canvasPad,
+                  dimmed: focusMode,
+                  child: FocusLodSatelliteMark(
+                    key: ValueKey('focus-lod-satellite-${satellite.objectId}'),
+                    objectId: satellite.objectId,
+                    kind:
+                        widget.controller.nodeById(satellite.objectId)?.kind ??
+                        'note',
+                    title:
+                        widget.controller.nodeById(satellite.objectId)?.title ??
+                        '',
+                    provider: widget.controller
+                        .nodeById(satellite.objectId)
+                        ?.provider,
+                    bookmarkColor: widget.bookmarkController?.colorFor(
+                      satellite.objectId,
+                    ),
+                    onTap: () =>
+                        widget.controller.selectObject(satellite.anchorTaskId),
                   ),
                 ),
-                ...nodes.map((node) {
-                  final position = positions[node.id] ?? const Offset(0, 0);
-                  final selected = selectedObjectId == node.id;
-                  final emphasized = !focusMode ||
-                      selected ||
-                      focusNeighborIds.contains(node.id);
-                  return Positioned(
-                    left: position.dx - bounds.left + kGraphCanvasPadding,
-                    top: position.dy - bounds.top + kGraphCanvasPadding,
-                    child: _GraphNodeCard(
-                      object: node,
-                      selected: selected,
-                      focusDimmed: focusMode && !emphasized,
-                      person: widget.controller.personFor(node.id),
-                      bookmarkColor:
-                          widget.bookmarkController?.colorFor(node.id),
-                      onTap: () => widget.controller.selectObject(node.id),
+              for (final overflow in projection.overflows)
+                _focusLodMark(
+                  topLeft: overflow.topLeft,
+                  bounds: bounds,
+                  canvasPad: canvasPad,
+                  dimmed: focusMode,
+                  child: FocusLodOverflowMark(
+                    key: ValueKey(
+                      'focus-lod-overflow-${overflow.anchorTaskId}',
                     ),
-                  );
-                }),
-              ],
-            ),
-          ),
-        );
+                    remainder: overflow.remainder,
+                    onTap: () =>
+                        widget.controller.selectObject(overflow.anchorTaskId),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _focusLodMark({
+    required Offset topLeft,
+    required Rect bounds,
+    required double canvasPad,
+    required bool dimmed,
+    required Widget child,
+  }) {
+    return Positioned(
+      left: topLeft.dx - bounds.left + canvasPad,
+      top: topLeft.dy - bounds.top + canvasPad,
+      child: Opacity(opacity: dimmed ? 0.35 : 1, child: child),
+    );
   }
 
   Widget _buildDetailPanel(BuildContext context, {required bool compact}) {
@@ -719,7 +805,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               const SizedBox(width: 8),
             ],
             Expanded(
-              child: Text(object.title, style: Theme.of(context).textTheme.titleMedium),
+              child: Text(
+                object.title,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             ),
             if (widget.bookmarkController != null)
               ObjectBookmarkEditor(
@@ -878,7 +967,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         const SizedBox(height: 12),
         _DetailSectionHeader(title: 'Связи'),
         ...relatedEdges.map((edge) {
-          final otherId = edge.sourceId == object.id ? edge.targetId : edge.sourceId;
+          final otherId = edge.sourceId == object.id
+              ? edge.targetId
+              : edge.sourceId;
           final other = widget.controller.nodeById(otherId);
           return ListTile(
             dense: true,
@@ -935,7 +1026,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     );
   }
 
-  Future<void> _addRelation(BuildContext context, SecretaryObject source) async {
+  Future<void> _addRelation(
+    BuildContext context,
+    SecretaryObject source,
+  ) async {
     String relationType = 'related_to';
     SecretaryObject? target;
     final queryController = TextEditingController();
@@ -956,9 +1050,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     DropdownButtonFormField<String>(
                       value: relationType,
                       items: const [
-                        DropdownMenuItem(value: 'related_to', child: Text('Связано с')),
-                        DropdownMenuItem(value: 'references', child: Text('Ссылается на')),
-                        DropdownMenuItem(value: 'depends_on', child: Text('Зависит от')),
+                        DropdownMenuItem(
+                          value: 'related_to',
+                          child: Text('Связано с'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'references',
+                          child: Text('Ссылается на'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'depends_on',
+                          child: Text('Зависит от'),
+                        ),
                       ],
                       onChanged: (value) {
                         if (value != null) {
@@ -968,9 +1071,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     ),
                     TextField(
                       controller: queryController,
-                      decoration: const InputDecoration(labelText: 'Поиск объекта'),
+                      decoration: const InputDecoration(
+                        labelText: 'Поиск объекта',
+                      ),
                       onSubmitted: (value) async {
-                        final results = await widget.apiClient.searchObjects(query: value);
+                        final results = await widget.apiClient.searchObjects(
+                          query: value,
+                        );
                         setState(() => options = results);
                       },
                     ),
@@ -991,7 +1098,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   child: const Text('Отмена'),
                 ),
                 FilledButton(
-                  onPressed: target == null ? null : () => Navigator.pop(context),
+                  onPressed: target == null
+                      ? null
+                      : () => Navigator.pop(context),
                   child: const Text('Создать'),
                 ),
               ],
@@ -1017,9 +1126,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       );
     } on ApiException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -1045,7 +1153,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     try {
       await navigation.launchForObject(objectId);
     } on SourceLaunchException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
@@ -1080,9 +1189,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       widget.authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -1119,9 +1227,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       widget.controller.removeEdge(edge.id);
     } on ApiException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -1171,9 +1278,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       }
     } on ApiException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -1249,7 +1355,9 @@ class _PersonDetailSection extends StatelessWidget {
           return ListTile(
             dense: true,
             title: Text(identity.displayValue),
-            subtitle: Text('${providerLabel(identity.provider)} · ${_identityStateLabel(identity.state)}'),
+            subtitle: Text(
+              '${providerLabel(identity.provider)} · ${_identityStateLabel(identity.state)}',
+            ),
             trailing: Wrap(
               spacing: 4,
               children: [
@@ -1258,7 +1366,8 @@ class _PersonDetailSection extends StatelessWidget {
                     onPressed: () => _correct(identity, 'confirm'),
                     child: const Text('Подтвердить'),
                   ),
-                if (identity.state == 'effective' || identity.state == 'conflicted')
+                if (identity.state == 'effective' ||
+                    identity.state == 'conflicted')
                   TextButton(
                     onPressed: () => _correct(identity, 'reject'),
                     child: const Text('Отклонить'),
@@ -1287,7 +1396,10 @@ class _PersonDetailSection extends StatelessWidget {
     );
   }
 
-  Future<void> _correct(PersonIdentityPresentation identity, String action) async {
+  Future<void> _correct(
+    PersonIdentityPresentation identity,
+    String action,
+  ) async {
     await apiClient.correctPersonIdentity(
       personId: person.personId,
       action: action,
@@ -1315,6 +1427,48 @@ String _identityStateLabel(String state) {
   }
 }
 
+class _TaskMapRendererBar extends StatelessWidget {
+  const _TaskMapRendererBar({required this.selected, required this.onSelected});
+
+  final TaskMapRenderer selected;
+  final ValueChanged<TaskMapRenderer> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const choices = <(TaskMapRenderer, String)>[
+      (TaskMapRenderer.current, 'Текущий'),
+      (TaskMapRenderer.experiment, 'Эксперимент'),
+      (TaskMapRenderer.elk, 'ELK'),
+      (TaskMapRenderer.fcose, 'fCoSE'),
+      (TaskMapRenderer.focusLod, 'Фокус LOD'),
+    ];
+    return Wrap(
+      spacing: 0,
+      runSpacing: 0,
+      children: [
+        for (final choice in choices)
+          TextButton(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              backgroundColor: choice.$1 == selected
+                  ? scheme.secondaryContainer
+                  : null,
+              foregroundColor: choice.$1 == selected
+                  ? scheme.onSecondaryContainer
+                  : null,
+            ),
+            onPressed: () => onSelected(choice.$1),
+            child: Text(choice.$2),
+          ),
+      ],
+    );
+  }
+}
+
 class _GraphNodeCard extends StatelessWidget {
   const _GraphNodeCard({
     required this.object,
@@ -1338,8 +1492,8 @@ class _GraphNodeCard extends StatelessWidget {
     final baseColor = selected
         ? scheme.primaryContainer
         : object.kind == 'task'
-            ? scheme.surfaceContainerHigh
-            : scheme.surface;
+        ? scheme.surfaceContainerHigh
+        : scheme.surface;
 
     final card = Material(
       elevation: selected ? 4 : 1,
@@ -1405,18 +1559,16 @@ class _GraphNodeCard extends StatelessWidget {
                   object.title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
               Text(
                 _graphNodeFooterLabel(object),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -1474,7 +1626,8 @@ class _GraphEdgePainter extends CustomPainter {
     if (selectedObjectId == null) {
       return false;
     }
-    return edge.sourceId == selectedObjectId || edge.targetId == selectedObjectId;
+    return edge.sourceId == selectedObjectId ||
+        edge.targetId == selectedObjectId;
   }
 
   @override
@@ -1494,8 +1647,8 @@ class _GraphEdgePainter extends CustomPainter {
         ..color = edge.state == 'proposed'
             ? colorScheme.tertiary
             : emphasized
-                ? colorScheme.primary
-                : colorScheme.outline
+            ? colorScheme.primary
+            : colorScheme.outline
         ..style = PaintingStyle.stroke;
 
       if (dimmed) {
