@@ -93,6 +93,7 @@ def test_accept_creates_open_confirmed_task_with_source_evidence(db_session) -> 
     assert task.origin == "agent"
     assert task.state == "confirmed"
     assert task.status == "open"
+    assert task.completion_mode == "finite"
     assert task.title == "Send forecast"
     assert task.body == "Send updated forecast"
     assert task.confidence == 0.86

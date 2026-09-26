@@ -19,6 +19,7 @@ SecretaryObject taskObject({
   String? plannedStartAt,
   String? plannedEndAt,
   String status = 'open',
+  String? completionMode,
 }) {
   return SecretaryObject(
     id: id,
@@ -29,6 +30,7 @@ SecretaryObject taskObject({
     origin: 'user',
     state: 'confirmed',
     status: status,
+    completionMode: completionMode,
     dueAt: dueAt,
     plannedStartAt: plannedStartAt,
     plannedEndAt: plannedEndAt,
@@ -551,5 +553,54 @@ void main() {
     expect(payload['planned_start_at'], isNull);
     expect(payload['planned_end_at'], isNull);
     expect(payload.containsKey('due_at'), isFalse);
+  });
+
+  testWidgets('completion mode patch does not clear the due date', (tester) async {
+    String? patchBody;
+    await tester.pumpWidget(
+      buildActions(
+        task: taskObject(dueAt: '2026-10-01T12:00:00Z'),
+        mock: MockClient((request) async {
+          if (request.method == 'PATCH') {
+            patchBody = request.body;
+            return http.Response(
+              jsonEncode({
+                'object': taskJson(
+                  taskObject(
+                    dueAt: '2026-10-01T12:00:00Z',
+                    completionMode: 'ongoing',
+                  ),
+                ),
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
+    );
+    await tester.tap(find.text('Редактировать'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Направление'));
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+    final payload = jsonDecode(patchBody!) as Map<String, dynamic>;
+    expect(payload['completion_mode'], 'ongoing');
+    expect(payload.containsKey('due_at'), isFalse);
+    expect(payload.containsKey('title'), isFalse);
+  });
+
+  testWidgets('ongoing status menu does not offer done', (tester) async {
+    await tester.pumpWidget(
+      buildActions(
+        task: taskObject(completionMode: 'ongoing'),
+        mock: MockClient((request) async => http.Response('{}', 404)),
+      ),
+    );
+    await tester.tap(find.text('Статус'));
+    await tester.pumpAndSettle();
+    expect(find.text('Выполнена'), findsNothing);
+    expect(find.text('Отменена'), findsOneWidget);
+    expect(find.text('В архиве'), findsOneWidget);
   });
 }

@@ -68,6 +68,7 @@ class Object(Base):
     external_id: Mapped[str | None] = mapped_column(nullable=True)
     canonical_uri: Mapped[str | None] = mapped_column(nullable=True)
     status: Mapped[str | None] = mapped_column(nullable=True)
+    completion_mode: Mapped[str | None] = mapped_column(nullable=True)
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     planned_start_at: Mapped[datetime | None] = mapped_column(

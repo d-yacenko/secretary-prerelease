@@ -796,6 +796,7 @@ class SecretaryObject {
     this.externalId,
     this.canonicalUri,
     this.status,
+    this.completionMode,
     this.startAt,
     this.dueAt,
     this.plannedStartAt,
@@ -818,6 +819,7 @@ class SecretaryObject {
   final String? externalId;
   final String? canonicalUri;
   final String? status;
+  final String? completionMode;
   final String? startAt;
   final String? dueAt;
   final String? plannedStartAt;
@@ -831,6 +833,16 @@ class SecretaryObject {
   final String createdAt;
   final String updatedAt;
 
+  bool get isOngoingTask => kind == 'task' && completionMode == 'ongoing';
+
+  /// Missing or unknown Task mode reads as finite. Dates are not consulted.
+  String? get effectiveCompletionMode {
+    if (kind != 'task') {
+      return null;
+    }
+    return isOngoingTask ? 'ongoing' : 'finite';
+  }
+
   factory SecretaryObject.fromJson(Map<String, dynamic> json) {
     return SecretaryObject(
       id: json['id'] as String,
@@ -841,6 +853,7 @@ class SecretaryObject {
       externalId: json['external_id'] as String?,
       canonicalUri: json['canonical_uri'] as String?,
       status: json['status'] as String?,
+      completionMode: json['completion_mode'] as String?,
       startAt: json['start_at'] as String?,
       dueAt: json['due_at'] as String?,
       plannedStartAt: json['planned_start_at'] as String?,
@@ -2633,8 +2646,10 @@ class TaskPatchRequest {
   bool bodySet = false;
   String? dueAt;
   bool dueAtSet = false;
+  String? completionMode;
+  bool completionModeSet = false;
 
-  bool get isEmpty => !titleSet && !bodySet && !dueAtSet;
+  bool get isEmpty => !titleSet && !bodySet && !dueAtSet && !completionModeSet;
 
   Map<String, dynamic> toJson() {
     final result = <String, dynamic>{};
@@ -2646,6 +2661,9 @@ class TaskPatchRequest {
     }
     if (dueAtSet) {
       result['due_at'] = dueAt;
+    }
+    if (completionModeSet) {
+      result['completion_mode'] = completionMode;
     }
     return result;
   }

@@ -103,6 +103,8 @@ FocusLodProjection projectFocusLod({
   required Map<String, Offset> positions,
   required String? selectedObjectId,
   bool Function(String objectId)? isBookmarked,
+  bool expandSelectedFlow = true,
+  Map<String, Rect>? taskObstacleRects,
 }) {
   final byId = {for (final node in nodes) node.id: node};
   final bookmarked = isBookmarked ?? (_) => false;
@@ -138,7 +140,7 @@ FocusLodProjection projectFocusLod({
   }
 
   final expanded = <String>{};
-  if (selectedIsTask) {
+  if (selectedIsTask && expandSelectedFlow) {
     for (final entry in tasksByFlow.entries) {
       if (entry.value.contains(selected.id)) {
         expanded.add(entry.key);
@@ -178,7 +180,8 @@ FocusLodProjection projectFocusLod({
   }
 
   final taskRects = {
-    for (final id in taskIds) id: GraphLayout.nodeRectAt(positions[id]!),
+    for (final id in taskIds)
+      id: taskObstacleRects?[id] ?? GraphLayout.nodeRectAt(positions[id]!),
   };
   final satellites = <FocusLodSatellite>[];
   final overflows = <FocusLodOverflow>[];

@@ -72,6 +72,11 @@ class TaskMutationService:
             effective["body"] = update_data["body"]
         if "due_at" in update_data and update_data["due_at"] != obj.due_at:
             effective["due_at"] = update_data["due_at"]
+        if (
+            "completion_mode" in update_data
+            and update_data["completion_mode"] != obj.completion_mode
+        ):
+            effective["completion_mode"] = update_data["completion_mode"]
         return effective
 
     def patch_task_fields(
@@ -81,6 +86,7 @@ class TaskMutationService:
         title: str | None = None,
         body: str | None = None,
         due_at: datetime | None = None,
+        completion_mode: str | None = None,
         fields_set: set[str],
     ) -> TaskPatchResult:
         obj = self._get_task(task_id)
@@ -95,6 +101,8 @@ class TaskMutationService:
             update_data["body"] = body
         if "due_at" in fields_set:
             update_data["due_at"] = normalize_tool_datetime(due_at)
+        if "completion_mode" in fields_set:
+            update_data["completion_mode"] = completion_mode
 
         if not update_data:
             raise ValidationError("at least one editable field must be supplied")

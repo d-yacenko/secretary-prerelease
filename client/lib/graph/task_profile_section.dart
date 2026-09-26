@@ -129,6 +129,8 @@ class _TaskProfileSectionState extends State<TaskProfileSection> {
             ),
           ),
         if (_profile != null) ...[
+          if (_profile!.task.isOngoingTask)
+            const Text('Направление · продолжается'),
           if (_profile!.operational != null)
             _OperationalCue(projection: _profile!.operational!),
           _actorGroup('Запросил', _profile!.requestedBy, _profile!.requestedByTruncated),

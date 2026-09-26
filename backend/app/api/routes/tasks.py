@@ -89,6 +89,9 @@ def patch_task(
             title=data.title if "title" in data.model_fields_set else None,
             body=data.body if "body" in data.model_fields_set else None,
             due_at=data.due_at if "due_at" in data.model_fields_set else None,
+            completion_mode=(
+                data.completion_mode if "completion_mode" in data.model_fields_set else None
+            ),
             fields_set=set(data.model_fields_set),
         )
     except NotFoundError as exc:

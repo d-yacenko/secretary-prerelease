@@ -28,6 +28,18 @@ const double kHybridFocusedCardWidth = 156;
 
 const double kHybridFocusedCardHeight = 76;
 
+/// Circular ongoing-task anchor. Centered on the canonical 186×100 Task center.
+const double kHybridOngoingSize = 144;
+
+Rect hybridOngoingRect(Offset canonicalTopLeft) {
+  return Rect.fromCenter(
+    center: canonicalTopLeft +
+        const Offset(kGraphNodeWidth / 2, kGraphNodeHeight / 2),
+    width: kHybridOngoingSize,
+    height: kHybridOngoingSize,
+  );
+}
+
 const double _focusedGap = 8;
 const int _focusedSlots = 8;
 const int _focusedMaxRings = 24;
@@ -85,12 +97,23 @@ HybridFocusPresentation presentHybridFocus({
   required GraphGeometryRefiner refiner,
   bool Function(String objectId)? isBookmarked,
 }) {
+  final selected = selectedObjectId == null
+      ? null
+      : nodes.where((node) => node.id == selectedObjectId).firstOrNull;
   final lod = projectFocusLod(
     nodes: nodes,
     edges: edges,
     positions: positions,
     selectedObjectId: selectedObjectId,
     isBookmarked: isBookmarked,
+    expandSelectedFlow: selected == null || !selected.isOngoingTask,
+    taskObstacleRects: {
+      for (final node in nodes)
+        if (node.kind == 'task' && positions.containsKey(node.id))
+          node.id: node.isOngoingTask
+              ? hybridOngoingRect(positions[node.id]!)
+              : GraphLayout.nodeRectAt(positions[node.id]!),
+    },
   );
   final scene = buildHybridGeometryScene(
     nodes: nodes,
@@ -258,14 +281,25 @@ GraphGeometryScene buildHybridGeometryScene({
     }
     final expandedFlow =
         focusLodKindIsCompactable(node.kind) && node.kind != 'task';
+    final ongoing = node.isOngoingTask;
     final focusedTopLeft = focusedStarts[node.id];
     geometryNodes.add(
       GraphGeometryNode(
         id: node.id,
-        width: expandedFlow ? kHybridFocusedCardWidth : kGraphNodeWidth,
-        height: expandedFlow ? kHybridFocusedCardHeight : kGraphNodeHeight,
+        width: expandedFlow
+            ? kHybridFocusedCardWidth
+            : ongoing
+            ? kHybridOngoingSize
+            : kGraphNodeWidth,
+        height: expandedFlow
+            ? kHybridFocusedCardHeight
+            : ongoing
+            ? kHybridOngoingSize
+            : kGraphNodeHeight,
         topLeft: expandedFlow
             ? (focusedTopLeft ?? positions[node.id]!)
+            : ongoing
+            ? hybridOngoingRect(positions[node.id]!).topLeft
             : positions[node.id]!,
         fixed: !expandedFlow,
       ),
@@ -601,6 +635,80 @@ class HybridFocusedFlowCard extends StatelessWidget {
   }
 }
 
+class HybridOngoingTaskNode extends StatelessWidget {
+  const HybridOngoingTaskNode({
+    super.key,
+    required this.object,
+    required this.selected,
+    required this.focusDimmed,
+    required this.bookmarkColor,
+    required this.onTap,
+  });
+
+  final SecretaryObject object;
+  final bool selected;
+  final bool focusDimmed;
+  final String? bookmarkColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final node = Material(
+      color: selected ? scheme.primaryContainer : scheme.secondaryContainer,
+      elevation: selected ? 4 : 2,
+      shape: CircleBorder(
+        side: BorderSide(
+          color: selected ? scheme.primary : scheme.outline,
+          width: selected ? 2.5 : 2,
+        ),
+      ),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: kHybridOngoingSize,
+          height: kHybridOngoingSize,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.all_inclusive, key: ValueKey('hybrid-ongoing-${object.id}')),
+                Text(
+                  'Направление',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                Text(
+                  object.title,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (bookmarkColor != null)
+                  Container(
+                    key: ValueKey('hybrid-ongoing-bookmark-${object.id}'),
+                    width: kHybridBookmarkMarkSize,
+                    height: kHybridBookmarkMarkSize,
+                    decoration: BoxDecoration(
+                      color: bookmarkTokenColor(bookmarkColor!, scheme),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!focusDimmed) {
+      return node;
+    }
+    return Opacity(opacity: 0.35, child: node);
+  }
+}
+
 Map<String, Offset> _focusedStarts({
   required List<SecretaryObject> nodes,
   required FocusLodProjection lod,
@@ -625,7 +733,9 @@ Map<String, Offset> _focusedStarts({
   final occupied = <Rect>[
     for (final node in nodes)
       if (node.kind == 'task' && positions.containsKey(node.id))
-        GraphLayout.nodeRectAt(positions[node.id]!),
+        node.isOngoingTask
+            ? hybridOngoingRect(positions[node.id]!)
+            : GraphLayout.nodeRectAt(positions[node.id]!),
   ];
   final placed = <Rect>[];
   final starts = <String, Offset>{};
@@ -818,12 +928,27 @@ List<HybridHairline> _hairlines(
 }
 
 (Offset, Offset) _borderToBorder(Rect source, Rect target) {
-  final sourceCenter = source.center;
-  final targetCenter = target.center;
   return (
-    _borderPoint(sourceCenter, targetCenter, source.width, source.height),
-    _borderPoint(targetCenter, sourceCenter, target.width, target.height),
+    _shapeBorder(source, target.center),
+    _shapeBorder(target, source.center),
   );
+}
+
+Offset _shapeBorder(Rect rect, Offset toward) {
+  if (rect.width == kHybridOngoingSize && rect.height == kHybridOngoingSize) {
+    final dx = toward.dx - rect.center.dx;
+    final dy = toward.dy - rect.center.dy;
+    final length = math.sqrt(dx * dx + dy * dy);
+    if (length == 0) {
+      return rect.center;
+    }
+    final radius = kHybridOngoingSize / 2;
+    return Offset(
+      rect.center.dx + dx / length * radius,
+      rect.center.dy + dy / length * radius,
+    );
+  }
+  return _borderPoint(rect.center, toward, rect.width, rect.height);
 }
 
 Offset _borderPoint(Offset center, Offset toward, double width, double height) {

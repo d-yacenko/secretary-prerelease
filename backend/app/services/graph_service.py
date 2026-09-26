@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session
 from app.api.schemas import EdgeCreate, ObjectCreate, ObjectUpdate
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
+from app.domain.task_completion import (
+    TASK_COMPLETION_FINITE,
+    completion_mode_for_storage,
+    reject_done_status_for_ongoing,
+)
 from app.domain.planned_execution import validate_planned_execution_interval
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
@@ -80,6 +85,17 @@ class GraphService:
             )
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        try:
+            completion_mode = completion_mode_for_storage(
+                kind=data.kind,
+                completion_mode=data.completion_mode,
+                status=data.status,
+                mode_was_set=True if data.kind == "task" else data.completion_mode is not None,
+            )
+            if data.kind == "task" and completion_mode is None:
+                completion_mode = TASK_COMPLETION_FINITE
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
 
         obj = Object(
             user_id=self._user_id,
@@ -92,6 +108,7 @@ class GraphService:
             external_id=data.external_id,
             canonical_uri=data.canonical_uri,
             status=data.status,
+            completion_mode=completion_mode,
             start_at=data.start_at,
             due_at=data.due_at,
             planned_start_at=data.planned_start_at,
@@ -130,8 +147,38 @@ class GraphService:
         metadata_updated = "metadata" in data.model_fields_set
         if "metadata" in updates:
             obj.metadata_ = updates.pop("metadata")
+        next_kind = updates.get("kind", obj.kind)
+        next_status = updates.get("status", obj.status)
+        next_mode = (
+            updates["completion_mode"]
+            if "completion_mode" in updates
+            else obj.completion_mode
+        )
+        try:
+            if next_kind != "task":
+                if updates.get("completion_mode") is not None:
+                    raise ValueError("completion_mode is only valid for task objects")
+                next_mode = None
+            elif "kind" in updates and "completion_mode" not in updates:
+                next_mode = TASK_COMPLETION_FINITE
+            elif "completion_mode" in updates:
+                next_mode = completion_mode_for_storage(
+                    kind=next_kind,
+                    completion_mode=next_mode,
+                    status=next_status,
+                    mode_was_set=True,
+                )
+            reject_done_status_for_ongoing(
+                kind=next_kind,
+                completion_mode=next_mode,
+                status=next_status,
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
         for field, value in updates.items():
             setattr(obj, field, value)
+        if next_kind != "task" or "kind" in updates or "completion_mode" in updates:
+            obj.completion_mode = next_mode
         changed_fields = set(updates.keys())
         if metadata_updated:
             changed_fields.add("metadata")

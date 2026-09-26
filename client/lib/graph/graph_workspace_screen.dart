@@ -771,7 +771,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   hybrid != null &&
                   hybrid.scene.nodeById(node.id)?.width ==
                       kHybridFocusedCardWidth;
-              final position = hybrid == null || node.kind == 'task'
+              final ongoingAnchor = hybrid != null && node.isOngoingTask;
+              final position = hybrid == null ||
+                      (node.kind == 'task' && !ongoingAnchor)
                   ? positions[node.id] ?? const Offset(0, 0)
                   : hybrid.topLeftFor(node.id, positions);
               final selected = selectedObjectId == node.id;
@@ -783,7 +785,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               return Positioned(
                 left: position.dx - bounds.left + canvasPad,
                 top: position.dy - bounds.top + canvasPad,
-                child: focusedFlow
+                child: ongoingAnchor
+                    ? KeyedSubtree(
+                        key: Key('graph_node_${node.id}'),
+                        child: HybridOngoingTaskNode(
+                          object: node,
+                          selected: selected,
+                          focusDimmed: focusMode && !emphasized,
+                          bookmarkColor: bookmarkColor,
+                          onTap: () => widget.controller.selectObject(node.id),
+                        ),
+                      )
+                    : focusedFlow
                     ? KeyedSubtree(
                         key: Key('graph_node_${node.id}'),
                         child: HybridFocusedFlowCard(
@@ -1756,6 +1769,28 @@ class _GraphEdgePainter extends CustomPainter {
         const Size(kGraphNodeWidth, kGraphNodeHeight);
   }
 
+  Offset _borderPoint(Offset center, Offset toward, Size size) {
+    final dx = toward.dx - center.dx;
+    final dy = toward.dy - center.dy;
+    if (dx == 0 && dy == 0) {
+      return center;
+    }
+    if (size.width == kHybridOngoingSize && size.height == kHybridOngoingSize) {
+      final length = math.sqrt(dx * dx + dy * dy);
+      final radius = kHybridOngoingSize / 2;
+      return Offset(
+        center.dx + dx / length * radius,
+        center.dy + dy / length * radius,
+      );
+    }
+    return GraphLayout.computeEdgeEndpoints(
+      sourceCenter: center,
+      targetCenter: toward,
+      nodeWidth: size.width,
+      nodeHeight: size.height,
+    ).start;
+  }
+
   Offset _nodeCenter(String objectId) {
     final position = positions[objectId] ?? const Offset(0, 0);
     final size = _nodeSize(objectId);
@@ -1802,18 +1837,16 @@ class _GraphEdgePainter extends CustomPainter {
       final targetCenter = _nodeCenter(edge.targetId);
       final sourceSize = _nodeSize(edge.sourceId);
       final targetSize = _nodeSize(edge.targetId);
-      final start = GraphLayout.computeEdgeEndpoints(
-        sourceCenter: sourceCenter,
-        targetCenter: targetCenter,
-        nodeWidth: sourceSize.width,
-        nodeHeight: sourceSize.height,
-      ).start;
-      final end = GraphLayout.computeEdgeEndpoints(
-        sourceCenter: targetCenter,
-        targetCenter: sourceCenter,
-        nodeWidth: targetSize.width,
-        nodeHeight: targetSize.height,
-      ).start;
+      final start = _borderPoint(
+        sourceCenter,
+        targetCenter,
+        sourceSize,
+      );
+      final end = _borderPoint(
+        targetCenter,
+        sourceCenter,
+        targetSize,
+      );
       canvas.drawLine(start, end, paint);
 
       final angle = math.atan2(end.dy - start.dy, end.dx - start.dx);

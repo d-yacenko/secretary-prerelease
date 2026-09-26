@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.planned_execution import validate_planned_execution_interval
+from app.domain.task_completion import TASK_COMPLETION_MODES
 from app.services.provenance import (
     Origin,
     State,
@@ -32,6 +33,7 @@ class ObjectCreate(BaseModel):
     planned_end_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     confidence: float | None = None
+    completion_mode: str | None = None
 
     @model_validator(mode="after")
     def validate_provenance(self) -> Self:
@@ -61,6 +63,7 @@ class ObjectUpdate(BaseModel):
     planned_end_at: datetime | None = None
     metadata: dict[str, Any] | None = None
     confidence: float | None = None
+    completion_mode: str | None = None
 
     @model_validator(mode="after")
     def reject_null_required_fields(self) -> Self:
@@ -100,6 +103,7 @@ class ObjectOut(BaseModel):
     external_id: str | None
     canonical_uri: str | None
     status: str | None
+    completion_mode: str | None = None
     start_at: datetime | None
     due_at: datetime | None
     planned_start_at: datetime | None = None
@@ -124,6 +128,7 @@ class ObjectOut(BaseModel):
             external_id=obj.external_id,
             canonical_uri=obj.canonical_uri,
             status=obj.status,
+            completion_mode=obj.completion_mode,
             start_at=obj.start_at,
             due_at=obj.due_at,
             planned_start_at=obj.planned_start_at,
@@ -514,6 +519,7 @@ class TaskPatchRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     body: str | None = None
     due_at: datetime | None = None
+    completion_mode: str | None = None
 
     @model_validator(mode="after")
     def require_at_least_one_field(self) -> Self:
@@ -521,6 +527,10 @@ class TaskPatchRequest(BaseModel):
             raise ValueError("at least one editable field must be supplied")
         if "title" in self.model_fields_set and self.title is None:
             raise ValueError("title cannot be null or empty")
+        if "completion_mode" in self.model_fields_set and (
+            self.completion_mode not in TASK_COMPLETION_MODES
+        ):
+            raise ValueError("completion_mode must be finite or ongoing")
         return self
 
 

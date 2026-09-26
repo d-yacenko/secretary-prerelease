@@ -101,6 +101,7 @@ class TaskManagementActions extends StatelessWidget {
     bool clearDue = false;
     bool dueAtChanged = false;
     bool plannedChanged = false;
+    var completionMode = task.effectiveCompletionMode ?? 'finite';
 
     final saved = await showDialog<bool>(
       context: context,
@@ -113,6 +114,20 @@ class TaskManagementActions extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    SegmentedButton<String>(
+                      key: const Key('task_completion_mode'),
+                      segments: const [
+                        ButtonSegment(value: 'finite', label: Text('Задача')),
+                        ButtonSegment(
+                          value: 'ongoing',
+                          label: Text('Направление'),
+                        ),
+                      ],
+                      selected: {completionMode},
+                      onSelectionChanged: (selection) {
+                        setState(() => completionMode = selection.first);
+                      },
+                    ),
                     TextField(
                       controller: titleController,
                       decoration: const InputDecoration(labelText: 'Название'),
@@ -318,6 +333,10 @@ class TaskManagementActions extends StatelessWidget {
       request.body = bodyController.text;
       request.bodySet = true;
     }
+    if (completionMode != (task.effectiveCompletionMode ?? 'finite')) {
+      request.completionMode = completionMode;
+      request.completionModeSet = true;
+    }
     if (clearDue) {
       request.dueAt = null;
       request.dueAtSet = true;
@@ -418,20 +437,25 @@ class TaskManagementActions extends StatelessWidget {
   }
 
   List<String> _statusOptionsFor(String? status) {
+    final List<String> options;
     switch (status) {
       case 'open':
       case null:
-        return ['in_progress', 'done', 'cancelled', 'archived'];
+        options = ['in_progress', 'done', 'cancelled', 'archived'];
       case 'in_progress':
-        return ['open', 'done', 'cancelled', 'archived'];
+        options = ['open', 'done', 'cancelled', 'archived'];
       case 'done':
       case 'cancelled':
       case 'archived':
       case 'completed':
-        return ['open'];
+        options = ['open'];
       default:
-        return ['open', 'in_progress', 'done', 'cancelled', 'archived'];
+        options = ['open', 'in_progress', 'done', 'cancelled', 'archived'];
     }
+    if (!task.isOngoingTask) {
+      return options;
+    }
+    return options.where((item) => item != 'done').toList();
   }
 }
 

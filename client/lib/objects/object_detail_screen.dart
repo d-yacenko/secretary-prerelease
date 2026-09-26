@@ -388,6 +388,8 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
                       'Запланированное время: $plannedIntervalValue',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                  if (object.isOngoingTask)
+                    const Text('Направление · продолжается'),
                   if (object.status != null)
                     Text(taskStatusLabel(object.status)),
                   if (object.state == 'proposed')
