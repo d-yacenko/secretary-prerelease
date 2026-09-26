@@ -18,7 +18,7 @@ from app.domain.person_assistant import feedback_identity_key, parse_feedback_id
 from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED
 from app.domain.person_identity import NormalizedPersonIdentity, PersonIdentityInputError
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS, is_terminal_for_reads
-from app.services.errors import NotFoundError, ValidationError
+from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
     DEFAULT_SEED_LIMIT,
@@ -103,12 +103,16 @@ class PersonGraphWorkspaceService:
             if grounded == "blocked":
                 raise ValidationError("person identity is conflicted")
             self._fail_closed_confirm(person_id, identity)
+            created = self._activate_unattached(person_id, identity)
             row = self._evidence.record_confirmation(
                 person_id,
                 identity,
                 f"graph_ui:user_confirmed:{identity.canonical_value}",
                 explanation="explicit graph correction",
             )
+            if created is not None and row.person_identity_id is None:
+                row.person_identity_id = created.id
+                self._session.flush()
             return _feedback_output(person_id, row)
         if action == "reject":
             row = self._evidence.record_rejection(
@@ -446,10 +450,37 @@ class PersonGraphWorkspaceService:
         ]
         if not rows:
             raise ValidationError("no active identity feedback to retract")
+        created_ids = [
+            row.person_identity_id
+            for row in rows
+            if row.evidence_type == USER_CONFIRMED and row.person_identity_id is not None
+        ]
         retracted = rows[0]
         for row in rows:
             retracted = self._evidence.retract(row.id)
+        for identity_id in created_ids:
+            self._detach_confirmation_identity(person_id, identity_id)
         return _feedback_output(person_id, retracted)
+
+    def _activate_unattached(
+        self,
+        person_id: UUID,
+        identity: NormalizedPersonIdentity,
+    ) -> PersonIdentity | None:
+        if self._people.resolve(identity) is not None:
+            return None
+        try:
+            return self._people.attach(person_id, identity)
+        except ConflictError as exc:
+            raise ValidationError("person identity is conflicted") from exc
+
+    def _detach_confirmation_identity(self, person_id: UUID, identity_id: UUID) -> None:
+        row = self._session.get(PersonIdentity, identity_id)
+        if row is None or row.user_id != self._user_id:
+            return
+        if row.person_object_id != person_id or row.state == REJECTED_STATE:
+            return
+        self._people.detach(row.id)
 
     def _grounding(self, person_id: UUID, identity: NormalizedPersonIdentity) -> str | None:
         wanted = feedback_identity_key(identity)
