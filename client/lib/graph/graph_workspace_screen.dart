@@ -1103,36 +1103,69 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   children: [
                     DropdownButtonFormField<String>(
                       value: relationType,
-                      items: const [
-                        DropdownMenuItem(
+                      items: [
+                        const DropdownMenuItem(
                           value: 'related_to',
                           child: Text('Связано с'),
                         ),
-                        DropdownMenuItem(
+                        const DropdownMenuItem(
                           value: 'references',
                           child: Text('Ссылается на'),
                         ),
-                        DropdownMenuItem(
+                        const DropdownMenuItem(
                           value: 'depends_on',
                           child: Text('Зависит от'),
                         ),
+                        if (source.kind == 'task')
+                          const DropdownMenuItem(
+                            value: 'part_of',
+                            child: Text('Входит в'),
+                          ),
                       ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() => relationType = value);
+                        if (value == null || value == relationType) {
+                          return;
                         }
+                        setState(() {
+                          final crossesPartOf =
+                              value == 'part_of' || relationType == 'part_of';
+                          relationType = value;
+                          if (crossesPartOf) {
+                            target = null;
+                            options = [];
+                          }
+                        });
                       },
                     ),
+                    if (relationType == 'part_of')
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Выбранная задача входит в выбранную родительскую задачу.',
+                        ),
+                      ),
                     TextField(
                       controller: queryController,
                       decoration: const InputDecoration(
                         labelText: 'Поиск объекта',
                       ),
                       onSubmitted: (value) async {
+                        final partOf = relationType == 'part_of';
                         final results = await widget.apiClient.searchObjects(
                           query: value,
+                          kind: partOf ? 'task' : null,
                         );
-                        setState(() => options = results);
+                        setState(() {
+                          options = partOf
+                              ? results
+                                    .where(
+                                      (item) =>
+                                          item.kind == 'task' &&
+                                          item.id != source.id,
+                                    )
+                                    .toList()
+                              : results;
+                        });
                       },
                     ),
                     ...options.map(
@@ -1165,6 +1198,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     );
 
     if (target == null || target!.id == source.id) {
+      return;
+    }
+    if (relationType == 'part_of' &&
+        (source.kind != 'task' || target!.kind != 'task')) {
       return;
     }
     try {
