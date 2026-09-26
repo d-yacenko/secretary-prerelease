@@ -134,3 +134,21 @@ Any production-database option needs a new harness. It should require:
 - no provider calls and no use of `deploy.py`.
 
 P1R1 does not add that harness. The local script is disposable and contains no production target.
+
+## P1R2 postmortem and P1R2R verifier repair
+
+P1R2 produced no usable Person counts. The one-shot production authorization was consumed after `CENSUS_MARKER=started`. The six integers are not stored anywhere in the repository and cannot be reconstructed.
+
+The verifier rejected a successful read. `psql -v ON_ERROR_STOP=1 -At` prints command tags around the data row. A disposable Postgres 16, queried with local psql 18.6, emitted:
+
+```
+BEGIN
+on|3|2|1|4|1|2
+COMMIT
+```
+
+The old helper required exactly one non-empty stdout line, so that shape became `CENSUS_BLOCKED=census_output`. The local parser treated `CENSUS_MARKER=started` plus that blocked line as generic `malformed`.
+
+P1R2R is local only. It does not rerun production and does not infer production counts. `psql` is now invoked with `-X -q -v ON_ERROR_STOP=1 -At`. On the same disposable server those flags emitted only the data row. The parser still accepts exactly two shapes: the data row alone, or `BEGIN`, the data row, and `COMMIT`. Any other line fails. A post-marker `CENSUS_BLOCKED=<known stage>` stays that stage with the authorization marked consumed.
+
+A second production census needs a new explicit authorization. The repaired verifier is ready for that authorization; this task does not grant it.

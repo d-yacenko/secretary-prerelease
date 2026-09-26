@@ -146,6 +146,26 @@ def require_runtime(health_url: str) -> None:
     )
 
 
+def extract_census_row(stdout: str) -> str:
+    """Accept only one data row, or BEGIN, that row, COMMIT."""
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    shape: list[str] = []
+    data: str | None = None
+    for line in lines:
+        if line in {"BEGIN", "COMMIT"}:
+            shape.append(line)
+            continue
+        shape.append("DATA")
+        if data is not None:
+            raise CensusError("census_output")
+        data = line
+    if tuple(shape) not in {("DATA",), ("BEGIN", "DATA", "COMMIT")}:
+        raise CensusError("census_output")
+    if data is None:
+        raise CensusError("census_output")
+    return data
+
+
 def parse_census_row(line: str) -> list[int]:
     parts = line.strip().split("|")
     if len(parts) != 7 or parts[0] != "on":
@@ -165,15 +185,12 @@ def run_census() -> list[int]:
         "db",
         "sh",
         "-lc",
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 '
+        'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -q -h 127.0.0.1 '
         '-U "${POSTGRES_USER:-secretary}" -d "${POSTGRES_DB:-secretary}" '
         "-v ON_ERROR_STOP=1 -At",
         stdin=CENSUS_SQL,
     )
-    lines = [line for line in output.splitlines() if line.strip()]
-    if len(lines) != 1:
-        raise CensusError("census_output")
-    return parse_census_row(lines[0])
+    return parse_census_row(extract_census_row(output))
 
 
 def emit_facts(values: list[int]) -> None:

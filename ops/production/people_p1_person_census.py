@@ -76,14 +76,30 @@ def classify(facts: dict[str, int]) -> str:
     return "P1_REAL_DATA_CANDIDATE_EXISTS"
 
 
+def _blocked_stage(line: str) -> str | None:
+    prefix = "CENSUS_BLOCKED="
+    if not line.startswith(prefix):
+        return None
+    stage = line[len(prefix) :]
+    if stage not in BLOCKED_STAGES:
+        return None
+    return stage
+
+
 def parse_remote_output(text: str) -> dict[str, int]:
     lines = text.splitlines()
     consumed = "CENSUS_MARKER=started" in lines
-    if len(lines) == 1 and lines[0].startswith("CENSUS_BLOCKED="):
-        stage = lines[0].split("=", 1)[1]
-        if stage not in BLOCKED_STAGES:
-            raise CensusClientError("malformed", consumed=consumed)
-        raise CensusClientError(stage, consumed=consumed)
+    if lines == []:
+        raise CensusClientError("malformed", consumed=False)
+    pre_marker = _blocked_stage(lines[0]) if len(lines) == 1 else None
+    if pre_marker is not None:
+        raise CensusClientError(pre_marker, consumed=False)
+    if (
+        len(lines) == 2
+        and lines[0] == "CENSUS_MARKER=started"
+        and _blocked_stage(lines[1]) is not None
+    ):
+        raise CensusClientError(_blocked_stage(lines[1]) or "malformed", consumed=True)
     expected = [
         "CENSUS_MARKER=started",
         "CENSUS_PREFLIGHT=pass",
