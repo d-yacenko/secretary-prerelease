@@ -1,15 +1,17 @@
 """Bounded read-only graph workspace for Flutter Graph UI."""
 
+from collections import deque
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import case, func, literal, or_, select, union_all
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, literal, or_, select, union_all
+from sqlalchemy.orm import Session, aliased
 
 from app.api.schemas import EdgeOut, ObjectOut
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS
+from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import NotFoundError
 from app.services.graph_service import GraphService
@@ -71,6 +73,13 @@ class GraphWorkspaceService:
         node_map: dict[UUID, Object] = {root.id: root}
         edge_map: dict[UUID, Edge] = {}
         truncated = False
+        if root.kind == "task":
+            truncated = self._close_confirmed_part_of(
+                [root.id],
+                node_map,
+                edge_map,
+                node_limit,
+            )
 
         new_node_budget = max(0, node_limit - len(node_map))
         if new_node_budget > 0:
@@ -115,6 +124,13 @@ class GraphWorkspaceService:
         node_map: dict[UUID, Object] = {seed.id: seed for seed in seeds}
         edge_map: dict[UUID, Edge] = {}
         seed_ids = [seed.id for seed in seeds]
+        if seed_ids:
+            truncated = truncated or self._close_confirmed_part_of(
+                seed_ids,
+                node_map,
+                edge_map,
+                node_limit,
+            )
 
         new_node_budget = node_limit - len(node_map)
         if new_node_budget > 0 and seed_ids:
@@ -169,6 +185,87 @@ class GraphWorkspaceService:
             keep.add(obj.id)
         return {object_id: node_map[object_id] for object_id in keep}
 
+    def _close_confirmed_part_of(
+        self,
+        frontier_ids: list[UUID],
+        node_map: dict[UUID, Object],
+        edge_map: dict[UUID, Edge],
+        node_limit: int,
+    ) -> bool:
+        """Add the confirmed Task part_of component reachable from the frontier.
+
+        Ordinary neighbor_limit does not apply. node_limit still bounds the
+        workspace. Hierarchy-added tasks are not returned as new expansion centers.
+        """
+        truncated = False
+        queue: deque[UUID] = deque(
+            object_id
+            for object_id in frontier_ids
+            if object_id in node_map and node_map[object_id].kind == "task"
+        )
+        seen: set[UUID] = set()
+        while queue:
+            current_id = queue.popleft()
+            if current_id in seen:
+                continue
+            seen.add(current_id)
+            for edge in self._confirmed_part_of_edges(current_id):
+                other_id = edge.target_id if edge.source_id == current_id else edge.source_id
+                if other_id not in node_map:
+                    if len(node_map) >= node_limit:
+                        truncated = True
+                        continue
+                    other = self._session.get(Object, other_id)
+                    if (
+                        other is None
+                        or other.user_id != self._user_id
+                        or other.kind != "task"
+                        or other.state == REJECTED_STATE
+                        or is_object_hidden_from_active_reads(other)
+                    ):
+                        continue
+                    node_map[other.id] = other
+                    queue.append(other.id)
+                if edge.source_id in node_map and edge.target_id in node_map:
+                    edge_map[edge.id] = edge
+        return truncated
+
+    def _confirmed_part_of_edges(self, task_id: UUID) -> list[Edge]:
+        neighbor = aliased(Object)
+        neighbor_filters = [
+            neighbor.user_id == self._user_id,
+            neighbor.kind == "task",
+            neighbor.state != REJECTED_STATE,
+            telegram_mtproto_active_object_predicate(neighbor),
+            object_is_active(neighbor),
+        ]
+        stmt = (
+            select(Edge)
+            .join(
+                neighbor,
+                or_(
+                    and_(Edge.source_id == task_id, Edge.target_id == neighbor.id),
+                    and_(Edge.target_id == task_id, Edge.source_id == neighbor.id),
+                ),
+            )
+            .where(
+                Edge.user_id == self._user_id,
+                Edge.type == PART_OF,
+                Edge.state == CONFIRMED_STATE,
+                or_(Edge.source_id == task_id, Edge.target_id == task_id),
+                *neighbor_filters,
+            )
+            .order_by(Edge.id)
+        )
+        edges: list[Edge] = []
+        seen_ids: set[UUID] = set()
+        for edge in self._session.scalars(stmt):
+            if edge.id in seen_ids:
+                continue
+            seen_ids.add(edge.id)
+            edges.append(edge)
+        return edges
+
     def _filter_edges_for_nodes(
         self,
         edge_map: dict[UUID, Edge],
@@ -181,11 +278,12 @@ class GraphWorkspaceService:
         }
 
     def _count_active_seed_tasks(self) -> int:
-        return self._session.scalar(
-            select(func.count())
-            .select_from(Object)
-            .where(*self._active_seed_task_filters())
-        ) or 0
+        return (
+            self._session.scalar(
+                select(func.count()).select_from(Object).where(*self._active_seed_task_filters())
+            )
+            or 0
+        )
 
     def _fetch_active_seed_tasks(self, limit: int) -> list[Object]:
         state_rank = case((Object.state == CONFIRMED_STATE, 0), else_=1)
@@ -294,6 +392,7 @@ class GraphWorkspaceService:
                 Edge.user_id == self._user_id,
                 Edge.source_id.in_(center_ids),
                 Edge.state != REJECTED_STATE,
+                or_(Edge.type != PART_OF, Edge.state != CONFIRMED_STATE),
                 *object_filters,
             )
         )
@@ -308,6 +407,7 @@ class GraphWorkspaceService:
                 Edge.user_id == self._user_id,
                 Edge.target_id.in_(center_ids),
                 Edge.state != REJECTED_STATE,
+                or_(Edge.type != PART_OF, Edge.state != CONFIRMED_STATE),
                 *object_filters,
             )
         )
@@ -315,8 +415,7 @@ class GraphWorkspaceService:
         candidates = union_all(outgoing, incoming).subquery("neighbor_candidates")
         counts_per_center = dict(
             self._session.execute(
-                select(candidates.c.center_id, func.count())
-                .group_by(candidates.c.center_id)
+                select(candidates.c.center_id, func.count()).group_by(candidates.c.center_id)
             ).all()
         )
         truncated = any(
