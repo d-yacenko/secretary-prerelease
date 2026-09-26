@@ -26,6 +26,7 @@ import 'graph_geometry.dart';
 import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
+import 'people_overview.dart';
 import 'graph_workspace_controller.dart';
 import 'task_map_hierarchy.dart';
 import 'task_profile_section.dart';
@@ -465,6 +466,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     if (widget.controller.mode == GraphWorkspaceMode.tasks) {
       positions.addAll(
         projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
+      );
+    } else if (widget.controller.rootId == null) {
+      positions.addAll(
+        projectPeopleOverview(
+          nodes: nodes,
+          seedIds: widget.controller.seedIds,
+          rootId: widget.controller.rootId,
+        ),
       );
     }
     if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
@@ -1483,6 +1492,7 @@ class _PersonDetailSection extends StatelessWidget {
           ),
         ],
         Text('Открытые задачи: ${person.openTaskCount}'),
+        Text('Недавние коммуникации: ${person.recentCommunicationCount}'),
       ],
     );
   }
@@ -1578,8 +1588,15 @@ class _GraphNodeCard extends StatelessWidget {
                     ),
                   ),
                   if (person?.identityConflict == true)
-                    Icon(Icons.report_outlined, size: 16, color: scheme.error),
-                  if (person != null && person!.identities.isNotEmpty)
+                    Icon(
+                      Icons.report_outlined,
+                      key: Key('person-identity-conflict-${object.id}'),
+                      size: 16,
+                      color: scheme.error,
+                      semanticLabel: 'Конфликт идентичности',
+                    ),
+                  if (person != null &&
+                      person!.identities.any((item) => item.state == 'effective'))
                     Flexible(
                       child: Text(
                         person!.identities
@@ -1587,6 +1604,7 @@ class _GraphNodeCard extends StatelessWidget {
                             .map((item) => providerLabel(item.provider))
                             .take(2)
                             .join(' · '),
+                        key: Key('person-provider-cues-${object.id}'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelSmall,
@@ -1613,7 +1631,12 @@ class _GraphNodeCard extends StatelessWidget {
                 ),
               ),
               Text(
-                _graphNodeFooterLabel(object),
+                person == null
+                    ? _graphNodeFooterLabel(object)
+                    : 'Задач: ${person!.openTaskCount} · сообщений: ${person!.recentCommunicationCount}',
+                key: person == null
+                    ? null
+                    : Key('person-activity-footer-${object.id}'),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelSmall

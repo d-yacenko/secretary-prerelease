@@ -44,6 +44,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   final Map<String, PersonPresentation> _people = {};
   final List<SecretaryEdge> _edges = [];
   final Map<String, Offset> _positions = {};
+  List<String> _seedIds = const [];
 
   List<SecretaryObject> get nodes => _nodes.values.toList();
   List<SecretaryObject> get visibleNodes =>
@@ -71,6 +72,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   }
 
   PersonPresentation? personFor(String id) => _people[id];
+  List<String> get seedIds => List.unmodifiable(_seedIds);
 
   SecretaryObject? get selectedObject =>
       selectedObjectId == null ? null : _nodes[selectedObjectId!];
@@ -102,6 +104,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _edges.clear();
     _positions.clear();
     _people.clear();
+    _seedIds = const [];
     mode = GraphWorkspaceMode.tasks;
     notifyListeners();
   }
@@ -505,6 +508,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     for (final person in workspace.people) {
       _people[person.personId] = person;
     }
+    _seedIds = List<String>.from(workspace.seedIds);
     for (final edge in workspace.edges) {
       final exists = _edges.any((item) => item.id == edge.id);
       if (!exists) {
@@ -535,6 +539,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     for (final person in workspace.people) {
       _people[person.personId] = person;
     }
+    _seedIds = List<String>.from(workspace.seedIds);
     for (final edge in workspace.edges) {
       final exists = _edges.any((item) => item.id == edge.id);
       if (!exists) {
