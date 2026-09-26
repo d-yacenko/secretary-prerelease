@@ -4,6 +4,7 @@ from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError as McpToolError
+from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 
 from app.mcp.gateway_runner import execute_mcp_tool
@@ -41,6 +42,17 @@ from app.tools.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _CompletionModeOmitted:
+    """MCP-local marker for an omitted completion_mode. Not a domain value."""
+
+
+_COMPLETION_MODE_OMITTED = _CompletionModeOmitted()
+
+
+def _omitted_completion_mode() -> _CompletionModeOmitted:
+    return _COMPLETION_MODE_OMITTED
 
 
 def _run_tool(operation: str, tool_name: str, arguments: dict) -> object:
@@ -171,7 +183,9 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
-        completion_mode: Literal["finite", "ongoing"] | None = None,
+        completion_mode: Literal["finite", "ongoing"] = Field(
+            default_factory=_omitted_completion_mode
+        ),
     ) -> CreateTaskOutput:
         """Create an agent-proposed task with required confidence."""
         arguments = {
@@ -181,7 +195,7 @@ def create_mcp_server() -> MCPServer:
             "due_at": due_at,
             "evidence_object_ids": evidence_object_ids or [],
         }
-        if completion_mode is not None:
+        if completion_mode is not _COMPLETION_MODE_OMITTED:
             arguments["completion_mode"] = completion_mode
         return _run_tool("create_task", "create_task", arguments)
 
@@ -192,7 +206,9 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
-        completion_mode: Literal["finite", "ongoing"] | None = None,
+        completion_mode: Literal["finite", "ongoing"] = Field(
+            default_factory=_omitted_completion_mode
+        ),
     ) -> UpdateTaskOutput:
         """Update task fields or attach evidence without changing lifecycle status."""
         arguments: dict = {"object_id": object_id}
@@ -204,7 +220,7 @@ def create_mcp_server() -> MCPServer:
             arguments["due_at"] = due_at
         if evidence_object_ids is not None:
             arguments["evidence_object_ids"] = evidence_object_ids
-        if completion_mode is not None:
+        if completion_mode is not _COMPLETION_MODE_OMITTED:
             arguments["completion_mode"] = completion_mode
         return _run_tool("update_task", "update_task", arguments)
 

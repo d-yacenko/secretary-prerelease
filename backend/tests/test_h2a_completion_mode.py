@@ -7,7 +7,9 @@ import uuid
 import pytest
 from mcp.client import Client
 from pydantic import ValidationError
+from sqlalchemy import func, select
 
+import app.mcp.server as mcp_server
 from app.api.schemas import ObjectCreate
 from app.db.models import Edge, Object
 from app.domain.task_relations import PART_OF
@@ -96,10 +98,11 @@ async def test_mcp_schema_matches_the_completion_mode_enum(patched_mcp_tool_sess
         listed = await client.list_tools()
     by_name = {tool.name: tool for tool in listed.tools}
     for name in ("create_task", "update_task"):
-        assert _enum_values(by_name[name].input_schema["properties"]["completion_mode"]) == {
-            "finite",
-            "ongoing",
-        }
+        schema = by_name[name].input_schema
+        prop = schema["properties"]["completion_mode"]
+        assert "completion_mode" not in schema.get("required", [])
+        assert not _advertises_null(prop)
+        assert _enum_values(prop) == {"finite", "ongoing"}
     for tool in listed.tools:
         if tool.name in {"create_task", "update_task"}:
             continue
@@ -252,6 +255,153 @@ def test_invalid_mode_does_not_mutate(db_session, fake_embedding_service) -> Non
 
 def _tools(db_session, fake_embedding_service, **kwargs) -> DomainToolService:
     return DomainToolService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_mcp_completion_mode_rejects_explicit_null(
+    db_session, patched_mcp_tool_session, monkeypatch
+) -> None:
+    forwarded: list[tuple[str, dict]] = []
+    real_execute = mcp_server.execute_mcp_tool
+
+    def spy(tool_name: str, arguments: dict):
+        forwarded.append((tool_name, dict(arguments)))
+        return real_execute(tool_name, arguments)
+
+    monkeypatch.setattr(mcp_server, "execute_mcp_tool", spy)
+
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID)
+    ongoing = graph.create_object(
+        ObjectCreate(
+            kind="task",
+            title="Keep ongoing",
+            origin=USER_ORIGIN,
+            completion_mode="ongoing",
+        )
+    )
+    before = db_session.scalar(select(func.count()).select_from(Object))
+
+    async with Client(create_mcp_server()) as client:
+        listed = await client.list_tools()
+        by_name = {tool.name: tool for tool in listed.tools}
+        for name in ("create_task", "update_task"):
+            schema = by_name[name].input_schema
+            prop = schema["properties"]["completion_mode"]
+            assert "completion_mode" not in schema.get("required", [])
+            assert prop.get("type") == "string"
+            assert set(prop.get("enum") or []) == {"finite", "ongoing"}
+            assert not _advertises_null(prop)
+
+        omitted_create = await client.call_tool(
+            "create_task",
+            {"title": "MCP omitted mode", "confidence": 0.4},
+        )
+        finite_create = await client.call_tool(
+            "create_task",
+            {"title": "MCP finite", "confidence": 0.4, "completion_mode": "finite"},
+        )
+        ongoing_create = await client.call_tool(
+            "create_task",
+            {"title": "MCP ongoing", "confidence": 0.4, "completion_mode": "ongoing"},
+        )
+        null_create = await client.call_tool(
+            "create_task",
+            {"title": "MCP null", "confidence": 0.4, "completion_mode": None},
+        )
+        bad_create = await client.call_tool(
+            "create_task",
+            {"title": "MCP bad", "confidence": 0.4, "completion_mode": "weekly"},
+        )
+        omitted_update = await client.call_tool("update_task", {"object_id": str(ongoing.id)})
+        finite_update = await client.call_tool(
+            "update_task",
+            {"object_id": str(ongoing.id), "completion_mode": "finite"},
+        )
+        ongoing_update = await client.call_tool(
+            "update_task",
+            {"object_id": str(ongoing.id), "completion_mode": "ongoing"},
+        )
+        null_update = await client.call_tool(
+            "update_task",
+            {"object_id": str(ongoing.id), "completion_mode": None},
+        )
+        bad_update = await client.call_tool(
+            "update_task",
+            {"object_id": str(ongoing.id), "completion_mode": "weekly"},
+        )
+
+    assert omitted_create.is_error
+    assert "approval" in _tool_text(omitted_create)
+    assert finite_create.is_error
+    assert "approval" in _tool_text(finite_create)
+    assert ongoing_create.is_error
+    assert "approval" in _tool_text(ongoing_create)
+    assert null_create.is_error
+    assert "approval" not in _tool_text(null_create).lower()
+    assert bad_create.is_error
+    assert "approval" not in _tool_text(bad_create).lower()
+    assert db_session.scalar(select(func.count()).select_from(Object)) == before
+
+    db_session.refresh(ongoing)
+    assert ongoing.completion_mode == "ongoing"
+    assert omitted_update.is_error
+    assert "approval" in _tool_text(omitted_update)
+    assert finite_update.is_error
+    assert "approval" in _tool_text(finite_update)
+    assert ongoing_update.is_error
+    assert "approval" in _tool_text(ongoing_update)
+    assert null_update.is_error
+    assert "approval" not in _tool_text(null_update).lower()
+    assert bad_update.is_error
+    assert "approval" not in _tool_text(bad_update).lower()
+    db_session.refresh(ongoing)
+    assert ongoing.completion_mode == "ongoing"
+
+    by_tool: dict[str, list[dict]] = {}
+    for tool_name, arguments in forwarded:
+        by_tool.setdefault(tool_name, []).append(arguments)
+    creates = by_tool["create_task"]
+    assert all(
+        "completion_mode" not in item for item in creates if item["title"] == "MCP omitted mode"
+    )
+    assert {"title": "MCP finite", "completion_mode": "finite"} == {
+        "title": next(item["title"] for item in creates if item.get("completion_mode") == "finite"),
+        "completion_mode": "finite",
+    }
+    assert any(
+        item.get("completion_mode") == "ongoing" and item["title"] == "MCP ongoing"
+        for item in creates
+    )
+    assert not any(item["title"] == "MCP null" for item in creates)
+    assert not any(item["title"] == "MCP bad" for item in creates)
+
+    updates = by_tool["update_task"]
+    assert any(
+        "completion_mode" not in item and item["object_id"] == str(ongoing.id) for item in updates
+    )
+    assert any(item.get("completion_mode") == "finite" for item in updates)
+    assert any(item.get("completion_mode") == "ongoing" for item in updates)
+    assert sum("completion_mode" in item for item in updates) == 2
+
+
+def _tool_text(result) -> str:
+    return result.content[0].text
+
+
+def _advertises_null(node) -> bool:
+    if isinstance(node, dict):
+        type_value = node.get("type")
+        if type_value == "null" or (isinstance(type_value, list) and "null" in type_value):
+            return True
+        if "const" in node and node["const"] is None:
+            return True
+        enum = node.get("enum")
+        if isinstance(enum, list) and any(item is None for item in enum):
+            return True
+        return any(_advertises_null(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_advertises_null(item) for item in node)
+    return False
 
 
 def _enum_values(schema: dict) -> set[str]:
