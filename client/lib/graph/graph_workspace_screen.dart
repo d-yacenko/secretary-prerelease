@@ -273,7 +273,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Text(
-                'Некоторые связанные объекты скрыты лимитом рабочей области.',
+                'Карта показывает только часть графа. Скрытые связи и объекты могут существовать. '
+                'Полный список прямых связей выбранного объекта — в панели сведений.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
@@ -857,13 +858,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       );
     }
 
-    final relatedEdges = widget.controller.edges.where(
-      (edge) => edge.sourceId == object.id || edge.targetId == object.id,
-    );
-
     final primaryDateValue = objectPrimaryDateDisplayValue(object);
 
     return ListView(
+      key: const ValueKey('graph-detail-panel'),
       padding: const EdgeInsets.all(16),
       children: [
         Row(
@@ -1036,46 +1034,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ],
         const SizedBox(height: 12),
         _DetailSectionHeader(title: 'Связи'),
-        ...relatedEdges.map((edge) {
-          final source = widget.controller.nodeById(edge.sourceId);
-          final target = widget.controller.nodeById(edge.targetId);
-          final otherId = edge.sourceId == object.id
-              ? edge.targetId
-              : edge.sourceId;
-          final other = widget.controller.nodeById(otherId);
-          return ListTile(
-            key: ValueKey('graph-relation-${edge.id}'),
-            dense: true,
-            selected: widget.controller.selectedEdgeId == edge.id,
-            onTap: () {
-              widget.controller.selectEdge(edge.id);
-              if (other != null) {
-                widget.controller.selectObject(other.id);
-              }
-            },
-            leading: edge.state == 'proposed'
-                ? Icon(
-                    Icons.diamond_outlined,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.tertiary,
-                    key: ValueKey('graph-relation-proposed-${edge.id}'),
-                  )
-                : null,
-            title: Text(
-              graphRelationAuditText(
-                edge: edge,
-                sourceTitle: source?.title ?? edge.sourceId,
-                targetTitle: target?.title ?? edge.targetId,
-                selectedObjectId: object.id,
-              ),
-              key: ValueKey('graph-relation-audit-${edge.id}'),
-            ),
-            subtitle: Text(
-              '${originLabel(edge.origin)} · ${provenanceStateLabel(edge.state)}',
-            ),
-            trailing: _relationTrailing(context, edge),
-          );
-        }),
+        _DirectRelationInventory(
+          objectId: object.id,
+          controller: widget.controller,
+          apiClient: widget.apiClient,
+          onAuthFailure: widget.authController.handleAuthenticationFailure,
+          trailingBuilder: (edge) => _relationTrailing(context, edge),
+        ),
         if (widget.controller.mode == GraphWorkspaceMode.tasks &&
             object.kind == 'task' &&
             !object.isDeletedTask) ...[
@@ -1136,23 +1101,41 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   children: [
                     DropdownButtonFormField<String>(
                       value: relationType,
+                      isExpanded: true,
+                      itemHeight: 48,
                       items: [
                         const DropdownMenuItem(
                           value: 'related_to',
-                          child: Text('Связано с'),
+                          child: GraphRelationChoiceLabel(
+                            name: 'Связано с',
+                            type: 'related_to',
+                            meaning: 'симметричная связь',
+                          ),
                         ),
                         const DropdownMenuItem(
                           value: 'references',
-                          child: Text('Ссылается на'),
+                          child: GraphRelationChoiceLabel(
+                            name: 'Ссылается на',
+                            type: 'references',
+                            meaning: 'источник → цель',
+                          ),
                         ),
                         const DropdownMenuItem(
                           value: 'depends_on',
-                          child: Text('Зависит от'),
+                          child: GraphRelationChoiceLabel(
+                            name: 'Зависит от',
+                            type: 'depends_on',
+                            meaning: 'зависимый → предпосылка',
+                          ),
                         ),
                         if (source.kind == 'task')
                           const DropdownMenuItem(
                             value: 'part_of',
-                            child: Text('Входит в'),
+                            child: GraphRelationChoiceLabel(
+                              name: 'Входит в',
+                              type: 'part_of',
+                              meaning: 'дочерняя → родитель',
+                            ),
                           ),
                       ],
                       onChanged: (value) {
@@ -2042,4 +2025,185 @@ class _AddPersonDialogState extends State<_AddPersonDialog> {
       ],
     );
   }
+}
+
+class _DirectRelationInventory extends StatefulWidget {
+  const _DirectRelationInventory({
+    required this.objectId,
+    required this.controller,
+    required this.apiClient,
+    required this.onAuthFailure,
+    required this.trailingBuilder,
+  });
+
+  final String objectId;
+  final GraphWorkspaceController controller;
+  final SecretaryApiClient apiClient;
+  final VoidCallback onAuthFailure;
+  final Widget? Function(SecretaryEdge edge) trailingBuilder;
+
+  @override
+  State<_DirectRelationInventory> createState() => _DirectRelationInventoryState();
+}
+
+class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
+  List<NeighborOut> _neighbors = const [];
+  String? _error;
+  int _requestGeneration = 0;
+  String _loadedSignature = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadedSignature = _edgeSignature(widget.controller);
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DirectRelationInventory oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final signature = _edgeSignature(widget.controller);
+    if (oldWidget.objectId != widget.objectId || signature != _loadedSignature) {
+      _loadedSignature = signature;
+      _load();
+    }
+  }
+
+  String _edgeSignature(GraphWorkspaceController controller) {
+    return controller.edges.map((edge) => '${edge.id}:${edge.state}').join('|');
+  }
+
+  Future<void> _load() async {
+    final generation = ++_requestGeneration;
+    final objectId = widget.objectId;
+    try {
+      final response = await widget.apiClient.getObjectNeighbors(objectId);
+      if (!mounted || generation != _requestGeneration || widget.objectId != objectId) {
+        return;
+      }
+      setState(() {
+        _neighbors = response.neighbors;
+        _error = null;
+      });
+    } on AuthenticationException {
+      widget.onAuthFailure();
+    } on ApiException {
+      if (!mounted || generation != _requestGeneration) {
+        return;
+      }
+      setState(() {
+        _error = 'Не удалось загрузить полный список связей.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = <_RelationRow>[];
+    final seen = <String>{};
+    for (final edge in widget.controller.edges) {
+      if (edge.sourceId != widget.objectId && edge.targetId != widget.objectId) {
+        continue;
+      }
+      final otherId = edge.sourceId == widget.objectId ? edge.targetId : edge.sourceId;
+      final other = widget.controller.nodeById(otherId);
+      rows.add(
+        _RelationRow(
+          edge: edge,
+          otherId: otherId,
+          sourceTitle: widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId,
+          targetTitle: widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId,
+          onMap: other != null,
+        ),
+      );
+      seen.add(edge.id);
+    }
+    for (final neighbor in _neighbors) {
+      if (seen.contains(neighbor.edge.id)) {
+        continue;
+      }
+      final onMap = widget.controller.nodeById(neighbor.object.id) != null;
+      final sourceIsSelected = neighbor.edge.sourceId == widget.objectId;
+      rows.add(
+        _RelationRow(
+          edge: neighbor.edge,
+          otherId: neighbor.object.id,
+          sourceTitle: sourceIsSelected ? 'Этот объект' : neighbor.object.title,
+          targetTitle: sourceIsSelected ? neighbor.object.title : 'Этот объект',
+          onMap: onMap,
+        ),
+      );
+      seen.add(neighbor.edge.id);
+    }
+
+    return Column(
+      children: [
+        for (final row in rows)
+          ListTile(
+            key: ValueKey('graph-relation-${row.edge.id}'),
+            dense: true,
+            selected: widget.controller.selectedEdgeId == row.edge.id,
+            onTap: () {
+              widget.controller.selectEdge(row.edge.id);
+              if (widget.controller.nodeById(row.otherId) != null) {
+                widget.controller.selectObject(row.otherId);
+              } else {
+                widget.controller.reRoot(row.otherId);
+              }
+            },
+            leading: row.edge.state == 'proposed'
+                ? Icon(
+                    Icons.diamond_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.tertiary,
+                    key: ValueKey('graph-relation-proposed-${row.edge.id}'),
+                  )
+                : null,
+            title: Text(
+              graphRelationAuditText(
+                edge: row.edge,
+                sourceTitle: row.sourceTitle,
+                targetTitle: row.targetTitle,
+                selectedObjectId: widget.objectId,
+              ),
+              key: ValueKey('graph-relation-audit-${row.edge.id}'),
+            ),
+            subtitle: Text(
+              row.onMap
+                  ? '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)}'
+                  : '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)} · не на карте',
+              key: row.onMap ? null : ValueKey('graph-off-canvas-${row.edge.id}'),
+            ),
+            trailing: widget.trailingBuilder(row.edge),
+          ),
+        if (_error != null)
+          ListTile(
+            key: const ValueKey('graph-relation-inventory-error'),
+            dense: true,
+            title: Text(_error!),
+            trailing: TextButton(
+              key: const ValueKey('graph-relation-inventory-retry'),
+              onPressed: _load,
+              child: const Text('Повторить'),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _RelationRow {
+  const _RelationRow({
+    required this.edge,
+    required this.otherId,
+    required this.sourceTitle,
+    required this.targetTitle,
+    required this.onMap,
+  });
+
+  final SecretaryEdge edge;
+  final String otherId;
+  final String sourceTitle;
+  final String targetTitle;
+  final bool onMap;
 }

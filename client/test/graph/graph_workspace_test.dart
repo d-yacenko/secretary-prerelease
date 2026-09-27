@@ -130,7 +130,10 @@ void main() {
     expect(find.byType(GraphWorkspaceScreen), findsOneWidget);
     expect(find.text('Graph task'), findsOneWidget);
     expect(
-      find.text('Некоторые связанные объекты скрыты лимитом рабочей области.'),
+      find.text(
+        'Карта показывает только часть графа. Скрытые связи и объекты могут существовать. '
+        'Полный список прямых связей выбранного объекта — в панели сведений.',
+      ),
       findsOneWidget,
     );
   });

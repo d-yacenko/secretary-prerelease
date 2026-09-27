@@ -198,7 +198,8 @@ def test_non_task_root_stays_one_hop(db_session, fake_embedding_service):
     db_session.flush()
 
     result = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID).get_workspace(root_id=note.id)
-    assert _titles(result) == {"Note root", "Near", "Parent"}
+    assert _titles(result) == {"Note root", "Near", "Parent", "Child"}
+    assert "Far" not in _titles(result)
 
 
 def test_ordinary_neighbors_follow_hierarchy_when_budget_remains(

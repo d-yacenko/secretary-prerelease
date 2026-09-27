@@ -1,4 +1,4 @@
-import 'dart:ui';
+import 'package:flutter/material.dart';
 
 import '../api/api_models.dart';
 import '../ui/domain_labels.dart';
@@ -100,6 +100,138 @@ bool _isFlow(String? kind) {
     return false;
   }
   return focusLodKindIsCompactable(kind);
+}
+
+/// Compact chooser line. Stroke, dash, and arrow come from [presentGraphMapEdge].
+class GraphRelationMiniPreview extends StatelessWidget {
+  const GraphRelationMiniPreview({super.key, required this.type});
+
+  final String type;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      container: true,
+      label: graphRelationMiniPreviewSemantics(type),
+      child: CustomPaint(
+        size: const Size(36, 12),
+        painter: _GraphRelationMiniPreviewPainter(
+          presentGraphMapEdge(
+            edge: _previewEdge(type),
+            sourceKind: 'task',
+            targetKind: 'task',
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class GraphRelationChoiceLabel extends StatelessWidget {
+  const GraphRelationChoiceLabel({
+    super.key,
+    required this.name,
+    required this.type,
+    required this.meaning,
+  });
+
+  final String name;
+  final String type;
+  final String meaning;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(name),
+        const SizedBox(width: 8),
+        GraphRelationMiniPreview(type: type),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            meaning,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String graphRelationMiniPreviewSemantics(String type) {
+  final presentation = presentGraphMapEdge(
+    edge: _previewEdge(type),
+    sourceKind: 'task',
+    targetKind: 'task',
+  );
+  return [
+    presentation.directed ? 'directed' : 'undirected',
+    presentation.dashed ? 'dashed' : 'solid',
+    if (presentation.light) 'light',
+    if (presentation.structural) 'structural',
+    presentation.label,
+  ].join(' ');
+}
+
+SecretaryEdge _previewEdge(String type) {
+  return SecretaryEdge(
+    id: 'preview-$type',
+    sourceId: 'source',
+    targetId: 'target',
+    type: type,
+    origin: 'user',
+    state: 'confirmed',
+    metadata: const {},
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  );
+}
+
+class _GraphRelationMiniPreviewPainter extends CustomPainter {
+  _GraphRelationMiniPreviewPainter(this.presentation);
+
+  final GraphMapEdgePresentation presentation;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final color = presentation.light
+        ? const Color(0xFF9AA0A6)
+        : const Color(0xFF202124);
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = presentation.structural ? 2.5 : 1.5
+      ..style = PaintingStyle.stroke;
+    final start = Offset(1, size.height / 2);
+    final end = Offset(size.width - (presentation.directed ? 6 : 1), size.height / 2);
+    if (presentation.dashed) {
+      const dash = 4.0;
+      const gap = 3.0;
+      var x = start.dx;
+      while (x < end.dx) {
+        final next = (x + dash).clamp(start.dx, end.dx);
+        canvas.drawLine(Offset(x, start.dy), Offset(next, start.dy), paint);
+        x += dash + gap;
+      }
+    } else {
+      canvas.drawLine(start, end, paint);
+    }
+    if (presentation.directed) {
+      final tip = Offset(size.width - 1, size.height / 2);
+      final arrow = Path()
+        ..moveTo(tip.dx, tip.dy)
+        ..lineTo(tip.dx - 5, tip.dy - 3.5)
+        ..lineTo(tip.dx - 5, tip.dy + 3.5)
+        ..close();
+      canvas.drawPath(arrow, Paint()..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GraphRelationMiniPreviewPainter oldDelegate) {
+    return oldDelegate.presentation != presentation;
+  }
 }
 
 String graphRelationAuditText({

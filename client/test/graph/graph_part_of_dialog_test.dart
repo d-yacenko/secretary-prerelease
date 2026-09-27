@@ -29,6 +29,14 @@ void main() {
     expect(find.text('Связано с'), findsWidgets);
     expect(find.text('Ссылается на'), findsWidgets);
     expect(find.text('Зависит от'), findsWidgets);
+    expect(find.text('симметричная связь'), findsWidgets);
+    expect(find.text('источник → цель'), findsWidgets);
+    expect(find.text('зависимый → предпосылка'), findsWidgets);
+    expect(find.text('дочерняя → родитель'), findsWidgets);
+    expect(find.bySemanticsLabel('undirected solid Связано с'), findsWidgets);
+    expect(find.bySemanticsLabel('directed solid light Ссылается на'), findsWidgets);
+    expect(find.bySemanticsLabel('directed dashed Зависит от'), findsWidgets);
+    expect(find.bySemanticsLabel('directed solid structural входит в'), findsWidgets);
 
     await tester.tap(find.text('Входит в').last);
     await tester.pumpAndSettle();

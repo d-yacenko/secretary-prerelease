@@ -81,25 +81,13 @@ class GraphWorkspaceService:
                 node_limit,
             )
 
-        new_node_budget = max(0, node_limit - len(node_map))
-        if new_node_budget > 0:
-            pairs, neighbor_truncated = self._expand_neighbors_batch(
-                center_ids=[root_id],
-                known_node_ids=set(node_map.keys()),
-                neighbor_limit=neighbor_limit,
-                new_node_budget=new_node_budget,
-                exclude_deleted_neighbors=True,
-            )
-            truncated = truncated or neighbor_truncated
-            for neighbor, edge in pairs:
-                node_map[neighbor.id] = neighbor
-                edge_map[edge.id] = edge
-        elif self._has_hidden_eligible_neighbors(
-            [root_id],
-            set(node_map.keys()),
-            exclude_deleted_neighbors=True,
-        ):
-            truncated = True
+        truncated = truncated or self._admit_ordinary_neighbors(
+            center_ids=[root_id],
+            node_map=node_map,
+            edge_map=edge_map,
+            neighbor_limit=neighbor_limit,
+            node_limit=node_limit,
+        )
 
         edge_map = self._filter_edges_for_nodes(edge_map, node_map)
         return GraphWorkspaceResult(
@@ -132,25 +120,14 @@ class GraphWorkspaceService:
                 node_limit,
             )
 
-        new_node_budget = node_limit - len(node_map)
-        if new_node_budget > 0 and seed_ids:
-            pairs, neighbor_truncated = self._expand_neighbors_batch(
+        if seed_ids:
+            truncated = truncated or self._admit_ordinary_neighbors(
                 center_ids=seed_ids,
-                known_node_ids=set(node_map.keys()),
+                node_map=node_map,
+                edge_map=edge_map,
                 neighbor_limit=neighbor_limit,
-                new_node_budget=new_node_budget,
-                exclude_deleted_neighbors=True,
+                node_limit=node_limit,
             )
-            truncated = truncated or neighbor_truncated
-            for neighbor, edge in pairs:
-                node_map[neighbor.id] = neighbor
-                edge_map[edge.id] = edge
-        elif seed_ids and self._has_hidden_eligible_neighbors(
-            seed_ids,
-            set(node_map.keys()),
-            exclude_deleted_neighbors=True,
-        ):
-            truncated = True
 
         if len(node_map) > node_limit:
             truncated = True
@@ -366,6 +343,64 @@ class GraphWorkspaceService:
         )
         return incoming_exists is not None
 
+    def _admit_ordinary_neighbors(
+        self,
+        center_ids: list[UUID],
+        node_map: dict[UUID, Object],
+        edge_map: dict[UUID, Edge],
+        neighbor_limit: int,
+        node_limit: int,
+    ) -> bool:
+        """Admit ordinary neighbors one at a time.
+
+        A newly admitted Task closes its confirmed part_of component before
+        the next ordinary neighbor consumes node budget.
+        """
+        if not center_ids:
+            return False
+        if len(node_map) >= node_limit:
+            return self._has_hidden_eligible_neighbors(
+                center_ids,
+                set(node_map.keys()),
+                exclude_deleted_neighbors=True,
+            )
+
+        truncated = False
+        while len(node_map) < node_limit:
+            pairs, batch_truncated = self._expand_neighbors_batch(
+                center_ids=center_ids,
+                known_node_ids=set(node_map.keys()),
+                neighbor_limit=neighbor_limit,
+                new_node_budget=1,
+                exclude_deleted_neighbors=True,
+            )
+            truncated = truncated or batch_truncated
+            new_ids: list[UUID] = []
+            for neighbor, edge in pairs:
+                is_new = neighbor.id not in node_map
+                node_map[neighbor.id] = neighbor
+                edge_map[edge.id] = edge
+                if is_new:
+                    new_ids.append(neighbor.id)
+            if not new_ids:
+                break
+            for new_id in new_ids:
+                if node_map[new_id].kind == "task":
+                    hierarchy_truncated = self._close_confirmed_part_of(
+                        [new_id],
+                        node_map,
+                        edge_map,
+                        node_limit,
+                    )
+                    truncated = truncated or hierarchy_truncated
+        if len(node_map) >= node_limit and self._has_hidden_eligible_neighbors(
+            center_ids,
+            set(node_map.keys()),
+            exclude_deleted_neighbors=True,
+        ):
+            truncated = True
+        return truncated
+
     def _expand_neighbors_batch(
         self,
         center_ids: list[UUID],
@@ -384,6 +419,7 @@ class GraphWorkspaceService:
         outgoing = (
             select(
                 Edge.id.label("edge_id"),
+                Edge.created_at.label("created_at"),
                 Edge.source_id.label("center_id"),
             )
             .select_from(Edge)
@@ -399,6 +435,7 @@ class GraphWorkspaceService:
         incoming = (
             select(
                 Edge.id.label("edge_id"),
+                Edge.created_at.label("created_at"),
                 Edge.target_id.label("center_id"),
             )
             .select_from(Edge)
@@ -424,10 +461,14 @@ class GraphWorkspaceService:
 
         row_number = func.row_number().over(
             partition_by=candidates.c.center_id,
-            order_by=candidates.c.edge_id,
+            order_by=(candidates.c.created_at.asc(), candidates.c.edge_id.asc()),
         )
         ranked = (
-            select(candidates.c.edge_id, row_number.label("row_number"))
+            select(
+                candidates.c.edge_id,
+                candidates.c.created_at,
+                row_number.label("row_number"),
+            )
             .select_from(candidates)
             .subquery("ranked_neighbor_edges")
         )
@@ -435,7 +476,7 @@ class GraphWorkspaceService:
         edge_id_rows = self._session.execute(
             select(ranked.c.edge_id)
             .where(ranked.c.row_number <= neighbor_limit)
-            .order_by(ranked.c.edge_id)
+            .order_by(ranked.c.created_at.asc(), ranked.c.edge_id.asc())
         ).all()
         edge_ids = [row[0] for row in edge_id_rows]
         if not edge_ids:
@@ -445,7 +486,7 @@ class GraphWorkspaceService:
             self._session.scalars(
                 select(Edge)
                 .where(Edge.id.in_(edge_ids), Edge.user_id == self._user_id)
-                .order_by(Edge.id)
+                .order_by(Edge.created_at.asc(), Edge.id.asc())
             )
         )
 
