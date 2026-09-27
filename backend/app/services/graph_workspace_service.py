@@ -15,7 +15,7 @@ from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import NotFoundError
 from app.services.graph_service import GraphService
-from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
+from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
 
 DEFAULT_SEED_LIMIT = 12
 MAX_SEED_LIMIT = 24
@@ -23,6 +23,8 @@ DEFAULT_NEIGHBOR_LIMIT = 12
 MAX_NEIGHBOR_LIMIT = 24
 DEFAULT_NODE_LIMIT = 80
 MAX_NODE_LIMIT = 120
+PRIORITY_TASK_FLOW_TYPES = ("references", "related_to", "depends_on")
+PRIORITY_TASK_FLOW_ORIGINS = (USER_ORIGIN, AGENT_ORIGIN)
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,11 @@ class GraphWorkspaceService:
                 edge_map,
                 node_limit,
             )
+            truncated = truncated or self._admit_priority_task_flow(
+                node_map,
+                edge_map,
+                node_limit,
+            )
 
         truncated = truncated or self._admit_ordinary_neighbors(
             center_ids=[root_id],
@@ -115,6 +122,11 @@ class GraphWorkspaceService:
         if seed_ids:
             truncated = truncated or self._close_confirmed_part_of(
                 seed_ids,
+                node_map,
+                edge_map,
+                node_limit,
+            )
+            truncated = truncated or self._admit_priority_task_flow(
                 node_map,
                 edge_map,
                 node_limit,
@@ -242,6 +254,95 @@ class GraphWorkspaceService:
             seen_ids.add(edge.id)
             edges.append(edge)
         return edges
+
+    def _admit_priority_task_flow(
+        self,
+        node_map: dict[UUID, Object],
+        edge_map: dict[UUID, Edge],
+        node_limit: int,
+    ) -> bool:
+        """Admit confirmed user/agent Task-Flow evidence before ordinary neighbors.
+
+        One new Flow endpoint per admitted Task per pass, in Task id order.
+        Each Task's edges are taken by created_at, then id. node_limit still
+        caps the workspace. neighbor_limit does not apply here.
+        """
+        task_ids = sorted(obj.id for obj in node_map.values() if obj.kind == "task")
+        if not task_ids:
+            return False
+        buckets = self._priority_task_flow_buckets(task_ids)
+        if not buckets:
+            return False
+
+        indexes = {task_id: 0 for task_id in task_ids}
+        while len(node_map) < node_limit:
+            admitted_new = False
+            for task_id in task_ids:
+                if len(node_map) >= node_limit:
+                    break
+                queue = buckets.get(task_id, [])
+                index = indexes[task_id]
+                while index < len(queue) and queue[index][1].id in node_map:
+                    edge_map[queue[index][0].id] = queue[index][0]
+                    index += 1
+                indexes[task_id] = index
+                if index >= len(queue):
+                    continue
+                edge, flow = queue[index]
+                node_map[flow.id] = flow
+                edge_map[edge.id] = edge
+                indexes[task_id] = index + 1
+                admitted_new = True
+            if not admitted_new:
+                break
+
+        for task_id in task_ids:
+            queue = buckets.get(task_id, [])
+            for edge, flow in queue[indexes[task_id] :]:
+                if flow.id in node_map:
+                    edge_map[edge.id] = edge
+                else:
+                    return True
+        return False
+
+    def _priority_task_flow_buckets(
+        self,
+        task_ids: list[UUID],
+    ) -> dict[UUID, list[tuple[Edge, Object]]]:
+        flow = aliased(Object)
+        task_id_set = set(task_ids)
+        rows = self._session.execute(
+            select(Edge, flow)
+            .join(
+                flow,
+                or_(
+                    and_(Edge.source_id.in_(task_ids), Edge.target_id == flow.id),
+                    and_(Edge.target_id.in_(task_ids), Edge.source_id == flow.id),
+                ),
+            )
+            .where(
+                Edge.user_id == self._user_id,
+                Edge.state == CONFIRMED_STATE,
+                Edge.origin.in_(PRIORITY_TASK_FLOW_ORIGINS),
+                Edge.type.in_(PRIORITY_TASK_FLOW_TYPES),
+                flow.user_id == self._user_id,
+                flow.kind != "task",
+                flow.state != REJECTED_STATE,
+                telegram_mtproto_active_object_predicate(flow),
+                object_is_active(flow),
+            )
+            .order_by(Edge.created_at.asc(), Edge.id.asc())
+        ).all()
+        buckets: dict[UUID, list[tuple[Edge, Object]]] = {}
+        for edge, flow_object in rows:
+            if edge.source_id in task_id_set and edge.target_id == flow_object.id:
+                task_id = edge.source_id
+            elif edge.target_id in task_id_set and edge.source_id == flow_object.id:
+                task_id = edge.target_id
+            else:
+                continue
+            buckets.setdefault(task_id, []).append((edge, flow_object))
+        return buckets
 
     def _complete_edges_among_nodes(
         self,

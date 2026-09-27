@@ -106,8 +106,7 @@ def test_overview_seed_includes_depth_two_descendants_that_are_not_seeds(
 
     result = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID).get_workspace()
     assert result.seed_ids == [parent.id]
-    assert _titles(result) == {"Parent", "Child", "Grandchild"}
-    assert "Child note" not in _titles(result)
+    assert _titles(result) == {"Parent", "Child", "Grandchild", "Child note"}
 
 
 def test_hierarchy_closure_ignores_small_neighbor_limit(db_session, fake_embedding_service):

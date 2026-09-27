@@ -26,13 +26,13 @@ def _note(graph: GraphService, title: str):
     )
 
 
-def _edge(graph: GraphService, source, target, edge_type: str):
+def _edge(graph: GraphService, source, target, edge_type: str, origin: str = "user"):
     return graph.create_edge(
         EdgeCreate(
             source_id=source.id,
             target_id=target.id,
             type=edge_type,
-            origin="user",
+            origin=origin,
             state=CONFIRMED_STATE,
         )
     )
@@ -68,7 +68,7 @@ def test_confirmed_part_of_survives_ordinary_neighbor_truncation(
     omitted_edge = None
     for index in range(5):
         note = _note(graph, f"Note-{index}")
-        edge = _edge(graph, parent, note, "related_to")
+        edge = _edge(graph, parent, note, "related_to", origin="source")
         _set_created_at(db_session, edge, _BASE + timedelta(days=index))
         if index == 4:
             omitted = note
@@ -99,7 +99,7 @@ def test_task_admitted_as_ordinary_neighbor_closes_part_of_before_later_neighbor
     structural_parent = _task(graph, "Structural parent")
     later = _note(graph, "Later note")
     admitted_edge = _edge(graph, root, admitted, "related_to")
-    later_edge = _edge(graph, root, later, "related_to")
+    later_edge = _edge(graph, root, later, "related_to", origin="source")
     _edge(graph, admitted, structural_parent, "part_of")
     _set_created_at(db_session, admitted_edge, _BASE)
     _set_created_at(db_session, later_edge, _BASE + timedelta(days=1))
@@ -119,8 +119,8 @@ def test_newer_ordinary_edge_does_not_evict_older_visible_edge(db_session, fake_
     root = _task(graph, "Root")
     older = _note(graph, "Older note")
     newer = _note(graph, "Newer note")
-    older_edge = _edge(graph, root, older, "references")
-    newer_edge = _edge(graph, root, newer, "references")
+    older_edge = _edge(graph, root, older, "references", origin="source")
+    newer_edge = _edge(graph, root, newer, "references", origin="source")
     _set_created_at(db_session, older_edge, _BASE)
     _set_created_at(db_session, newer_edge, _BASE + timedelta(days=1))
     _set_edge_id(db_session, older_edge, uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"))

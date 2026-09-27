@@ -62,7 +62,7 @@ def test_neighbor_limit_enforced(db_session, fake_embedding_service):
                 source_id=root.id,
                 target_id=neighbor.id,
                 type="references",
-                origin="user",
+                origin="source",
                 state=CONFIRMED_STATE,
             )
         )
@@ -243,7 +243,8 @@ def test_overview_per_seed_neighbor_limit_with_high_degree_seed(
 ):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
     hub = _task(graph, "HUB")
-    other_seeds = [_task(graph, f"SEED-{index}") for index in range(2)]
+    for index in range(2):
+        _task(graph, f"SEED-{index}")
     for index in range(8):
         neighbor = graph.create_object(
             ObjectCreate(kind="note", title=f"HUB-N-{index}", origin="user", state=CONFIRMED_STATE)
@@ -253,7 +254,7 @@ def test_overview_per_seed_neighbor_limit_with_high_degree_seed(
                 source_id=hub.id,
                 target_id=neighbor.id,
                 type="references",
-                origin="user",
+                origin="source",
                 state=CONFIRMED_STATE,
             )
         )
