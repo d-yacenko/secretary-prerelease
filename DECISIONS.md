@@ -164,3 +164,14 @@
 - P5: safe confirmation/rejection/reversal flows and Person-aware Assistant lookup/retrieval, so queries such as “what did Olga write?” can resolve a Person and search linked communication evidence.
 - P6: Person-aware communication routing / send-by-person with ambiguity handling, route-choice feedback, and the existing pending-action-plan/frozen-route approval safety boundary.
 - Each phase remains separately reviewable. Do not let a current phase silently start the next one.
+
+
+## Compact core ontology in Secretary prompt
+
+- The Secretary must receive one compact orientation near the top of its system instructions:
+  `Core ontology: Person=who; Task=commitment/Direction; Flow=evidence/context; Time=when. Relations are explicit facts, never inferred.`
+- This line is a routing/mental-model prior for tool use, not a replacement for typed tool contracts or safety rules.
+- `Flow` and `Time` are conceptual axes; this wording does not require literal Object kinds named `flow` or `time`.
+- The prompt orientation must not authorize unsupported relation types, automatic role inference, or mutation without the existing typed-tool/approval rules.
+- People social/organizational semantics are not yet canonical. Do not introduce ad-hoc `manager_of`, `colleague`, `role_at`, `member_of`, etc. until a dedicated Person/organization ontology design pass distinguishes roles-in-organization from Person-to-Person relations and their provenance/confirmation semantics.
+- Keep first-party UX, internal Assistant tools, MCP/Harness exposure, and prompt vocabulary aligned with the same canonical ontology; parity gaps should be explicit backlog items rather than silently divergent semantics.
