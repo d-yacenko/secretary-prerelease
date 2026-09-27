@@ -89,7 +89,7 @@ class GraphWorkspaceService:
             node_limit=node_limit,
         )
 
-        edge_map = self._filter_edges_for_nodes(edge_map, node_map)
+        edge_map = self._complete_edges_among_nodes(edge_map, node_map)
         return GraphWorkspaceResult(
             root_id=root_id,
             seed_ids=[],
@@ -133,7 +133,7 @@ class GraphWorkspaceService:
             truncated = True
             node_map = self._trim_nodes_deterministically(node_map, node_limit, seed_ids)
 
-        edge_map = self._filter_edges_for_nodes(edge_map, node_map)
+        edge_map = self._complete_edges_among_nodes(edge_map, node_map)
         return GraphWorkspaceResult(
             root_id=None,
             seed_ids=seed_ids,
@@ -242,6 +242,33 @@ class GraphWorkspaceService:
             seen_ids.add(edge.id)
             edges.append(edge)
         return edges
+
+    def _complete_edges_among_nodes(
+        self,
+        edge_map: dict[UUID, Edge],
+        node_map: dict[UUID, Object],
+    ) -> dict[UUID, Edge]:
+        """Return every non-rejected edge whose endpoints are already admitted.
+
+        Node admission stays traversal-bounded. This query does not add nodes.
+        It only fills edges the walk never inserted, including proposed edges
+        that existing reads already keep when state is not rejected.
+        """
+        completed = self._filter_edges_for_nodes(edge_map, node_map)
+        node_ids = list(node_map)
+        if len(node_ids) < 2:
+            return completed
+        persisted = self._session.scalars(
+            select(Edge).where(
+                Edge.user_id == self._user_id,
+                Edge.state != REJECTED_STATE,
+                Edge.source_id.in_(node_ids),
+                Edge.target_id.in_(node_ids),
+            )
+        )
+        for edge in persisted:
+            completed[edge.id] = edge
+        return completed
 
     def _filter_edges_for_nodes(
         self,
