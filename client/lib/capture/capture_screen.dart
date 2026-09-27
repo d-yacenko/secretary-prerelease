@@ -114,6 +114,18 @@ class _CaptureScreenState extends State<CaptureScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            SegmentedButton<String>(
+              key: const Key('capture_task_completion_mode'),
+              segments: const [
+                ButtonSegment(value: 'finite', label: Text('Задача')),
+                ButtonSegment(value: 'ongoing', label: Text('Направление')),
+              ],
+              selected: {draft.completionMode},
+              onSelectionChanged: inputDisabled
+                  ? null
+                  : (selection) => controller.setCompletionMode(selection.first),
+            ),
+            const SizedBox(height: 12),
             if (controller.voiceState == VoiceState.recording)
               Material(
                 color: Theme.of(context).colorScheme.errorContainer,

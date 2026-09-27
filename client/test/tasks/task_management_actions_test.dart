@@ -49,6 +49,7 @@ Map<String, dynamic> taskJson(SecretaryObject task) {
     'external_id': null,
     'canonical_uri': null,
     'status': task.status,
+    'completion_mode': task.completionMode ?? 'finite',
     'start_at': null,
     'due_at': task.dueAt,
     'planned_start_at': task.plannedStartAt,
@@ -602,5 +603,74 @@ void main() {
     expect(find.text('Выполнена'), findsNothing);
     expect(find.text('Отменена'), findsOneWidget);
     expect(find.text('В архиве'), findsOneWidget);
+  });
+
+  testWidgets('finite status menu still offers done', (tester) async {
+    await tester.pumpWidget(
+      buildActions(
+        task: taskObject(completionMode: 'finite'),
+        mock: MockClient((request) async => http.Response('{}', 404)),
+      ),
+    );
+    await tester.tap(find.text('Статус'));
+    await tester.pumpAndSettle();
+    expect(find.text('Выполнена'), findsOneWidget);
+  });
+
+  testWidgets('ongoing task can be changed back to finite', (tester) async {
+    String? patchBody;
+    await tester.pumpWidget(
+      buildActions(
+        task: taskObject(completionMode: 'ongoing'),
+        mock: MockClient((request) async {
+          if (request.method == 'PATCH') {
+            patchBody = request.body;
+            return http.Response(
+              jsonEncode({
+                'object': taskJson(taskObject(completionMode: 'finite')),
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
+    );
+    await tester.tap(find.text('Редактировать'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Задача'));
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+    final payload = jsonDecode(patchBody!) as Map<String, dynamic>;
+    expect(payload['completion_mode'], 'finite');
+  });
+
+  testWidgets('unchanged completion mode is omitted from the patch', (tester) async {
+    String? patchBody;
+    await tester.pumpWidget(
+      buildActions(
+        task: taskObject(completionMode: 'finite', title: 'Keep'),
+        mock: MockClient((request) async {
+          if (request.method == 'PATCH') {
+            patchBody = request.body;
+            return http.Response(
+              jsonEncode({
+                'object': taskJson(taskObject(title: 'Renamed', completionMode: 'finite')),
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
+    );
+    await tester.tap(find.text('Редактировать'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Название'), 'Renamed');
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+    final payload = jsonDecode(patchBody!) as Map<String, dynamic>;
+    expect(payload.containsKey('completion_mode'), isFalse);
+    expect(payload['title'], 'Renamed');
   });
 }

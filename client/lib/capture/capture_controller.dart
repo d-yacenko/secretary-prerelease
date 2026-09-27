@@ -73,6 +73,15 @@ class CaptureController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setCompletionMode(String mode) {
+    _draft = _draft.copyWith(completionMode: mode);
+    if (submitState != CaptureSubmitState.submitting) {
+      submitState = CaptureSubmitState.idle;
+      errorMessage = null;
+    }
+    notifyListeners();
+  }
+
   void setTitle(String? value) {
     final trimmed = value?.trim();
     _draft = trimmed == null || trimmed.isEmpty
@@ -99,7 +108,7 @@ class CaptureController extends ChangeNotifier {
   }
 
   void mergeDraft(CaptureDraft draft) {
-    _draft = draft;
+    _draft = draft.copyWith(completionMode: _draft.completionMode);
     submitState = CaptureSubmitState.idle;
     errorMessage = null;
     notifyListeners();

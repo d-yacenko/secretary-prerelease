@@ -715,12 +715,14 @@ class CaptureTaskRequest {
     this.title,
     this.contextObjectIds = const [],
     this.dependsOnIds = const [],
+    this.completionMode = 'finite',
   });
 
   final String text;
   final String? title;
   final List<String> contextObjectIds;
   final List<String> dependsOnIds;
+  final String completionMode;
 
   Map<String, dynamic> toJson() {
     return {
@@ -728,6 +730,7 @@ class CaptureTaskRequest {
       if (title != null) 'title': title,
       'context_object_ids': contextObjectIds,
       'depends_on_ids': dependsOnIds,
+      'completion_mode': completionMode,
     };
   }
 }

@@ -1,8 +1,10 @@
 from datetime import datetime
+from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.domain.task_completion import TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING
 from app.services.capture_service import (
     MAX_CAPTURE_CONTEXT_IDS,
     MAX_CAPTURE_DEPENDS_ON_IDS,
@@ -68,6 +70,13 @@ class CaptureTaskRequest(BaseModel):
     title: str | None = Field(default=None, max_length=MAX_CAPTURE_TITLE_CHARS)
     context_object_ids: list[UUID] = Field(default_factory=list, max_length=MAX_CAPTURE_CONTEXT_IDS)
     depends_on_ids: list[UUID] = Field(default_factory=list, max_length=MAX_CAPTURE_DEPENDS_ON_IDS)
+    completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
+
+    @model_validator(mode="after")
+    def reject_null_completion_mode(self) -> Self:
+        if "completion_mode" in self.model_fields_set and self.completion_mode is None:
+            raise ValueError("completion_mode must be finite or ongoing")
+        return self
 
     @field_validator("text")
     @classmethod

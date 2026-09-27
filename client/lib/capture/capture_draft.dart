@@ -8,6 +8,7 @@ class CaptureDraft {
     this.contextObjectIds = const [],
     this.contextRefs = const [],
     this.dependsOnIds = const [],
+    this.completionMode = 'finite',
   });
 
   static const maxTextLength = 16000;
@@ -18,6 +19,7 @@ class CaptureDraft {
   final List<String> contextObjectIds;
   final List<CaptureContextRef> contextRefs;
   final List<String> dependsOnIds;
+  final String completionMode;
 
   bool get isBlank => text.trim().isEmpty;
 
@@ -36,6 +38,7 @@ class CaptureDraft {
     List<String>? contextObjectIds,
     List<CaptureContextRef>? contextRefs,
     List<String>? dependsOnIds,
+    String? completionMode,
   }) {
     return CaptureDraft(
       text: text ?? this.text,
@@ -43,6 +46,7 @@ class CaptureDraft {
       contextObjectIds: contextObjectIds ?? this.contextObjectIds,
       contextRefs: contextRefs ?? this.contextRefs,
       dependsOnIds: dependsOnIds ?? this.dependsOnIds,
+      completionMode: completionMode ?? this.completionMode,
     );
   }
 
@@ -52,6 +56,7 @@ class CaptureDraft {
       title: title,
       contextObjectIds: contextObjectIds,
       dependsOnIds: dependsOnIds,
+      completionMode: completionMode,
     );
   }
 

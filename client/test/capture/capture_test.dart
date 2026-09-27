@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,6 +15,7 @@ import 'package:personal_secretary/auth/server_url_store.dart';
 import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/capture/capture_controller.dart';
 import 'package:personal_secretary/capture/capture_draft.dart';
+import 'package:personal_secretary/capture/capture_screen.dart';
 import 'package:personal_secretary/objects/object_detail_screen.dart';
 import 'package:personal_secretary/voice/voice_transcription_controller.dart';
 
@@ -493,5 +495,115 @@ void main() {
     await controller.submit();
     expect(controller.draft.text, 'keep unfinished task');
     expect(controller.submitState, CaptureSubmitState.validationError);
+  });
+
+  Map<String, dynamic> createdBody() {
+    return {
+      'task_id': 't1',
+      'context_edge_ids': <String>[],
+      'dependency_edge_ids': <String>[],
+    };
+  }
+
+  test('capture draft defaults to finite and sends it', () async {
+    Map<String, dynamic>? body;
+    final controller = buildController(MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return http.Response(jsonEncode(createdBody()), 201);
+    }));
+    expect(CaptureDraft.empty.completionMode, 'finite');
+    expect(controller.draft.completionMode, 'finite');
+    expect(controller.draft.toRequest().toJson()['completion_mode'], 'finite');
+    controller.setText('task body');
+    await controller.submit();
+    expect(body!['completion_mode'], 'finite');
+    expect(controller.draft.completionMode, 'finite');
+  });
+
+  test('mode changes, attachments, voice, failure, and reset keep the contract', () async {
+    Map<String, dynamic>? body;
+    late CaptureController controller;
+    controller = buildController(MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      final text = body!['text'] as String;
+      if (text.contains('fail')) {
+        return http.Response(jsonEncode({'detail': 'no'}), 422);
+      }
+      return http.Response(jsonEncode(createdBody()), 201);
+    }));
+    controller.setCompletionMode('ongoing');
+    controller.setText('keep text');
+    controller.setTitle('keep title');
+    expect(controller.draft.text, 'keep text');
+    expect(controller.draft.completionMode, 'ongoing');
+    controller.attachContext(CaptureContextRef(id: 'ctx-1', title: 'Mail', kind: 'email'));
+    controller.attachObjectContext(
+      SecretaryObject(
+        id: 'dep-1',
+        kind: 'task',
+        title: 'Prerequisite',
+        metadata: const {},
+        origin: 'user',
+        state: 'confirmed',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      ),
+    );
+    expect(controller.draft.completionMode, 'ongoing');
+    expect(controller.draft.contextObjectIds, ['ctx-1', 'dep-1']);
+    controller.mergeDraft(
+      CaptureDraft(
+        text: 'fail this submit',
+        title: 'keep title',
+        dependsOnIds: const ['dep-1'],
+      ),
+    );
+    expect(controller.draft.completionMode, 'ongoing');
+    expect(controller.draft.dependsOnIds, ['dep-1']);
+    await controller.submit();
+    expect(controller.submitState, CaptureSubmitState.validationError);
+    expect(controller.draft.completionMode, 'ongoing');
+    controller.appendTranscriptToText('ещё');
+    expect(controller.draft.completionMode, 'ongoing');
+    expect(controller.draft.text, contains('ещё'));
+    controller.setText('ready now');
+    controller.setCompletionMode('finite');
+    await controller.submit();
+    expect(body!['completion_mode'], 'finite');
+    expect(controller.draft.completionMode, 'finite');
+    controller.setCompletionMode('ongoing');
+    controller.resetSession();
+    expect(controller.draft.completionMode, 'finite');
+    expect(controller.draft.text, isEmpty);
+  });
+
+  testWidgets('capture selector sends ongoing and disables while submitting', (tester) async {
+    Map<String, dynamic>? body;
+    final gate = Completer<http.Response>();
+    final controller = buildController(MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return gate.future;
+    }));
+    controller.setText('direction text');
+    await tester.pumpWidget(
+      MaterialApp(home: CaptureScreen(controller: controller)),
+    );
+    expect(find.text('Создание задачи'), findsOneWidget);
+    expect(find.text('Создать задачу'), findsOneWidget);
+    await tester.tap(find.text('Направление'));
+    await tester.pump();
+    expect(controller.draft.completionMode, 'ongoing');
+    await tester.tap(find.byKey(const Key('capture_submit_button')));
+    await tester.pump();
+    final selector = tester.widget<SegmentedButton<String>>(
+      find.byKey(const Key('capture_task_completion_mode')),
+    );
+    expect(selector.onSelectionChanged, isNull);
+    gate.complete(
+      http.Response(jsonEncode(createdBody()), 201),
+    );
+    await tester.pumpAndSettle();
+    expect(body!['completion_mode'], 'ongoing');
+    expect(controller.draft.completionMode, 'finite');
   });
 }

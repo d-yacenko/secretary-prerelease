@@ -43,6 +43,7 @@ class CaptureService:
         title: str | None = None,
         context_object_ids: list[UUID] | None = None,
         depends_on_ids: list[UUID] | None = None,
+        completion_mode: str | None = None,
     ) -> CaptureTaskResult:
         if not text.strip():
             raise ValidationError("text must not be empty")
@@ -78,6 +79,7 @@ class CaptureService:
                 origin="user",
                 state="confirmed",
                 status=TASK_STATUS_OPEN,
+                completion_mode=completion_mode,
             )
         )
 
