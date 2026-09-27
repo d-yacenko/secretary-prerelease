@@ -255,3 +255,49 @@ empty. If either table is non-empty, a count cannot be proven, or another
 safety check fails, the harness keeps `api` and `worker` stopped, does not
 downgrade, does not delete conversation rows, and emits
 `BREAK_GLASS_REQUIRED=true`.
+
+## People and Task migration 0047 -> 0050
+
+The normal `ops/production/deploy.py` harness stays schema-neutral. The
+People identities and Task completion-mode move uses a separate harness:
+
+```bash
+python3 ops/production/migrate_people_tasks_0050.py \
+  --release-sha "$RELEASE_SHA" \
+  --rollback-sha 296b4735f9473ea60ef22f1827ed94260603128e \
+  --from-alembic 0047 \
+  --to-alembic 0050
+```
+
+The rollback SHA and the revision pair are fixed. The release SHA is an
+argument and is not hard-coded. The Alembic delta between those commits must
+be exactly the added files `0048_person_identities.py`,
+`0049_person_identity_evidence.py`, and `0050_task_completion_mode.py`, with
+the chain `0047 -> 0048 -> 0049 -> 0050` and no changes to Alembic env,
+config, template, or earlier revisions. It reuses the pinned production
+target and host-key contract. D1 prepares and tests this entrypoint only; it
+does not authorize a live rollout.
+
+The remote helper requires `origin/production` to equal the supplied release.
+The checkout must be the rollback runtime with Alembic `0047`, or already the
+release with Alembic `0050`. The second case verifies invariants and returns
+without migrating again. Any other checkout/revision pair fails closed.
+
+On a first rollout it checks out the release, builds `api` and `worker`
+while the previous containers keep serving, then stops only those two
+services. It runs `alembic upgrade 0050` with `--rm --no-deps`, checks that
+the revision is exactly `0050`, and checks that `person_identities` and
+`person_identity_evidence` exist, `objects.completion_mode` exists, every
+Task mode is `finite` or `ongoing`, and no non-Task row has a mode. Those
+checks print counts and booleans only. Only then does it recreate `api` and
+`worker`. The database container, volume, and `.env` stay in place. `db` is
+never included in `up`.
+
+Before the release runtime starts, a failed rollout may downgrade
+`0050 -> 0047` and restore the rollback application. After the release
+application has started, that downgrade is allowed only when
+`person_identities`, `person_identity_evidence`, and Tasks with
+`completion_mode='ongoing'` are all directly proven empty. If any count is
+nonzero or a safety query fails, the harness keeps `api` and `worker`
+stopped, does not downgrade, does not delete rows, and emits
+`BREAK_GLASS_REQUIRED=true`.
