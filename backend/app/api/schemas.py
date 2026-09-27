@@ -666,6 +666,12 @@ class PersonIdentityCorrectionRequest(BaseModel):
     canonical_value: str
 
 
+class PersonEmailBindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+
+
 class OpenTargetOut(BaseModel):
     available: bool
     action: str

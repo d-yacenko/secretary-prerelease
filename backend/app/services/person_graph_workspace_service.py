@@ -16,7 +16,11 @@ from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.person_assistant import feedback_identity_key, parse_feedback_identity
 from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED
-from app.domain.person_identity import NormalizedPersonIdentity, PersonIdentityInputError
+from app.domain.person_identity import (
+    NormalizedPersonIdentity,
+    PersonIdentityInputError,
+    normalize_email,
+)
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS, is_terminal_for_reads
 from app.domain.task_relations import TASK_ACTOR_ROLES
 from app.services.errors import ConflictError, NotFoundError, ValidationError
@@ -129,6 +133,40 @@ class PersonGraphWorkspaceService:
             )
             return _feedback_output(person_id, row)
         raise ValidationError("person identity action is unknown")
+
+    def bind_email(self, person_id: UUID, raw_email: str) -> PersonIdentityFeedbackOutput:
+        self._require_person(person_id)
+        try:
+            identity = normalize_email(raw_email)
+        except PersonIdentityInputError as exc:
+            raise ValidationError("email identity is malformed") from exc
+        owner = self._people.resolve(identity)
+        if owner is not None and owner.id != person_id:
+            raise ConflictError("person email is already bound")
+        if self._confirmed_by_other_person(person_id, identity):
+            raise ConflictError("person email is already bound")
+        created = None
+        if owner is None:
+            try:
+                created = self._people.attach(person_id, identity)
+            except ConflictError as exc:
+                raise ConflictError("person email is already bound") from exc
+        existing = self._active_confirmation(person_id, identity)
+        if existing is not None:
+            if created is not None and existing.person_identity_id is None:
+                existing.person_identity_id = created.id
+                self._session.flush()
+            return _feedback_output(person_id, existing)
+        row = self._evidence.record_confirmation(
+            person_id,
+            identity,
+            f"graph_ui:manual_email:{identity.canonical_value}",
+            explanation="explicit manual email binding",
+        )
+        if created is not None and row.person_identity_id is None:
+            row.person_identity_id = created.id
+            self._session.flush()
+        return _feedback_output(person_id, row)
 
     def _overview(self, seed_limit: int) -> PeopleWorkspaceResult:
         scores, ranked = self._ranked_people()
@@ -626,6 +664,39 @@ class PersonGraphWorkspaceService:
         if owner is not None:
             people.add(owner.id)
         return len(people) > 1
+
+    def _active_confirmation(
+        self,
+        person_id: UUID,
+        identity: NormalizedPersonIdentity,
+    ) -> PersonIdentityEvidence | None:
+        return self._session.scalar(
+            select(PersonIdentityEvidence).where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id == person_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type == USER_CONFIRMED,
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+            ).limit(1)
+        )
+
+    def _confirmed_by_other_person(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
+        other = self._session.scalar(
+            select(PersonIdentityEvidence.id).where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id != person_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type == USER_CONFIRMED,
+                PersonIdentityEvidence.provider == identity.provider,
+                PersonIdentityEvidence.identity_type == identity.identity_type,
+                PersonIdentityEvidence.realm == identity.realm,
+                PersonIdentityEvidence.canonical_value == identity.canonical_value,
+            ).limit(1)
+        )
+        return other is not None
 
     def _fail_closed_confirm(self, person_id: UUID, identity: NormalizedPersonIdentity) -> None:
         owner = self._people.resolve(identity)

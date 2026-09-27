@@ -1559,6 +1559,14 @@ class _PersonDetailSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _DetailSectionHeader(title: 'Известные контакты'),
+        if (person.salience != null)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => _addEmail(context),
+              child: const Text('Добавить email'),
+            ),
+          ),
         if (person.identityConflict)
           Text(
             'Есть конфликт идентичности',
@@ -1685,6 +1693,21 @@ class _PersonDetailSection extends StatelessWidget {
     final hour = local.hour.toString().padLeft(2, '0');
     final minute = local.minute.toString().padLeft(2, '0');
     return '$day.$month.${local.year} $hour:$minute';
+  }
+
+  Future<void> _addEmail(BuildContext context) async {
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (context) => _AddPersonEmailDialog(
+        onSubmit: (email) => apiClient.bindPersonEmail(
+          personId: person.personId,
+          email: email,
+        ),
+      ),
+    );
+    if (added == true) {
+      await onChanged();
+    }
   }
 
   Future<void> _correct(
@@ -2137,6 +2160,103 @@ class _GraphOpenSourceActionState extends State<_GraphOpenSourceAction> {
     }
     return const SizedBox.shrink();
   }
+}
+
+class _AddPersonEmailDialog extends StatefulWidget {
+  const _AddPersonEmailDialog({required this.onSubmit});
+
+  final Future<void> Function(String email) onSubmit;
+
+  @override
+  State<_AddPersonEmailDialog> createState() => _AddPersonEmailDialogState();
+}
+
+class _AddPersonEmailDialogState extends State<_AddPersonEmailDialog> {
+  final _email = TextEditingController();
+  var _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final email = _email.text.trim();
+    if (email.isEmpty || _submitting) {
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await widget.onSubmit(email);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _submitting = false;
+        _error = _emailBindError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSubmit = _email.text.trim().isNotEmpty && !_submitting;
+    return AlertDialog(
+      title: const Text('Добавить email'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _email,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              helperText:
+                  'Добавляется только точный адрес, который вы подтверждаете как принадлежащий этому человеку.',
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: canSubmit ? (_) => _submit() : null,
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          onPressed: canSubmit ? _submit : null,
+          child: const Text('Добавить'),
+        ),
+      ],
+    );
+  }
+}
+
+String _emailBindError(ApiException error) {
+  final message = error.message;
+  if (message.contains('already bound')) {
+    return 'Этот email уже принадлежит другому человеку.';
+  }
+  if (message.contains('malformed')) {
+    return 'Укажите точный email.';
+  }
+  return message;
 }
 
 class _AddPersonDialog extends StatefulWidget {

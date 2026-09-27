@@ -10,11 +10,17 @@ from app.api.schemas import (
     ObjectOut,
     PeopleWorkspaceOut,
     PersonCreateRequest,
+    PersonEmailBindRequest,
     PersonIdentityCorrectionRequest,
     PersonPresentation,
 )
 from app.core.current_user import CurrentUserContext
-from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
+from app.services.errors import (
+    ConflictError,
+    ConstellationTooLargeError,
+    NotFoundError,
+    ValidationError,
+)
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
     DEFAULT_NODE_LIMIT,
@@ -165,6 +171,31 @@ def correct_person_identity(
         ) from exc
     except ValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    return {
+        "person_id": str(row.person_id),
+        "evidence_id": str(row.evidence_id),
+        "evidence_type": row.evidence_type,
+        "state": row.state,
+    }
+
+
+@router.post("/graph/people/{person_id}/emails")
+def bind_person_email(
+    person_id: UUID,
+    body: PersonEmailBindRequest,
+    service: PersonGraphWorkspaceService = Depends(_people_service),
+):
+    try:
+        row = service.bind_email(person_id, body.email)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
     return {
         "person_id": str(row.person_id),
         "evidence_id": str(row.evidence_id),

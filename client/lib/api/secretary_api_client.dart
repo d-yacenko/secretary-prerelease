@@ -775,6 +775,17 @@ class SecretaryApiClient {
     return GraphWorkspaceOut.fromJson(body);
   }
 
+  Future<void> bindPersonEmail({
+    required String personId,
+    required String email,
+  }) async {
+    await _request(
+      'POST',
+      '/graph/people/$personId/emails',
+      jsonBody: {'email': email},
+    );
+  }
+
   Future<void> correctPersonIdentity({
     required String personId,
     required String action,
