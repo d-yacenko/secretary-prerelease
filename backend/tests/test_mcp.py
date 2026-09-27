@@ -10,8 +10,8 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import func, select
 
-from app.api.schemas import ObjectCreate
-from app.db.models import Object
+from app.api.schemas import EdgeCreate, ObjectCreate
+from app.db.models import Object, User
 from app.mcp.server import MCP_TOOL_NAMES, create_mcp_server
 from app.services.graph_service import GraphService
 from app.tools.executor import ToolExecutor
@@ -33,6 +33,22 @@ FORBIDDEN_MCP_TOOLS = frozenset(
 @pytest.fixture
 def mcp_server(patched_mcp_tool_session):
     return create_mcp_server()
+
+
+def _schema_advertises_null(node) -> bool:
+    if isinstance(node, dict):
+        type_value = node.get("type")
+        if type_value == "null" or (isinstance(type_value, list) and "null" in type_value):
+            return True
+        if "const" in node and node["const"] is None:
+            return True
+        enum = node.get("enum")
+        if isinstance(enum, list) and any(item is None for item in enum):
+            return True
+        return any(_schema_advertises_null(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_schema_advertises_null(item) for item in node)
+    return False
 
 
 def _create_task(graph: GraphService, title: str):
@@ -74,6 +90,82 @@ async def test_mcp_get_object(db_session, mcp_server) -> None:
     obj = result.structured_content["object"]
     assert obj["id"] == str(task.id)
     assert obj["title"] == "MCP get object"
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_task_profile(db_session, mcp_server) -> None:
+    graph = GraphService(db_session, BOOTSTRAP_USER_ID)
+    parent = graph.create_object(
+        ObjectCreate(
+            kind="task",
+            title="MCP profile parent",
+            origin="user",
+            completion_mode="ongoing",
+        )
+    )
+    child = graph.create_object(
+        ObjectCreate(
+            kind="task",
+            title="MCP profile child",
+            origin="user",
+            completion_mode="ongoing",
+        )
+    )
+    graph.create_edge(
+        EdgeCreate(
+            source_id=child.id,
+            target_id=parent.id,
+            type="part_of",
+            origin="user",
+            state="confirmed",
+        )
+    )
+    note = graph.create_object(ObjectCreate(kind="note", title="Not a task", origin="user"))
+    other_id = uuid.uuid4()
+    db_session.add(User(id=other_id, display_name="mcp-profile-other"))
+    db_session.flush()
+    foreign = GraphService(db_session, other_id).create_object(
+        ObjectCreate(kind="task", title="Foreign MCP profile", origin="user")
+    )
+
+    async with Client(mcp_server) as client:
+        listed = await client.list_tools()
+        names = {tool.name for tool in listed.tools}
+        assert "get_task_profile" in names
+        assert names == MCP_TOOL_NAMES
+        by_name = {tool.name: tool for tool in listed.tools}
+        schema = by_name["get_task_profile"].input_schema
+        assert schema.get("required") == ["task_id"]
+        prop = schema["properties"]["task_id"]
+        assert prop.get("type") == "string"
+        assert not _schema_advertises_null(prop)
+
+        result = await client.call_tool("get_task_profile", {"task_id": str(child.id)})
+        missing = await client.call_tool("get_task_profile", {"task_id": str(uuid.uuid4())})
+        not_task = await client.call_tool("get_task_profile", {"task_id": str(note.id)})
+        foreign_result = await client.call_tool(
+            "get_task_profile",
+            {"task_id": str(foreign.id)},
+        )
+        null_id = await client.call_tool("get_task_profile", {"task_id": None})
+
+    assert not result.is_error
+    payload = result.structured_content
+    assert payload["task"]["id"] == str(child.id)
+    assert payload["task"]["title"] == "MCP profile child"
+    assert payload["task"]["completion_mode"] == "ongoing"
+    assert payload["parent_task"]["object_id"] == str(parent.id)
+    assert payload["parent_task"]["title"] == "MCP profile parent"
+    assert missing.is_error
+    assert "task not found" in missing.content[0].text
+    assert "Traceback" not in missing.content[0].text
+    assert not_task.is_error
+    assert "task not found" in not_task.content[0].text
+    assert foreign_result.is_error
+    assert "task not found" in foreign_result.content[0].text
+    assert "Foreign MCP profile" not in foreign_result.content[0].text
+    assert null_id.is_error
+    assert "task not found" not in null_id.content[0].text
 
 
 @pytest.mark.asyncio
@@ -357,7 +449,9 @@ async def test_mcp_streamable_http_smoke(db_session, patched_mcp_tool_session) -
 
     async with test_app.router.lifespan_context(test_app):
         transport = ASGITransport(app=test_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as http_client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1"
+        ) as http_client:
             url = "http://127.0.0.1/mcp/"
             client_transport = streamable_http_client(
                 url,
@@ -372,6 +466,14 @@ async def test_mcp_streamable_http_smoke(db_session, patched_mcp_tool_session) -
                 result = await client.call_tool("get_object", {"object_id": str(task.id)})
                 assert not result.is_error
                 assert result.structured_content["object"]["id"] == str(task.id)
+                profile = await client.call_tool(
+                    "get_task_profile",
+                    {"task_id": str(task.id)},
+                )
+                assert not profile.is_error
+                assert profile.structured_content["task"]["id"] == str(task.id)
+                assert profile.structured_content["task"]["title"] == "Streamable HTTP smoke task"
+                assert profile.structured_content["task"]["completion_mode"] == "finite"
 
 
 @pytest.mark.asyncio

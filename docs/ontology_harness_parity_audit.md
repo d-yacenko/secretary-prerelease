@@ -156,3 +156,7 @@ H2A closes only the `completion_mode` write gap. `create_task` and `update_task`
 ## H2B closure
 
 H2A closed the `completion_mode` write gap. H2B closes the free-form relation write gap. `link_objects.relation_type` is the same four-value set as human `RelationService`: `related_to`, `references`, `depends_on`, `part_of`, defined once in `app/domain/generic_relations.py`. Actor roles stay on the typed `create_task` / `update_task` fields. Existing legacy or custom edges stay readable and are not rewritten. `remove_relation` is unchanged. Planned start/end tool fields and the `get_task_profile` MCP-list mismatch remain separate open findings and are not part of this closure.
+
+## H2C closure
+
+H2C closes the registry/server mismatch for `get_task_profile`. The MCP server now registers the already `mcp_exposed` read-only wrapper and forwards `task_id` through `_run_tool`. The profile payload and Assistant description are unchanged. Planned start/end tool fields remain a separate open finding.

@@ -22,6 +22,7 @@ from app.tools.schemas import (
     DeleteTaskOutput,
     GetContextOutput,
     GetObjectOutput,
+    GetTaskProfileOutput,
     GetTodayOutput,
     LinkObjectsOutput,
     ListConversationMembersOutput,
@@ -149,6 +150,15 @@ def create_mcp_server() -> MCPServer:
             "get_object",
             "get_object",
             {"object_id": object_id},
+        )
+
+    @mcp.tool()
+    def get_task_profile(task_id: str) -> GetTaskProfileOutput:
+        """Read the canonical Task profile for one task."""
+        return _run_tool(
+            "get_task_profile",
+            "get_task_profile",
+            {"task_id": task_id},
         )
 
     @mcp.tool()

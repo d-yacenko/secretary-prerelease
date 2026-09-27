@@ -85,6 +85,7 @@ from app.tools.schemas import (
     GetObjectInput,
     GetObjectOutput,
     GetTaskProfileInput,
+    GetTaskProfileOutput,
     GetTodayOutput,
     InboxReviewCompactItemOut,
     InboxReviewStackOut,
@@ -1041,11 +1042,12 @@ class DomainToolService:
         self._enqueue_object_embedding(obj.id)
         return CreateTaskOutput(object=ObjectOut.from_model(obj))
 
-    def get_task_profile(self, payload: GetTaskProfileInput):
+    def get_task_profile(self, payload: GetTaskProfileInput) -> GetTaskProfileOutput:
         try:
-            return TaskProfileService(self._session, self._user_id).get_profile(payload.task_id)
+            profile = TaskProfileService(self._session, self._user_id).get_profile(payload.task_id)
         except NotFoundError as exc:
             raise ToolError(f"task not found: {exc.entity_id}") from exc
+        return GetTaskProfileOutput.model_validate(profile.model_dump())
 
     def _scheduled_activities(self):
         from app.services.scheduled_activity_service import ScheduledActivityService
