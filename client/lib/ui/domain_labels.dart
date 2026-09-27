@@ -83,6 +83,55 @@ String operationalStateLabel(String state) {
   }
 }
 
+String personActorRoleLabel(String role) {
+  switch (role) {
+    case 'requested_by':
+      return 'Попросил(а)';
+    case 'delegated_to':
+      return 'Делегировано';
+    case 'waiting_on':
+      return 'Ждём от';
+    case 'involves':
+      return 'Участвует';
+    default:
+      return role;
+  }
+}
+
+String personSalienceTierLabel(String tier) {
+  switch (tier) {
+    case 'focus':
+      return 'В фокусе';
+    case 'known':
+      return 'Известен';
+    case 'incidental':
+      return 'Редко';
+    default:
+      return tier;
+  }
+}
+
+String personSalienceComponentLabel(String name) {
+  switch (name) {
+    case 'directness':
+      return 'Прямые диалоги';
+    case 'reciprocity':
+      return 'В обе стороны';
+    case 'frequency':
+      return 'Частота';
+    case 'recency':
+      return 'Недавность';
+    case 'public_exposure':
+      return 'Общие каналы';
+    case 'user_attention':
+      return 'Подтверждение';
+    case 'task_calendar':
+      return 'Задачи и календарь';
+    default:
+      return name;
+  }
+}
+
 String taskRelationProposalLabel(String origin, String state) {
   if (state == 'proposed' && origin == 'agent') {
     return 'Предложено секретарём';

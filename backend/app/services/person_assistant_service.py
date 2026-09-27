@@ -93,11 +93,18 @@ class PersonAssistantService:
         return self._finish([match.person_id for match in matches], ("name_similarity",), None)
 
     def find_communications(
-        self, payload: FindPersonCommunicationsInput
+        self,
+        payload: FindPersonCommunicationsInput,
+        *,
+        include_quarantined_telegram: bool = False,
     ) -> FindPersonCommunicationsOutput:
         person = self._require_active_person(payload.person_id)
         keys = self._effective_keys(person.id)
-        matches, truncated = self._matching_messages(keys, payload)
+        matches, truncated = self._matching_messages(
+            keys,
+            payload,
+            apply_telegram_ai_gate=not include_quarantined_telegram,
+        )
         return FindPersonCommunicationsOutput(
             person_id=person.id,
             objects=[
@@ -666,6 +673,8 @@ class PersonAssistantService:
         self,
         keys: set[tuple[str, str, str]],
         payload: FindPersonCommunicationsInput,
+        *,
+        apply_telegram_ai_gate: bool = True,
     ) -> tuple[list[Object], bool]:
         if not keys:
             return [], False
@@ -673,7 +682,10 @@ class PersonAssistantService:
         pending: list[Object] = []
         matched: list[Object] = []
         saw_row = False
-        for chunk, scope_complete in self._message_chunks(payload):
+        for chunk, scope_complete in self._message_chunks(
+            payload,
+            apply_telegram_ai_gate=apply_telegram_ai_gate,
+        ):
             saw_row = True
             for index, obj in enumerate(chunk):
                 _collect_match(obj, keys, anchors, pending, matched, payload.direction)

@@ -2451,6 +2451,114 @@ class PersonRoutePresentation {
   }
 }
 
+class PersonTaskInvolvement {
+  PersonTaskInvolvement({
+    required this.taskId,
+    required this.title,
+    required this.role,
+    required this.edgeState,
+    required this.edgeOrigin,
+    this.status,
+    this.completionMode,
+    this.dueAt,
+  });
+
+  final String taskId;
+  final String title;
+  final String? status;
+  final String? completionMode;
+  final String? dueAt;
+  final String role;
+  final String edgeState;
+  final String edgeOrigin;
+
+  factory PersonTaskInvolvement.fromJson(Map<String, dynamic> json) {
+    return PersonTaskInvolvement(
+      taskId: json['task_id'] as String,
+      title: json['title'] as String? ?? '',
+      status: json['status'] as String?,
+      completionMode: json['completion_mode'] as String?,
+      dueAt: json['due_at'] as String?,
+      role: json['role'] as String? ?? '',
+      edgeState: json['edge_state'] as String? ?? '',
+      edgeOrigin: json['edge_origin'] as String? ?? '',
+    );
+  }
+}
+
+class PersonFlowPreview {
+  PersonFlowPreview({
+    required this.objectId,
+    required this.kind,
+    this.provider,
+    this.title,
+    this.occurredAt,
+  });
+
+  final String objectId;
+  final String kind;
+  final String? provider;
+  final String? title;
+  final String? occurredAt;
+
+  factory PersonFlowPreview.fromJson(Map<String, dynamic> json) {
+    return PersonFlowPreview(
+      objectId: json['object_id'] as String,
+      kind: json['kind'] as String? ?? '',
+      provider: json['provider'] as String?,
+      title: json['title'] as String?,
+      occurredAt: json['occurred_at'] as String?,
+    );
+  }
+}
+
+class PersonSalienceComponent {
+  PersonSalienceComponent({required this.name, required this.value});
+
+  final String name;
+  final int value;
+
+  factory PersonSalienceComponent.fromJson(Map<String, dynamic> json) {
+    return PersonSalienceComponent(
+      name: json['name'] as String? ?? '',
+      value: json['value'] as int? ?? 0,
+    );
+  }
+}
+
+class PersonSalienceSummary {
+  PersonSalienceSummary({
+    required this.score,
+    required this.tier,
+    required this.components,
+    required this.truncated,
+    required this.windowDays,
+    required this.claimsObjectImportance,
+  });
+
+  final int score;
+  final String tier;
+  final List<PersonSalienceComponent> components;
+  final bool truncated;
+  final int windowDays;
+  final bool claimsObjectImportance;
+
+  factory PersonSalienceSummary.fromJson(Map<String, dynamic> json) {
+    return PersonSalienceSummary(
+      score: json['score'] as int? ?? 0,
+      tier: json['tier'] as String? ?? '',
+      components: (json['components'] as List<dynamic>? ?? [])
+          .map(
+            (item) => PersonSalienceComponent.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(),
+      truncated: json['truncated'] as bool? ?? false,
+      windowDays: json['window_days'] as int? ?? 0,
+      claimsObjectImportance: json['claims_object_importance'] as bool? ?? false,
+    );
+  }
+}
+
 class PersonPresentation {
   PersonPresentation({
     required this.personId,
@@ -2461,6 +2569,11 @@ class PersonPresentation {
     required this.identityConflict,
     required this.openTaskCount,
     required this.recentCommunicationCount,
+    this.taskInvolvement = const [],
+    this.taskInvolvementTruncated = false,
+    this.recentCommunications = const [],
+    this.recentCommunicationsTruncated = false,
+    this.salience,
   });
 
   final String personId;
@@ -2471,6 +2584,11 @@ class PersonPresentation {
   final bool identityConflict;
   final int openTaskCount;
   final int recentCommunicationCount;
+  final List<PersonTaskInvolvement> taskInvolvement;
+  final bool taskInvolvementTruncated;
+  final List<PersonFlowPreview> recentCommunications;
+  final bool recentCommunicationsTruncated;
+  final PersonSalienceSummary? salience;
 
   factory PersonPresentation.fromJson(Map<String, dynamic> json) {
     return PersonPresentation(
@@ -2493,6 +2611,18 @@ class PersonPresentation {
       identityConflict: json['identity_conflict'] as bool? ?? false,
       openTaskCount: json['open_task_count'] as int? ?? 0,
       recentCommunicationCount: json['recent_communication_count'] as int? ?? 0,
+      taskInvolvement: (json['task_involvement'] as List<dynamic>? ?? [])
+          .map((item) => PersonTaskInvolvement.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      taskInvolvementTruncated: json['task_involvement_truncated'] as bool? ?? false,
+      recentCommunications: (json['recent_communications'] as List<dynamic>? ?? [])
+          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      recentCommunicationsTruncated:
+          json['recent_communications_truncated'] as bool? ?? false,
+      salience: json['salience'] == null
+          ? null
+          : PersonSalienceSummary.fromJson(json['salience'] as Map<String, dynamic>),
     );
   }
 }

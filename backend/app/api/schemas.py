@@ -592,6 +592,39 @@ class PersonRoutePresentation(BaseModel):
     route_key: str
 
 
+class PersonTaskInvolvementOut(BaseModel):
+    task_id: UUID
+    title: str
+    status: str | None = None
+    completion_mode: str | None = None
+    due_at: datetime | None = None
+    role: Literal["requested_by", "delegated_to", "waiting_on", "involves"]
+    edge_state: str
+    edge_origin: str
+
+
+class PersonFlowPreviewOut(BaseModel):
+    object_id: UUID
+    kind: str
+    provider: str | None = None
+    title: str | None = None
+    occurred_at: datetime | None = None
+
+
+class PersonSalienceComponentOut(BaseModel):
+    name: str
+    value: int
+
+
+class PersonSalienceSummaryOut(BaseModel):
+    score: int
+    tier: str
+    components: list[PersonSalienceComponentOut]
+    truncated: bool
+    window_days: int
+    claims_object_importance: bool
+
+
 class PersonPresentation(BaseModel):
     person_id: UUID
     title: str
@@ -601,6 +634,11 @@ class PersonPresentation(BaseModel):
     identity_conflict: bool
     open_task_count: int
     recent_communication_count: int
+    task_involvement: list[PersonTaskInvolvementOut] = Field(default_factory=list)
+    task_involvement_truncated: bool = False
+    recent_communications: list[PersonFlowPreviewOut] = Field(default_factory=list)
+    recent_communications_truncated: bool = False
+    salience: PersonSalienceSummaryOut | None = None
 
 
 class PeopleWorkspaceOut(BaseModel):

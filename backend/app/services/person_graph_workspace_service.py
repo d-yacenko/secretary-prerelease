@@ -18,6 +18,7 @@ from app.domain.person_assistant import feedback_identity_key, parse_feedback_id
 from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED
 from app.domain.person_identity import NormalizedPersonIdentity, PersonIdentityInputError
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS, is_terminal_for_reads
+from app.domain.task_relations import TASK_ACTOR_ROLES
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
@@ -30,12 +31,17 @@ from app.services.person_evidence_service import PersonEvidenceService, _identit
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
 from app.services.person_salience_service import PersonSalienceService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
-from app.tools.schemas import ListPersonRoutesInput, PersonIdentityFeedbackOutput
+from app.tools.schemas import (
+    FindPersonCommunicationsInput,
+    ListPersonRoutesInput,
+    PersonIdentityFeedbackOutput,
+)
 
 _MAX_IDENTITIES = 8
 _MAX_ROUTES = 5
 _MAX_CANDIDATES = 5
 _MAX_COMMUNICATIONS = 3
+_MAX_TRUTH_ROWS = 8
 _COMMUNICATION_KINDS = frozenset({"email", "chat_message"})
 _FORBIDDEN_EDGE_TYPES = frozenset(
     {"member_of", "role_at", "manager_of", "works_with", "colleague", "manager", "friend"}
@@ -194,6 +200,7 @@ class PersonGraphWorkspaceService:
                     person,
                     scores.get(person.id, 0),
                     include_details=include_details,
+                    include_truth=include_details and person.id == root_id,
                     communication_count=communication_counts.get(person.id, 0),
                 )
                 for person in people
@@ -328,6 +335,7 @@ class PersonGraphWorkspaceService:
         score: int,
         *,
         include_details: bool,
+        include_truth: bool,
         communication_count: int,
     ) -> dict:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
@@ -336,7 +344,7 @@ class PersonGraphWorkspaceService:
         if include_details:
             identities.extend(self._candidates(person.id))
             conflict = conflict or any(item["state"] == "conflicted" for item in identities)
-        return {
+        payload = {
             "person_id": person.id,
             "title": person.title,
             "salience_score": score,
@@ -346,6 +354,42 @@ class PersonGraphWorkspaceService:
             "open_task_count": self._open_task_count(person.id),
             "recent_communication_count": communication_count,
         }
+        if include_truth:
+            involvement, involvement_truncated = self._task_involvement(person.id)
+            flow = self._assistant.find_communications(
+                FindPersonCommunicationsInput(person_id=person.id, limit=_MAX_TRUTH_ROWS),
+                include_quarantined_telegram=True,
+            )
+            salience = PersonSalienceService(self._session, self._user_id).evaluate(person.id)
+            payload.update(
+                {
+                    "task_involvement": involvement,
+                    "task_involvement_truncated": involvement_truncated,
+                    "recent_communications": [
+                        {
+                            "object_id": item.id,
+                            "kind": item.kind,
+                            "provider": item.provider,
+                            "title": item.title,
+                            "occurred_at": item.occurred_at,
+                        }
+                        for item in flow.objects
+                    ],
+                    "recent_communications_truncated": flow.truncated,
+                    "salience": {
+                        "score": salience.score,
+                        "tier": salience.tier,
+                        "components": [
+                            {"name": component.name, "value": component.value}
+                            for component in salience.components
+                        ],
+                        "truncated": salience.truncated,
+                        "window_days": salience.window_days,
+                        "claims_object_importance": salience.claims_object_importance,
+                    },
+                }
+            )
+        return payload
 
     def _identity_presentations(self, person_id: UUID, *, include_rejected: bool) -> list[dict]:
         rows = []
@@ -416,6 +460,50 @@ class PersonGraphWorkspaceService:
             for row in self._people.list_identities(person_id)
             if row.state != REJECTED_STATE
         ]
+
+    def _task_involvement(self, person_id: UUID) -> tuple[list[dict], bool]:
+        task = aliased(Object)
+        rows = list(
+            self._session.execute(
+                select(Edge, task)
+                .join(task, task.id == Edge.source_id)
+                .where(
+                    Edge.user_id == self._user_id,
+                    Edge.target_id == person_id,
+                    Edge.type.in_(tuple(TASK_ACTOR_ROLES)),
+                    Edge.state != REJECTED_STATE,
+                    task.user_id == self._user_id,
+                    task.kind == "task",
+                    object_is_active(task),
+                    or_(
+                        task.status.is_(None),
+                        task.status.notin_(tuple(TERMINAL_TASK_STATUSES_FOR_READS)),
+                    ),
+                )
+                .order_by(
+                    task.due_at.asc().nulls_last(),
+                    func.lower(task.title),
+                    task.id,
+                    Edge.type,
+                    Edge.id,
+                )
+                .limit(_MAX_TRUTH_ROWS + 1)
+            )
+        )
+        visible = rows[:_MAX_TRUTH_ROWS]
+        return [
+            {
+                "task_id": item.id,
+                "title": item.title,
+                "status": item.status,
+                "completion_mode": item.completion_mode,
+                "due_at": item.due_at,
+                "role": edge.type,
+                "edge_state": edge.state,
+                "edge_origin": edge.origin,
+            }
+            for edge, item in visible
+        ], len(rows) > _MAX_TRUTH_ROWS
 
     def _open_task_count(self, person_id: UUID) -> int:
         other = aliased(Object)

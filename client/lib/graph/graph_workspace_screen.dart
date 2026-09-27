@@ -1102,6 +1102,26 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             person: widget.controller.personFor(object.id)!,
             apiClient: widget.apiClient,
             onChanged: widget.controller.refreshCurrentWorkspace,
+            onOpenTask: (taskId) async {
+              await widget.controller.setMode(GraphWorkspaceMode.tasks);
+              if (!mounted) {
+                return;
+              }
+              await widget.controller.reRoot(taskId);
+            },
+            onOpenFlow: (objectId) {
+              return openObjectDetail(
+                context,
+                objectId: objectId,
+                apiClient: widget.apiClient,
+                authController: widget.authController,
+                captureController: widget.captureController,
+                assistantController: widget.assistantController,
+                onAskSecretary: widget.onAskSecretary,
+                onShowInGraph: widget.controller.reRoot,
+                bookmarkController: widget.bookmarkController,
+              );
+            },
           ),
         ],
         const SizedBox(height: 12),
@@ -1523,11 +1543,15 @@ class _PersonDetailSection extends StatelessWidget {
     required this.person,
     required this.apiClient,
     required this.onChanged,
+    required this.onOpenTask,
+    required this.onOpenFlow,
   });
 
   final PersonPresentation person;
   final SecretaryApiClient apiClient;
   final Future<void> Function() onChanged;
+  final Future<void> Function(String taskId) onOpenTask;
+  final Future<void> Function(String objectId) onOpenFlow;
 
   @override
   Widget build(BuildContext context) {
@@ -1582,8 +1606,85 @@ class _PersonDetailSection extends StatelessWidget {
         ],
         Text('Открытые задачи: ${person.openTaskCount}'),
         Text('Недавние коммуникации: ${person.recentCommunicationCount}'),
+        if (person.salience != null) ...[
+          const _DetailSectionHeader(title: 'Участие в задачах'),
+          if (person.taskInvolvement.isEmpty)
+            const Text('Нет участия в текущих задачах')
+          else
+            ...person.taskInvolvement.map(_taskRow),
+          if (person.taskInvolvementTruncated)
+            const Text('Показаны не все задачи'),
+          const _DetailSectionHeader(title: 'Недавние сообщения'),
+          if (person.recentCommunications.isEmpty)
+            const Text('Нет недавних коммуникаций')
+          else
+            ...person.recentCommunications.map(_flowRow),
+          if (person.recentCommunicationsTruncated)
+            const Text('Показаны не все сообщения'),
+          const _DetailSectionHeader(title: 'Активность'),
+          Text(
+            '${personSalienceTierLabel(person.salience!.tier)} · ${person.salience!.score}',
+          ),
+          const Text(
+            'Сигнал активности и контекста, не оценка важности человека или сообщения.',
+          ),
+          ...person.salience!.components.map(
+            (component) => Text(
+              '${personSalienceComponentLabel(component.name)}: ${component.value}',
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  Widget _taskRow(PersonTaskInvolvement row) {
+    final proposal = taskRelationProposalLabel(row.edgeOrigin, row.edgeState);
+    final due = _shortWhen(row.dueAt);
+    return ListTile(
+      dense: true,
+      title: Text(row.title),
+      subtitle: Text(
+        [
+          personActorRoleLabel(row.role),
+          if (proposal.isNotEmpty) proposal,
+          if (row.completionMode == 'ongoing') 'Направление',
+          if (due.isNotEmpty) due,
+        ].join(' · '),
+      ),
+      onTap: () => onOpenTask(row.taskId),
+    );
+  }
+
+  Widget _flowRow(PersonFlowPreview row) {
+    final when = _shortWhen(row.occurredAt);
+    return ListTile(
+      dense: true,
+      title: Text(row.title ?? row.kind),
+      subtitle: Text(
+        [
+          if (row.provider != null) providerLabel(row.provider!),
+          if (when.isNotEmpty) when,
+        ].join(' · '),
+      ),
+      onTap: () => onOpenFlow(row.objectId),
+    );
+  }
+
+  String _shortWhen(String? iso) {
+    if (iso == null || iso.isEmpty) {
+      return '';
+    }
+    final parsed = DateTime.tryParse(iso);
+    if (parsed == null) {
+      return '';
+    }
+    final local = parsed.toLocal();
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$day.$month.${local.year} $hour:$minute';
   }
 
   Future<void> _correct(
