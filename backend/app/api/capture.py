@@ -29,6 +29,9 @@ def capture_task(
             context_object_ids=data.context_object_ids,
             depends_on_ids=data.depends_on_ids,
             completion_mode=data.completion_mode,
+            due_at=data.due_at,
+            planned_start_at=data.planned_start_at,
+            planned_end_at=data.planned_end_at,
         )
     except NotFoundError as exc:
         raise HTTPException(

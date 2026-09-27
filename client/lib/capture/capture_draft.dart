@@ -9,6 +9,9 @@ class CaptureDraft {
     this.contextRefs = const [],
     this.dependsOnIds = const [],
     this.completionMode = 'finite',
+    this.dueAt,
+    this.plannedStartAt,
+    this.plannedEndAt,
   });
 
   static const maxTextLength = 16000;
@@ -20,6 +23,9 @@ class CaptureDraft {
   final List<CaptureContextRef> contextRefs;
   final List<String> dependsOnIds;
   final String completionMode;
+  final DateTime? dueAt;
+  final DateTime? plannedStartAt;
+  final DateTime? plannedEndAt;
 
   bool get isBlank => text.trim().isEmpty;
 
@@ -29,7 +35,8 @@ class CaptureDraft {
 
   bool get canSubmit => !isBlank && !isTextTooLong && !isTitleTooLong;
 
-  bool get hasTaskIntent => contextObjectIds.isNotEmpty || dependsOnIds.isNotEmpty;
+  bool get hasTaskIntent =>
+      contextObjectIds.isNotEmpty || dependsOnIds.isNotEmpty;
 
   CaptureDraft copyWith({
     String? text,
@@ -39,6 +46,11 @@ class CaptureDraft {
     List<CaptureContextRef>? contextRefs,
     List<String>? dependsOnIds,
     String? completionMode,
+    DateTime? dueAt,
+    bool clearDue = false,
+    DateTime? plannedStartAt,
+    DateTime? plannedEndAt,
+    bool clearPlanned = false,
   }) {
     return CaptureDraft(
       text: text ?? this.text,
@@ -47,6 +59,11 @@ class CaptureDraft {
       contextRefs: contextRefs ?? this.contextRefs,
       dependsOnIds: dependsOnIds ?? this.dependsOnIds,
       completionMode: completionMode ?? this.completionMode,
+      dueAt: clearDue ? null : (dueAt ?? this.dueAt),
+      plannedStartAt: clearPlanned
+          ? null
+          : (plannedStartAt ?? this.plannedStartAt),
+      plannedEndAt: clearPlanned ? null : (plannedEndAt ?? this.plannedEndAt),
     );
   }
 
@@ -57,14 +74,16 @@ class CaptureDraft {
       contextObjectIds: contextObjectIds,
       dependsOnIds: dependsOnIds,
       completionMode: completionMode,
+      dueAt: _iso(dueAt),
+      plannedStartAt: _iso(plannedStartAt),
+      plannedEndAt: _iso(plannedEndAt),
     );
   }
 
+  static String? _iso(DateTime? value) => value?.toUtc().toIso8601String();
+
   CaptureNoteRequest toNoteRequest() {
-    return CaptureNoteRequest(
-      text: text,
-      title: title,
-    );
+    return CaptureNoteRequest(text: text, title: title);
   }
 
   static const empty = CaptureDraft();

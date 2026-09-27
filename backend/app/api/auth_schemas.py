@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.domain.planned_execution import validate_planned_execution_interval
 from app.domain.task_completion import TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING
 from app.services.capture_service import (
     MAX_CAPTURE_CONTEXT_IDS,
@@ -71,11 +72,18 @@ class CaptureTaskRequest(BaseModel):
     context_object_ids: list[UUID] = Field(default_factory=list, max_length=MAX_CAPTURE_CONTEXT_IDS)
     depends_on_ids: list[UUID] = Field(default_factory=list, max_length=MAX_CAPTURE_DEPENDS_ON_IDS)
     completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
+    due_at: datetime | None = None
+    planned_start_at: datetime | None = None
+    planned_end_at: datetime | None = None
 
     @model_validator(mode="after")
     def reject_null_completion_mode(self) -> Self:
         if "completion_mode" in self.model_fields_set and self.completion_mode is None:
             raise ValueError("completion_mode must be finite or ongoing")
+        try:
+            validate_planned_execution_interval("task", self.planned_start_at, self.planned_end_at)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     @field_validator("text")

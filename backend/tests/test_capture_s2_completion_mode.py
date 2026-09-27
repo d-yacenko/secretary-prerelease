@@ -179,3 +179,65 @@ def test_ongoing_enqueue_matches_finite_and_wording_does_not_infer_mode(
     wording_task = _task(db_session, wording.json()["task_id"])
     assert wording_task.completion_mode == "finite"
     assert wording_task.kind == "task"
+
+
+def test_old_capture_payload_without_schedule_fields_stays_valid(db_session, auth_client) -> None:
+    response = auth_client.post("/capture/task", json={"text": "legacy capture"})
+    assert response.status_code == 201
+    task = _task(db_session, response.json()["task_id"])
+    assert task.completion_mode == "finite"
+    assert task.due_at is None
+    assert task.planned_start_at is None
+    assert task.planned_end_at is None
+
+
+def test_capture_due_and_planned_interval(db_session, auth_client) -> None:
+    due = auth_client.post(
+        "/capture/task",
+        json={"text": "with due", "due_at": "2026-10-02T09:30:00Z"},
+    )
+    planned = auth_client.post(
+        "/capture/task",
+        json={
+            "text": "with interval",
+            "planned_start_at": "2026-10-02T10:00:00Z",
+            "planned_end_at": "2026-10-02T11:00:00Z",
+        },
+    )
+    assert due.status_code == 201
+    assert planned.status_code == 201
+    due_task = _task(db_session, due.json()["task_id"])
+    planned_task = _task(db_session, planned.json()["task_id"])
+    assert due_task.due_at is not None
+    assert due_task.planned_start_at is None
+    assert planned_task.planned_start_at is not None
+    assert planned_task.planned_end_at is not None
+    assert planned_task.completion_mode == "finite"
+
+
+def test_half_planned_interval_rejected(auth_client) -> None:
+    response = auth_client.post(
+        "/capture/task",
+        json={"text": "half interval", "planned_start_at": "2026-10-02T10:00:00Z"},
+    )
+    assert response.status_code == 422
+
+
+def test_ongoing_capture_keeps_mode_with_due_and_planned(db_session, auth_client) -> None:
+    response = auth_client.post(
+        "/capture/task",
+        json={
+            "text": "direction with time",
+            "completion_mode": "ongoing",
+            "due_at": "2026-10-03T08:00:00Z",
+            "planned_start_at": "2026-10-03T09:00:00Z",
+            "planned_end_at": "2026-10-03T10:00:00Z",
+        },
+    )
+    assert response.status_code == 201
+    task = _task(db_session, response.json()["task_id"])
+    assert task.kind == "task"
+    assert task.completion_mode == "ongoing"
+    assert task.status == "open"
+    assert task.due_at is not None
+    assert task.planned_end_at > task.planned_start_at

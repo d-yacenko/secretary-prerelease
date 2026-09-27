@@ -114,7 +114,9 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
       if (!mounted) {
         return;
       }
-      final neighbors = await widget.apiClient.getObjectNeighbors(widget.objectId);
+      final neighbors = await widget.apiClient.getObjectNeighbors(
+        widget.objectId,
+      );
       if (!mounted) {
         return;
       }
@@ -193,12 +195,14 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
     } on ApiException catch (e) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
@@ -213,7 +217,8 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
@@ -222,13 +227,15 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
     if (object == null || object.kind != 'email') {
       return [];
     }
-    return _neighbors.where(
-      (neighbor) =>
-          neighbor.edge.type == 'contains' &&
-          neighbor.direction == 'outgoing' &&
-          neighbor.object.kind == 'file' &&
-          neighbor.edge.metadata['source_fact'] == 'email_attachment',
-    ).toList();
+    return _neighbors
+        .where(
+          (neighbor) =>
+              neighbor.edge.type == 'contains' &&
+              neighbor.direction == 'outgoing' &&
+              neighbor.object.kind == 'file' &&
+              neighbor.edge.metadata['source_fact'] == 'email_attachment',
+        )
+        .toList();
   }
 
   bool get _showDeleteAction {
@@ -283,9 +290,8 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
     if (!mounted || !deleted) {
       return;
     }
-    Navigator.of(context).pop(
-      ObjectDetailNavigationResult(deletedObjectId: object.id),
-    );
+    Navigator.of(context)
+        .pop(ObjectDetailNavigationResult(deletedObjectId: object.id));
   }
 
   @override
@@ -354,196 +360,219 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
                   right: bookmarkColor != null ? kBookmarkRibbonReserve : 0,
                 ),
                 child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.xs,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Icon(iconForKind(object.kind), size: AppSpacing.kindIconSize),
-                  if (providerHasIdentity(object.provider))
-                    ProviderSourceIcon(
-                      provider: object.provider,
-                      onPressed: _sourcePresentation?.canOpen == true
-                          ? _openSource
-                          : null,
-                      openTooltip: _sourcePresentation?.canOpen == true
-                          ? (_sourcePresentation!.openLabel ??
-                              'Открыть в источнике')
-                          : providerLabel(object.provider),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.xs,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Icon(
+                          iconForKind(object.kind),
+                          size: AppSpacing.kindIconSize,
+                        ),
+                        if (providerHasIdentity(object.provider))
+                          ProviderSourceIcon(
+                            provider: object.provider,
+                            onPressed: _sourcePresentation?.canOpen == true
+                                ? _openSource
+                                : null,
+                            openTooltip: _sourcePresentation?.canOpen == true
+                                ? (_sourcePresentation!.openLabel ??
+                                      'Открыть в источнике')
+                                : providerLabel(object.provider),
+                          ),
+                        Text(
+                          humanTaskModeLabel(object),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        if (primaryDateValue.isNotEmpty)
+                          Text(
+                            primaryDateValue,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        if (plannedIntervalValue != null)
+                          Text(
+                            key: const Key('object_planned_interval'),
+                            'Запланированное время: $plannedIntervalValue',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        if (object.isOngoingTask)
+                          const Text('Направление · продолжается'),
+                        if (object.status != null)
+                          Text(taskStatusLabel(object.status)),
+                        if (object.state == 'proposed')
+                          Text(
+                            provenanceStateLabel(object.state),
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                        if (bookmarkColor == null)
+                          ObjectBookmarkControl(
+                            color: bookmarkColor,
+                            onSelect: (color) =>
+                                _bookmarks.setColor(object.id, color),
+                            onClear: () => _bookmarks.clear(object.id),
+                          ),
+                      ],
                     ),
-                  Text(
-                    objectKindLabel(object.kind),
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                  if (primaryDateValue.isNotEmpty)
+                    if (_sourcePresentation != null) ...[
+                      if (_sourcePresentation!.canOpen && !wide)
+                        Padding(
+                          padding: const EdgeInsets.only(top: AppSpacing.sm),
+                          child: OpenSourceAction(
+                            key: const Key('object_detail_open_source'),
+                            onPressed: _openSource,
+                            label:
+                                _sourcePresentation!.openLabel ??
+                                'Открыть в источнике',
+                          ),
+                        ),
+                      if (_sourcePresentation!.canOpen && wide)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OpenSourceAction(
+                            key: const Key('object_detail_open_source'),
+                            onPressed: _openSource,
+                            label:
+                                _sourcePresentation!.openLabel ??
+                                'Открыть в источнике',
+                          ),
+                        ),
+                      if (_sourcePresentation!.canShowInFolder)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            key: const Key('object_detail_show_in_folder'),
+                            onPressed: _showInFolder,
+                            child: Text(_sourcePresentation!.showInFolderLabel),
+                          ),
+                        ),
+                      if (_sourcePresentation!.isDisabled)
+                        Padding(
+                          padding: const EdgeInsets.only(top: AppSpacing.sm),
+                          child: Text(
+                            _sourcePresentation!.disabledReason!,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                        ),
+                    ],
+                    if (object.body != null &&
+                        object.body!.trim().isNotEmpty) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      LinkifiedText(
+                        key: const Key('object_detail_body'),
+                        text: object.body!,
+                      ),
+                    ],
+                    const SizedBox(height: AppSpacing.lg),
+                    if (object.kind == 'label')
+                      Text(
+                        'Управлять метками можно в разделе Аккаунт.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      )
+                    else
+                      ObjectLabelsSection(
+                        key: const Key('object_labels_section'),
+                        objectId: object.id,
+                        apiClient: widget.apiClient,
+                        authController: widget.authController,
+                      ),
+                    if (_attachmentNeighbors.isNotEmpty) ...[
+                      const SizedBox(height: AppSpacing.lg),
+                      Text(
+                        'Вложения',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      ..._attachmentNeighbors.map(
+                        (neighbor) => ListTile(
+                          leading: const Icon(Icons.attach_file),
+                          title: Text(neighbor.object.title),
+                          subtitle: Text(_attachmentSubtitle(neighbor.object)),
+                          onTap: () => _openNeighborDetail(neighbor.object.id),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: AppSpacing.lg),
+                    ExpansionTile(
+                      key: const Key('object_detail_technical'),
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('Подробности'),
+                      children: [
+                        _FieldRow(
+                          label: 'Состояние',
+                          value: provenanceStateLabel(object.state),
+                        ),
+                        _FieldRow(
+                          label: 'Источник',
+                          value: originLabel(object.origin),
+                        ),
+                        _FieldRow(
+                          label: 'Создано',
+                          value: formatUserDateTime(object.createdAt),
+                        ),
+                        _FieldRow(
+                          label: 'Обновлено',
+                          value: formatUserDateTime(object.updatedAt),
+                        ),
+                        if (object.provider != null)
+                          _FieldRow(
+                            label: 'Провайдер',
+                            value: providerLabel(object.provider!),
+                          ),
+                        if (object.canonicalUri != null)
+                          _CanonicalUriRow(uri: object.canonicalUri!),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
                     Text(
-                      primaryDateValue,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                      'Связи',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  if (plannedIntervalValue != null)
+                    if (_neighbors.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text('Нет связей'),
+                      )
+                    else
+                      ..._neighbors.map(
+                        (neighbor) => ListTile(
+                          title: Text(neighbor.object.title),
+                          subtitle: Text(
+                            '${relationTypeLabel(neighbor.edge.type)} • '
+                            '${neighborDirectionLabel(neighbor.direction)} • '
+                            '${objectKindLabel(neighbor.object.kind)}',
+                          ),
+                          onTap: () => _openNeighborDetail(neighbor.object.id),
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    if (_object != null)
+                      TaskManagementActions(
+                        task: _object!,
+                        apiClient: widget.apiClient,
+                        authController: widget.authController,
+                        onTaskUpdated: _notifyTaskUpdated,
+                      ),
+                    const SizedBox(height: 16),
                     Text(
-                      key: const Key('object_planned_interval'),
-                      'Запланированное время: $plannedIntervalValue',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                      'Контекст',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  if (object.isOngoingTask)
-                    const Text('Направление · продолжается'),
-                  if (object.status != null)
-                    Text(taskStatusLabel(object.status)),
-                  if (object.state == 'proposed')
-                    Text(
-                      provenanceStateLabel(object.state),
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  if (bookmarkColor == null)
-                    ObjectBookmarkControl(
-                      color: bookmarkColor,
-                      onSelect: (color) =>
-                          _bookmarks.setColor(object.id, color),
-                      onClear: () => _bookmarks.clear(object.id),
-                    ),
-                ],
-              ),
-              if (_sourcePresentation != null) ...[
-                if (_sourcePresentation!.canOpen && !wide)
-                  Padding(
-                    padding: const EdgeInsets.only(top: AppSpacing.sm),
-                    child: OpenSourceAction(
-                      key: const Key('object_detail_open_source'),
-                      onPressed: _openSource,
-                      label: _sourcePresentation!.openLabel ??
-                          'Открыть в источнике',
-                    ),
-                  ),
-                if (_sourcePresentation!.canOpen && wide)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OpenSourceAction(
-                      key: const Key('object_detail_open_source'),
-                      onPressed: _openSource,
-                      label: _sourcePresentation!.openLabel ??
-                          'Открыть в источнике',
-                    ),
-                  ),
-                if (_sourcePresentation!.canShowInFolder)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      key: const Key('object_detail_show_in_folder'),
-                      onPressed: _showInFolder,
-                      child: Text(_sourcePresentation!.showInFolderLabel),
-                    ),
-                  ),
-                if (_sourcePresentation!.isDisabled)
-                  Padding(
-                    padding: const EdgeInsets.only(top: AppSpacing.sm),
-                    child: Text(
-                      _sourcePresentation!.disabledReason!,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
-                    ),
-                  ),
-              ],
-              if (object.body != null && object.body!.trim().isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.md),
-                LinkifiedText(
-                  key: const Key('object_detail_body'),
-                  text: object.body!,
-                ),
-              ],
-              const SizedBox(height: AppSpacing.lg),
-              if (object.kind == 'label')
-                Text(
-                  'Управлять метками можно в разделе Аккаунт.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                )
-              else
-                ObjectLabelsSection(
-                  key: const Key('object_labels_section'),
-                  objectId: object.id,
-                  apiClient: widget.apiClient,
-                  authController: widget.authController,
-                ),
-              if (_attachmentNeighbors.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.lg),
-                Text('Вложения', style: Theme.of(context).textTheme.titleMedium),
-                ..._attachmentNeighbors.map(
-                  (neighbor) => ListTile(
-                    leading: const Icon(Icons.attach_file),
-                    title: Text(neighbor.object.title),
-                    subtitle: Text(_attachmentSubtitle(neighbor.object)),
-                    onTap: () => _openNeighborDetail(neighbor.object.id),
-                  ),
-                ),
-              ],
-              const SizedBox(height: AppSpacing.lg),
-              ExpansionTile(
-                key: const Key('object_detail_technical'),
-                tilePadding: EdgeInsets.zero,
-                title: const Text('Подробности'),
-                children: [
-                  _FieldRow(label: 'Состояние', value: provenanceStateLabel(object.state)),
-                  _FieldRow(label: 'Источник', value: originLabel(object.origin)),
-                  _FieldRow(
-                    label: 'Создано',
-                    value: formatUserDateTime(object.createdAt),
-                  ),
-                  _FieldRow(
-                    label: 'Обновлено',
-                    value: formatUserDateTime(object.updatedAt),
-                  ),
-                  if (object.provider != null)
-                    _FieldRow(
-                      label: 'Провайдер',
-                      value: providerLabel(object.provider!),
-                    ),
-                  if (object.canonicalUri != null)
-                    _CanonicalUriRow(uri: object.canonicalUri!),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text('Связи', style: Theme.of(context).textTheme.titleMedium),
-              if (_neighbors.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Text('Нет связей'),
-                )
-              else
-                ..._neighbors.map(
-                  (neighbor) => ListTile(
-                    title: Text(neighbor.object.title),
-                    subtitle: Text(
-                      '${relationTypeLabel(neighbor.edge.type)} • '
-                      '${neighborDirectionLabel(neighbor.direction)} • '
-                      '${objectKindLabel(neighbor.object.kind)}',
-                    ),
-                    onTap: () => _openNeighborDetail(neighbor.object.id),
-                  ),
-                ),
-              const SizedBox(height: 16),
-              if (_object != null)
-                TaskManagementActions(
-                  task: _object!,
-                  apiClient: widget.apiClient,
-                  authController: widget.authController,
-                  onTaskUpdated: _notifyTaskUpdated,
-                ),
-              const SizedBox(height: 16),
-              Text('Контекст', style: Theme.of(context).textTheme.titleMedium),
-              if (_context == null || _context!.neighbors.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Text('Нет соседнего контекста'),
-                )
-              else
-                ..._context!.neighbors.map(
-                  (neighbor) => ListTile(
-                    title: Text(neighbor.title),
-                    subtitle: Text(objectKindLabel(neighbor.kind)),
-                  ),
-                ),
-            ],
+                    if (_context == null || _context!.neighbors.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text('Нет соседнего контекста'),
+                      )
+                    else
+                      ..._context!.neighbors.map(
+                        (neighbor) => ListTile(
+                          title: Text(neighbor.title),
+                          subtitle: Text(objectKindLabel(neighbor.kind)),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -603,7 +632,10 @@ class _CanonicalUriRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Канонический URI', style: Theme.of(context).textTheme.labelLarge),
+          Text(
+            'Канонический URI',
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
           SelectableText(
             sanitized,
             onTap: () => Clipboard.setData(ClipboardData(text: sanitized)),

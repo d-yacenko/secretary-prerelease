@@ -716,6 +716,9 @@ class CaptureTaskRequest {
     this.contextObjectIds = const [],
     this.dependsOnIds = const [],
     this.completionMode = 'finite',
+    this.dueAt,
+    this.plannedStartAt,
+    this.plannedEndAt,
   });
 
   final String text;
@@ -723,6 +726,9 @@ class CaptureTaskRequest {
   final List<String> contextObjectIds;
   final List<String> dependsOnIds;
   final String completionMode;
+  final String? dueAt;
+  final String? plannedStartAt;
+  final String? plannedEndAt;
 
   Map<String, dynamic> toJson() {
     return {
@@ -731,6 +737,9 @@ class CaptureTaskRequest {
       'context_object_ids': contextObjectIds,
       'depends_on_ids': dependsOnIds,
       'completion_mode': completionMode,
+      if (dueAt != null) 'due_at': dueAt,
+      if (plannedStartAt != null) 'planned_start_at': plannedStartAt,
+      if (plannedEndAt != null) 'planned_end_at': plannedEndAt,
     };
   }
 }
@@ -2469,10 +2478,17 @@ class PersonPresentation {
       title: json['title'] as String? ?? '',
       salienceScore: json['salience_score'] as int? ?? 0,
       identities: (json['identities'] as List<dynamic>? ?? [])
-          .map((item) => PersonIdentityPresentation.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => PersonIdentityPresentation.fromJson(
+              item as Map<String, dynamic>,
+            ),
+          )
           .toList(),
       routes: (json['routes'] as List<dynamic>? ?? [])
-          .map((item) => PersonRoutePresentation.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) =>
+                PersonRoutePresentation.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
       identityConflict: json['identity_conflict'] as bool? ?? false,
       openTaskCount: json['open_task_count'] as int? ?? 0,
@@ -2512,7 +2528,9 @@ class GraphWorkspaceOut {
           .toList(),
       truncated: json['truncated'] as bool? ?? false,
       people: (json['people'] as List<dynamic>? ?? [])
-          .map((item) => PersonPresentation.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => PersonPresentation.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
     );
   }
@@ -2865,7 +2883,9 @@ class TaskOperationalProjection {
   factory TaskOperationalProjection.fromJson(Map<String, dynamic> json) {
     List<TaskOperationalRef> refs(String field) {
       return (json[field] as List<dynamic>? ?? const [])
-          .map((item) => TaskOperationalRef.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => TaskOperationalRef.fromJson(item as Map<String, dynamic>),
+          )
           .toList();
     }
 
@@ -2981,7 +3001,8 @@ class TaskProfile {
       waitingOnTruncated: json['waiting_on_truncated'] as bool? ?? false,
       involvesTruncated: json['involves_truncated'] as bool? ?? false,
       dependsOnTruncated: json['depends_on_truncated'] as bool? ?? false,
-      dependentTasksTruncated: json['dependent_tasks_truncated'] as bool? ?? false,
+      dependentTasksTruncated:
+          json['dependent_tasks_truncated'] as bool? ?? false,
       childTasksTruncated: json['child_tasks_truncated'] as bool? ?? false,
       evidenceTruncated: json['evidence_truncated'] as bool? ?? false,
     );

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -44,6 +45,9 @@ class CaptureService:
         context_object_ids: list[UUID] | None = None,
         depends_on_ids: list[UUID] | None = None,
         completion_mode: str | None = None,
+        due_at: datetime | None = None,
+        planned_start_at: datetime | None = None,
+        planned_end_at: datetime | None = None,
     ) -> CaptureTaskResult:
         if not text.strip():
             raise ValidationError("text must not be empty")
@@ -80,6 +84,9 @@ class CaptureService:
                 state="confirmed",
                 status=TASK_STATUS_OPEN,
                 completion_mode=completion_mode,
+                due_at=due_at,
+                planned_start_at=planned_start_at,
+                planned_end_at=planned_end_at,
             )
         )
 

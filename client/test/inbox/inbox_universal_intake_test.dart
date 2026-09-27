@@ -38,7 +38,8 @@ void main() {
       serverUrlStore: FakeServerUrlStore(),
     );
     auth.status = AuthStatus.authenticated;
-    final captureController = capture ??
+    final captureController =
+        capture ??
         CaptureController(apiClient: apiClient, authController: auth);
     return MaterialApp(
       home: Scaffold(
@@ -65,18 +66,20 @@ void main() {
     Map<String, dynamic>? body;
     int inboxCalls = 0;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          inboxCalls++;
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/capture/note') {
-          path = request.url.path;
-          body = jsonDecode(request.body) as Map<String, dynamic>;
-          return http.Response(jsonEncode({'note_id': 'n1'}), 201);
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            inboxCalls++;
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/capture/note') {
+            path = request.url.path;
+            body = jsonDecode(request.body) as Map<String, dynamic>;
+            return http.Response(jsonEncode({'note_id': 'n1'}), 201);
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -96,16 +99,18 @@ void main() {
   testWidgets('embedded url text submits capture note', (tester) async {
     String? path;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/capture/note') {
-          path = request.url.path;
-          return http.Response(jsonEncode({'note_id': 'n2'}), 201);
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/capture/note') {
+            path = request.url.path;
+            return http.Response(jsonEncode({'note_id': 'n2'}), 201);
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -122,26 +127,28 @@ void main() {
   testWidgets('exact generic url submits intake link', (tester) async {
     String? path;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/intake/link') {
-          path = request.url.path;
-          return http.Response(
-            jsonEncode({
-              'object_id': 'web-1',
-              'provider': 'web',
-              'kind': 'web_page',
-              'status': 'created',
-              'content_status': 'ready',
-              'content_jobs_enqueued': 1,
-            }),
-            200,
-          );
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/intake/link') {
+            path = request.url.path;
+            return http.Response(
+              jsonEncode({
+                'object_id': 'web-1',
+                'provider': 'web',
+                'kind': 'web_page',
+                'status': 'created',
+                'content_status': 'ready',
+                'content_jobs_enqueued': 1,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -155,66 +162,72 @@ void main() {
     expect(path, '/intake/link');
   });
 
-  testWidgets('google docs url submits intake link not provider-specific path',
-      (tester) async {
-    String? path;
-    await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/intake/link') {
-          path = request.url.path;
-          return http.Response(
-            jsonEncode({
-              'object_id': 'drive-1',
-              'provider': 'google_drive',
-              'kind': 'file',
-              'status': 'created',
-              'content_status': 'pending',
-              'content_jobs_enqueued': 1,
-            }),
-            200,
-          );
-        }
-        return http.Response('{}', 404);
-      })),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'google docs url submits intake link not provider-specific path',
+    (tester) async {
+      String? path;
+      await tester.pumpWidget(
+        buildInbox(
+          MockClient((request) async {
+            if (request.url.path == '/inbox') {
+              return http.Response(jsonEncode(inboxJson()), 200);
+            }
+            if (request.url.path == '/intake/link') {
+              path = request.url.path;
+              return http.Response(
+                jsonEncode({
+                  'object_id': 'drive-1',
+                  'provider': 'google_drive',
+                  'kind': 'file',
+                  'status': 'created',
+                  'content_status': 'pending',
+                  'content_jobs_enqueued': 1,
+                }),
+                200,
+              );
+            }
+            return http.Response('{}', 404);
+          }),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.enterText(
-      find.byKey(const Key('inbox_link_input')),
-      'https://docs.google.com/document/d/abc/edit',
-    );
-    await tester.tap(find.byKey(const Key('inbox_link_add_button')));
-    await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('inbox_link_input')),
+        'https://docs.google.com/document/d/abc/edit',
+      );
+      await tester.tap(find.byKey(const Key('inbox_link_add_button')));
+      await tester.pumpAndSettle();
 
-    expect(path, '/intake/link');
-  });
+      expect(path, '/intake/link');
+    },
+  );
 
   testWidgets('yandex disk url submits intake link', (tester) async {
     String? path;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/intake/link') {
-          path = request.url.path;
-          return http.Response(
-            jsonEncode({
-              'object_id': 'yandex-1',
-              'provider': 'yandex_disk',
-              'kind': 'file',
-              'status': 'created',
-              'content_status': 'metadata_only',
-              'content_jobs_enqueued': 0,
-            }),
-            200,
-          );
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/intake/link') {
+            path = request.url.path;
+            return http.Response(
+              jsonEncode({
+                'object_id': 'yandex-1',
+                'provider': 'yandex_disk',
+                'kind': 'file',
+                'status': 'created',
+                'content_status': 'metadata_only',
+                'content_jobs_enqueued': 0,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -230,12 +243,14 @@ void main() {
 
   testWidgets('inbox intake bar shows microphone button', (tester) async {
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -243,26 +258,30 @@ void main() {
     expect(find.text('Введите заметку или вставьте ссылку'), findsOneWidget);
   });
 
-  testWidgets('voice transcript fills inbox input without auto submit', (tester) async {
+  testWidgets('voice transcript fills inbox input without auto submit', (
+    tester,
+  ) async {
     int noteCalls = 0;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/assistant/transcribe') {
-          return http.Response.bytes(
-            utf8.encode(jsonEncode({'text': 'Голосовая заметка'})),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }
-        if (request.url.path == '/capture/note') {
-          noteCalls++;
-          return http.Response(jsonEncode({'note_id': 'vn1'}), 201);
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/assistant/transcribe') {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'text': 'Голосовая заметка'})),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          if (request.url.path == '/capture/note') {
+            noteCalls++;
+            return http.Response(jsonEncode({'note_id': 'vn1'}), 201);
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -279,7 +298,9 @@ void main() {
     });
     await pumpFrames(tester, frames: 10);
 
-    final field = tester.widget<TextField>(find.byKey(const Key('inbox_link_input')));
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('inbox_link_input')),
+    );
     expect(field.controller!.text, contains('Голосовая заметка'));
     expect(noteCalls, 0);
 
@@ -288,21 +309,25 @@ void main() {
     expect(noteCalls, 1);
   });
 
-  testWidgets('voice transcript appends to existing inbox text', (tester) async {
+  testWidgets('voice transcript appends to existing inbox text', (
+    tester,
+  ) async {
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/assistant/transcribe') {
-          return http.Response.bytes(
-            utf8.encode(jsonEncode({'text': 'дополнение'})),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/assistant/transcribe') {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'text': 'дополнение'})),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -322,30 +347,36 @@ void main() {
     });
     await pumpFrames(tester, frames: 10);
 
-    final field = tester.widget<TextField>(find.byKey(const Key('inbox_link_input')));
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('inbox_link_input')),
+    );
     expect(field.controller!.text, 'Уже есть текст дополнение');
   });
 
-  testWidgets('voice transcript exact url does not auto submit link intake', (tester) async {
+  testWidgets('voice transcript exact url does not auto submit link intake', (
+    tester,
+  ) async {
     int linkCalls = 0;
     await tester.pumpWidget(
-      buildInbox(MockClient((request) async {
-        if (request.url.path == '/inbox') {
-          return http.Response(jsonEncode(inboxJson()), 200);
-        }
-        if (request.url.path == '/assistant/transcribe') {
-          return http.Response.bytes(
-            utf8.encode(jsonEncode({'text': 'https://example.org/article'})),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }
-        if (request.url.path == '/intake/link') {
-          linkCalls++;
-          return http.Response('{}', 200);
-        }
-        return http.Response('{}', 404);
-      })),
+      buildInbox(
+        MockClient((request) async {
+          if (request.url.path == '/inbox') {
+            return http.Response(jsonEncode(inboxJson()), 200);
+          }
+          if (request.url.path == '/assistant/transcribe') {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'text': 'https://example.org/article'})),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          if (request.url.path == '/intake/link') {
+            linkCalls++;
+            return http.Response('{}', 200);
+          }
+          return http.Response('{}', 404);
+        }),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -361,7 +392,9 @@ void main() {
     await pumpFrames(tester, frames: 10);
 
     expect(linkCalls, 0);
-    final field = tester.widget<TextField>(find.byKey(const Key('inbox_link_input')));
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('inbox_link_input')),
+    );
     expect(field.controller!.text, 'https://example.org/article');
   });
 
@@ -374,7 +407,10 @@ void main() {
       tokenStore: FakeTokenStore(),
       serverUrlStore: FakeServerUrlStore(),
     );
-    final capture = CaptureController(apiClient: apiClient, authController: auth);
+    final capture = CaptureController(
+      apiClient: apiClient,
+      authController: auth,
+    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -383,7 +419,7 @@ void main() {
     );
 
     expect(find.text('Создание задачи'), findsOneWidget);
-    expect(find.text('Текст задачи'), findsOneWidget);
+    expect(find.text('Описание'), findsOneWidget);
     expect(find.text('Создать задачу'), findsOneWidget);
     expect(find.text('Заметка'), findsNothing);
     expect(find.text('Добавить заметку'), findsNothing);

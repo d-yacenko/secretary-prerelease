@@ -481,7 +481,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
-    final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
+    final positions = Map<String, Offset>.from(
+      widget.controller.visiblePositions,
+    );
     if (widget.controller.mode == GraphWorkspaceMode.tasks) {
       positions.addAll(
         projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
@@ -692,7 +694,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   hybrid != null &&
                   hybrid.scene.nodeById(node.id)?.width ==
                       kHybridFocusedCardWidth;
-              final ongoingAnchor = hybrid != null && node.isOngoingTask;
+              final ongoingAnchor = node.isOngoingTask;
               final position =
                   hybrid == null || (node.kind == 'task' && !ongoingAnchor)
                   ? positions[node.id] ?? const Offset(0, 0)
@@ -1603,7 +1605,7 @@ class _GraphNodeCard extends StatelessWidget {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      objectKindLabel(object.kind),
+                      humanTaskModeLabel(object),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.labelSmall,
@@ -1618,7 +1620,9 @@ class _GraphNodeCard extends StatelessWidget {
                       semanticLabel: 'Конфликт идентичности',
                     ),
                   if (person != null &&
-                      person!.identities.any((item) => item.state == 'effective'))
+                      person!.identities.any(
+                        (item) => item.state == 'effective',
+                      ))
                     Flexible(
                       child: Text(
                         person!.identities
@@ -1824,7 +1828,9 @@ class _GraphEdgePainter extends CustomPainter {
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = kProposedFullStroke + kProposedUnderExtra
-            ..color = colorScheme.tertiary.withValues(alpha: dimmed ? 0.28 : 0.34),
+            ..color = colorScheme.tertiary.withValues(
+              alpha: dimmed ? 0.28 : 0.34,
+            ),
         );
       }
       if (presentation?.dashed ?? false) {
@@ -2002,9 +2008,8 @@ class _AddPersonDialogState extends State<_AddPersonDialog> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.message)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
       setState(() => _submitting = false);
     }
   }
@@ -2019,7 +2024,8 @@ class _AddPersonDialogState extends State<_AddPersonDialog> {
         autofocus: true,
         decoration: const InputDecoration(
           labelText: 'Имя',
-          helperText: 'Контакты и связанные аккаунты можно подтвердить после создания.',
+          helperText:
+              'Контакты и связанные аккаунты можно подтвердить после создания.',
         ),
         onChanged: (_) => setState(() {}),
         onSubmitted: canSubmit ? (_) => _submit() : null,

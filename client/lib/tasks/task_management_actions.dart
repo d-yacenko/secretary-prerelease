@@ -4,8 +4,8 @@ import '../api/api_error.dart';
 import '../api/api_models.dart';
 import '../api/secretary_api_client.dart';
 import '../auth/auth_controller.dart';
-import '../ui/date_format.dart';
 import '../ui/domain_labels.dart';
+import 'task_form_fields.dart';
 
 class TaskManagementActions extends StatelessWidget {
   const TaskManagementActions({
@@ -87,7 +87,9 @@ class TaskManagementActions extends StatelessWidget {
   Future<void> _editTask(BuildContext context) async {
     final titleController = TextEditingController(text: task.title);
     final bodyController = TextEditingController(text: task.body ?? '');
-    DateTime? dueAt = task.dueAt == null ? null : DateTime.tryParse(task.dueAt!);
+    DateTime? dueAt = task.dueAt == null
+        ? null
+        : DateTime.tryParse(task.dueAt!);
     final originalDueAt = dueAt;
     DateTime? plannedStart = task.plannedStartAt == null
         ? null
@@ -114,19 +116,10 @@ class TaskManagementActions extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SegmentedButton<String>(
-                      key: const Key('task_completion_mode'),
-                      segments: const [
-                        ButtonSegment(value: 'finite', label: Text('Задача')),
-                        ButtonSegment(
-                          value: 'ongoing',
-                          label: Text('Направление'),
-                        ),
-                      ],
-                      selected: {completionMode},
-                      onSelectionChanged: (selection) {
-                        setState(() => completionMode = selection.first);
-                      },
+                    TaskCompletionModeSelector(
+                      mode: completionMode,
+                      onChanged: (value) =>
+                          setState(() => completionMode = value),
                     ),
                     TextField(
                       controller: titleController,
@@ -143,160 +136,25 @@ class TaskManagementActions extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Очистить описание'),
                       value: clearBody,
-                      onChanged: (value) => setState(() => clearBody = value ?? false),
+                      onChanged: (value) =>
+                          setState(() => clearBody = value ?? false),
                     ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        dueAt == null
-                            ? 'Без срока'
-                            : formatUserDateTimeFromDateTime(dueAt),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Установить срок',
-                            onPressed: () async {
-                              final pickedDate = await showDatePicker(
-                                context: context,
-                                initialDate: dueAt?.toLocal() ?? DateTime.now(),
-                                firstDate: DateTime(2000),
-                                lastDate: DateTime(2100),
-                              );
-                              if (pickedDate == null) {
-                                return;
-                              }
-                              final pickedTime = await showTimePicker(
-                                context: context,
-                                initialTime: dueAt != null
-                                    ? TimeOfDay.fromDateTime(dueAt!.toLocal())
-                                    : TimeOfDay.now(),
-                              );
-                              if (pickedTime == null) {
-                                return;
-                              }
-                              setState(() {
-                                dueAt = DateTime(
-                                  pickedDate.year,
-                                  pickedDate.month,
-                                  pickedDate.day,
-                                  pickedTime.hour,
-                                  pickedTime.minute,
-                                );
-                                clearDue = false;
-                                dueAtChanged = true;
-                              });
-                            },
-                            icon: const Icon(Icons.event_outlined),
-                          ),
-                          IconButton(
-                            tooltip: 'Очистить срок',
-                            onPressed: () => setState(() {
-                              clearDue = true;
-                              dueAt = null;
-                              dueAtChanged = true;
-                            }),
-                            icon: const Icon(Icons.event_busy_outlined),
-                          ),
-                        ],
-                      ),
+                    TaskDueDateField(
+                      dueAt: dueAt,
+                      onChanged: (value) => setState(() {
+                        dueAt = value;
+                        clearDue = value == null;
+                        dueAtChanged = true;
+                      }),
                     ),
-                    ListTile(
-                      key: const Key('task_planned_interval'),
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Запланированное время'),
-                      subtitle: Text(
-                        plannedStart == null || plannedEnd == null
-                            ? 'Не задано'
-                            : formatPlannedExecutionInterval(
-                                start: plannedStart!,
-                                end: plannedEnd!,
-                              ),
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            key: const Key('task_planned_interval_set'),
-                            tooltip: 'Установить запланированное время',
-                            onPressed: () async {
-                              final initialStart =
-                                  plannedStart?.toLocal() ?? DateTime.now();
-                              final pickedDate = await showDatePicker(
-                                context: context,
-                                initialDate: initialStart,
-                                firstDate: DateTime(2000),
-                                lastDate: DateTime(2100),
-                              );
-                              if (pickedDate == null) {
-                                return;
-                              }
-                              if (!context.mounted) {
-                                return;
-                              }
-                              final pickedStart = await showTimePicker(
-                                context: context,
-                                initialTime: TimeOfDay.fromDateTime(initialStart),
-                              );
-                              if (pickedStart == null) {
-                                return;
-                              }
-                              if (!context.mounted) {
-                                return;
-                              }
-                              final initialEnd = plannedEnd?.toLocal() ??
-                                  DateTime(
-                                    pickedDate.year,
-                                    pickedDate.month,
-                                    pickedDate.day,
-                                    pickedStart.hour,
-                                    pickedStart.minute,
-                                  ).add(const Duration(hours: 1));
-                              final pickedEnd = await showTimePicker(
-                                context: context,
-                                initialTime: TimeOfDay.fromDateTime(initialEnd),
-                              );
-                              if (pickedEnd == null) {
-                                return;
-                              }
-                              final start = DateTime(
-                                pickedDate.year,
-                                pickedDate.month,
-                                pickedDate.day,
-                                pickedStart.hour,
-                                pickedStart.minute,
-                              );
-                              var end = DateTime(
-                                pickedDate.year,
-                                pickedDate.month,
-                                pickedDate.day,
-                                pickedEnd.hour,
-                                pickedEnd.minute,
-                              );
-                              if (!end.isAfter(start)) {
-                                end = end.add(const Duration(days: 1));
-                              }
-                              setState(() {
-                                plannedStart = start;
-                                plannedEnd = end;
-                                plannedChanged = true;
-                              });
-                            },
-                            icon: const Icon(Icons.schedule_outlined),
-                          ),
-                          IconButton(
-                            key: const Key('task_planned_interval_clear'),
-                            tooltip: 'Очистить запланированное время',
-                            onPressed: () => setState(() {
-                              plannedStart = null;
-                              plannedEnd = null;
-                              plannedChanged = true;
-                            }),
-                            icon: const Icon(Icons.timer_off_outlined),
-                          ),
-                        ],
-                      ),
+                    TaskPlannedIntervalField(
+                      plannedStart: plannedStart,
+                      plannedEnd: plannedEnd,
+                      onChanged: (start, end) => setState(() {
+                        plannedStart = start;
+                        plannedEnd = end;
+                        plannedChanged = true;
+                      }),
                     ),
                   ],
                 ),
@@ -367,6 +225,9 @@ class TaskManagementActions extends StatelessWidget {
       return;
     }
 
+    final requestedMode = request.completionModeSet
+        ? request.completionMode
+        : null;
     try {
       SecretaryObject updated = task;
       if (!request.isEmpty) {
@@ -377,18 +238,33 @@ class TaskManagementActions extends StatelessWidget {
         updated = await apiClient.patchObject(task.id, plannedPayload);
       }
       onTaskUpdated(updated);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Задача обновлена')),
-        );
+      if (!context.mounted) {
+        return;
       }
+      if (requestedMode != null &&
+          updated.effectiveCompletionMode != requestedMode) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Изменение режима не сохранилось')),
+        );
+        return;
+      }
+      final message =
+          requestedMode == 'ongoing' ||
+              (requestedMode == null && updated.isOngoingTask)
+          ? (requestedMode == null
+                ? 'Направление обновлено'
+                : 'Направление сохранено')
+          : (requestedMode == 'finite'
+                ? 'Задача сохранена'
+                : 'Задача обновлена');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } on AuthenticationException {
       authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -419,9 +295,8 @@ class TaskManagementActions extends StatelessWidget {
       authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.message)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
@@ -496,9 +371,8 @@ Future<void> confirmAndDeleteTask(
     authController.handleAuthenticationFailure();
   } on ApiException catch (error) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.message)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
     }
   }
 }

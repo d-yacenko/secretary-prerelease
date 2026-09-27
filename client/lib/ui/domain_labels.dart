@@ -93,8 +93,7 @@ String taskRelationProposalLabel(String origin, String state) {
   return '';
 }
 
-String originLabel(String origin) =>
-    _originLabels[origin] ?? _fallback(origin);
+String originLabel(String origin) => _originLabels[origin] ?? _fallback(origin);
 
 String neighborDirectionLabel(String direction) =>
     _neighborDirectionLabels[direction] ?? _fallback(direction);
@@ -106,18 +105,26 @@ String objectLifecycleDisplayLabel(SecretaryObject object) {
   return provenanceStateLabel(object.state);
 }
 
+/// Human Task/Direction label. Technical `kind` stays `task`.
+String humanTaskModeLabel(SecretaryObject object) {
+  if (object.kind != 'task') {
+    return objectKindLabel(object.kind);
+  }
+  return object.isOngoingTask ? 'Направление' : 'Задача';
+}
+
 String affectedObjectDisplayLabel(AssistantAffectedObject affected) {
   final kind = objectKindLabel(affected.kind);
   final lifecycle = affected.kind == 'task'
       ? taskStatusLabel(affected.status)
       : affected.status != null && affected.status!.trim().isNotEmpty
-          ? taskStatusLabel(affected.status)
-          : provenanceStateLabel(affected.state);
+      ? taskStatusLabel(affected.status)
+      : provenanceStateLabel(affected.state);
   return '$kind: ${affected.title} — $lifecycle';
 }
 
 String objectSummaryLabel(SecretaryObject object) {
-  final kind = objectKindLabel(object.kind);
+  final kind = humanTaskModeLabel(object);
   final lifecycle = objectLifecycleDisplayLabel(object);
   return '$kind • $lifecycle • ${provenanceStateLabel(object.state)}';
 }

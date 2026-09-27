@@ -34,6 +34,7 @@ Map<String, dynamic> graphObjectJson({
   String? provider,
   String? dueAt,
   String? body,
+  String? completionMode,
 }) {
   return {
     'id': id,
@@ -44,6 +45,7 @@ Map<String, dynamic> graphObjectJson({
     'external_id': null,
     'canonical_uri': null,
     'status': status,
+    if (completionMode != null) 'completion_mode': completionMode,
     'start_at': null,
     'due_at': dueAt,
     'metadata': {},

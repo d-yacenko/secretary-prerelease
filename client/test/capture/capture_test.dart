@@ -42,9 +42,11 @@ void main() {
   }
 
   test('blank text cannot submit', () async {
-    final controller = buildController(MockClient((request) async {
-      return http.Response('{}', 201);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        return http.Response('{}', 201);
+      }),
+    );
     controller.setText('   ');
     await controller.submit();
     expect(controller.submitState, CaptureSubmitState.validationError);
@@ -52,17 +54,19 @@ void main() {
 
   test('exact whitespace and text preserved in request', () async {
     Map<String, dynamic>? body;
-    final controller = buildController(MockClient((request) async {
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(
-        jsonEncode({
-          'task_id': 't1',
-          'context_edge_ids': [],
-          'dependency_edge_ids': [],
-        }),
-        201,
-      );
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'task_id': 't1',
+            'context_edge_ids': [],
+            'dependency_edge_ids': [],
+          }),
+          201,
+        );
+      }),
+    );
     controller.setText('  leading space');
     await controller.submit();
     expect(body!['text'], '  leading space');
@@ -70,26 +74,30 @@ void main() {
 
   test('title is optional', () async {
     Map<String, dynamic>? body;
-    final controller = buildController(MockClient((request) async {
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(
-        jsonEncode({
-          'task_id': 't1',
-          'context_edge_ids': [],
-          'dependency_edge_ids': [],
-        }),
-        201,
-      );
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'task_id': 't1',
+            'context_edge_ids': [],
+            'dependency_edge_ids': [],
+          }),
+          201,
+        );
+      }),
+    );
     controller.setText('task body');
     await controller.submit();
     expect(body!.containsKey('title'), isFalse);
   });
 
   test('max length validation blocks submit', () async {
-    final controller = buildController(MockClient((request) async {
-      return http.Response('{}', 201);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        return http.Response('{}', 201);
+      }),
+    );
     controller.setText('x' * (CaptureDraft.maxTextLength + 1));
     expect(controller.draft.canSubmit, isFalse);
 
@@ -99,17 +107,19 @@ void main() {
   });
 
   test('submit disabled while request pending', () async {
-    final controller = buildController(MockClient((request) async {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      return http.Response(
-        jsonEncode({
-          'task_id': 't1',
-          'context_edge_ids': [],
-          'dependency_edge_ids': [],
-        }),
-        201,
-      );
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        return http.Response(
+          jsonEncode({
+            'task_id': 't1',
+            'context_edge_ids': [],
+            'dependency_edge_ids': [],
+          }),
+          201,
+        );
+      }),
+    );
     controller.setText('task');
     final first = controller.submit();
     expect(controller.submitState, CaptureSubmitState.submitting);
@@ -117,16 +127,18 @@ void main() {
   });
 
   test('success clears draft', () async {
-    final controller = buildController(MockClient((request) async {
-      return http.Response(
-        jsonEncode({
-          'task_id': 'task-42',
-          'context_edge_ids': [],
-          'dependency_edge_ids': [],
-        }),
-        201,
-      );
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'task_id': 'task-42',
+            'context_edge_ids': [],
+            'dependency_edge_ids': [],
+          }),
+          201,
+        );
+      }),
+    );
     controller.setText('done task');
     await controller.submit();
     expect(controller.submitState, CaptureSubmitState.success);
@@ -135,9 +147,11 @@ void main() {
   });
 
   test('failure preserves draft', () async {
-    final controller = buildController(MockClient((request) async {
-      return http.Response(jsonEncode({'detail': 'validation failed'}), 422);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        return http.Response(jsonEncode({'detail': 'validation failed'}), 422);
+      }),
+    );
     controller.setText('keep me');
     await controller.submit();
     expect(controller.draft.text, 'keep me');
@@ -162,67 +176,67 @@ void main() {
 
   group('capture session boundary', () {
     CaptureController buildCaptureController(AuthController auth) {
-      return CaptureController(
-        apiClient: auth.apiClient,
-        authController: auth,
-      );
+      return CaptureController(apiClient: auth.apiClient, authController: auth);
     }
 
-    test('clears draft after forget token and re-authentication as another user', () async {
-      var currentUserId = 'user-a';
-      final mock = MockClient((request) async {
-        if (request.url.path.endsWith('/me')) {
-          return http.Response(
-            jsonEncode({
-              'id': currentUserId,
-              'display_name': currentUserId,
-              'created_at': '2026-01-01T00:00:00Z',
-            }),
-            200,
-          );
-        }
-        return http.Response('{}', 404);
-      });
+    test(
+      'clears draft after forget token and re-authentication as another user',
+      () async {
+        var currentUserId = 'user-a';
+        final mock = MockClient((request) async {
+          if (request.url.path.endsWith('/me')) {
+            return http.Response(
+              jsonEncode({
+                'id': currentUserId,
+                'display_name': currentUserId,
+                'created_at': '2026-01-01T00:00:00Z',
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        });
 
-      final tokenStore = FakeTokenStore();
-      final serverUrlStore = FakeServerUrlStore();
-      final auth = AuthController(
-        apiClient: SecretaryApiClient(httpClient: mock),
-        tokenStore: tokenStore,
-        serverUrlStore: serverUrlStore,
-      );
-      final capture = buildCaptureController(auth);
-      auth.onSessionTerminated = capture.resetSession;
+        final tokenStore = FakeTokenStore();
+        final serverUrlStore = FakeServerUrlStore();
+        final auth = AuthController(
+          apiClient: SecretaryApiClient(httpClient: mock),
+          tokenStore: tokenStore,
+          serverUrlStore: serverUrlStore,
+        );
+        final capture = buildCaptureController(auth);
+        auth.onSessionTerminated = capture.resetSession;
 
-      auth.apiClient.configure(baseUrl: baseUrl, token: 'token-a');
-      await auth.initialize();
-      capture.mergeDraft(
-        CaptureDraft(
-          text: 'user A secret',
-          title: 'A title',
-          contextObjectIds: ['ctx-a'],
-          contextRefs: [
-            CaptureContextRef(id: 'ctx-a', title: 'Context A', kind: 'email'),
-          ],
-          dependsOnIds: ['dep-a'],
-        ),
-      );
+        auth.apiClient.configure(baseUrl: baseUrl, token: 'token-a');
+        await auth.initialize();
+        capture.mergeDraft(
+          CaptureDraft(
+            text: 'user A secret',
+            title: 'A title',
+            contextObjectIds: ['ctx-a'],
+            contextRefs: [
+              CaptureContextRef(id: 'ctx-a', title: 'Context A', kind: 'email'),
+            ],
+            dependsOnIds: ['dep-a'],
+          ),
+        );
 
-      await auth.forgetToken();
-      currentUserId = 'user-b';
-      final connected = await auth.connect(
-        serverUrlInput: baseUrl,
-        token: 'token-b',
-      );
-      expect(connected, isTrue);
+        await auth.forgetToken();
+        currentUserId = 'user-b';
+        final connected = await auth.connect(
+          serverUrlInput: baseUrl,
+          token: 'token-b',
+        );
+        expect(connected, isTrue);
 
-      expect(capture.draft.text, isEmpty);
-      expect(capture.draft.title, isNull);
-      expect(capture.draft.contextObjectIds, isEmpty);
-      expect(capture.draft.contextRefs, isEmpty);
-      expect(capture.draft.dependsOnIds, isEmpty);
-      expect(capture.lastResult, isNull);
-    });
+        expect(capture.draft.text, isEmpty);
+        expect(capture.draft.title, isNull);
+        expect(capture.draft.contextObjectIds, isEmpty);
+        expect(capture.draft.contextRefs, isEmpty);
+        expect(capture.draft.dependsOnIds, isEmpty);
+        expect(capture.lastResult, isNull);
+      },
+    );
 
     test('same-user network failure preserves draft', () async {
       final mock = MockClient((request) async {
@@ -255,43 +269,14 @@ void main() {
       expect(capture.submitState, CaptureSubmitState.networkError);
     });
 
-    testWidgets('manual context from object detail preserves text and sends context ids',
-        (tester) async {
-      Map<String, dynamic>? captureBody;
-      final mock = MockClient((request) async {
-        if (request.url.path == '/objects/email-1') {
-          return http.Response(
-            jsonEncode({
-              'id': 'email-1',
-              'kind': 'email',
-              'title': 'Course plan',
-              'body': 'Full email body should not be copied',
-              'provider': 'gmail',
-              'external_id': null,
-              'canonical_uri': null,
-              'status': null,
-              'start_at': null,
-              'due_at': null,
-              'metadata': {},
-              'origin': 'source',
-              'state': 'observed',
-              'confidence': null,
-              'created_at': '2026-08-28T08:00:00Z',
-              'updated_at': '2026-08-28T08:00:00Z',
-            }),
-            200,
-          );
-        }
-        if (request.url.path == '/objects/email-1/neighbors') {
-          return http.Response(
-            jsonEncode({'object_id': 'email-1', 'neighbors': []}),
-            200,
-          );
-        }
-        if (request.url.path == '/objects/email-1/context') {
-          return http.Response(
-            jsonEncode({
-              'object': {
+    testWidgets(
+      'manual context from object detail preserves text and sends context ids',
+      (tester) async {
+        Map<String, dynamic>? captureBody;
+        final mock = MockClient((request) async {
+          if (request.url.path == '/objects/email-1') {
+            return http.Response(
+              jsonEncode({
                 'id': 'email-1',
                 'kind': 'email',
                 'title': 'Course plan',
@@ -308,104 +293,137 @@ void main() {
                 'confidence': null,
                 'created_at': '2026-08-28T08:00:00Z',
                 'updated_at': '2026-08-28T08:00:00Z',
-              },
-              'edges': [],
-              'neighbors': [],
-            }),
-            200,
-          );
-        }
-        if (request.url.path.endsWith('/capture/task')) {
-          captureBody = jsonDecode(request.body) as Map<String, dynamic>;
-          return http.Response(
-            jsonEncode({
-              'task_id': 'task-new',
-              'context_edge_ids': ['edge-1'],
-              'dependency_edge_ids': [],
-            }),
-            201,
-          );
-        }
-        return http.Response('{}', 404);
-      });
+              }),
+              200,
+            );
+          }
+          if (request.url.path == '/objects/email-1/neighbors') {
+            return http.Response(
+              jsonEncode({'object_id': 'email-1', 'neighbors': []}),
+              200,
+            );
+          }
+          if (request.url.path == '/objects/email-1/context') {
+            return http.Response(
+              jsonEncode({
+                'object': {
+                  'id': 'email-1',
+                  'kind': 'email',
+                  'title': 'Course plan',
+                  'body': 'Full email body should not be copied',
+                  'provider': 'gmail',
+                  'external_id': null,
+                  'canonical_uri': null,
+                  'status': null,
+                  'start_at': null,
+                  'due_at': null,
+                  'metadata': {},
+                  'origin': 'source',
+                  'state': 'observed',
+                  'confidence': null,
+                  'created_at': '2026-08-28T08:00:00Z',
+                  'updated_at': '2026-08-28T08:00:00Z',
+                },
+                'edges': [],
+                'neighbors': [],
+              }),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/capture/task')) {
+            captureBody = jsonDecode(request.body) as Map<String, dynamic>;
+            return http.Response(
+              jsonEncode({
+                'task_id': 'task-new',
+                'context_edge_ids': ['edge-1'],
+                'dependency_edge_ids': [],
+              }),
+              201,
+            );
+          }
+          return http.Response('{}', 404);
+        });
 
-      final auth = AuthController(
-        apiClient: SecretaryApiClient(httpClient: mock),
-        tokenStore: FakeTokenStore(),
-        serverUrlStore: FakeServerUrlStore(),
-      );
-      auth.apiClient.configure(baseUrl: baseUrl, token: token);
-      final capture = buildCaptureController(auth);
-      capture.mergeDraft(CaptureDraft(text: '  keep exact  '));
+        final auth = AuthController(
+          apiClient: SecretaryApiClient(httpClient: mock),
+          tokenStore: FakeTokenStore(),
+          serverUrlStore: FakeServerUrlStore(),
+        );
+        auth.apiClient.configure(baseUrl: baseUrl, token: token);
+        final capture = buildCaptureController(auth);
+        capture.mergeDraft(CaptureDraft(text: '  keep exact  '));
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ObjectDetailScreen(
-            objectId: 'email-1',
-            apiClient: auth.apiClient,
-            authController: auth,
-            captureController: capture,
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ObjectDetailScreen(
+              objectId: 'email-1',
+              apiClient: auth.apiClient,
+              authController: auth,
+              captureController: capture,
+            ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Использовать как контекст задачи'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Использовать как контекст задачи'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Контекст: Course plan'), findsOneWidget);
-      expect(capture.draft.contextObjectIds, ['email-1']);
-      expect(capture.draft.contextRefs.length, 1);
-      expect(capture.draft.text, '  keep exact  ');
+        expect(find.text('Контекст: Course plan'), findsOneWidget);
+        expect(capture.draft.contextObjectIds, ['email-1']);
+        expect(capture.draft.contextRefs.length, 1);
+        expect(capture.draft.text, '  keep exact  ');
 
-      capture.attachObjectContext(
-        SecretaryObject.fromJson({
-          'id': 'email-1',
-          'kind': 'email',
-          'title': 'Course plan',
-          'body': null,
-          'provider': null,
-          'external_id': null,
-          'canonical_uri': null,
-          'status': null,
-          'start_at': null,
-          'due_at': null,
-          'metadata': {},
-          'origin': 'source',
-          'state': 'observed',
-          'confidence': null,
-          'created_at': '2026-08-28T08:00:00Z',
-          'updated_at': '2026-08-28T08:00:00Z',
-        }),
-      );
-      expect(capture.draft.contextObjectIds, ['email-1']);
+        capture.attachObjectContext(
+          SecretaryObject.fromJson({
+            'id': 'email-1',
+            'kind': 'email',
+            'title': 'Course plan',
+            'body': null,
+            'provider': null,
+            'external_id': null,
+            'canonical_uri': null,
+            'status': null,
+            'start_at': null,
+            'due_at': null,
+            'metadata': {},
+            'origin': 'source',
+            'state': 'observed',
+            'confidence': null,
+            'created_at': '2026-08-28T08:00:00Z',
+            'updated_at': '2026-08-28T08:00:00Z',
+          }),
+        );
+        expect(capture.draft.contextObjectIds, ['email-1']);
 
-      await capture.submit();
-      expect(captureBody!['context_object_ids'], ['email-1']);
-      expect(captureBody!['text'], '  keep exact  ');
-      expect(captureBody!.containsKey('body'), isFalse);
-      expect(captureBody!.containsKey('context_body'), isFalse);
-    });
+        await capture.submit();
+        expect(captureBody!['context_object_ids'], ['email-1']);
+        expect(captureBody!['text'], '  keep exact  ');
+        expect(captureBody!.containsKey('body'), isFalse);
+        expect(captureBody!.containsKey('context_body'), isFalse);
+      },
+    );
   });
 
   test('capture voice sets empty task text from transcript', () async {
     int transcribeCalls = 0;
     int captureCalls = 0;
-    final controller = buildController(MockClient((request) async {
-      if (request.url.path == '/assistant/transcribe') {
-        transcribeCalls += 1;
-        return http.Response.bytes(
-          utf8.encode(jsonEncode({'text': 'Новая задача голосом'})),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }
-      if (request.url.path.endsWith('/capture/task')) {
-        captureCalls += 1;
-        return http.Response('{}', 201);
-      }
-      return http.Response('{}', 404);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        if (request.url.path == '/assistant/transcribe') {
+          transcribeCalls += 1;
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({'text': 'Новая задача голосом'})),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.path.endsWith('/capture/task')) {
+          captureCalls += 1;
+          return http.Response('{}', 201);
+        }
+        return http.Response('{}', 404);
+      }),
+    );
 
     await controller.startVoiceRecording();
     expect(controller.voiceState, VoiceState.recording);
@@ -420,16 +438,18 @@ void main() {
   });
 
   test('capture voice appends transcript to existing text', () async {
-    final controller = buildController(MockClient((request) async {
-      if (request.url.path == '/assistant/transcribe') {
-        return http.Response.bytes(
-          utf8.encode(jsonEncode({'text': 'дополнение'})),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }
-      return http.Response('{}', 404);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        if (request.url.path == '/assistant/transcribe') {
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({'text': 'дополнение'})),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
 
     controller.setText('Уже есть текст');
     await controller.startVoiceRecording();
@@ -441,42 +461,49 @@ void main() {
     expect(controller.draft.text, 'Уже есть текст дополнение');
   });
 
-  test('exact url in task capture posts capture task not intake link', () async {
-    String? path;
-    Map<String, dynamic>? body;
-    final controller = buildController(MockClient((request) async {
-      path = request.url.path;
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(
-        jsonEncode({
-          'task_id': 'task-url',
-          'context_edge_ids': [],
-          'dependency_edge_ids': [],
+  test(
+    'exact url in task capture posts capture task not intake link',
+    () async {
+      String? path;
+      Map<String, dynamic>? body;
+      final controller = buildController(
+        MockClient((request) async {
+          path = request.url.path;
+          body = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({
+              'task_id': 'task-url',
+              'context_edge_ids': [],
+              'dependency_edge_ids': [],
+            }),
+            201,
+          );
         }),
-        201,
       );
-    }));
-    controller.setText('https://example.org/article');
-    await controller.submit();
-    expect(path, '/capture/task');
-    expect(body!['text'], 'https://example.org/article');
-  });
+      controller.setText('https://example.org/article');
+      await controller.submit();
+      expect(path, '/capture/task');
+      expect(body!['text'], 'https://example.org/article');
+    },
+  );
 
   test('task context with exact url submits capture task', () async {
     String? path;
     Map<String, dynamic>? body;
-    final controller = buildController(MockClient((request) async {
-      path = request.url.path;
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(
-        jsonEncode({
-          'task_id': 'task-url',
-          'context_edge_ids': ['edge-1'],
-          'dependency_edge_ids': [],
-        }),
-        201,
-      );
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        path = request.url.path;
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'task_id': 'task-url',
+            'context_edge_ids': ['edge-1'],
+            'dependency_edge_ids': [],
+          }),
+          201,
+        );
+      }),
+    );
     controller.attachContext(
       CaptureContextRef(id: 'ctx-1', title: 'Related', kind: 'email'),
     );
@@ -488,9 +515,11 @@ void main() {
   });
 
   test('unfinished task draft preserved after failed submit', () async {
-    final controller = buildController(MockClient((request) async {
-      return http.Response(jsonEncode({'detail': 'validation failed'}), 422);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        return http.Response(jsonEncode({'detail': 'validation failed'}), 422);
+      }),
+    );
     controller.setText('keep unfinished task');
     await controller.submit();
     expect(controller.draft.text, 'keep unfinished task');
@@ -507,10 +536,12 @@ void main() {
 
   test('capture draft defaults to finite and sends it', () async {
     Map<String, dynamic>? body;
-    final controller = buildController(MockClient((request) async {
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(jsonEncode(createdBody()), 201);
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(jsonEncode(createdBody()), 201);
+      }),
+    );
     expect(CaptureDraft.empty.completionMode, 'finite');
     expect(controller.draft.completionMode, 'finite');
     expect(controller.draft.toRequest().toJson()['completion_mode'], 'finite');
@@ -520,70 +551,97 @@ void main() {
     expect(controller.draft.completionMode, 'finite');
   });
 
-  test('mode changes, attachments, voice, failure, and reset keep the contract', () async {
-    Map<String, dynamic>? body;
-    late CaptureController controller;
-    controller = buildController(MockClient((request) async {
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      final text = body!['text'] as String;
-      if (text.contains('fail')) {
-        return http.Response(jsonEncode({'detail': 'no'}), 422);
-      }
-      return http.Response(jsonEncode(createdBody()), 201);
-    }));
-    controller.setCompletionMode('ongoing');
-    controller.setText('keep text');
-    controller.setTitle('keep title');
-    expect(controller.draft.text, 'keep text');
-    expect(controller.draft.completionMode, 'ongoing');
-    controller.attachContext(CaptureContextRef(id: 'ctx-1', title: 'Mail', kind: 'email'));
-    controller.attachObjectContext(
-      SecretaryObject(
-        id: 'dep-1',
-        kind: 'task',
-        title: 'Prerequisite',
-        metadata: const {},
-        origin: 'user',
-        state: 'confirmed',
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      ),
-    );
-    expect(controller.draft.completionMode, 'ongoing');
-    expect(controller.draft.contextObjectIds, ['ctx-1', 'dep-1']);
-    controller.mergeDraft(
-      CaptureDraft(
-        text: 'fail this submit',
-        title: 'keep title',
-        dependsOnIds: const ['dep-1'],
-      ),
-    );
-    expect(controller.draft.completionMode, 'ongoing');
-    expect(controller.draft.dependsOnIds, ['dep-1']);
-    await controller.submit();
-    expect(controller.submitState, CaptureSubmitState.validationError);
-    expect(controller.draft.completionMode, 'ongoing');
-    controller.appendTranscriptToText('ещё');
-    expect(controller.draft.completionMode, 'ongoing');
-    expect(controller.draft.text, contains('ещё'));
-    controller.setText('ready now');
-    controller.setCompletionMode('finite');
-    await controller.submit();
-    expect(body!['completion_mode'], 'finite');
-    expect(controller.draft.completionMode, 'finite');
-    controller.setCompletionMode('ongoing');
-    controller.resetSession();
-    expect(controller.draft.completionMode, 'finite');
-    expect(controller.draft.text, isEmpty);
-  });
+  test(
+    'mode changes, attachments, voice, failure, and reset keep the contract',
+    () async {
+      Map<String, dynamic>? body;
+      late CaptureController controller;
+      controller = buildController(
+        MockClient((request) async {
+          body = jsonDecode(request.body) as Map<String, dynamic>;
+          final text = body!['text'] as String;
+          if (text.contains('fail')) {
+            return http.Response(jsonEncode({'detail': 'no'}), 422);
+          }
+          return http.Response(jsonEncode(createdBody()), 201);
+        }),
+      );
+      controller.setCompletionMode('ongoing');
+      controller.setText('keep text');
+      controller.setTitle('keep title');
+      final due = DateTime.utc(2026, 10, 2, 9, 30);
+      final start = DateTime.utc(2026, 10, 2, 10);
+      final end = DateTime.utc(2026, 10, 2, 11);
+      controller.setDueAt(due);
+      controller.setPlannedInterval(start, end);
+      expect(controller.draft.text, 'keep text');
+      expect(controller.draft.completionMode, 'ongoing');
+      controller.attachContext(
+        CaptureContextRef(id: 'ctx-1', title: 'Mail', kind: 'email'),
+      );
+      controller.attachObjectContext(
+        SecretaryObject(
+          id: 'dep-1',
+          kind: 'task',
+          title: 'Prerequisite',
+          metadata: const {},
+          origin: 'user',
+          state: 'confirmed',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        ),
+      );
+      expect(controller.draft.completionMode, 'ongoing');
+      expect(controller.draft.contextObjectIds, ['ctx-1', 'dep-1']);
+      controller.mergeDraft(
+        CaptureDraft(
+          text: 'fail this submit',
+          title: 'keep title',
+          dependsOnIds: const ['dep-1'],
+        ),
+      );
+      expect(controller.draft.completionMode, 'ongoing');
+      expect(controller.draft.dependsOnIds, ['dep-1']);
+      await controller.submit();
+      expect(controller.submitState, CaptureSubmitState.validationError);
+      expect(controller.draft.completionMode, 'ongoing');
+      expect(controller.draft.dueAt, due);
+      expect(controller.draft.plannedStartAt, start);
+      expect(controller.draft.plannedEndAt, end);
+      controller.appendTranscriptToText('ещё');
+      expect(controller.draft.completionMode, 'ongoing');
+      expect(controller.draft.text, contains('ещё'));
+      controller.setText('ready now');
+      controller.setCompletionMode('finite');
+      await controller.submit();
+      expect(body!['completion_mode'], 'finite');
+      expect(body!['due_at'], due.toUtc().toIso8601String());
+      expect(body!['planned_start_at'], start.toUtc().toIso8601String());
+      expect(body!['planned_end_at'], end.toUtc().toIso8601String());
+      expect(controller.draft.completionMode, 'finite');
+      expect(controller.draft.dueAt, isNull);
+      expect(controller.draft.plannedStartAt, isNull);
+      expect(controller.draft.plannedEndAt, isNull);
+      controller.setCompletionMode('ongoing');
+      controller.setDueAt(due);
+      controller.resetSession();
+      expect(controller.draft.completionMode, 'finite');
+      expect(controller.draft.dueAt, isNull);
+      expect(controller.draft.text, isEmpty);
+    },
+  );
 
-  testWidgets('capture selector sends ongoing and disables while submitting', (tester) async {
+  testWidgets('capture selector sends ongoing and disables while submitting', (
+    tester,
+  ) async {
     Map<String, dynamic>? body;
     final gate = Completer<http.Response>();
-    final controller = buildController(MockClient((request) async {
-      body = jsonDecode(request.body) as Map<String, dynamic>;
-      return gate.future;
-    }));
+    final controller = buildController(
+      MockClient((request) async {
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return gate.future;
+      }),
+    );
     controller.setText('direction text');
     await tester.pumpWidget(
       MaterialApp(home: CaptureScreen(controller: controller)),
@@ -593,15 +651,18 @@ void main() {
     await tester.tap(find.text('Направление'));
     await tester.pump();
     expect(controller.draft.completionMode, 'ongoing');
+    expect(find.text('Создать направление'), findsOneWidget);
+    expect(find.text('Название'), findsOneWidget);
+    expect(find.text('Описание'), findsOneWidget);
+    expect(find.text('Без срока'), findsOneWidget);
+    expect(find.text('Запланированное время'), findsOneWidget);
     await tester.tap(find.byKey(const Key('capture_submit_button')));
     await tester.pump();
     final selector = tester.widget<SegmentedButton<String>>(
       find.byKey(const Key('capture_task_completion_mode')),
     );
     expect(selector.onSelectionChanged, isNull);
-    gate.complete(
-      http.Response(jsonEncode(createdBody()), 201),
-    );
+    gate.complete(http.Response(jsonEncode(createdBody()), 201));
     await tester.pumpAndSettle();
     expect(body!['completion_mode'], 'ongoing');
     expect(controller.draft.completionMode, 'finite');

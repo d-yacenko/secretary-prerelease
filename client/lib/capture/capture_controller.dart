@@ -27,16 +27,17 @@ class CaptureController extends ChangeNotifier {
     VoiceRecorder? voiceRecorder,
     VoiceTempFiles? voiceTempFiles,
     VoiceTranscriptionController? voiceController,
-  })  : _apiClient = apiClient,
-        _authController = authController,
-        _draft = initialDraft ?? CaptureDraft.empty,
-        _voice = voiceController ??
-            VoiceTranscriptionController(
-              apiClient: apiClient,
-              authController: authController,
-              voiceRecorder: voiceRecorder,
-              voiceTempFiles: voiceTempFiles,
-            ) {
+  }) : _apiClient = apiClient,
+       _authController = authController,
+       _draft = initialDraft ?? CaptureDraft.empty,
+       _voice =
+           voiceController ??
+           VoiceTranscriptionController(
+             apiClient: apiClient,
+             authController: authController,
+             voiceRecorder: voiceRecorder,
+             voiceTempFiles: voiceTempFiles,
+           ) {
     _voice.bindTranscriptConsumer(_handleVoiceTranscript);
     _voice.addListener(_onVoiceChanged);
   }
@@ -49,6 +50,7 @@ class CaptureController extends ChangeNotifier {
   CaptureSubmitState submitState = CaptureSubmitState.idle;
   String? errorMessage;
   CaptureTaskResponse? lastTaskResult;
+  String? lastCreatedMode;
 
   CaptureTaskResponse? get lastResult => lastTaskResult;
 
@@ -107,8 +109,40 @@ class CaptureController extends ChangeNotifier {
     }
   }
 
+  void setDueAt(DateTime? value) {
+    _draft = value == null
+        ? _draft.copyWith(clearDue: true)
+        : _draft.copyWith(dueAt: value);
+    if (submitState != CaptureSubmitState.submitting) {
+      submitState = CaptureSubmitState.idle;
+      errorMessage = null;
+    }
+    notifyListeners();
+  }
+
+  void setPlannedInterval(DateTime? start, DateTime? end) {
+    _draft = start == null || end == null
+        ? _draft.copyWith(clearPlanned: true)
+        : _draft.copyWith(plannedStartAt: start, plannedEndAt: end);
+    if (submitState != CaptureSubmitState.submitting) {
+      submitState = CaptureSubmitState.idle;
+      errorMessage = null;
+    }
+    notifyListeners();
+  }
+
   void mergeDraft(CaptureDraft draft) {
-    _draft = draft.copyWith(completionMode: _draft.completionMode);
+    _draft = CaptureDraft(
+      text: draft.text,
+      title: draft.title,
+      contextObjectIds: draft.contextObjectIds,
+      contextRefs: draft.contextRefs,
+      dependsOnIds: draft.dependsOnIds,
+      completionMode: _draft.completionMode,
+      dueAt: _draft.dueAt,
+      plannedStartAt: _draft.plannedStartAt,
+      plannedEndAt: _draft.plannedEndAt,
+    );
     submitState = CaptureSubmitState.idle;
     errorMessage = null;
     notifyListeners();
@@ -134,11 +168,7 @@ class CaptureController extends ChangeNotifier {
 
   void attachObjectContext(SecretaryObject object) {
     attachContext(
-      CaptureContextRef(
-        id: object.id,
-        title: object.title,
-        kind: object.kind,
-      ),
+      CaptureContextRef(id: object.id, title: object.title, kind: object.kind),
     );
   }
 
@@ -189,6 +219,7 @@ class CaptureController extends ChangeNotifier {
     try {
       final result = await _apiClient.captureTask(_draft.toRequest());
       lastTaskResult = result;
+      lastCreatedMode = _draft.completionMode;
       _draft = CaptureDraft.empty;
       submitState = CaptureSubmitState.success;
       notifyListeners();
@@ -225,6 +256,7 @@ class CaptureController extends ChangeNotifier {
     submitState = CaptureSubmitState.idle;
     errorMessage = null;
     lastTaskResult = null;
+    lastCreatedMode = null;
     notifyListeners();
   }
 
