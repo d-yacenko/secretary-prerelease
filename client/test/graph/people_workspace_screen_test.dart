@@ -91,7 +91,7 @@ void main() {
     expect(find.byKey(const ValueKey('graph-desktop-detail-pane')), findsNothing);
     expect(find.text('Выберите объект для просмотра.'), findsNothing);
     expect(find.text('Olga'), findsWidgets);
-    expect(find.textContaining('email'), findsWidgets);
+    expect(find.textContaining('Email'), findsWidgets);
     expect(paths.any((path) => path.contains('/graph/people-workspace')), isTrue);
 
     await tester.tap(find.text('Olga').first);

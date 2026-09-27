@@ -611,6 +611,27 @@ class PersonFlowPreviewOut(BaseModel):
     occurred_at: datetime | None = None
 
 
+class PersonIdentityCandidateOut(BaseModel):
+    provider: str
+    identity_type: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str
+    confirmable: bool
+    state: Literal["candidate", "conflicted"]
+    reasons: list[str] = Field(default_factory=list)
+    assessment_resolution: str | None = None
+    sources: list[PersonFlowPreviewOut] = Field(default_factory=list)
+
+
+class PersonRejectedIdentityCandidateOut(BaseModel):
+    provider: str
+    identity_type: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str
+
+
 class PersonSalienceComponentOut(BaseModel):
     name: str
     value: int
@@ -639,6 +660,11 @@ class PersonPresentation(BaseModel):
     recent_communications: list[PersonFlowPreviewOut] = Field(default_factory=list)
     recent_communications_truncated: bool = False
     salience: PersonSalienceSummaryOut | None = None
+    identity_candidates: list[PersonIdentityCandidateOut] = Field(default_factory=list)
+    identity_candidates_truncated: bool = False
+    rejected_identity_candidates: list[PersonRejectedIdentityCandidateOut] = Field(
+        default_factory=list
+    )
 
 
 class PeopleWorkspaceOut(BaseModel):

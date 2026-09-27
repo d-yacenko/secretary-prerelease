@@ -42,6 +42,8 @@ const Map<String, String> providerLabels = {
   'outlook': 'Outlook',
   'microsoft': 'Microsoft',
   'telegram': 'Telegram',
+  'telegram_mtproto': 'Telegram',
+  'email': 'Email',
   'teams': 'Microsoft Teams',
   'slack': 'Slack',
   'mattermost': 'Mattermost',

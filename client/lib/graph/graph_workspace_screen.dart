@@ -1602,6 +1602,17 @@ class _PersonDetailSection extends StatelessWidget {
             ),
           );
         }),
+        if (person.salience != null &&
+            (person.identityCandidates.isNotEmpty || person.identityCandidatesTruncated)) ...[
+          const _DetailSectionHeader(title: 'Возможные контакты'),
+          ...person.identityCandidates.map(_candidateBlock),
+          if (person.identityCandidatesTruncated)
+            const Text('Показаны не все возможные контакты'),
+        ],
+        if (person.salience != null && person.rejectedIdentityCandidates.isNotEmpty) ...[
+          const _DetailSectionHeader(title: 'Отклонённые предложения'),
+          ...person.rejectedIdentityCandidates.map(_rejectedCandidateRow),
+        ],
         if (person.routes.isNotEmpty) ...[
           const _DetailSectionHeader(title: 'Маршруты'),
           ...person.routes.map(
@@ -1644,6 +1655,85 @@ class _PersonDetailSection extends StatelessWidget {
         ],
       ],
     );
+  }
+
+  Widget _candidateBlock(PersonIdentityCandidate candidate) {
+    final exact = candidate.displayValue == candidate.canonicalValue
+        ? ''
+        : candidate.canonicalValue;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          title: Text(candidate.displayValue),
+          subtitle: Text(
+            [
+              providerLabel(candidate.provider),
+              if (exact.isNotEmpty) exact,
+              personCandidateExplanation(candidate.reasons),
+              if (candidate.state == 'conflicted') 'конфликт',
+            ].join(' · '),
+          ),
+        ),
+        if (candidate.confirmable)
+          Wrap(
+            spacing: 4,
+            children: [
+              TextButton(
+                onPressed: () => _correctTuple(candidate, 'confirm'),
+                child: const Text('Подтвердить'),
+              ),
+              TextButton(
+                onPressed: () => _correctTuple(candidate, 'reject'),
+                child: const Text('Это не этот человек'),
+              ),
+            ],
+          ),
+        ...candidate.sources.take(3).map(_flowRow),
+      ],
+    );
+  }
+
+  Widget _rejectedCandidateRow(PersonRejectedIdentityCandidate candidate) {
+    return ListTile(
+      dense: true,
+      title: Text(candidate.displayValue),
+      subtitle: Text(providerLabel(candidate.provider)),
+      trailing: TextButton(
+        onPressed: () => _correctTuple(candidate, 'retract'),
+        child: const Text('Вернуть'),
+      ),
+    );
+  }
+
+  Future<void> _correctTuple(Object candidate, String action) async {
+    final String identityType;
+    final String provider;
+    final String realm;
+    final String canonicalValue;
+    if (candidate is PersonIdentityCandidate) {
+      identityType = candidate.identityType;
+      provider = candidate.provider;
+      realm = candidate.realm;
+      canonicalValue = candidate.canonicalValue;
+    } else if (candidate is PersonRejectedIdentityCandidate) {
+      identityType = candidate.identityType;
+      provider = candidate.provider;
+      realm = candidate.realm;
+      canonicalValue = candidate.canonicalValue;
+    } else {
+      return;
+    }
+    await apiClient.correctPersonIdentity(
+      personId: person.personId,
+      action: action,
+      identityType: identityType,
+      provider: provider,
+      realm: realm,
+      canonicalValue: canonicalValue,
+    );
+    await onChanged();
   }
 
   Widget _taskRow(PersonTaskInvolvement row) {

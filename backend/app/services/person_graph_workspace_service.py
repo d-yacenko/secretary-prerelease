@@ -379,14 +379,11 @@ class PersonGraphWorkspaceService:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
         conflict = any(item["state"] == "conflicted" for item in identities)
         routes = self._routes(person.id) if include_details else self._email_route_summaries(person.id)
-        if include_details:
-            identities.extend(self._candidates(person.id))
-            conflict = conflict or any(item["state"] == "conflicted" for item in identities)
         payload = {
             "person_id": person.id,
             "title": person.title,
             "salience_score": score,
-            "identities": identities[: _MAX_IDENTITIES + _MAX_CANDIDATES],
+            "identities": identities[:_MAX_IDENTITIES],
             "routes": routes[:_MAX_ROUTES],
             "identity_conflict": conflict,
             "open_task_count": self._open_task_count(person.id),
@@ -399,6 +396,7 @@ class PersonGraphWorkspaceService:
                 include_quarantined_telegram=True,
             )
             salience = PersonSalienceService(self._session, self._user_id).evaluate(person.id)
+            candidates, candidates_truncated = self._identity_candidates(person.id)
             payload.update(
                 {
                     "task_involvement": involvement,
@@ -425,6 +423,9 @@ class PersonGraphWorkspaceService:
                         "window_days": salience.window_days,
                         "claims_object_importance": salience.claims_object_importance,
                     },
+                    "identity_candidates": candidates,
+                    "identity_candidates_truncated": candidates_truncated,
+                    "rejected_identity_candidates": self._rejected_identity_candidates(person.id),
                 }
             )
         return payload
@@ -440,23 +441,86 @@ class PersonGraphWorkspaceService:
             rows.append(self._identity_payload(identity, state, confirmable=False))
         return rows[:_MAX_IDENTITIES]
 
-    def _candidates(self, person_id: UUID) -> list[dict]:
+    def _identity_candidates(self, person_id: UUID) -> tuple[list[dict], bool]:
         page = self._assistant.find_identity_candidates(
             person_id,
             include_quarantined_telegram=True,
         )
         found = []
-        for item in page.candidates[:_MAX_CANDIDATES]:
+        for item in page.candidates:
             state = "conflicted" if "identity_conflict" in item.reasons else "candidate"
             found.append(
                 {
                     "provider": item.identity.provider,
                     "identity_type": item.identity.identity_type,
-                    "display_value": item.identity.display_value or item.identity.canonical_value,
                     "realm": item.identity.realm,
                     "canonical_value": item.identity.canonical_value,
-                    "state": state,
+                    "display_value": item.identity.display_value or item.identity.canonical_value,
                     "confirmable": item.confirmable,
+                    "state": state,
+                    "reasons": list(item.reasons),
+                    "assessment_resolution": item.assessment_resolution,
+                    "sources": self._source_previews(item.source_object_ids),
+                }
+            )
+        return found, page.truncated
+
+    def _source_previews(self, object_ids: tuple[UUID, ...]) -> list[dict]:
+        wanted = list(object_ids)[:3]
+        if not wanted:
+            return []
+        rows = self._session.scalars(
+            select(Object).where(
+                Object.user_id == self._user_id,
+                Object.id.in_(wanted),
+                object_is_active(Object),
+            )
+        )
+        by_id = {row.id: row for row in rows}
+        previews = []
+        for object_id in wanted:
+            item = by_id.get(object_id)
+            if item is None:
+                continue
+            previews.append(
+                {
+                    "object_id": item.id,
+                    "kind": item.kind,
+                    "provider": item.provider,
+                    "title": item.title,
+                    "occurred_at": item.occurred_at,
+                }
+            )
+        return previews
+
+    def _rejected_identity_candidates(self, person_id: UUID) -> list[dict]:
+        attached = {
+            (row.provider, row.identity_type, row.realm, row.canonical_value)
+            for row in self._identity_rows(person_id)
+        }
+        rows = self._session.scalars(
+            select(PersonIdentityEvidence)
+            .where(
+                PersonIdentityEvidence.user_id == self._user_id,
+                PersonIdentityEvidence.person_object_id == person_id,
+                PersonIdentityEvidence.state == "active",
+                PersonIdentityEvidence.evidence_type == USER_REJECTED,
+            )
+            .order_by(PersonIdentityEvidence.canonical_value, PersonIdentityEvidence.id)
+            .limit(_MAX_CANDIDATES)
+        )
+        found = []
+        for row in rows:
+            key = (row.provider, row.identity_type, row.realm, row.canonical_value)
+            if key in attached:
+                continue
+            found.append(
+                {
+                    "provider": row.provider,
+                    "identity_type": row.identity_type,
+                    "realm": row.realm,
+                    "canonical_value": row.canonical_value,
+                    "display_value": row.canonical_value,
                 }
             )
         return found

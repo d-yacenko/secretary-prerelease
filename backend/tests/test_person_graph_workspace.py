@@ -309,7 +309,9 @@ def test_people_ui_can_confirm_a_stored_telegram_candidate(people_client, db_ses
     )
     rooted = people_client.get("/graph/people-workspace", params={"root_id": str(person.id)})
     candidates = [
-        item for item in rooted.json()["people"][0]["identities"] if item["state"] == "candidate"
+        item
+        for item in rooted.json()["people"][0]["identity_candidates"]
+        if item["state"] == "candidate"
     ]
     assert len(candidates) == 1
     assert candidates[0]["confirmable"] is True

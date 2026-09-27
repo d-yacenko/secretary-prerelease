@@ -83,6 +83,19 @@ String operationalStateLabel(String state) {
   }
 }
 
+String personCandidateExplanation(List<String> reasons) {
+  if (reasons.contains('identity_conflict')) {
+    return 'Этот контакт уже связан с другим человеком';
+  }
+  if (reasons.contains('name_similarity')) {
+    return 'Имя в источнике похоже на имя этого человека';
+  }
+  if (reasons.contains('exact_identifier')) {
+    return 'Точный идентификатор уже известен';
+  }
+  return 'Найдено в сохранённых сообщениях';
+}
+
 String personActorRoleLabel(String role) {
   switch (role) {
     case 'requested_by':

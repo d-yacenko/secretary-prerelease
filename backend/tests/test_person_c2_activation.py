@@ -241,9 +241,11 @@ def _correct(people_client, person_id, action: str, payload: dict):
 def _card(people_client, person_id) -> dict[str, str]:
     shown = people_client.get("/graph/people-workspace", params={"root_id": str(person_id)})
     assert shown.status_code == 200
-    return {
-        item["canonical_value"]: item["state"] for item in shown.json()["people"][0]["identities"]
-    }
+    person = shown.json()["people"][0]
+    states = {item["canonical_value"]: item["state"] for item in person["identities"]}
+    for item in person.get("identity_candidates") or []:
+        states.setdefault(item["canonical_value"], item["state"])
+    return states
 
 
 def _payload(identity) -> dict:

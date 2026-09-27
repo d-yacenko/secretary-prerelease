@@ -2559,6 +2559,75 @@ class PersonSalienceSummary {
   }
 }
 
+class PersonIdentityCandidate {
+  PersonIdentityCandidate({
+    required this.provider,
+    required this.identityType,
+    required this.realm,
+    required this.canonicalValue,
+    required this.displayValue,
+    required this.confirmable,
+    required this.state,
+    required this.reasons,
+    required this.sources,
+    this.assessmentResolution,
+  });
+
+  final String provider;
+  final String identityType;
+  final String realm;
+  final String canonicalValue;
+  final String displayValue;
+  final bool confirmable;
+  final String state;
+  final List<String> reasons;
+  final String? assessmentResolution;
+  final List<PersonFlowPreview> sources;
+
+  factory PersonIdentityCandidate.fromJson(Map<String, dynamic> json) {
+    return PersonIdentityCandidate(
+      provider: json['provider'] as String? ?? '',
+      identityType: json['identity_type'] as String? ?? '',
+      realm: json['realm'] as String? ?? '',
+      canonicalValue: json['canonical_value'] as String? ?? '',
+      displayValue: json['display_value'] as String? ?? '',
+      confirmable: json['confirmable'] as bool? ?? false,
+      state: json['state'] as String? ?? '',
+      reasons: (json['reasons'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
+      assessmentResolution: json['assessment_resolution'] as String?,
+      sources: (json['sources'] as List<dynamic>? ?? [])
+          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class PersonRejectedIdentityCandidate {
+  PersonRejectedIdentityCandidate({
+    required this.provider,
+    required this.identityType,
+    required this.realm,
+    required this.canonicalValue,
+    required this.displayValue,
+  });
+
+  final String provider;
+  final String identityType;
+  final String realm;
+  final String canonicalValue;
+  final String displayValue;
+
+  factory PersonRejectedIdentityCandidate.fromJson(Map<String, dynamic> json) {
+    return PersonRejectedIdentityCandidate(
+      provider: json['provider'] as String? ?? '',
+      identityType: json['identity_type'] as String? ?? '',
+      realm: json['realm'] as String? ?? '',
+      canonicalValue: json['canonical_value'] as String? ?? '',
+      displayValue: json['display_value'] as String? ?? '',
+    );
+  }
+}
+
 class PersonPresentation {
   PersonPresentation({
     required this.personId,
@@ -2574,6 +2643,9 @@ class PersonPresentation {
     this.recentCommunications = const [],
     this.recentCommunicationsTruncated = false,
     this.salience,
+    this.identityCandidates = const [],
+    this.identityCandidatesTruncated = false,
+    this.rejectedIdentityCandidates = const [],
   });
 
   final String personId;
@@ -2589,6 +2661,9 @@ class PersonPresentation {
   final List<PersonFlowPreview> recentCommunications;
   final bool recentCommunicationsTruncated;
   final PersonSalienceSummary? salience;
+  final List<PersonIdentityCandidate> identityCandidates;
+  final bool identityCandidatesTruncated;
+  final List<PersonRejectedIdentityCandidate> rejectedIdentityCandidates;
 
   factory PersonPresentation.fromJson(Map<String, dynamic> json) {
     return PersonPresentation(
@@ -2623,6 +2698,15 @@ class PersonPresentation {
       salience: json['salience'] == null
           ? null
           : PersonSalienceSummary.fromJson(json['salience'] as Map<String, dynamic>),
+      identityCandidates: (json['identity_candidates'] as List<dynamic>? ?? [])
+          .map((item) => PersonIdentityCandidate.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      identityCandidatesTruncated: json['identity_candidates_truncated'] as bool? ?? false,
+      rejectedIdentityCandidates: (json['rejected_identity_candidates'] as List<dynamic>? ?? [])
+          .map(
+            (item) => PersonRejectedIdentityCandidate.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(),
     );
   }
 }
