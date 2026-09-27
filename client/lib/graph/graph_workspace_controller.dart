@@ -14,6 +14,9 @@ enum GraphWorkspaceMode { tasks, people }
 const String taskTopologyRefreshFailureMessage =
     'Связь сохранена, но граф не удалось обновить. Обновите обзор.';
 
+const String localContextHideFailureMessage =
+    'Не удалось скрыть связи. Обновите обзор и повторите.';
+
 const Set<String> _terminalTaskStatusesForReads = {
   'done',
   'completed',
@@ -55,6 +58,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   final List<SecretaryEdge> _edges = [];
   final Map<String, Offset> _positions = {};
   List<String> _seedIds = const [];
+  final List<String> _localContextAnchorIds = [];
 
   List<SecretaryObject> get nodes => _nodes.values.toList();
   List<SecretaryObject> get visibleNodes =>
@@ -83,6 +87,11 @@ class GraphWorkspaceController extends ChangeNotifier {
 
   PersonPresentation? personFor(String id) => _people[id];
   List<String> get seedIds => List.unmodifiable(_seedIds);
+  List<String> get localContextAnchorIds =>
+      List.unmodifiable(_localContextAnchorIds);
+
+  bool isLocalContextExpanded(String objectId) =>
+      _localContextAnchorIds.contains(objectId);
 
   SecretaryObject? get selectedObject =>
       selectedObjectId == null ? null : _nodes[selectedObjectId!];
@@ -120,6 +129,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _positions.clear();
     _people.clear();
     _seedIds = const [];
+    _localContextAnchorIds.clear();
     mode = GraphWorkspaceMode.tasks;
     notifyListeners();
   }
@@ -354,8 +364,12 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
     try {
       final workspace = await _fetchWorkspace(rootId: selected.id);
-      _mergeWorkspace(workspace, expandAround: selected.id);
+      _mergeWorkspace(workspace, expandAround: selected.id, notify: false);
+      if (!_localContextAnchorIds.contains(selected.id)) {
+        _localContextAnchorIds.add(selected.id);
+      }
       errorMessage = null;
+      notifyListeners();
     } on AuthenticationException {
       _authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
@@ -363,6 +377,52 @@ class GraphWorkspaceController extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       errorMessage = 'Failed to expand neighbors';
+      notifyListeners();
+    }
+  }
+
+  /// Removes one explicit local-context overlay and rebuilds the canvas from
+  /// the authoritative base plus every remaining overlay, in activation order.
+  Future<void> hideLocalContext(String objectId) async {
+    if (!_localContextAnchorIds.contains(objectId)) {
+      return;
+    }
+    final remaining = [
+      for (final id in _localContextAnchorIds)
+        if (id != objectId) id,
+    ];
+    final baseRootId = rootId;
+    final baseWindow = windowIndex;
+    final previousSelection = selectedObjectId;
+    final previousEdge = selectedEdgeId;
+    try {
+      final base = await _readHideBase(
+        baseRootId: baseRootId,
+        baseWindow: baseWindow,
+      );
+      if (base == null) {
+        return;
+      }
+      final replays = <({String id, GraphWorkspaceOut workspace})>[];
+      for (final anchorId in remaining) {
+        final workspace = await _readReplay(anchorId);
+        if (workspace == null) {
+          continue;
+        }
+        replays.add((id: anchorId, workspace: workspace));
+      }
+      _installHideRebuild(
+        base: base,
+        rooted: baseRootId != null,
+        rootId: baseRootId,
+        replays: replays,
+        previousSelection: previousSelection,
+        previousEdge: previousEdge,
+      );
+    } on AuthenticationException {
+      _authController.handleAuthenticationFailure();
+    } catch (_) {
+      errorMessage = localContextHideFailureMessage;
       notifyListeners();
     }
   }
@@ -545,6 +605,93 @@ class GraphWorkspaceController extends ChangeNotifier {
 
   bool _windowIndexOutOfRange(ApiException error) {
     return error.message.toLowerCase().contains('window index is out of range');
+  }
+
+  /// Null means the rooted base was gone and the overview fallback already ran.
+  Future<GraphWorkspaceOut?> _readHideBase({
+    required String? baseRootId,
+    required int baseWindow,
+  }) async {
+    if (baseRootId == null) {
+      try {
+        return await _fetchWorkspace(windowIndex: baseWindow);
+      } on ApiException catch (error) {
+        if (_windowIndexOutOfRange(error) && baseWindow != 0) {
+          return await _fetchWorkspace(windowIndex: 0);
+        }
+        rethrow;
+      }
+    }
+    try {
+      final workspace = await _fetchWorkspace(rootId: baseRootId);
+      if (!_replayAnchorPresent(workspace, baseRootId)) {
+        await _loadOverviewFromMissingRoot();
+        return null;
+      }
+      return workspace;
+    } on NotFoundException {
+      await _loadOverviewFromMissingRoot();
+      return null;
+    }
+  }
+
+  Future<GraphWorkspaceOut?> _readReplay(String anchorId) async {
+    try {
+      final workspace = await _fetchWorkspace(rootId: anchorId);
+      if (!_replayAnchorPresent(workspace, anchorId)) {
+        return null;
+      }
+      return workspace;
+    } on NotFoundException {
+      return null;
+    }
+  }
+
+  bool _replayAnchorPresent(GraphWorkspaceOut workspace, String objectId) {
+    for (final node in workspace.nodes) {
+      if (node.id == objectId) {
+        return !node.isDeletedTask;
+      }
+    }
+    return false;
+  }
+
+  void _installHideRebuild({
+    required GraphWorkspaceOut base,
+    required bool rooted,
+    required String? rootId,
+    required List<({String id, GraphWorkspaceOut workspace})> replays,
+    required String? previousSelection,
+    required String? previousEdge,
+  }) {
+    _replaceWorkspaceState(
+      workspace: base,
+      layoutRoot: rooted ? rootId : null,
+      freshRoot: true,
+      rootIdAfter: rooted ? rootId : null,
+      selectObjectId: null,
+      fitAfterLayout: true,
+    );
+    _localContextAnchorIds.addAll(replays.map((replay) => replay.id));
+    for (final replay in replays) {
+      _mergeWorkspace(
+        replay.workspace,
+        expandAround: replay.id,
+        notify: false,
+      );
+    }
+    selectedObjectId =
+        previousSelection != null && _nodes.containsKey(previousSelection)
+            ? previousSelection
+            : null;
+    selectedEdgeId =
+        previousEdge != null && _edges.any((edge) => edge.id == previousEdge)
+            ? previousEdge
+            : null;
+    shouldFitAfterLayout = true;
+    loadState = GraphWorkspaceLoadState.ready;
+    errorMessage = null;
+    notifyListeners();
   }
 
   void _failTaskTopologyRefresh() {
@@ -766,9 +913,14 @@ class GraphWorkspaceController extends ChangeNotifier {
     selectedObjectId = selectObjectId;
     selectedEdgeId = null;
     shouldFitAfterLayout = fitAfterLayout;
+    _localContextAnchorIds.clear();
   }
 
-  void _mergeWorkspace(GraphWorkspaceOut workspace, {required String expandAround}) {
+  void _mergeWorkspace(
+    GraphWorkspaceOut workspace, {
+    required String expandAround,
+    bool notify = true,
+  }) {
     truncated = workspace.truncated;
     for (final node in workspace.nodes) {
       _nodes[node.id] = node;
@@ -792,7 +944,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     );
     _positions.addAll(computed);
     loadState = GraphWorkspaceLoadState.ready;
-    notifyListeners();
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   void _applyWorkspace(

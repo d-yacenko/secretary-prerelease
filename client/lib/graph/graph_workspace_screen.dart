@@ -1051,11 +1051,24 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               ),
             ),
             Tooltip(
-              message: 'Показать связи',
+              message: widget.controller.isLocalContextExpanded(object.id)
+                  ? 'Скрыть связи'
+                  : 'Показать связи',
               child: OutlinedButton.icon(
-                onPressed: widget.controller.expandSelected,
-                icon: const Icon(Icons.hub_outlined, size: 18),
-                label: const Text('Показать связи'),
+                onPressed: widget.controller.isLocalContextExpanded(object.id)
+                    ? () => widget.controller.hideLocalContext(object.id)
+                    : widget.controller.expandSelected,
+                icon: Icon(
+                  widget.controller.isLocalContextExpanded(object.id)
+                      ? Icons.visibility_off_outlined
+                      : Icons.hub_outlined,
+                  size: 18,
+                ),
+                label: Text(
+                  widget.controller.isLocalContextExpanded(object.id)
+                      ? 'Скрыть связи'
+                      : 'Показать связи',
+                ),
               ),
             ),
             Tooltip(
