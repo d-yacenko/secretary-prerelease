@@ -1,40 +1,41 @@
-# Current task — HOLD: rerun Direction visual gate on current-main backend
+# Current task — HOLD: human-only Direction visual review
 
-Task Stabilization S2 remains accepted at the code/test level.
+Task Stabilization S2 remains accepted.
 
-The first human visual attempt is INCONCLUSIVE because the client was connected to an older backend contract.
+Current-main technical behavior has already been exercised locally enough to provide informal evidence that:
+- ongoing Directions can be created;
+- several Directions/relations can be created;
+- a finite Task can be changed to ongoing.
 
-Observed symptoms:
-- editing to `ongoing` returned `extra_forbidden` for `completion_mode`;
-- manual create with `Направление` produced an effective finite Task;
-- Task profile failed to load.
+Do not spend Executor time repeating these flows manually.
 
-These match the old production backend exactly:
-- production ref `296b4735f9473ea60ef22f1827ed94260603128e` does not accept `completion_mode` in Task PATCH;
-- old Capture request does not know the field and can silently ignore it;
-- old tasks router has no Task profile endpoint.
+## Human-only gate
 
-Do not treat this as an S2 code failure.
+The next step belongs to the user/Architect, not the Executor.
 
-Human gate must be rerun with:
-- backend from current `main`;
-- DB upgraded to current head / Alembic 0050;
-- client from current `main`;
-- client configured to that current-main backend, NOT production.
+The human tester may inspect, as desired:
+- several ongoing Directions in Graph overview;
+- finite child Tasks under Directions;
+- ongoing -> ongoing `part_of`;
+- circle/card distinction;
+- hierarchy readability;
+- spacing/overlap;
+- spatial stability after refresh/re-root;
+- any confusing visual behavior.
 
-Then verify:
-- create `Направление` persists `completion_mode=ongoing`;
-- edit finite -> ongoing succeeds and survives refresh;
-- edit ongoing -> finite succeeds and survives refresh;
-- ongoing renders as the Direction/circle presentation even though its canonical Object `kind` remains `task`;
-- Task profile loads;
-- several Directions plus finite child Tasks can be inspected visually;
-- ongoing -> ongoing `part_of` hierarchy is readable.
+Screenshots/observations should be supplied by the human tester if further refinement is needed.
 
-Capture screenshots/observations after the environment is corrected.
+## Executor boundary
 
-Do not start S3.
-Do not start H2D.
-Do not deploy production.
+Do NOT:
+- launch the Flutter UI for manual clicking;
+- create sample objects by hand in the GUI;
+- take screenshots for visual acceptance;
+- repeat create/edit/part_of flows manually;
+- start S3;
+- start H2D;
+- deploy production.
 
-STOP until the rerun is reviewed.
+Automated tests, code changes, builds, backend preparation, and environment setup are Executor work only when separately authorized.
+
+STOP until the human visual review or a new explicit implementation/deploy task is provided.
