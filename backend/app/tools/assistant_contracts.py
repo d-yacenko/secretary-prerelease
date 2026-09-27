@@ -7,6 +7,7 @@ from app.assistant.inbox_review_intent import (
     format_complete_review_utterance_list,
     format_inspect_utterance_list,
 )
+from app.domain.generic_relations import GENERIC_RELATION_TYPE_VALUES
 
 _PERSON_IDENTITY_PARAMETERS = {
     "type": "object",
@@ -657,17 +658,24 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         "type": "function",
         "name": "link_objects",
         "description": (
-            "Create a relation edge between two objects. "
-            "part_of means composition, not dependency: source is the child task and "
-            "target is the parent task. Both endpoints must be tasks. A task has at most "
-            "one active parent, including a proposed part_of edge. Do not infer part_of."
+            "Create one canonical relation between two objects. "
+            "related_to is a symmetric general relation. "
+            "references means the source cites or refers to the target. "
+            "depends_on means the source/dependent depends on the target/prerequisite. "
+            "part_of means the source child Task belongs to the target parent Task: "
+            "composition, not dependency; one active or proposed parent; do not infer. "
+            "Actor roles use the typed Task fields. Labels use assign_label. "
+            "Do not invent unsupported relation names."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "source_id": {"type": "string"},
                 "target_id": {"type": "string"},
-                "relation_type": {"type": "string"},
+                "relation_type": {
+                    "type": "string",
+                    "enum": list(GENERIC_RELATION_TYPE_VALUES),
+                },
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             },
             "required": ["source_id", "target_id", "relation_type", "confidence"],

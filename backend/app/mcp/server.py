@@ -7,6 +7,7 @@ from mcp.server.mcpserver.exceptions import ToolError as McpToolError
 from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 
+from app.domain.generic_relations import GenericRelationType
 from app.mcp.gateway_runner import execute_mcp_tool
 from app.tools.registry import MCP_TOOL_NAMES  # noqa: F401 — re-exported for tests
 from app.tools.schemas import (
@@ -246,7 +247,7 @@ def create_mcp_server() -> MCPServer:
     def link_objects(
         source_id: str,
         target_id: str,
-        relation_type: str,
+        relation_type: GenericRelationType,
         confidence: float,
     ) -> LinkObjectsOutput:
         """Create an agent-proposed relation between two objects."""

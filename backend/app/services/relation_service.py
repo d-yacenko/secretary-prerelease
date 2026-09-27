@@ -6,14 +6,15 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.schemas import EdgeCreate, EdgeOut
+from app.api.schemas import EdgeCreate
 from app.db.models import Edge, Object
+from app.domain.generic_relations import GENERIC_RELATION_TYPES
 from app.domain.object_visibility import is_object_hidden_from_active_reads
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
 
-USER_RELATION_TYPES = frozenset({"related_to", "references", "depends_on", "part_of"})
+USER_RELATION_TYPES = GENERIC_RELATION_TYPES
 USER_ORIGIN = "user"
 
 
@@ -87,10 +88,7 @@ class RelationService:
         self._graph.delete_edge(edge_id)
 
     def _get_endpoint(self, object_id: UUID) -> Object:
-        try:
-            return self._graph.get_object(object_id)
-        except NotFoundError:
-            raise
+        return self._graph.get_object(object_id)
 
     def _validate_endpoint_for_relation(self, obj: Object) -> None:
         if obj.state == REJECTED_STATE:

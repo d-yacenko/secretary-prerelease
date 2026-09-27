@@ -14,6 +14,7 @@ from app.api.schemas import (
 )
 from app.db.models import Edge, Object
 from app.db.session import SessionLocal
+from app.domain.generic_relations import GENERIC_RELATION_TYPES
 from app.domain.labels import EDGE_TYPE_LABELED_WITH
 from app.domain.object_visibility import is_object_tombstoned
 from app.domain.task_lifecycle import (
@@ -1250,6 +1251,8 @@ class DomainToolService:
     def link_objects(self, input: LinkObjectsInput) -> LinkObjectsOutput:
         if input.relation_type == EDGE_TYPE_LABELED_WITH:
             raise ToolError("labeled_with assignments must use assign_label")
+        if input.relation_type not in GENERIC_RELATION_TYPES:
+            raise ToolError(f"unsupported relation type: {input.relation_type}")
         if input.source_id == input.target_id:
             raise ToolError("source and target must differ")
         existing = self._session.scalar(

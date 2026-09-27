@@ -152,3 +152,7 @@ Manager, member-of, and organization edges are not canonical. `person_graph_work
 ## H2A closure
 
 H2A closes only the `completion_mode` write gap. `create_task` and `update_task` accept optional `finite` or `ongoing` on Assistant and MCP, and the existing domain guards still reject an ongoing Task marked done and an incompatible `part_of` change. Omitting the field on create stays finite; omitting it on update changes nothing. The free-form `link_objects.relation_type` finding stays open for H2B.
+
+## H2B closure
+
+H2A closed the `completion_mode` write gap. H2B closes the free-form relation write gap. `link_objects.relation_type` is the same four-value set as human `RelationService`: `related_to`, `references`, `depends_on`, `part_of`, defined once in `app/domain/generic_relations.py`. Actor roles stay on the typed `create_task` / `update_task` fields. Existing legacy or custom edges stay readable and are not rewritten. `remove_relation` is unchanged. Planned start/end tool fields and the `get_task_profile` MCP-list mismatch remain separate open findings and are not part of this closure.

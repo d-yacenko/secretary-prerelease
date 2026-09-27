@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.api.schemas import ContextItem, EdgeOut, NotificationOut, ObjectOut, TaskProfileOut
+from app.domain.generic_relations import GenericRelationType
 from app.domain.task_completion import TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING
 from app.domain.task_relations import MAX_TASK_ACTOR_IDS, MAX_TASK_DEPENDENCY_IDS
 
@@ -243,7 +244,7 @@ class DeleteTaskOutput(BaseModel):
 class LinkObjectsInput(BaseModel):
     source_id: UUID
     target_id: UUID
-    relation_type: str = Field(min_length=1)
+    relation_type: GenericRelationType
     confidence: float = Field(ge=0.0, le=1.0)
 
 

@@ -183,13 +183,22 @@ def test_generic_paths_fail_closed(db_session) -> None:
                 state="confirmed",
             )
         )
+    from pydantic import ValidationError as PydanticValidationError
+
     from app.services.domain_tool_service import DomainToolService
     from app.tools.schemas import LinkObjectsInput, RemoveRelationInput
 
     tools = DomainToolService(db_session, BOOTSTRAP_USER_ID, None)
+    with pytest.raises(PydanticValidationError):
+        LinkObjectsInput(
+            source_id=note.id,
+            target_id=label.id,
+            relation_type=EDGE_TYPE_LABELED_WITH,
+            confidence=0.9,
+        )
     with pytest.raises(ToolError, match="assign_label"):
         tools.link_objects(
-            LinkObjectsInput(
+            LinkObjectsInput.model_construct(
                 source_id=note.id,
                 target_id=label.id,
                 relation_type=EDGE_TYPE_LABELED_WITH,

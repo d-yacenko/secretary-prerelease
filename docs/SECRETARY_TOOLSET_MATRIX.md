@@ -29,11 +29,11 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Add task evidence | SUPPORTED | `update_task(evidence_object_ids=…)` | **Additive only** — attaches `references`; never removes |
 | Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, `depends_on` |
 | Task composition `part_of` | SUPPORTED | `link_objects` | Child/source → parent/target. Not a field on `create_task` |
-| `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done`. `link_objects.relation_type` remains unrestricted |
+| `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done` |
 | Planned start/end | PARTIAL | Human editor; read on Task Profile | Tools cannot set it |
 | Task lifecycle status | SUPPORTED | `set_task_status` | open / in_progress / done / cancelled / archived |
 | Soft-delete task | SUPPORTED | `delete_task` | Tombstone; graph history preserved |
-| Add relation | SUPPORTED | `link_objects` | `relation_type` is a free string except `labeled_with` and `part_of` checks |
+| Add relation | SUPPORTED | `link_objects` | `relation_type` is exactly `related_to`, `references`, `depends_on`, or `part_of`. Actor roles stay on typed Task fields. `labeled_with` and `contains` are not generic writes |
 | Remove relation | SUPPORTED | `remove_relation(edge_id)` | Sets `state=rejected`; no physical delete |
 | Labels | SUPPORTED | `list_labels`, `assign_label`, `remove_label`, `create_label`, `rename_label`, `delete_label` | `labeled_with` is not created through `link_objects` |
 | Person identity feedback and route memory | SUPPORTED | `confirm_person_identity`, `reject_person_identity`, `retract_person_identity_feedback`, `record_person_route_choice` | Assistant only |
