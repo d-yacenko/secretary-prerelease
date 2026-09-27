@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_secretary/api/api_error.dart';
 import 'package:personal_secretary/api/api_models.dart';
@@ -12,6 +13,9 @@ class _FakeApiClient extends SecretaryApiClient {
   _FakeApiClient(this._handler);
 
   final Future<GraphWorkspaceOut> Function(String? rootId) _handler;
+  int? requestedWindow;
+  String? requestedRootId;
+  int fetchCount = 0;
 
   @override
   Future<GraphWorkspaceOut> getGraphWorkspace({
@@ -21,6 +25,9 @@ class _FakeApiClient extends SecretaryApiClient {
     int? nodeLimit,
     int? windowIndex,
   }) {
+    fetchCount += 1;
+    requestedRootId = rootId;
+    requestedWindow = windowIndex;
     return _handler(rootId);
   }
 }
@@ -46,10 +53,11 @@ SecretaryObject _obj(
   String title, {
   String? status,
   String state = 'confirmed',
+  String kind = 'task',
 }) {
   return SecretaryObject(
     id: id,
-    kind: 'task',
+    kind: kind,
     title: title,
     metadata: {},
     origin: 'user',
@@ -288,7 +296,7 @@ void main() {
     expect(controller.edgeEndpointsPositioned(edge), isTrue);
   });
 
-  test('mergeRelationContext keeps staged relation when refresh fails', () async {
+  test('Task-to-Task merge clears geometry when the authoritative refresh fails', () async {
     final auth = _FakeAuth();
     final edge = SecretaryEdge(
       id: 'e-new',
@@ -320,12 +328,11 @@ void main() {
       edge: edge,
     );
 
-    expect(controller.edges.length, 1);
-    expect(controller.edges.first.id, 'e-new');
-    expect(controller.positions.containsKey('source'), isTrue);
-    expect(controller.positions.containsKey('target'), isTrue);
-    expect(controller.edgeEndpointsPositioned(edge), isTrue);
-    expect(controller.errorMessage, isNotNull);
+    expect(controller.edges.any((item) => item.id == 'e-new'), isFalse);
+    expect(controller.positions, isEmpty);
+    expect(controller.loadState, GraphWorkspaceLoadState.error);
+    expect(controller.errorMessage, taskTopologyRefreshFailureMessage);
+    expect(calls, 2);
   });
 
   test('selectObject updates selection', () {
@@ -642,6 +649,366 @@ void main() {
     expect(controller.positions['task-local'], originalPositions['task-local']);
     expect(controller.positions['email-gmail'], originalPositions['email-gmail']);
   });
+
+  test('part_of between positioned tasks replaces the window and recomputes geometry', () async {
+    final auth = _FakeAuth();
+    final parent = _obj('parent', 'Parent');
+    final child = _obj('child', 'Child');
+    final partOf = _edge(id: 'part', sourceId: 'child', targetId: 'parent', type: 'part_of');
+    var phase = 0;
+    late _FakeApiClient client;
+    client = _FakeApiClient((rootId) async {
+      phase += 1;
+      if (phase == 1) {
+        return GraphWorkspaceOut(
+          rootId: null,
+          seedIds: ['parent', 'child'],
+          nodes: [parent, child],
+          edges: const [],
+          truncated: false,
+          windowIndex: 0,
+          windowCount: 2,
+          hasNextWindow: true,
+          constellationRootIds: const ['parent', 'child'],
+          semanticWindowComplete: true,
+        );
+      }
+      return GraphWorkspaceOut(
+        rootId: null,
+        seedIds: ['parent'],
+        nodes: [parent, child],
+        edges: [partOf],
+        truncated: false,
+        windowIndex: 0,
+        windowCount: 1,
+        hasNextWindow: false,
+        constellationRootIds: const ['parent'],
+        semanticWindowComplete: true,
+      );
+    });
+    final controller = GraphWorkspaceController(apiClient: client, authController: auth);
+    await controller.loadOverview();
+    final before = Map<String, Offset>.from(controller.positions);
+    final stale = GraphLayout.computePositions(
+      nodes: [parent, child],
+      edges: [partOf],
+      rootId: null,
+      existing: before,
+      freshRoot: false,
+    );
+    controller.upsertObject(_obj('phantom', 'Phantom'));
+    controller.selectObject('child');
+    controller.shouldFitAfterLayout = false;
+
+    await controller.applyCreatedRelation(
+      sourceId: 'child',
+      sourceKind: 'task',
+      target: parent,
+      edge: partOf,
+    );
+
+    expect(controller.nodeById('phantom'), isNull);
+    expect(controller.edges.map((edge) => edge.id), ['part']);
+    expect(controller.positions['parent'], isNot(stale['parent']));
+    expect(controller.positions['child'], stale['child']);
+    expect(controller.shouldFitAfterLayout, isTrue);
+    expect(controller.windowCount, 1);
+    expect(controller.hasNextWindow, isFalse);
+    expect(controller.constellationRootIds, ['parent']);
+    expect(controller.semanticWindowComplete, isTrue);
+    expect(controller.selectedObjectId, 'child');
+    expect(controller.loadState, GraphWorkspaceLoadState.ready);
+  });
+
+  test('invalid overview window after part_of recovers to window 0 once', () async {
+    final auth = _FakeAuth();
+    final task = _obj('task', 'Task');
+    late _FakeApiClient client;
+    client = _FakeApiClient((rootId) async {
+      if (client.requestedWindow == 4) {
+        throw ValidationException('graph window index is out of range');
+      }
+      return GraphWorkspaceOut(
+        rootId: null,
+        seedIds: ['task'],
+        nodes: [task],
+        edges: const [],
+        truncated: false,
+        windowIndex: 0,
+        windowCount: 1,
+        semanticWindowComplete: true,
+      );
+    });
+    final controller = GraphWorkspaceController(apiClient: client, authController: auth);
+    await controller.loadOverview();
+    controller.windowIndex = 4;
+    final fetchesBefore = client.fetchCount;
+
+    await controller.refreshAfterTaskTopologyMutation();
+
+    expect(controller.windowIndex, 0);
+    expect(controller.loadState, GraphWorkspaceLoadState.ready);
+    expect(controller.errorMessage, isNull);
+    expect(controller.positions.containsKey('task'), isTrue);
+    expect(client.fetchCount - fetchesBefore, 2);
+  });
+
+  test('map-visible Task-to-Task relations fresh-relayout', () async {
+    for (final type in ['related_to', 'references', 'depends_on']) {
+      final auth = _FakeAuth();
+      final left = _obj('left', 'Left');
+      final right = _obj('right', 'Right');
+      final edge = _edge(id: type, sourceId: 'left', targetId: 'right', type: type);
+      var phase = 0;
+      final controller = GraphWorkspaceController(
+        apiClient: _FakeApiClient((rootId) async {
+          phase += 1;
+          return GraphWorkspaceOut(
+            rootId: null,
+            seedIds: const ['left'],
+            nodes: [left, right],
+            edges: phase == 1 ? const [] : [edge],
+            truncated: false,
+            semanticWindowComplete: true,
+          );
+        }),
+        authController: auth,
+      );
+      await controller.loadOverview();
+      final before = Map<String, Offset>.from(controller.positions);
+      controller.shouldFitAfterLayout = false;
+      await controller.applyCreatedRelation(
+        sourceId: 'left',
+        sourceKind: 'task',
+        target: right,
+        edge: edge,
+      );
+      expect(controller.positions['right'], isNot(before['right']), reason: type);
+      expect(controller.shouldFitAfterLayout, isTrue, reason: type);
+      expect(controller.edges.single.type, type);
+    }
+  });
+
+  test('Task-to-Flow relation stays incremental', () async {
+    final auth = _FakeAuth();
+    final task = _obj('task', 'Task');
+    final flow = _obj('flow', 'Flow', kind: 'note');
+    final edge = _edge(id: 'ref', sourceId: 'task', targetId: 'flow', type: 'references');
+    var phase = 0;
+    final controller = GraphWorkspaceController(
+      apiClient: _FakeApiClient((rootId) async {
+        phase += 1;
+        if (phase == 1) {
+          return _workspace(nodes: [task]);
+        }
+        return GraphWorkspaceOut(
+          rootId: null,
+          seedIds: const ['task'],
+          nodes: [task, flow],
+          edges: [edge],
+          truncated: false,
+        );
+      }),
+      authController: auth,
+    );
+    await controller.loadOverview();
+    final taskPosition = controller.positions['task'];
+    controller.shouldFitAfterLayout = false;
+    await controller.applyCreatedRelation(
+      sourceId: 'task',
+      sourceKind: 'task',
+      target: flow,
+      edge: edge,
+    );
+    expect(controller.positions['task'], taskPosition);
+    expect(controller.positions.containsKey('flow'), isTrue);
+    expect(controller.edges.single.id, 'ref');
+    expect(controller.shouldFitAfterLayout, isFalse);
+  });
+
+  test('deleting part_of refreshes and fresh-relayouts the split', () async {
+    final auth = _FakeAuth();
+    final parent = _obj('parent', 'Parent');
+    final child = _obj('child', 'Child');
+    final partOf = _edge(id: 'part', sourceId: 'child', targetId: 'parent', type: 'part_of');
+    var phase = 0;
+    final controller = GraphWorkspaceController(
+      apiClient: _FakeApiClient((rootId) async {
+        phase += 1;
+        return GraphWorkspaceOut(
+          rootId: null,
+          seedIds: const ['parent', 'child'],
+          nodes: [parent, child],
+          edges: phase == 1 ? [partOf] : const [],
+          truncated: false,
+          semanticWindowComplete: true,
+        );
+      }),
+      authController: auth,
+    );
+    await controller.loadOverview();
+    final before = Map<String, Offset>.from(controller.positions);
+    await controller.applyDeletedRelation(partOf, sourceKind: 'task', targetKind: 'task');
+    expect(controller.edges, isEmpty);
+    expect(controller.positions['parent'], isNot(before['parent']));
+    expect(controller.shouldFitAfterLayout, isTrue);
+  });
+
+  test('Task-to-Task proposal confirm and reject refresh topology', () async {
+    final auth = _FakeAuth();
+    final parent = _obj('parent', 'Parent');
+    final child = _obj('child', 'Child');
+    final proposed = _edge(
+      id: 'part',
+      sourceId: 'child',
+      targetId: 'parent',
+      type: 'part_of',
+      state: 'proposed',
+      origin: 'agent',
+    );
+    final confirmed = _edge(
+      id: 'part',
+      sourceId: 'child',
+      targetId: 'parent',
+      type: 'part_of',
+      origin: 'agent',
+    );
+    var includeEdge = true;
+    var fetches = 0;
+    final controller = GraphWorkspaceController(
+      apiClient: _FakeApiClient((rootId) async {
+        fetches += 1;
+        return GraphWorkspaceOut(
+          rootId: null,
+          seedIds: const ['parent'],
+          nodes: [parent, child],
+          edges: includeEdge ? [confirmed] : const [],
+          truncated: false,
+          semanticWindowComplete: true,
+        );
+      }),
+      authController: auth,
+    );
+    await controller.loadOverview();
+    final beforeConfirm = fetches;
+    await controller.applyRelationDecision(
+      previous: proposed,
+      updated: confirmed,
+      sourceKind: 'task',
+      targetKind: 'task',
+    );
+    expect(fetches, beforeConfirm + 1);
+    expect(controller.shouldFitAfterLayout, isTrue);
+    expect(controller.edges.single.state, 'confirmed');
+
+    includeEdge = false;
+    await controller.applyRelationDecision(
+      previous: confirmed,
+      updated: _edge(
+        id: 'part',
+        sourceId: 'child',
+        targetId: 'parent',
+        type: 'part_of',
+        state: 'rejected',
+        origin: 'agent',
+      ),
+      sourceKind: 'task',
+      targetKind: 'task',
+    );
+    expect(controller.edges, isEmpty);
+    expect(controller.loadState, GraphWorkspaceLoadState.ready);
+  });
+
+  test('rooted topology mutation refreshes that root with fresh geometry', () async {
+    final auth = _FakeAuth();
+    final root = _obj('root', 'Root');
+    final child = _obj('child', 'Child');
+    final partOf = _edge(id: 'part', sourceId: 'child', targetId: 'root', type: 'part_of');
+    var phase = 0;
+    late _FakeApiClient client;
+    client = _FakeApiClient((rootId) async {
+      phase += 1;
+      return GraphWorkspaceOut(
+        rootId: 'root',
+        seedIds: const ['root'],
+        nodes: [root, child],
+        edges: phase == 1 ? const [] : [partOf],
+        truncated: false,
+      );
+    });
+    final controller = GraphWorkspaceController(apiClient: client, authController: auth);
+    await controller.reRoot('root');
+    final beforeChild = controller.positions['child'];
+    controller.selectObject('root');
+    controller.shouldFitAfterLayout = false;
+    await controller.applyCreatedRelation(
+      sourceId: 'child',
+      sourceKind: 'task',
+      target: root,
+      edge: partOf,
+    );
+    expect(client.requestedRootId, 'root');
+    expect(controller.rootId, 'root');
+    expect(controller.selectedObjectId, 'root');
+    expect(controller.positions['child'], isNot(beforeChild));
+    expect(controller.shouldFitAfterLayout, isTrue);
+  });
+
+  test('overview refresh failure after a successful write does not retry', () async {
+    final auth = _FakeAuth();
+    var fetches = 0;
+    final controller = GraphWorkspaceController(
+      apiClient: _FakeApiClient((rootId) async {
+        fetches += 1;
+        if (fetches > 1) {
+          throw Exception('offline');
+        }
+        return _workspace(nodes: [_obj('task', 'Task')]);
+      }),
+      authController: auth,
+    );
+    await controller.loadOverview();
+    expect(controller.positions.containsKey('task'), isTrue);
+    await controller.refreshAfterTaskTopologyMutation();
+    expect(fetches, 2);
+    expect(controller.positions, isEmpty);
+    expect(controller.loadState, GraphWorkspaceLoadState.error);
+    expect(controller.errorMessage, taskTopologyRefreshFailureMessage);
+  });
+
+  test('fit transform leaves node coordinates unchanged', () {
+    final positions = <String, Offset>{
+      'a': const Offset(12, 24),
+      'b': const Offset(400, 24),
+    };
+    final before = Map<String, Offset>.from(positions);
+    GraphLayout.fitTransform(
+      positions: positions,
+      viewportSize: const Size(800, 600),
+    );
+    expect(positions, before);
+  });
+}
+
+SecretaryEdge _edge({
+  required String id,
+  required String sourceId,
+  required String targetId,
+  required String type,
+  String state = 'confirmed',
+  String origin = 'user',
+}) {
+  return SecretaryEdge(
+    id: id,
+    sourceId: sourceId,
+    targetId: targetId,
+    type: type,
+    origin: origin,
+    state: state,
+    metadata: const {},
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  );
 }
 
 void _expectNoOverlaps(Map<String, Offset> positions) {

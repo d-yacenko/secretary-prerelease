@@ -1285,8 +1285,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         targetId: target!.id,
         type: relationType,
       );
-      await widget.controller.mergeRelationContext(
-        source.id,
+      await widget.controller.applyCreatedRelation(
+        sourceId: source.id,
+        sourceKind: source.kind,
         target: target,
         edge: response.edge,
       );
@@ -1390,7 +1391,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     try {
       await widget.apiClient.deleteRelation(edge.id);
-      widget.controller.removeEdge(edge.id);
+      final sourceKind = widget.controller.nodeById(edge.sourceId)?.kind;
+      final targetKind = widget.controller.nodeById(edge.targetId)?.kind;
+      await widget.controller.applyDeletedRelation(
+        edge,
+        sourceKind: sourceKind,
+        targetKind: targetKind,
+      );
     } on ApiException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -1437,11 +1444,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         edgeId: edge.id,
         decision: decision,
       );
-      if (response.edge.state == 'rejected') {
-        widget.controller.removeEdge(edge.id);
-      } else {
-        widget.controller.upsertEdge(response.edge);
-      }
+      final sourceKind = widget.controller.nodeById(edge.sourceId)?.kind;
+      final targetKind = widget.controller.nodeById(edge.targetId)?.kind;
+      await widget.controller.applyRelationDecision(
+        previous: edge,
+        updated: response.edge,
+        sourceKind: sourceKind,
+        targetKind: targetKind,
+      );
     } on ApiException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)

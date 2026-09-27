@@ -5,10 +5,14 @@ import '../api/api_models.dart';
 import '../api/secretary_api_client.dart';
 import '../auth/auth_controller.dart';
 import 'graph_layout.dart';
+import 'graph_map_edge_presentation.dart';
 
 enum GraphWorkspaceLoadState { idle, loading, ready, error }
 
 enum GraphWorkspaceMode { tasks, people }
+
+const String taskTopologyRefreshFailureMessage =
+    'Связь сохранена, но граф не удалось обновить. Обновите обзор.';
 
 const Set<String> _terminalTaskStatusesForReads = {
   'done',
@@ -38,6 +42,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   bool hasPreviousWindow = false;
   bool hasNextWindow = false;
   bool semanticWindowComplete = false;
+  List<String> constellationRootIds = const [];
   String? selectedObjectId;
   String? selectedEdgeId;
   String? searchQuery;
@@ -362,11 +367,209 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
   }
 
+  bool relationInvalidatesTaskTopology({
+    required String type,
+    String? sourceKind,
+    String? targetKind,
+  }) {
+    if (mode != GraphWorkspaceMode.tasks) {
+      return false;
+    }
+    if (type == 'part_of') {
+      return true;
+    }
+    return taskToTaskRelationVisibleOnTasksMap(
+      type: type,
+      sourceKind: sourceKind,
+      targetKind: targetKind,
+    );
+  }
+
+  Future<void> applyCreatedRelation({
+    required String sourceId,
+    required String sourceKind,
+    SecretaryObject? target,
+    required SecretaryEdge edge,
+  }) async {
+    final targetKind = target?.kind ?? nodeById(edge.targetId)?.kind;
+    if (relationInvalidatesTaskTopology(
+      type: edge.type,
+      sourceKind: sourceKind,
+      targetKind: targetKind,
+    )) {
+      await refreshAfterTaskTopologyMutation();
+      return;
+    }
+    await mergeRelationContext(sourceId, target: target, edge: edge);
+  }
+
+  Future<void> applyDeletedRelation(
+    SecretaryEdge edge, {
+    String? sourceKind,
+    String? targetKind,
+  }) async {
+    if (relationInvalidatesTaskTopology(
+      type: edge.type,
+      sourceKind: sourceKind ?? nodeById(edge.sourceId)?.kind,
+      targetKind: targetKind ?? nodeById(edge.targetId)?.kind,
+    )) {
+      await refreshAfterTaskTopologyMutation();
+      return;
+    }
+    removeEdge(edge.id);
+  }
+
+  Future<void> applyRelationDecision({
+    required SecretaryEdge previous,
+    required SecretaryEdge updated,
+    String? sourceKind,
+    String? targetKind,
+  }) async {
+    if (relationInvalidatesTaskTopology(
+      type: previous.type,
+      sourceKind: sourceKind ?? nodeById(previous.sourceId)?.kind,
+      targetKind: targetKind ?? nodeById(previous.targetId)?.kind,
+    )) {
+      await refreshAfterTaskTopologyMutation();
+      return;
+    }
+    if (updated.state == 'rejected') {
+      removeEdge(previous.id);
+    } else {
+      upsertEdge(updated);
+    }
+  }
+
+  /// Authoritative replace of the current overview window or rooted workspace.
+  /// Task coordinates are recomputed; the camera fit is requested afterwards.
+  Future<void> refreshAfterTaskTopologyMutation() async {
+    if (mode != GraphWorkspaceMode.tasks) {
+      return;
+    }
+    if (rootId != null) {
+      await _refreshRootedAfterTopology(rootId!);
+      return;
+    }
+    await _refreshOverviewAfterTopology();
+  }
+
+  Future<void> _refreshOverviewAfterTopology() async {
+    final index = windowIndex;
+    loadState = GraphWorkspaceLoadState.loading;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await _installFreshOverview(index);
+      loadState = GraphWorkspaceLoadState.ready;
+    } on AuthenticationException {
+      _authController.handleAuthenticationFailure();
+    } on ApiException catch (error) {
+      if (_windowIndexOutOfRange(error) && index != 0) {
+        try {
+          await _installFreshOverview(0);
+          loadState = GraphWorkspaceLoadState.ready;
+          errorMessage = null;
+        } catch (_) {
+          _failTaskTopologyRefresh();
+          return;
+        }
+      } else {
+        _failTaskTopologyRefresh();
+        return;
+      }
+    } catch (_) {
+      _failTaskTopologyRefresh();
+      return;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _refreshRootedAfterTopology(String objectId) async {
+    loadState = GraphWorkspaceLoadState.loading;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final workspace = await _fetchWorkspace(rootId: objectId);
+      SecretaryObject? rootNode;
+      for (final node in workspace.nodes) {
+        if (node.id == objectId) {
+          rootNode = node;
+          break;
+        }
+      }
+      if (rootNode == null || rootNode.isDeletedTask) {
+        await _loadOverviewFromMissingRoot();
+        return;
+      }
+      final preservedSelection = selectedObjectId;
+      _replaceWorkspaceState(
+        workspace: workspace,
+        layoutRoot: objectId,
+        freshRoot: true,
+        rootIdAfter: objectId,
+        selectObjectId: preservedSelection != null &&
+                workspace.nodes.any((node) => node.id == preservedSelection)
+            ? preservedSelection
+            : objectId,
+        fitAfterLayout: true,
+      );
+      loadState = GraphWorkspaceLoadState.ready;
+    } on AuthenticationException {
+      _authController.handleAuthenticationFailure();
+    } on NotFoundException {
+      await _loadOverviewFromMissingRoot();
+      return;
+    } catch (_) {
+      _failTaskTopologyRefresh();
+      return;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _installFreshOverview(int index) async {
+    final previousSelection = selectedObjectId;
+    final workspace = await _fetchWorkspace(windowIndex: index);
+    final keptSelection = previousSelection != null &&
+            workspace.nodes.any((node) => node.id == previousSelection)
+        ? previousSelection
+        : null;
+    _replaceWorkspaceState(
+      workspace: workspace,
+      layoutRoot: null,
+      freshRoot: true,
+      rootIdAfter: null,
+      selectObjectId: keptSelection,
+      fitAfterLayout: true,
+    );
+  }
+
+  bool _windowIndexOutOfRange(ApiException error) {
+    return error.message.toLowerCase().contains('window index is out of range');
+  }
+
+  void _failTaskTopologyRefresh() {
+    _positions.clear();
+    loadState = GraphWorkspaceLoadState.error;
+    errorMessage = taskTopologyRefreshFailureMessage;
+    notifyListeners();
+  }
+
   Future<void> mergeRelationContext(
     String sourceId, {
     SecretaryObject? target,
     SecretaryEdge? edge,
   }) async {
+    final sourceKind = nodeById(sourceId)?.kind;
+    final targetKind = target?.kind ?? (edge == null ? null : nodeById(edge.targetId)?.kind);
+    if (edge != null &&
+        relationInvalidatesTaskTopology(
+          type: edge.type,
+          sourceKind: sourceKind,
+          targetKind: targetKind,
+        )) {
+      await refreshAfterTaskTopologyMutation();
+      return;
+    }
     if (edge != null) {
       _stageCreatedRelation(sourceId, target, edge);
     } else if (target != null) {
@@ -559,6 +762,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     hasPreviousWindow = workspace.hasPreviousWindow;
     hasNextWindow = workspace.hasNextWindow;
     semanticWindowComplete = workspace.semanticWindowComplete;
+    constellationRootIds = List<String>.from(workspace.constellationRootIds);
     selectedObjectId = selectObjectId;
     selectedEdgeId = null;
     shouldFitAfterLayout = fitAfterLayout;

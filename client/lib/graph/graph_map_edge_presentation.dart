@@ -95,6 +95,19 @@ GraphMapEdgePresentation presentGraphMapEdge({
   );
 }
 
+/// Task↔Task relation that the Tasks map already draws.
+/// Flow evidence and person/label edges stay outside this predicate.
+bool taskToTaskRelationVisibleOnTasksMap({
+  required String type,
+  required String? sourceKind,
+  required String? targetKind,
+}) {
+  if (sourceKind != 'task' || targetKind != 'task') {
+    return false;
+  }
+  return !kGraphMapHiddenRelationTypes.contains(type);
+}
+
 bool _isFlow(String? kind) {
   if (kind == null || kind == 'task') {
     return false;

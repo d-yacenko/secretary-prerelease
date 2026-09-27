@@ -60,8 +60,9 @@ void main() {
     expect(posts.single['source_id'], 'child');
     expect(posts.single['target_id'], 'parent');
     expect(posts.single['type'], 'part_of');
-    expect(rootedRefreshes, 1);
-    expect(harness.graph.shouldFitAfterLayout, isFalse);
+    expect(rootedRefreshes, 0);
+    expect(harness.graph.rootId, isNull);
+    expect(harness.graph.edges.where((edge) => edge.type == 'part_of'), hasLength(1));
     expect(find.textContaining('входит в'), findsWidgets);
   });
 
@@ -178,6 +179,7 @@ GraphTestHarness _harness({
   void Function()? onRootedRefresh,
   bool rejectPartOf = false,
 }) {
+  var partOfCreated = false;
   return GraphTestHarness(
     MockClient((request) async {
       if (request.url.path == '/notifications') {
@@ -216,6 +218,7 @@ GraphTestHarness _harness({
             statusCode: 422,
           );
         }
+        partOfCreated = body['type'] == 'part_of';
         return jsonUtf8Response({
           'created': true,
           'edge': {
@@ -245,7 +248,7 @@ GraphTestHarness _harness({
               graphObjectJson(id: 'parent', title: 'Родитель'),
               graphObjectJson(id: 'note', title: 'Заметка', kind: 'note'),
             ],
-            edges: rootId == null
+            edges: rootId != null || !partOfCreated
                 ? const []
                 : [
                     {
