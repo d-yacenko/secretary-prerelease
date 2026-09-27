@@ -1,12 +1,21 @@
 """PHASE 24 closure — graph workspace cap and batch neighbor tests."""
 
+import uuid
 from datetime import UTC, datetime
 
 from app.api.schemas import EdgeCreate, ObjectCreate
+from app.db.models import User
 from app.services.graph_service import GraphService
 from app.services.graph_workspace_service import GraphWorkspaceService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
 from tests.conftest import BOOTSTRAP_USER_ID
+
+
+def _isolated_user(db_session) -> uuid.UUID:
+    user_id = uuid.uuid4()
+    db_session.add(User(id=user_id, display_name=f"caps-{user_id}"))
+    db_session.flush()
+    return user_id
 
 
 def _task(graph: GraphService, title: str, status: str | None = "open") -> object:
@@ -23,25 +32,31 @@ def _task(graph: GraphService, title: str, status: str | None = "open") -> objec
 
 
 def test_overview_node_limit_wins_over_seed_limit(db_session, fake_embedding_service):
-    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    user_id = _isolated_user(db_session)
+    graph = GraphService(db_session, user_id, fake_embedding_service)
     for index in range(12):
         _task(graph, f"ACTIVE-{index}")
     db_session.flush()
 
-    service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
-    result = service.get_workspace(seed_limit=12, node_limit=5)
-    assert len(result.nodes) <= 5
+    service = GraphWorkspaceService(db_session, user_id)
+    result = service.get_workspace(seed_limit=12, soft_window_target=5)
+    assert len(result.nodes) == 5
     assert result.truncated is True
+    assert result.semantic_window_complete is True
+    nxt = service.get_workspace(seed_limit=12, window_index=1, soft_window_target=5)
+    assert len(nxt.nodes) == 5
+    assert {node.id for node in result.nodes}.isdisjoint({node.id for node in nxt.nodes})
 
 
 def test_twelve_active_tasks_with_node_limit_five(db_session, fake_embedding_service):
-    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    user_id = _isolated_user(db_session)
+    graph = GraphService(db_session, user_id, fake_embedding_service)
     for index in range(12):
         _task(graph, f"CAP-{index}")
     db_session.flush()
 
-    service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
-    result = service.get_workspace(seed_limit=12, neighbor_limit=12, node_limit=5)
+    service = GraphWorkspaceService(db_session, user_id)
+    result = service.get_workspace(seed_limit=12, neighbor_limit=12, soft_window_target=5)
     assert len(result.nodes) == 5
     assert result.truncated is True
     node_ids = {node.id for node in result.nodes}
@@ -121,7 +136,8 @@ def test_cycle_bounded_unique_ids(db_session, fake_embedding_service):
 
 
 def test_duplicate_neighbor_edges_do_not_exceed_node_cap(db_session, fake_embedding_service):
-    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    user_id = _isolated_user(db_session)
+    graph = GraphService(db_session, user_id, fake_embedding_service)
     seeds = [_task(graph, f"SEED-{index}") for index in range(6)]
     shared = graph.create_object(
         ObjectCreate(kind="note", title="SHARED", origin="user", state=CONFIRMED_STATE)
@@ -138,10 +154,14 @@ def test_duplicate_neighbor_edges_do_not_exceed_node_cap(db_session, fake_embedd
         )
     db_session.flush()
 
-    service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
+    service = GraphWorkspaceService(db_session, user_id)
     result = service.get_workspace(seed_limit=6, neighbor_limit=6, node_limit=4)
-    assert len(result.nodes) <= 4
-    assert result.truncated is True
+    assert len(result.nodes) == 7
+    assert result.truncated is False
+    node_ids = {node.id for node in result.nodes}
+    for edge in result.edges:
+        assert edge.source_id in node_ids
+        assert edge.target_id in node_ids
 
 
 def test_rooted_zero_node_budget_with_hidden_neighbors_truncated(
@@ -166,14 +186,15 @@ def test_rooted_zero_node_budget_with_hidden_neighbors_truncated(
 
     service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
     result = service.get_workspace(root_id=root.id, neighbor_limit=12, node_limit=1)
-    assert len(result.nodes) == 1
-    assert result.truncated is True
+    assert {node.title for node in result.nodes} == {"ROOT", "N-0", "N-1", "N-2"}
+    assert result.truncated is False
 
 
 def test_overview_zero_node_budget_with_hidden_neighbor_truncated(
     db_session, fake_embedding_service,
 ):
-    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    user_id = _isolated_user(db_session)
+    graph = GraphService(db_session, user_id, fake_embedding_service)
     seed = _task(graph, "ONLY-SEED")
     neighbor = graph.create_object(
         ObjectCreate(kind="note", title="NEIGHBOR", origin="user", state=CONFIRMED_STATE)
@@ -189,10 +210,11 @@ def test_overview_zero_node_budget_with_hidden_neighbor_truncated(
     )
     db_session.flush()
 
-    service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
+    service = GraphWorkspaceService(db_session, user_id)
     result = service.get_workspace(seed_limit=1, neighbor_limit=12, node_limit=1)
-    assert len(result.nodes) == 1
-    assert result.truncated is True
+    assert {node.title for node in result.nodes} == {"ONLY-SEED", "NEIGHBOR"}
+    assert result.truncated is False
+    assert result.semantic_window_complete is True
 
 
 def test_rooted_no_eligible_neighbors_not_truncated(
@@ -262,6 +284,7 @@ def test_overview_per_seed_neighbor_limit_with_high_degree_seed(
 
     service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
     result = service.get_workspace(
+        root_id=hub.id,
         seed_limit=3,
         neighbor_limit=2,
         node_limit=80,

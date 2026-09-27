@@ -568,6 +568,12 @@ class GraphWorkspaceOut(BaseModel):
     nodes: list[ObjectOut]
     edges: list[EdgeOut]
     truncated: bool
+    window_index: int = 0
+    window_count: int = 1
+    has_previous_window: bool = False
+    has_next_window: bool = False
+    constellation_root_ids: list[UUID] = Field(default_factory=list)
+    semantic_window_complete: bool = False
 
 
 class PersonIdentityPresentation(BaseModel):

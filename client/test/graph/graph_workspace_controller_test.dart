@@ -19,6 +19,7 @@ class _FakeApiClient extends SecretaryApiClient {
     int? seedLimit,
     int? neighborLimit,
     int? nodeLimit,
+    int? windowIndex,
   }) {
     return _handler(rootId);
   }

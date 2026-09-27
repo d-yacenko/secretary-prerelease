@@ -1,8 +1,10 @@
 """PHASE 24 E2E corrective — graph workspace active seed compatibility tests."""
 
-from datetime import UTC, datetime, timedelta
+import uuid
+from datetime import UTC, datetime
 
-from app.api.schemas import EdgeCreate, ObjectCreate
+from app.api.schemas import ObjectCreate
+from app.db.models import User
 from app.services.graph_service import GraphService
 from app.services.graph_workspace_service import GraphWorkspaceService
 from app.services.provenance import CONFIRMED_STATE, PROPOSED_STATE, REJECTED_STATE
@@ -120,14 +122,18 @@ def test_proposed_due_before_confirmed_no_due_in_seed_order(
 
 
 def test_active_seed_caps_still_apply(db_session, fake_embedding_service):
-    graph = GraphService(db_session, BOOTSTRAP_USER_ID, fake_embedding_service)
+    user_id = uuid.uuid4()
+    db_session.add(User(id=user_id, display_name=f"seeds-{user_id}"))
+    db_session.flush()
+    graph = GraphService(db_session, user_id, fake_embedding_service)
     for index in range(8):
         _task(graph, f"CAP-{index}")
     db_session.flush()
 
-    result = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID).get_workspace(
+    result = GraphWorkspaceService(db_session, user_id).get_workspace(
         seed_limit=12,
-        node_limit=3,
+        soft_window_target=3,
     )
-    assert len(result.nodes) <= 3
+    assert len(result.nodes) == 3
     assert result.truncated is True
+    assert result.semantic_window_complete is True

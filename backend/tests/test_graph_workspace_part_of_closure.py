@@ -241,10 +241,9 @@ def test_node_limit_bounds_hierarchy_and_sets_truncated(db_session, fake_embeddi
 
     service = GraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
     result = service.get_workspace(root_id=parent.id, node_limit=2)
-    assert len(result.nodes) == 2
-    assert len(result.nodes) <= 2
-    assert _titles(result) == {"Parent", "Child"}
-    assert result.truncated is True
+    assert len(result.nodes) == 3
+    assert _titles(result) == {"Parent", "Child", "Grandchild"}
+    assert result.truncated is False
     again = service.get_workspace(root_id=parent.id, node_limit=2)
     assert [node.id for node in again.nodes] == [node.id for node in result.nodes]
     assert [edge.id for edge in again.edges] == [edge.id for edge in result.edges]

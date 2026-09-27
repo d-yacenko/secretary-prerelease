@@ -14,7 +14,7 @@ from app.api.schemas import (
     PersonPresentation,
 )
 from app.core.current_user import CurrentUserContext
-from app.services.errors import NotFoundError, ValidationError
+from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
     DEFAULT_NODE_LIMIT,
@@ -43,6 +43,7 @@ def get_graph_workspace(
     seed_limit: int = Query(default=DEFAULT_SEED_LIMIT, ge=1, le=MAX_SEED_LIMIT),
     neighbor_limit: int = Query(default=DEFAULT_NEIGHBOR_LIMIT, ge=1, le=MAX_NEIGHBOR_LIMIT),
     node_limit: int = Query(default=DEFAULT_NODE_LIMIT, ge=1, le=MAX_NODE_LIMIT),
+    window_index: int = Query(default=0, ge=0),
     service: GraphWorkspaceService = Depends(_service),
 ) -> GraphWorkspaceOut:
     try:
@@ -51,11 +52,22 @@ def get_graph_workspace(
             seed_limit=seed_limit,
             neighbor_limit=neighbor_limit,
             node_limit=node_limit,
+            window_index=window_index,
         )
     except NotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"{exc.resource} not found",
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
+        ) from exc
+    except ConstellationTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
         ) from exc
     return GraphWorkspaceOut(
         root_id=result.root_id,
@@ -63,6 +75,12 @@ def get_graph_workspace(
         nodes=[ObjectOut.from_model(node) for node in result.nodes],
         edges=[EdgeOut.from_model(edge) for edge in result.edges],
         truncated=result.truncated,
+        window_index=result.window_index,
+        window_count=result.window_count,
+        has_previous_window=result.has_previous_window,
+        has_next_window=result.has_next_window,
+        constellation_root_ids=list(result.constellation_root_ids),
+        semantic_window_complete=result.semantic_window_complete,
     )
 
 

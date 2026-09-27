@@ -2505,6 +2505,12 @@ class GraphWorkspaceOut {
     required this.edges,
     required this.truncated,
     this.people = const [],
+    this.windowIndex = 0,
+    this.windowCount = 1,
+    this.hasPreviousWindow = false,
+    this.hasNextWindow = false,
+    this.constellationRootIds = const [],
+    this.semanticWindowComplete = false,
   });
 
   final String? rootId;
@@ -2513,6 +2519,12 @@ class GraphWorkspaceOut {
   final List<SecretaryEdge> edges;
   final bool truncated;
   final List<PersonPresentation> people;
+  final int windowIndex;
+  final int windowCount;
+  final bool hasPreviousWindow;
+  final bool hasNextWindow;
+  final List<String> constellationRootIds;
+  final bool semanticWindowComplete;
 
   factory GraphWorkspaceOut.fromJson(Map<String, dynamic> json) {
     return GraphWorkspaceOut(
@@ -2527,6 +2539,14 @@ class GraphWorkspaceOut {
           .map((e) => SecretaryEdge.fromJson(e as Map<String, dynamic>))
           .toList(),
       truncated: json['truncated'] as bool? ?? false,
+      windowIndex: json['window_index'] as int? ?? 0,
+      windowCount: json['window_count'] as int? ?? 1,
+      hasPreviousWindow: json['has_previous_window'] as bool? ?? false,
+      hasNextWindow: json['has_next_window'] as bool? ?? false,
+      constellationRootIds: (json['constellation_root_ids'] as List<dynamic>? ?? [])
+          .map((item) => item as String)
+          .toList(),
+      semanticWindowComplete: json['semantic_window_complete'] as bool? ?? false,
       people: (json['people'] as List<dynamic>? ?? [])
           .map(
             (item) => PersonPresentation.fromJson(item as Map<String, dynamic>),

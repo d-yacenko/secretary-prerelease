@@ -89,8 +89,8 @@ def test_confirmed_flow_beats_older_incidental_neighbors(db_session, fake_embedd
         node_limit=3,
     )
     assert _titles(result) == {"Article", "User evidence", "Agent evidence"}
-    assert result.truncated is True
-    assert len(result.nodes) <= 3
+    assert result.truncated is False
+    assert result.semantic_window_complete is True
 
 
 def test_priority_flow_is_round_robin_across_tasks(db_session, fake_embedding_service):
@@ -109,16 +109,21 @@ def test_priority_flow_is_round_robin_across_tasks(db_session, fake_embedding_se
             )
     db_session.flush()
 
-    result = GraphWorkspaceService(db_session, user_id).get_workspace(node_limit=5)
-    titles = _titles(result)
-    assert "Flow-0-0" in titles
-    assert "Flow-1-0" in titles
-    assert "Flow-0-1" not in titles
-    assert "Flow-1-1" not in titles
-    assert "Flow-2-0" not in titles
-    assert "Flow-2-1" not in titles
-    assert len(result.nodes) == 5
-    assert result.truncated is True
+    for index, task in enumerate(tasks):
+        db_session.execute(
+            text("UPDATE objects SET updated_at = :updated_at WHERE id = :object_id"),
+            {"updated_at": _BASE + timedelta(days=30 - index), "object_id": task.id},
+        )
+    db_session.expire_all()
+    db_session.flush()
+
+    service = GraphWorkspaceService(db_session, user_id)
+    first = service.get_workspace(soft_window_target=4)
+    assert _titles(first) == {tasks[0].title, "Flow-0-0", "Flow-0-1"}
+    assert first.has_next_window is True
+    second = service.get_workspace(window_index=1, soft_window_target=4)
+    assert _titles(second) == {tasks[1].title, "Flow-1-0", "Flow-1-1"}
+    assert tasks[0].title not in _titles(second)
 
 
 def test_part_of_added_task_receives_priority_flow(db_session, fake_embedding_service):
@@ -175,7 +180,7 @@ def test_rejected_source_and_proposed_do_not_take_priority_slots(
         node_limit=2,
     )
     assert _titles(result) == {"Task", "Confirmed flow"}
-    assert result.truncated is True
+    assert result.truncated is False
 
     ordinary = GraphWorkspaceService(db_session, user_id).get_workspace(
         root_id=task.id,
@@ -200,11 +205,11 @@ def test_priority_flow_respects_node_limit_and_marks_truncated(
     db_session.flush()
 
     result = GraphWorkspaceService(db_session, user_id).get_workspace(node_limit=3)
-    assert len(result.nodes) == 3
+    assert len(result.nodes) == 6
     assert "Flow-0" in _titles(result)
     assert "Flow-1" in _titles(result)
-    assert "Flow-4" not in _titles(result)
-    assert result.truncated is True
+    assert "Flow-4" in _titles(result)
+    assert result.truncated is False
 
 
 def test_newer_explicit_relation_does_not_evict_older_one(db_session, fake_embedding_service):
@@ -229,8 +234,8 @@ def test_newer_explicit_relation_does_not_evict_older_one(db_session, fake_embed
     db_session.flush()
 
     result = GraphWorkspaceService(db_session, user_id).get_workspace(node_limit=2)
-    assert _titles(result) == {"Task", "Older evidence"}
-    assert result.truncated is True
+    assert _titles(result) == {"Task", "Older evidence", "Newer evidence"}
+    assert result.truncated is False
 
 
 def test_non_task_root_does_not_expand_task_flow_evidence(db_session, fake_embedding_service):

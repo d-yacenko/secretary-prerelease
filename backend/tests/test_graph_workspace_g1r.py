@@ -187,7 +187,7 @@ def test_parallel_part_of_and_related_to_between_same_endpoints_are_both_returne
     graph = _graph(db_session, user_id, fake_embedding_service)
     hub = _task(graph, "Hub")
     child = _task(graph, "Child", status="done")
-    parent = _task(graph, "Parent", status="done")
+    parent = _task(graph, "Parent", status="open")
     _edge(graph, hub, child, "related_to")
     _edge(graph, hub, parent, "related_to")
     structural = _edge(graph, child, parent, "part_of")

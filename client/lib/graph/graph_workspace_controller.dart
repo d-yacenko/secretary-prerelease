@@ -33,6 +33,11 @@ class GraphWorkspaceController extends ChangeNotifier {
   String? errorMessage;
   String? rootId;
   bool truncated = false;
+  int windowIndex = 0;
+  int windowCount = 1;
+  bool hasPreviousWindow = false;
+  bool hasNextWindow = false;
+  bool semanticWindowComplete = false;
   String? selectedObjectId;
   String? selectedEdgeId;
   String? searchQuery;
@@ -94,6 +99,11 @@ class GraphWorkspaceController extends ChangeNotifier {
     errorMessage = null;
     rootId = null;
     truncated = false;
+    windowIndex = 0;
+    windowCount = 1;
+    hasPreviousWindow = false;
+    hasNextWindow = false;
+    semanticWindowComplete = false;
     selectedObjectId = null;
     selectedEdgeId = null;
     searchQuery = null;
@@ -121,11 +131,18 @@ class GraphWorkspaceController extends ChangeNotifier {
     await loadOverview();
   }
 
-  Future<GraphWorkspaceOut> _fetchWorkspace({String? rootId, String? query}) {
+  Future<GraphWorkspaceOut> _fetchWorkspace({
+    String? rootId,
+    String? query,
+    int? windowIndex,
+  }) {
     if (mode == GraphWorkspaceMode.people) {
       return _apiClient.getPeopleWorkspace(rootId: rootId, query: query);
     }
-    return _apiClient.getGraphWorkspace(rootId: rootId);
+    return _apiClient.getGraphWorkspace(
+      rootId: rootId,
+      windowIndex: rootId == null ? windowIndex : null,
+    );
   }
 
   Future<void> refreshCurrentWorkspace() async {
@@ -133,7 +150,7 @@ class GraphWorkspaceController extends ChangeNotifier {
       return;
     }
     if (rootId == null) {
-      await loadOverview();
+      await loadOverviewWindow(windowIndex);
       return;
     }
     await _refreshRooted(rootId!);
@@ -143,7 +160,32 @@ class GraphWorkspaceController extends ChangeNotifier {
     if (loadState == GraphWorkspaceLoadState.loading) {
       return;
     }
-    await _loadOverviewInternal(setLoading: true);
+    await _loadOverviewInternal(setLoading: true, windowIndex: 0);
+  }
+
+  Future<void> loadOverviewWindow(int index) async {
+    if (loadState == GraphWorkspaceLoadState.loading) {
+      return;
+    }
+    await _loadOverviewInternal(
+      setLoading: true,
+      windowIndex: index,
+      preserveSelection: true,
+    );
+  }
+
+  Future<void> loadNextOverviewWindow() async {
+    if (!hasNextWindow || loadState == GraphWorkspaceLoadState.loading) {
+      return;
+    }
+    await loadOverviewWindow(windowIndex + 1);
+  }
+
+  Future<void> loadPreviousOverviewWindow() async {
+    if (!hasPreviousWindow || loadState == GraphWorkspaceLoadState.loading) {
+      return;
+    }
+    await loadOverviewWindow(windowIndex - 1);
   }
 
   Future<void> _loadOverviewFromMissingRoot() async {
@@ -171,20 +213,30 @@ class GraphWorkspaceController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _loadOverviewInternal({required bool setLoading}) async {
+  Future<void> _loadOverviewInternal({
+    required bool setLoading,
+    int windowIndex = 0,
+    bool preserveSelection = false,
+  }) async {
     if (setLoading) {
       loadState = GraphWorkspaceLoadState.loading;
       errorMessage = null;
       notifyListeners();
     }
     try {
-      final workspace = await _fetchWorkspace();
+      final previousSelection = selectedObjectId;
+      final workspace = await _fetchWorkspace(windowIndex: windowIndex);
+      final keptSelection = preserveSelection &&
+              previousSelection != null &&
+              workspace.nodes.any((node) => node.id == previousSelection)
+          ? previousSelection
+          : null;
       _replaceWorkspaceState(
         workspace: workspace,
         layoutRoot: null,
         freshRoot: true,
         rootIdAfter: null,
-        selectObjectId: null,
+        selectObjectId: keptSelection,
         fitAfterLayout: true,
       );
       loadState = GraphWorkspaceLoadState.ready;
@@ -192,12 +244,19 @@ class GraphWorkspaceController extends ChangeNotifier {
       _authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       loadState = GraphWorkspaceLoadState.error;
-      errorMessage = error.message;
+      errorMessage = _workspaceErrorMessage(error);
     } catch (_) {
       loadState = GraphWorkspaceLoadState.error;
       errorMessage = 'Failed to load graph workspace';
     }
     notifyListeners();
+  }
+
+  String _workspaceErrorMessage(ApiException error) {
+    if (error.message.toLowerCase().contains('too large for complete overview')) {
+      return 'Это соцветие слишком велико для полного обзора. Нужен отдельный сфокусированный вид.';
+    }
+    return error.message;
   }
 
   Future<void> reRoot(String objectId) async {
@@ -222,7 +281,7 @@ class GraphWorkspaceController extends ChangeNotifier {
       _authController.handleAuthenticationFailure();
     } on ApiException catch (error) {
       loadState = GraphWorkspaceLoadState.ready;
-      errorMessage = error.message;
+      errorMessage = _workspaceErrorMessage(error);
     } catch (_) {
       loadState = GraphWorkspaceLoadState.ready;
       errorMessage = 'Failed to load graph workspace';
@@ -495,6 +554,11 @@ class GraphWorkspaceController extends ChangeNotifier {
     _applyWorkspace(workspace, layoutRoot: layoutRoot, freshRoot: freshRoot);
     rootId = rootIdAfter;
     truncated = workspace.truncated;
+    windowIndex = workspace.windowIndex;
+    windowCount = workspace.windowCount;
+    hasPreviousWindow = workspace.hasPreviousWindow;
+    hasNextWindow = workspace.hasNextWindow;
+    semanticWindowComplete = workspace.semanticWindowComplete;
     selectedObjectId = selectObjectId;
     selectedEdgeId = null;
     shouldFitAfterLayout = fitAfterLayout;

@@ -1,7 +1,8 @@
 """Bounded read-only graph workspace for Flutter Graph UI."""
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import and_, case, func, literal, or_, select, union_all
@@ -13,7 +14,7 @@ from app.domain.object_visibility import is_object_hidden_from_active_reads, obj
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS
 from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
-from app.services.errors import NotFoundError
+from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
 
@@ -23,6 +24,8 @@ DEFAULT_NEIGHBOR_LIMIT = 12
 MAX_NEIGHBOR_LIMIT = 24
 DEFAULT_NODE_LIMIT = 80
 MAX_NODE_LIMIT = 120
+SOFT_WINDOW_NODE_TARGET = 80
+MAX_COMPLETE_WINDOW_NODES = 500
 PRIORITY_TASK_FLOW_TYPES = ("references", "related_to", "depends_on")
 PRIORITY_TASK_FLOW_ORIGINS = (USER_ORIGIN, AGENT_ORIGIN)
 
@@ -34,6 +37,28 @@ class GraphWorkspaceResult:
     nodes: list[Object]
     edges: list[Edge]
     truncated: bool
+    window_index: int = 0
+    window_count: int = 1
+    has_previous_window: bool = False
+    has_next_window: bool = False
+    constellation_root_ids: tuple[UUID, ...] = ()
+    semantic_window_complete: bool = False
+
+
+@dataclass(frozen=True)
+class _Constellation:
+    """One indivisible overview unit.
+
+    Order key is the minimum active-member seed key:
+    missing due_at last, then earliest due_at, confirmed before other states,
+    most recently updated, then task id. Unrelated lower-priority constellations
+    therefore sort after earlier pages.
+    """
+
+    root_id: UUID
+    members: dict[UUID, Object]
+    sort_key: tuple
+    node_ids: frozenset[UUID] = field(default_factory=frozenset)
 
 
 class GraphWorkspaceService:
@@ -48,20 +73,30 @@ class GraphWorkspaceService:
         seed_limit: int = DEFAULT_SEED_LIMIT,
         neighbor_limit: int = DEFAULT_NEIGHBOR_LIMIT,
         node_limit: int = DEFAULT_NODE_LIMIT,
+        window_index: int = 0,
+        soft_window_target: int | None = None,
+        max_complete_window_nodes: int | None = None,
     ) -> GraphWorkspaceResult:
-        seed_limit = min(max(1, seed_limit), MAX_SEED_LIMIT)
+        # seed_limit remains accepted for older clients. Overview membership is
+        # whole constellations, so this bound must not slice one.
+        _ = min(max(1, seed_limit), MAX_SEED_LIMIT)
         neighbor_limit = min(max(1, neighbor_limit), MAX_NEIGHBOR_LIMIT)
         node_limit = min(max(1, node_limit), MAX_NODE_LIMIT)
 
         if root_id is not None:
-            return self._rooted_workspace(root_id, neighbor_limit, node_limit)
-        return self._overview_workspace(seed_limit, neighbor_limit, node_limit)
+            return self._rooted_workspace(root_id, neighbor_limit, node_limit, max_complete_window_nodes)
+        return self._semantic_overview(
+            window_index=window_index,
+            soft_target=soft_window_target or SOFT_WINDOW_NODE_TARGET,
+            emergency_ceiling=max_complete_window_nodes or MAX_COMPLETE_WINDOW_NODES,
+        )
 
     def _rooted_workspace(
         self,
         root_id: UUID,
         neighbor_limit: int,
         node_limit: int,
+        max_complete_window_nodes: int | None,
     ) -> GraphWorkspaceResult:
         root = self._session.scalar(
             select(Object).where(
@@ -75,83 +110,239 @@ class GraphWorkspaceService:
         node_map: dict[UUID, Object] = {root.id: root}
         edge_map: dict[UUID, Edge] = {}
         truncated = False
+        emergency = max_complete_window_nodes or MAX_COMPLETE_WINDOW_NODES
         if root.kind == "task":
-            truncated = self._close_confirmed_part_of(
-                [root.id],
-                node_map,
-                edge_map,
-                node_limit,
-            )
-            truncated = truncated or self._admit_priority_task_flow(
-                node_map,
-                edge_map,
-                node_limit,
-            )
+            constellation = self._constellation_containing(root.id, require_non_terminal=False)
+            if constellation is not None:
+                if len(constellation.node_ids) > emergency:
+                    raise ConstellationTooLargeError
+                node_map = dict(constellation.members)
+                edge_map = {}
 
+        ordinary_cap = max(node_limit, len(node_map))
         truncated = truncated or self._admit_ordinary_neighbors(
             center_ids=[root_id],
             node_map=node_map,
             edge_map=edge_map,
             neighbor_limit=neighbor_limit,
-            node_limit=node_limit,
+            node_limit=ordinary_cap,
         )
 
         edge_map = self._complete_edges_among_nodes(edge_map, node_map)
         return GraphWorkspaceResult(
             root_id=root_id,
             seed_ids=[],
-            nodes=list(node_map.values()),
+            nodes=self._ordered_nodes(node_map, root_id),
             edges=list(edge_map.values()),
             truncated=truncated,
         )
 
-    def _overview_workspace(
+    def _semantic_overview(
         self,
-        seed_limit: int,
-        neighbor_limit: int,
-        node_limit: int,
+        *,
+        window_index: int,
+        soft_target: int,
+        emergency_ceiling: int,
     ) -> GraphWorkspaceResult:
-        actual_seed_limit = min(seed_limit, node_limit)
-        total_seeds = self._count_active_seed_tasks()
-        seeds = self._fetch_active_seed_tasks(actual_seed_limit)
-        truncated = total_seeds > actual_seed_limit
-
-        node_map: dict[UUID, Object] = {seed.id: seed for seed in seeds}
-        edge_map: dict[UUID, Edge] = {}
-        seed_ids = [seed.id for seed in seeds]
-        if seed_ids:
-            truncated = truncated or self._close_confirmed_part_of(
-                seed_ids,
-                node_map,
-                edge_map,
-                node_limit,
-            )
-            truncated = truncated or self._admit_priority_task_flow(
-                node_map,
-                edge_map,
-                node_limit,
-            )
-
-        if seed_ids:
-            truncated = truncated or self._admit_ordinary_neighbors(
-                center_ids=seed_ids,
-                node_map=node_map,
-                edge_map=edge_map,
-                neighbor_limit=neighbor_limit,
-                node_limit=node_limit,
-            )
-
-        if len(node_map) > node_limit:
-            truncated = True
-            node_map = self._trim_nodes_deterministically(node_map, node_limit, seed_ids)
-
-        edge_map = self._complete_edges_among_nodes(edge_map, node_map)
+        constellations = self._overview_constellations(emergency_ceiling)
+        windows = self._pack_constellation_windows(constellations, soft_target)
+        if not windows:
+            windows = [[]]
+        if window_index < 0 or window_index >= len(windows):
+            raise ValidationError("graph window index is out of range")
+        chosen = windows[window_index]
+        node_map: dict[UUID, Object] = {}
+        root_ids: list[UUID] = []
+        for constellation in chosen:
+            node_map.update(constellation.members)
+            root_ids.append(constellation.root_id)
+        edge_map = self._complete_edges_among_nodes({}, node_map)
+        window_count = len(windows)
         return GraphWorkspaceResult(
             root_id=None,
-            seed_ids=seed_ids,
-            nodes=list(node_map.values()),
+            seed_ids=root_ids,
+            nodes=self._ordered_nodes(node_map, None),
             edges=list(edge_map.values()),
-            truncated=truncated,
+            truncated=window_count > 1,
+            window_index=window_index,
+            window_count=window_count,
+            has_previous_window=window_index > 0,
+            has_next_window=window_index + 1 < window_count,
+            constellation_root_ids=tuple(root_ids),
+            semantic_window_complete=True,
+        )
+
+    def _overview_constellations(self, emergency_ceiling: int) -> list[_Constellation]:
+        tasks = self._visible_tasks()
+        if not tasks:
+            return []
+        parent_of, children_of = self._confirmed_part_of_forest(set(tasks))
+        roots = [task_id for task_id in tasks if task_id not in parent_of]
+        constellations: list[_Constellation] = []
+        for root_id in roots:
+            member_ids = self._descendant_ids(root_id, children_of)
+            members = {task_id: tasks[task_id] for task_id in member_ids}
+            if not any(self._task_is_overview_seed(task) for task in members.values()):
+                continue
+            flows = self._priority_flows_for_tasks(set(members))
+            members.update(flows)
+            if len(members) > emergency_ceiling:
+                raise ConstellationTooLargeError
+            ordering_members = [
+                task
+                for task in members.values()
+                if task.kind == "task" and self._task_is_overview_seed(task)
+            ] or [task for task in members.values() if task.kind == "task"]
+            constellations.append(
+                _Constellation(
+                    root_id=root_id,
+                    members=members,
+                    sort_key=min(self._task_seed_key(task) for task in ordering_members),
+                    node_ids=frozenset(members),
+                )
+            )
+        constellations.sort(key=lambda item: (item.sort_key, str(item.root_id)))
+        return constellations
+
+    def _pack_constellation_windows(
+        self,
+        constellations: list[_Constellation],
+        soft_target: int,
+    ) -> list[list[_Constellation]]:
+        windows: list[list[_Constellation]] = []
+        current: list[_Constellation] = []
+        occupied: set[UUID] = set()
+        for constellation in constellations:
+            added = constellation.node_ids - occupied
+            if current and len(occupied) + len(added) > soft_target:
+                windows.append(current)
+                current = [constellation]
+                occupied = set(constellation.node_ids)
+                continue
+            current.append(constellation)
+            occupied.update(constellation.node_ids)
+        if current:
+            windows.append(current)
+        return windows
+
+    def _constellation_containing(
+        self,
+        task_id: UUID,
+        *,
+        require_non_terminal: bool,
+    ) -> _Constellation | None:
+        tasks = self._visible_tasks()
+        if task_id not in tasks:
+            return None
+        parent_of, children_of = self._confirmed_part_of_forest(set(tasks))
+        root_id = task_id
+        seen_parents: set[UUID] = set()
+        while root_id in parent_of and root_id not in seen_parents:
+            seen_parents.add(root_id)
+            root_id = parent_of[root_id]
+        member_ids = self._descendant_ids(root_id, children_of)
+        members = {member_id: tasks[member_id] for member_id in member_ids}
+        if require_non_terminal and not any(
+            self._task_is_overview_seed(task) for task in members.values()
+        ):
+            return None
+        members.update(self._priority_flows_for_tasks(set(members)))
+        return _Constellation(
+            root_id=root_id,
+            members=members,
+            sort_key=(),
+            node_ids=frozenset(members),
+        )
+
+    def _visible_tasks(self) -> dict[UUID, Object]:
+        rows = self._session.scalars(
+            select(Object).where(
+                Object.user_id == self._user_id,
+                Object.kind == "task",
+                Object.state != REJECTED_STATE,
+                telegram_mtproto_active_object_predicate(),
+            )
+        ).all()
+        return {
+            task.id: task
+            for task in rows
+            if not is_object_hidden_from_active_reads(task)
+        }
+
+    def _confirmed_part_of_forest(
+        self,
+        task_ids: set[UUID],
+    ) -> tuple[dict[UUID, UUID], dict[UUID, list[UUID]]]:
+        if not task_ids:
+            return {}, {}
+        edges = self._session.scalars(
+            select(Edge).where(
+                Edge.user_id == self._user_id,
+                Edge.type == "part_of",
+                Edge.state == CONFIRMED_STATE,
+                Edge.source_id.in_(task_ids),
+                Edge.target_id.in_(task_ids),
+            )
+        ).all()
+        parent_of: dict[UUID, UUID] = {}
+        children_of: dict[UUID, list[UUID]] = {}
+        for edge in sorted(edges, key=lambda item: (item.created_at, str(item.id))):
+            if edge.source_id in parent_of:
+                continue
+            parent_of[edge.source_id] = edge.target_id
+            children_of.setdefault(edge.target_id, []).append(edge.source_id)
+        return parent_of, children_of
+
+    def _descendant_ids(
+        self,
+        root_id: UUID,
+        children_of: dict[UUID, list[UUID]],
+    ) -> set[UUID]:
+        seen = {root_id}
+        pending = [root_id]
+        while pending:
+            current = pending.pop()
+            for child_id in children_of.get(current, []):
+                if child_id in seen:
+                    continue
+                seen.add(child_id)
+                pending.append(child_id)
+        return seen
+
+    def _priority_flows_for_tasks(self, task_ids: set[UUID]) -> dict[UUID, Object]:
+        buckets = self._priority_task_flow_buckets(task_ids)
+        flows: dict[UUID, Object] = {}
+        for rows in buckets.values():
+            for _edge, flow in rows:
+                flows[flow.id] = flow
+        return flows
+
+    def _ordered_nodes(self, node_map: dict[UUID, Object], root_id: UUID | None) -> list[Object]:
+        tasks = [obj for obj in node_map.values() if obj.kind == "task"]
+        others = [obj for obj in node_map.values() if obj.kind != "task"]
+        if root_id is not None and root_id in node_map and node_map[root_id].kind == "task":
+            tasks = [node_map[root_id]] + sorted(
+                (task for task in tasks if task.id != root_id),
+                key=self._task_seed_key,
+            )
+        else:
+            tasks = sorted(tasks, key=self._task_seed_key)
+        others.sort(key=lambda obj: (obj.title, str(obj.id)))
+        return tasks + others
+
+    def _task_is_overview_seed(self, task: Object) -> bool:
+        return task.status is None or task.status not in TERMINAL_TASK_STATUSES_FOR_READS
+
+    def _task_seed_key(self, task: Object) -> tuple:
+        due_missing = task.due_at is None
+        due_token = "" if due_missing else task.due_at.isoformat()
+        updated = task.updated_at or datetime.min.replace(tzinfo=UTC)
+        return (
+            due_missing,
+            due_token,
+            0 if task.state == CONFIRMED_STATE else 1,
+            -updated.timestamp(),
+            str(task.id),
         )
 
     def _trim_nodes_deterministically(

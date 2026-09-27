@@ -272,10 +272,16 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Text(
-                'Карта показывает только часть графа. Скрытые связи и объекты могут существовать. '
-                'Полный список прямых связей выбранного объекта — в панели сведений.',
-                style: Theme.of(context).textTheme.bodySmall,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _truncationBanner(),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  if (_showOverviewWindowControls) _overviewWindowControls(),
+                ],
               ),
             ),
           ),
@@ -316,6 +322,57 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ),
       ],
     );
+  }
+
+  bool get _showOverviewWindowControls =>
+      widget.controller.mode == GraphWorkspaceMode.tasks &&
+      widget.controller.rootId == null &&
+      widget.controller.windowCount > 1;
+
+  Widget _overviewWindowControls() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'Предыдущая область графа',
+          child: IconButton(
+            key: const ValueKey('graph-overview-window-previous'),
+            visualDensity: VisualDensity.compact,
+            onPressed: widget.controller.hasPreviousWindow
+                ? widget.controller.loadPreviousOverviewWindow
+                : null,
+            icon: const Icon(Icons.chevron_left),
+          ),
+        ),
+        Text(
+          key: const ValueKey('graph-overview-window-status'),
+          'Область ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}',
+        ),
+        Tooltip(
+          message: 'Следующая область графа',
+          child: IconButton(
+            key: const ValueKey('graph-overview-window-next'),
+            visualDensity: VisualDensity.compact,
+            onPressed: widget.controller.hasNextWindow
+                ? widget.controller.loadNextOverviewWindow
+                : null,
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _truncationBanner() {
+    final controller = widget.controller;
+    if (controller.rootId == null &&
+        controller.mode == GraphWorkspaceMode.tasks &&
+        controller.semanticWindowComplete) {
+      return 'Показана часть пространства графа: направления и соцветия в этой области показаны целиком. '
+          'Перейдите в соседнюю область, чтобы увидеть остальные.';
+    }
+    return 'Карта показывает только часть графа. Скрытые связи и объекты могут существовать. '
+        'Полный список прямых связей выбранного объекта — в панели сведений.';
   }
 
   Widget _buildToolbar(BuildContext context) {
@@ -361,6 +418,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 setState(() => _fcoseMode = selection.first);
               },
             ),
+          if (_showOverviewWindowControls && !widget.controller.truncated)
+            _overviewWindowControls(),
           SizedBox(
             width: widget.controller.mode == GraphWorkspaceMode.tasks
                 ? 140
