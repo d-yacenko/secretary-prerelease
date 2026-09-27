@@ -8,6 +8,7 @@ import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/api/secretary_api_client.dart';
 import 'package:personal_secretary/graph/graph_layout.dart';
 import 'package:personal_secretary/graph/graph_workspace_controller.dart';
+import 'package:personal_secretary/graph/task_map_hierarchy.dart';
 
 class _FakeApiClient extends SecretaryApiClient {
   _FakeApiClient(this._handler);
@@ -987,6 +988,61 @@ void main() {
       viewportSize: const Size(800, 600),
     );
     expect(positions, before);
+  });
+
+  test('fresh workspace projection keeps a Task daisy with its Direction', () async {
+    final auth = _FakeAuth();
+    final publications = _obj('publications', 'Publications');
+    final academy = _obj('academy', 'Academy');
+    final paper = _obj('paper', 'Paper');
+    final partOf = _edge(
+      id: 'part',
+      sourceId: 'publications',
+      targetId: 'academy',
+      type: 'part_of',
+    );
+    final related = _edge(
+      id: 'rel',
+      sourceId: 'paper',
+      targetId: 'publications',
+      type: 'related_to',
+    );
+    final controller = GraphWorkspaceController(
+      apiClient: _FakeApiClient((rootId) async {
+        return GraphWorkspaceOut(
+          rootId: null,
+          seedIds: const ['academy'],
+          nodes: [academy, publications, paper],
+          edges: [partOf, related],
+          truncated: false,
+          semanticWindowComplete: true,
+        );
+      }),
+      authController: auth,
+    );
+    await controller.loadOverview();
+    final stale = {
+      'academy': controller.positions['academy']!,
+      'publications': const Offset(3000, 0),
+      'paper': const Offset(6000, 800),
+    };
+    final shown = Map<String, Offset>.from(stale)..addAll(
+      projectTaskMapHierarchy(
+        nodes: controller.nodes,
+        edges: controller.edges,
+      ).positions,
+    );
+    final projection = projectTaskMapHierarchy(
+      nodes: controller.nodes,
+      edges: controller.edges,
+    );
+    expect(projection.components, hasLength(1));
+    expect(projection.placements['publications']!.parentId, 'academy');
+    expect(projection.placements.containsKey('paper'), isFalse);
+    final paperDistance =
+        (shown['paper']! - shown['publications']!).distance;
+    expect(paperDistance, lessThan(1200));
+    expect(shown['paper'], isNot(stale['paper']));
   });
 }
 

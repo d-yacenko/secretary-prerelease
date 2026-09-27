@@ -212,10 +212,17 @@ void main() {
       nodes: tasks,
       edges: [...hierarchy, _edge('left', 'right', 'depends_on')],
     );
-    expect(linked.positions, plain.positions);
+    expect(plain.components, hasLength(2));
+    expect(linked.components, hasLength(1));
+    expect(linked.components.single.structuralTreeCount, 2);
     expect(linked.placements['left-child']!.parentId, 'left');
     expect(linked.placements['right-child']!.parentId, 'right');
+    expect(linked.placements['left']!.parentId, isNull);
+    expect(linked.placements['right']!.parentId, isNull);
+    expect(linked.placements['left']!.rootId, plain.placements['left']!.rootId);
+    expect(linked.placements['right-child']!.depth, plain.placements['right-child']!.depth);
     expect(linked.hierarchyTreeCount, 2);
+    expect(linked.taskRectOverlaps, 0);
     final presentation = presentGraphMapEdge(edge: _edge('left', 'right', 'depends_on'));
     expect(presentation.visibleOnTasksMap, isTrue);
     expect(presentation.dashed, isTrue);
@@ -327,6 +334,140 @@ void main() {
       'preserve=$preserveShift relax=$relaxShift',
     );
   });
+
+  test('confirmed part_of keeps an existing Task daisy with its Direction', () {
+    final publications = _task('publications', ongoing: true);
+    final petals = [
+      _task('paper-a'),
+      _task('paper-b'),
+      _task('paper-c'),
+      _task('paper-d'),
+    ];
+    final academy = _task('academy', ongoing: true);
+    final daisyEdges = [
+      for (final petal in petals) _edge(petal.id, 'publications', 'related_to'),
+    ];
+    final openDaisy = projectTaskMapHierarchy(
+      nodes: [publications, ...petals],
+      edges: daisyEdges,
+    );
+    final attached = projectTaskMapHierarchy(
+      nodes: [academy, publications, ...petals],
+      edges: [...daisyEdges, _edge('publications', 'academy', 'part_of')],
+    );
+    final removed = projectTaskMapHierarchy(
+      nodes: [academy, publications, ...petals],
+      edges: daisyEdges,
+    );
+
+    expect(attached.components, hasLength(1));
+    expect(attached.components.single.taskIds, containsAll(['academy', 'publications', ...petals.map((task) => task.id)]));
+    expect(attached.hierarchyTreeCount, 1);
+    expect(attached.placements['publications']!.parentId, 'academy');
+    expect(attached.placements['paper-a'], isNull);
+    expect(attached.taskRectOverlaps, 0);
+    expect(attached.envelopeOverlaps, 0);
+
+    final openSpan = _span(openDaisy, 'publications', petals.map((task) => task.id));
+    final attachedSpan = _span(attached, 'publications', petals.map((task) => task.id));
+    final removedSpan = _span(removed, 'publications', petals.map((task) => task.id));
+    expect(openSpan, lessThan(900));
+    expect(attachedSpan, lessThan(openSpan + 280));
+    expect(removedSpan, lessThan(900));
+    expect(removed.components.length, greaterThan(1));
+    expect(
+      removed.components.any((component) => component.taskIds.contains('publications') && component.taskIds.contains('paper-a')),
+      isTrue,
+    );
+
+    final ongoing = hybridOngoingRect(attached.positions['publications']!);
+    expect(ongoing.width, 144);
+    expect(ongoing.height, 144);
+    for (final petal in petals) {
+      final card = GraphLayout.nodeRectAt(attached.positions[petal.id]!);
+      expect(ongoing.overlaps(card), isFalse);
+    }
+
+    final reversed = projectTaskMapHierarchy(
+      nodes: [academy, publications, ...petals].reversed.toList(),
+      edges: [...daisyEdges, _edge('publications', 'academy', 'part_of')].reversed.toList(),
+    );
+    expect(reversed.positions, attached.positions);
+
+    final controllerPositions = {
+      'academy': const Offset(0, 0),
+      'publications': const Offset(2400, 0),
+      for (final petal in petals) petal.id: const Offset(4800, 400),
+    };
+    final shown = Map<String, Offset>.from(controllerPositions)
+      ..addAll(attached.positions);
+    final shownSpan = _span(
+      attached,
+      'publications',
+      petals.map((task) => task.id),
+      positions: shown,
+    );
+    expect(shownSpan, attachedSpan);
+    expect(shown['paper-a'], isNot(controllerPositions['paper-a']));
+  });
+
+  test('two disconnected part_of trees stay separate visual components', () {
+    final laid = projectTaskMapHierarchy(
+      nodes: [
+        _task('left'),
+        _task('left-child'),
+        _task('right'),
+        _task('right-child'),
+      ],
+      edges: [
+        _edge('left-child', 'left', 'part_of'),
+        _edge('right-child', 'right', 'part_of'),
+      ],
+    );
+    expect(laid.components, hasLength(2));
+    expect(laid.hierarchyTreeCount, 2);
+    expect(laid.freeComponentCount, 0);
+    expect(laid.taskRectOverlaps, 0);
+  });
+
+  test('Task to Flow evidence does not join Task packing', () {
+    final withFlow = projectTaskMapHierarchy(
+      nodes: [
+        _task('publications', ongoing: true),
+        _task('paper'),
+        _flow('mail', const Offset(9000, 4000)),
+      ],
+      edges: [
+        _edge('paper', 'publications', 'references'),
+        _edge('publications', 'mail', 'references'),
+      ],
+    );
+    final tasksOnly = projectTaskMapHierarchy(
+      nodes: [
+        _task('publications', ongoing: true),
+        _task('paper'),
+      ],
+      edges: [_edge('paper', 'publications', 'references')],
+    );
+    expect(withFlow.positions, tasksOnly.positions);
+    expect(withFlow.components.single.taskIds, ['paper', 'publications']);
+    expect(withFlow.taskBounds.width, lessThan(2000));
+  });
+}
+
+double _span(
+  TaskMapHierarchyProjection laid,
+  String anchorId,
+  Iterable<String> ids, {
+  Map<String, Offset>? positions,
+}) {
+  final source = positions ?? laid.positions;
+  final anchor = _center(source[anchorId]!);
+  var span = 0.0;
+  for (final id in ids) {
+    span = math.max(span, (_center(source[id]!) - anchor).distance);
+  }
+  return span;
 }
 
 void _printMetrics(

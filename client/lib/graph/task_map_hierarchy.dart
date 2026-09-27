@@ -43,14 +43,16 @@ class TaskHierarchyPlacement {
 class TaskMapComponent {
   const TaskMapComponent({
     required this.key,
-    required this.hierarchy,
+    required this.structuralTreeCount,
     required this.depth,
     required this.taskIds,
     required this.envelope,
   });
 
   final String key;
-  final bool hierarchy;
+
+  /// Confirmed `part_of` trees inside this visual packing component.
+  final int structuralTreeCount;
   final int depth;
   final List<String> taskIds;
 
@@ -87,10 +89,21 @@ class TaskMapHierarchyProjection {
   final Rect taskBounds;
 
   int get taskCount => positions.length;
-  int get hierarchyTreeCount =>
-      components.where((component) => component.hierarchy).length;
+
+  /// Confirmed `part_of` trees, including several trees that share one visual component.
+  int get hierarchyTreeCount {
+    final roots = <String>{};
+    for (final placement in placements.values) {
+      if (placement.parentId == null) {
+        roots.add(placement.rootId);
+      }
+    }
+    return roots.length;
+  }
+
+  /// Visual packing components that contain no confirmed `part_of` tree.
   int get freeComponentCount =>
-      components.where((component) => !component.hierarchy).length;
+      components.where((component) => component.structuralTreeCount == 0).length;
   int get maxDepth {
     var depth = 0;
     for (final placement in placements.values) {
@@ -139,6 +152,9 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
     ).visibleOnTasksMap) {
       continue;
     }
+    if (edge.state == 'rejected') {
+      continue;
+    }
     if (edge.type == 'part_of') {
       if (edge.state == 'confirmed') {
         confirmedPartOf.add(edge);
@@ -148,6 +164,7 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
     layoutEdges.add(edge);
   }
   confirmedPartOf.sort((a, b) => a.id.compareTo(b.id));
+  layoutEdges.sort((a, b) => a.id.compareTo(b.id));
 
   final parentOf = <String, String>{};
   for (final edge in confirmedPartOf) {
@@ -173,72 +190,22 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
   );
 
   final placements = <String, TaskHierarchyPlacement>{};
-  final drafted = <_DraftComponent>[];
-
-  for (final rootId in roots) {
-    final memberIds = _treeMembers(rootId, childrenOf, taskById.keys.toSet());
-    final centers = <String, Offset>{};
-    _placeRadial(
-      id: rootId,
-      parentId: null,
-      rootId: rootId,
-      depth: 0,
-      radius: 0,
-      sectorStart: -math.pi,
-      sectorEnd: math.pi,
-      origin: Offset.zero,
-      taskById: taskById,
-      childrenOf: childrenOf,
-      baselinePositions: baselinePositions,
-      centers: centers,
-      placements: placements,
-    );
-    final positions = {
-      for (final id in memberIds) id: _topLeftForCenter(centers[id]!),
-    };
-    final envelope = _envelope(positions, taskById);
-    drafted.add(
-      _DraftComponent(
-        key: rootId,
-        hierarchy: true,
-        depth: _maxDepth(memberIds, placements),
-        taskIds: memberIds.toList()..sort(),
-        localPositions: positions,
-        envelope: envelope,
+  final packingAdjacency = _undirected(
+    [...confirmedPartOf, ...layoutEdges],
+    taskById.keys.toSet(),
+  );
+  final drafted = <_DraftComponent>[
+    for (final memberIds in _components(taskById.keys.toSet(), packingAdjacency))
+      _draftVisualComponent(
+        memberIds: memberIds,
+        taskById: taskById,
+        childrenOf: childrenOf,
+        roots: roots.where(memberIds.contains).toList(),
+        layoutEdges: layoutEdges,
+        baselinePositions: baselinePositions,
+        placements: placements,
       ),
-    );
-  }
-
-  final freeIds = taskById.keys.where((id) => !hierarchyIds.contains(id)).toSet();
-  final freeAdjacency = _undirected(layoutEdges, freeIds);
-  for (final component in _components(freeIds, freeAdjacency)) {
-    final componentTasks = [
-      for (final id in component) taskById[id]!,
-    ];
-    final internalEdges = [
-      for (final edge in layoutEdges)
-        if (component.contains(edge.sourceId) && component.contains(edge.targetId))
-          edge,
-    ];
-    final laid = GraphLayout.computePositions(
-      nodes: componentTasks,
-      edges: internalEdges,
-      rootId: null,
-      existing: const {},
-      freshRoot: true,
-    );
-    final key = component.reduce((a, b) => a.compareTo(b) < 0 ? a : b);
-    drafted.add(
-      _DraftComponent(
-        key: key,
-        hierarchy: false,
-        depth: 0,
-        taskIds: component.toList()..sort(),
-        localPositions: laid,
-        envelope: _envelope(laid, taskById),
-      ),
-    );
-  }
+  ];
 
   drafted.sort((a, b) {
     final left = a.envelope.width * a.envelope.height;
@@ -257,7 +224,7 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
     components.add(
       TaskMapComponent(
         key: placed.draft.key,
-        hierarchy: placed.draft.hierarchy,
+        structuralTreeCount: placed.draft.structuralTreeCount,
         depth: placed.draft.depth,
         taskIds: placed.draft.taskIds,
         envelope: placed.envelope,
@@ -283,7 +250,7 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
 class _DraftComponent {
   const _DraftComponent({
     required this.key,
-    required this.hierarchy,
+    required this.structuralTreeCount,
     required this.depth,
     required this.taskIds,
     required this.localPositions,
@@ -291,12 +258,314 @@ class _DraftComponent {
   });
 
   final String key;
-  final bool hierarchy;
+  final int structuralTreeCount;
   final int depth;
   final List<String> taskIds;
   final Map<String, Offset> localPositions;
   final Rect envelope;
 }
+
+_DraftComponent _draftVisualComponent({
+  required Set<String> memberIds,
+  required Map<String, SecretaryObject> taskById,
+  required Map<String, List<String>> childrenOf,
+  required List<String> roots,
+  required List<SecretaryEdge> layoutEdges,
+  required Map<String, Offset> baselinePositions,
+  required Map<String, TaskHierarchyPlacement> placements,
+}) {
+  final orderedIds = memberIds.toList()..sort();
+  if (roots.isEmpty) {
+    final componentTasks = [for (final id in orderedIds) taskById[id]!];
+    final internalEdges = [
+      for (final edge in layoutEdges)
+        if (memberIds.contains(edge.sourceId) && memberIds.contains(edge.targetId)) edge,
+    ];
+    final laid = GraphLayout.computePositions(
+      nodes: componentTasks,
+      edges: internalEdges,
+      rootId: null,
+      existing: const {},
+      freshRoot: true,
+    );
+    return _DraftComponent(
+      key: orderedIds.first,
+      structuralTreeCount: 0,
+      depth: 0,
+      taskIds: orderedIds,
+      localPositions: laid,
+      envelope: _envelope(laid, taskById),
+    );
+  }
+
+  final centers = <String, Offset>{};
+  final membersByRoot = <String, Set<String>>{};
+  final primaryBaseline = _baselineCenter(baselinePositions[roots.first]);
+  for (final rootId in roots) {
+    final rootBaseline = _baselineCenter(baselinePositions[rootId]);
+    final origin = rootId == roots.first || primaryBaseline == null || rootBaseline == null
+        ? Offset.zero
+        : rootBaseline - primaryBaseline;
+    membersByRoot[rootId] = _treeMembers(rootId, childrenOf, memberIds);
+    _placeRadial(
+      id: rootId,
+      parentId: null,
+      rootId: rootId,
+      depth: 0,
+      radius: 0,
+      sectorStart: -math.pi,
+      sectorEnd: math.pi,
+      origin: origin,
+      taskById: taskById,
+      childrenOf: childrenOf,
+      baselinePositions: baselinePositions,
+      centers: centers,
+      placements: placements,
+    );
+  }
+  _separateStructuralTrees(
+    rootIds: roots,
+    membersByRoot: membersByRoot,
+    centers: centers,
+    taskById: taskById,
+  );
+  final freeIds = memberIds.where((id) => !centers.containsKey(id)).toSet();
+  _placeFreeTasks(
+    freeIds: freeIds,
+    layoutEdges: layoutEdges,
+    baselinePositions: baselinePositions,
+    centers: centers,
+    taskById: taskById,
+  );
+  final positions = {
+    for (final id in orderedIds)
+      if (centers.containsKey(id)) id: _topLeftForCenter(centers[id]!),
+  };
+  final treeIds = membersByRoot.values.expand((ids) => ids).toSet();
+  final key = roots.length == 1 && freeIds.isEmpty ? roots.single : orderedIds.first;
+  return _DraftComponent(
+    key: key,
+    structuralTreeCount: roots.length,
+    depth: _maxDepth(treeIds, placements),
+    taskIds: orderedIds,
+    localPositions: positions,
+    envelope: _envelope(positions, taskById),
+  );
+}
+
+void _separateStructuralTrees({
+  required List<String> rootIds,
+  required Map<String, Set<String>> membersByRoot,
+  required Map<String, Offset> centers,
+  required Map<String, SecretaryObject> taskById,
+}) {
+  for (var index = 1; index < rootIds.length; index++) {
+    final rootId = rootIds[index];
+    final members = membersByRoot[rootId] ?? const <String>{};
+    for (var step = 0; step < 48; step++) {
+      String? blockedBy;
+      for (var earlier = 0; earlier < index; earlier++) {
+        final other = membersByRoot[rootIds[earlier]] ?? const <String>{};
+        if (_memberRectsOverlap(members, other, centers, taskById)) {
+          blockedBy = rootIds[earlier];
+          break;
+        }
+      }
+      if (blockedBy == null) {
+        break;
+      }
+      final away = _unit(centers[rootId]! - centers[blockedBy]!, const Offset(1, 0));
+      for (final id in members) {
+        centers[id] = centers[id]! + away * (28 + step * 6);
+      }
+    }
+  }
+}
+
+void _placeFreeTasks({
+  required Set<String> freeIds,
+  required List<SecretaryEdge> layoutEdges,
+  required Map<String, Offset> baselinePositions,
+  required Map<String, Offset> centers,
+  required Map<String, SecretaryObject> taskById,
+}) {
+  if (freeIds.isEmpty) {
+    return;
+  }
+  final neighbors = <String, Set<String>>{};
+  for (final edge in layoutEdges) {
+    neighbors.putIfAbsent(edge.sourceId, () => <String>{}).add(edge.targetId);
+    neighbors.putIfAbsent(edge.targetId, () => <String>{}).add(edge.sourceId);
+  }
+  final remaining = Set<String>.from(freeIds);
+  final placedFree = <String>{};
+  while (remaining.isNotEmpty) {
+    String? next;
+    String? anchor;
+    for (final id in remaining.toList()..sort()) {
+      final found = _freeAnchor(
+        id: id,
+        neighbors: neighbors[id] ?? const <String>{},
+        centers: centers,
+        placedFree: placedFree,
+        baselinePositions: baselinePositions,
+      );
+      if (found != null) {
+        next = id;
+        anchor = found;
+        break;
+      }
+    }
+    if (next == null || anchor == null) {
+      final leftover = remaining.toList()..sort();
+      final laid = GraphLayout.computePositions(
+        nodes: [for (final id in leftover) taskById[id]!],
+        edges: const [],
+        rootId: null,
+        existing: const {},
+        freshRoot: true,
+      );
+      for (final id in leftover) {
+        centers[id] = _clearFree(
+          id: id,
+          desired: centerFromTopLeft(laid[id]) ?? Offset.zero,
+          centers: centers,
+          taskById: taskById,
+        );
+      }
+      break;
+    }
+    final anchorCenter = centers[anchor]!;
+    final baselineDelta =
+        (_baselineCenter(baselinePositions[next]) ?? anchorCenter) -
+        (_baselineCenter(baselinePositions[anchor]) ?? anchorCenter);
+    centers[next] = _clearFree(
+      id: next,
+      desired: anchorCenter + baselineDelta,
+      centers: centers,
+      taskById: taskById,
+    );
+    placedFree.add(next);
+    remaining.remove(next);
+  }
+}
+
+String? _freeAnchor({
+  required String id,
+  required Set<String> neighbors,
+  required Map<String, Offset> centers,
+  required Set<String> placedFree,
+  required Map<String, Offset> baselinePositions,
+}) {
+  final placed = neighbors.where(centers.containsKey).toList();
+  if (placed.isEmpty) {
+    return null;
+  }
+  placed.sort((a, b) {
+    final preferPlacedFree = placedFree.contains(a) == placedFree.contains(b)
+        ? 0
+        : placedFree.contains(a)
+        ? 1
+        : -1;
+    if (preferPlacedFree != 0) {
+      return preferPlacedFree;
+    }
+    final left = _baselineDistance(id, a, baselinePositions);
+    final right = _baselineDistance(id, b, baselinePositions);
+    final distance = left.compareTo(right);
+    if (distance != 0) {
+      return distance;
+    }
+    return a.compareTo(b);
+  });
+  return placed.first;
+}
+
+double _baselineDistance(
+  String left,
+  String right,
+  Map<String, Offset> baselinePositions,
+) {
+  final a = _baselineCenter(baselinePositions[left]);
+  final b = _baselineCenter(baselinePositions[right]);
+  if (a == null || b == null) {
+    return double.infinity;
+  }
+  return (a - b).distance;
+}
+
+Offset _clearFree({
+  required String id,
+  required Offset desired,
+  required Map<String, Offset> centers,
+  required Map<String, SecretaryObject> taskById,
+}) {
+  var center = desired;
+  for (var step = 0; step < 48; step++) {
+    final hit = _overlappingCenter(id, center, centers, taskById);
+    if (hit == null) {
+      return center;
+    }
+    center += _unit(center - hit, const Offset(1, 0)) * (24 + step * 8);
+  }
+  return center;
+}
+
+Offset? _overlappingCenter(
+  String id,
+  Offset center,
+  Map<String, Offset> centers,
+  Map<String, SecretaryObject> taskById,
+) {
+  final rect = taskPresentationRect(taskById[id]!, _topLeftForCenter(center)).inflate(1);
+  final ids = centers.keys.toList()..sort();
+  for (final other in ids) {
+    if (other == id) {
+      continue;
+    }
+    final otherRect = taskPresentationRect(
+      taskById[other]!,
+      _topLeftForCenter(centers[other]!),
+    ).inflate(1);
+    if (rect.overlaps(otherRect)) {
+      return centers[other];
+    }
+  }
+  return null;
+}
+
+bool _memberRectsOverlap(
+  Set<String> left,
+  Set<String> right,
+  Map<String, Offset> centers,
+  Map<String, SecretaryObject> taskById,
+) {
+  for (final a in left) {
+    final leftRect = taskPresentationRect(
+      taskById[a]!,
+      _topLeftForCenter(centers[a]!),
+    ).inflate(1);
+    for (final b in right) {
+      final rightRect = taskPresentationRect(
+        taskById[b]!,
+        _topLeftForCenter(centers[b]!),
+      ).inflate(1);
+      if (leftRect.overlaps(rightRect)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+Offset _unit(Offset vector, Offset fallback) {
+  if (vector.distance < 1) {
+    return fallback;
+  }
+  return vector / vector.distance;
+}
+
+Offset? _baselineCenter(Offset? topLeft) => centerFromTopLeft(topLeft);
 
 class _PlacedComponent {
   const _PlacedComponent({
