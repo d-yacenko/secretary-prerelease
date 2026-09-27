@@ -33,11 +33,29 @@ Yet the structural `part_of` lines are absent from the canvas.
 This proves:
 - persistence truth exists;
 - both endpoints are admitted to the current workspace;
-- the workspace/canvas edge set is incomplete.
+- the initial overview workspace/canvas edge set is incomplete.
+
+Additional human evidence BEFORE Executor start:
+
+- with `Создание курсов` still selected, the human pressed `Показать связи`;
+- the previously missing structural arrows immediately appeared;
+- no relation was created or edited during that action.
+
+Code path already verified:
+
+`Показать связи -> GraphWorkspaceController.expandSelected() -> GET /graph/workspace?root_id=<selected> -> _mergeWorkspace(...)`
+
+This is NOT a painter visibility toggle. It fetches a rooted workspace and merges its returned nodes/edges into the existing overview.
+
+Therefore the product reproduction is now stronger:
+
+**overview contains the visible Task endpoints but omits one or more persisted edges; rooted workspace for one endpoint returns those edges; merging the rooted response makes the existing renderer draw them.**
+
+The renderer/LOD is therefore already capable of drawing these edges once they are in the controller edge set.
 
 Do not inspect or mutate the user's production data to reproduce this.
 
-## Root-cause hypothesis to verify
+## Root cause to reproduce precisely
 
 Current `GraphWorkspaceService` builds `edge_map` incrementally while:
 - closing confirmed `part_of`;
@@ -45,13 +63,22 @@ Current `GraphWorkspaceService` builds `edge_map` incrementally while:
 
 After the final `node_map` is known, it only filters the already accumulated `edge_map` by endpoint membership.
 
-It does NOT guarantee:
+The human behavior strongly indicates an overview/rooted divergence caused by that traversal-dependent edge accumulation:
 
-**for every persisted active/non-rejected relation whose source and target are both in the final admitted node set, the workspace response contains that edge.**
+- overview: endpoints present, edge absent;
+- rooted workspace around selected endpoint: edge present;
+- client merge: edge becomes visible without any write.
 
-Verify this hypothesis with a minimal failing test before fixing it.
+Before implementing the fix, add a minimal regression that reproduces this divergence against the service/API:
 
-If the failing test disproves this hypothesis, identify the smallest actual cause and keep the same product invariant below.
+1. obtain an overview workspace in which the relevant Task endpoints are admitted;
+2. assert a persisted eligible edge between those admitted endpoints is missing from the overview response;
+3. request the rooted workspace for one endpoint;
+4. assert the same persisted edge is returned there.
+
+Then fix the service so step 2 is no longer possible.
+
+If a clean minimal fixture cannot reproduce the traversal-dependent omission, inspect the exact overview seed/admission path and identify the smallest equivalent service-level case. Do not pivot to painter/LOD work: the human evidence proves the renderer draws the edge after rooted merge.
 
 ## Product invariant
 
@@ -106,23 +133,23 @@ Also cover:
 The test should make the distinction explicit:
 `nodes complete -> edges must be complete among those nodes`.
 
-## Part C — client drawing regression
+## Part C — client regression: Show relations must not be required for an already-admitted edge
 
-Add focused client coverage using a workspace payload where:
+The human evidence proves the existing renderer can draw the structural edge after `expandSelected()` merges a rooted workspace.
 
-- child Task and parent Task are both present;
-- confirmed `part_of` edge is present;
-- both are ongoing Directions in one case;
-- finite/ongoing mixed case in another.
+Add focused client/controller coverage for the contract, not a painter rewrite:
 
-Prove:
-- `focusLodEdgeIsVisible` does not hide Task<->Task edges;
-- `presentGraphMapEdge` marks `part_of` visible, directed, structural;
-- the Graph painter receives/draws the structural edge;
-- selecting either endpoint does not remove the edge;
-- Preserve/Relax mode does not change relation visibility.
+- initial overview payload contains child + parent Task and the eligible persisted `part_of` edge -> structural edge is visible immediately;
+- selecting an endpoint alone does not remove it;
+- calling `expandSelected()` with a rooted response containing the same edge does not duplicate it;
+- finite/ongoing presentation does not change relation visibility;
+- Preserve/Relax does not change relation visibility.
 
-Do not rewrite the painter unless the regression shows a separate client defect.
+Keep the existing low-level assertions that:
+- `focusLodEdgeIsVisible` retains Task<->Task edges;
+- `presentGraphMapEdge` marks `part_of` visible, directed, structural.
+
+Do NOT change painter/LOD unless these regressions expose a separate failure after backend workspace edge closure.
 
 ## Part D — parallel relation sanity
 
