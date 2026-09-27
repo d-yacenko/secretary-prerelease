@@ -64,3 +64,14 @@ Before any explicitly authorized production deploy, rollback, recovery, or runti
 - `AGENTS.md` — Executor role and operating boundary.
 
 Do not update these documents to invent or schedule the next phase. Only record current-phase facts when the authorized task explicitly requires documentation updates.
+
+## Manual UI and human visual gates
+
+Manual GUI interaction is **not** normal Executor work.
+
+- Do not launch the Flutter application merely to click through user flows, inspect layout by eye, create sample objects manually, take screenshots, or perform visual/UX acceptance unless the current task explicitly authorizes Executor-driven GUI work.
+- When a task reaches a human visual or interactive gate, prepare only the minimum environment needed for the human tester (build artifacts, backend/API readiness, test data helpers if explicitly requested), then STOP and hand the gate to the user/Architect.
+- Prefer automated widget/integration/API tests over manual clicking whenever the behavior can be asserted programmatically.
+- Do not spend Executor time reproducing by hand what the user can verify immediately in the UI.
+- A human visual gate is not satisfied by Executor screenshots or Executor judgment unless the task explicitly says the Executor is the visual tester.
+- If the task text includes visual observations or screenshots as acceptance criteria but does not explicitly authorize Executor-driven GUI work, interpret those steps as **human-only** and STOP after technical readiness.
