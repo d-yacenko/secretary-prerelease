@@ -1,37 +1,40 @@
-# Current task — HOLD: human Direction visual validation
+# Current task — HOLD: rerun Direction visual gate on current-main backend
 
-Task Stabilization S2 is accepted.
+Task Stabilization S2 remains accepted at the code/test level.
 
-Implementation: `60c5157f8781dad82b555bf3b1642dd30267f430`.
-Executor HOLD: `34aabf1ac2e6b24ea9ab22d9c4aa23ee8c0f559f`.
+The first human visual attempt is INCONCLUSIVE because the client was connected to an older backend contract.
 
-No coding task is active.
+Observed symptoms:
+- editing to `ongoing` returned `extra_forbidden` for `completion_mode`;
+- manual create with `Направление` produced an effective finite Task;
+- Task profile failed to load.
 
-Human visual gate on current main:
+These match the old production backend exactly:
+- production ref `296b4735f9473ea60ef22f1827ed94260603128e` does not accept `completion_mode` in Task PATCH;
+- old Capture request does not know the field and can silently ignore it;
+- old tasks router has no Task profile endpoint.
 
-- create several Tasks as `Направление` (ongoing) through the manual Capture screen;
-- create several ordinary finite Tasks;
-- edit one finite Task to `Направление`;
-- edit one ongoing Direction back to finite;
-- verify save succeeds and mode persists after refresh;
-- compose finite Tasks under Directions using confirmed `part_of`;
-- create at least one ongoing Direction under another ongoing Direction using confirmed `part_of`;
-- open Graph overview and rooted views and inspect:
-  - ongoing circle vs finite card distinction;
-  - hierarchy readability;
-  - parent/child direction;
-  - spacing and overlap;
-  - spatial stability after refresh/re-root;
-  - behavior with several Directions at once.
+Do not treat this as an S2 code failure.
 
-Please capture screenshots and concrete observations, especially anything that feels confusing or visually wrong.
+Human gate must be rerun with:
+- backend from current `main`;
+- DB upgraded to current head / Alembic 0050;
+- client from current `main`;
+- client configured to that current-main backend, NOT production.
 
-Important environment boundary:
-- use current-main backend + current-main client;
-- do not point this validation at production, which remains on the older production ref/schema.
+Then verify:
+- create `Направление` persists `completion_mode=ongoing`;
+- edit finite -> ongoing succeeds and survives refresh;
+- edit ongoing -> finite succeeds and survives refresh;
+- ongoing renders as the Direction/circle presentation even though its canonical Object `kind` remains `task`;
+- Task profile loads;
+- several Directions plus finite child Tasks can be inspected visually;
+- ongoing -> ongoing `part_of` hierarchy is readable.
+
+Capture screenshots/observations after the environment is corrected.
 
 Do not start S3.
 Do not start H2D.
 Do not deploy production.
 
-STOP until the human visual gate is reviewed.
+STOP until the rerun is reviewed.
