@@ -27,7 +27,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Create task | SUPPORTED | `create_task` | Agent-proposed until an approved plan confirms. Optional `completion_mode` `finite` or `ongoing`; omit means finite |
 | Edit task fields (title, body, due, completion_mode) | SUPPORTED | `update_task` | Does not change lifecycle status. Omitted `completion_mode` is unchanged |
 | Add task evidence | SUPPORTED | `update_task(evidence_object_ids=…)` | **Additive only** — attaches `references`; never removes |
-| Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, `depends_on` |
+| Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Assistant and the shared domain contract write additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, and `depends_on`. MCP schema accepts the same five parameters. MCP execution stays fail-closed: `INTERNAL_WRITE` requires approval, and MCP has no trusted approval transport |
 | Task composition `part_of` | SUPPORTED | `link_objects` | Child/source → parent/target. Not a field on `create_task` |
 | `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done` |
 | Planned start/end | PARTIAL | Human editor; read on Task Profile | Tools cannot set it |

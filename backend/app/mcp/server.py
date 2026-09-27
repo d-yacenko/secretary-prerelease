@@ -8,6 +8,7 @@ from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 
 from app.domain.generic_relations import GenericRelationType
+from app.domain.task_relations import MAX_TASK_ACTOR_IDS, MAX_TASK_DEPENDENCY_IDS
 from app.mcp.gateway_runner import execute_mcp_tool
 from app.tools.registry import MCP_TOOL_NAMES  # noqa: F401 — re-exported for tests
 from app.tools.schemas import (
@@ -46,15 +47,20 @@ from app.tools.schemas import (
 logger = logging.getLogger(__name__)
 
 
-class _CompletionModeOmitted:
-    """MCP-local marker for an omitted completion_mode. Not a domain value."""
+class _Omitted:
+    """MCP-local marker for an omitted optional argument. Not a domain value."""
 
 
-_COMPLETION_MODE_OMITTED = _CompletionModeOmitted()
+_OMITTED = _Omitted()
 
 
-def _omitted_completion_mode() -> _CompletionModeOmitted:
-    return _COMPLETION_MODE_OMITTED
+def _omitted() -> _Omitted:
+    return _OMITTED
+
+
+def _put_if_present(arguments: dict, name: str, value: object) -> None:
+    if value is not _OMITTED:
+        arguments[name] = value
 
 
 def _run_tool(operation: str, tool_name: str, arguments: dict) -> object:
@@ -194,9 +200,24 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
-        completion_mode: Literal["finite", "ongoing"] = Field(
-            default_factory=_omitted_completion_mode
+        requested_by_person_id: str = Field(default_factory=_omitted),
+        delegated_to_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
         ),
+        waiting_on_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
+        ),
+        involved_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
+        ),
+        depends_on_task_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_DEPENDENCY_IDS,
+        ),
+        completion_mode: Literal["finite", "ongoing"] = Field(default_factory=_omitted),
     ) -> CreateTaskOutput:
         """Create an agent-proposed task with required confidence."""
         arguments = {
@@ -206,7 +227,12 @@ def create_mcp_server() -> MCPServer:
             "due_at": due_at,
             "evidence_object_ids": evidence_object_ids or [],
         }
-        if completion_mode is not _COMPLETION_MODE_OMITTED:
+        _put_if_present(arguments, "requested_by_person_id", requested_by_person_id)
+        _put_if_present(arguments, "delegated_to_person_ids", delegated_to_person_ids)
+        _put_if_present(arguments, "waiting_on_person_ids", waiting_on_person_ids)
+        _put_if_present(arguments, "involved_person_ids", involved_person_ids)
+        _put_if_present(arguments, "depends_on_task_ids", depends_on_task_ids)
+        if completion_mode is not _OMITTED:
             arguments["completion_mode"] = completion_mode
         return _run_tool("create_task", "create_task", arguments)
 
@@ -217,9 +243,24 @@ def create_mcp_server() -> MCPServer:
         body: str | None = None,
         due_at: datetime | None = None,
         evidence_object_ids: list[str] | None = None,
-        completion_mode: Literal["finite", "ongoing"] = Field(
-            default_factory=_omitted_completion_mode
+        requested_by_person_id: str = Field(default_factory=_omitted),
+        delegated_to_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
         ),
+        waiting_on_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
+        ),
+        involved_person_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_ACTOR_IDS,
+        ),
+        depends_on_task_ids: list[str] = Field(
+            default_factory=_omitted,
+            max_length=MAX_TASK_DEPENDENCY_IDS,
+        ),
+        completion_mode: Literal["finite", "ongoing"] = Field(default_factory=_omitted),
     ) -> UpdateTaskOutput:
         """Update task fields or attach evidence without changing lifecycle status."""
         arguments: dict = {"object_id": object_id}
@@ -231,7 +272,12 @@ def create_mcp_server() -> MCPServer:
             arguments["due_at"] = due_at
         if evidence_object_ids is not None:
             arguments["evidence_object_ids"] = evidence_object_ids
-        if completion_mode is not _COMPLETION_MODE_OMITTED:
+        _put_if_present(arguments, "requested_by_person_id", requested_by_person_id)
+        _put_if_present(arguments, "delegated_to_person_ids", delegated_to_person_ids)
+        _put_if_present(arguments, "waiting_on_person_ids", waiting_on_person_ids)
+        _put_if_present(arguments, "involved_person_ids", involved_person_ids)
+        _put_if_present(arguments, "depends_on_task_ids", depends_on_task_ids)
+        if completion_mode is not _OMITTED:
             arguments["completion_mode"] = completion_mode
         return _run_tool("update_task", "update_task", arguments)
 
