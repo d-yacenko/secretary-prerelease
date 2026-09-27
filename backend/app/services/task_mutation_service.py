@@ -51,16 +51,18 @@ class TaskMutationService:
     ) -> None:
         self._graph = GraphService(session, user_id, embedding_service)
 
-    def _get_task(self, task_id: UUID, *, allow_deleted: bool = False) -> Object:
-        try:
-            obj = self._graph.get_object(task_id)
-        except NotFoundError:
-            raise
+    def load_task_for_mutation(self, task_id: UUID, *, allow_deleted: bool = False) -> Object:
+        """Load a same-user Task without active-read filtering.
+
+        Missing and cross-user ids are not found. A deleted Task is rejected
+        unless the caller is the soft-delete preflight.
+        """
+        obj = self._graph._session.get(Object, task_id)
+        if obj is None or obj.user_id != self._graph._user_id:
+            raise NotFoundError("object", task_id)
         if obj.kind != "task":
             raise ValidationError("operation only supports task objects")
-        if not allow_deleted and (
-            is_object_tombstoned(obj) or obj.status == TASK_STATUS_DELETED
-        ):
+        if not allow_deleted and (is_object_tombstoned(obj) or obj.status == TASK_STATUS_DELETED):
             raise ValidationError("deleted task cannot be modified")
         return obj
 
@@ -89,7 +91,7 @@ class TaskMutationService:
         completion_mode: str | None = None,
         fields_set: set[str],
     ) -> TaskPatchResult:
-        obj = self._get_task(task_id)
+        obj = self.load_task_for_mutation(task_id)
         update_data: dict = {}
         if "title" in fields_set:
             if title is None:
@@ -122,7 +124,7 @@ class TaskMutationService:
     def set_task_status(self, task_id: UUID, status: str) -> TaskStatusResult:
         if status not in SET_TASK_STATUS_VALUES:
             raise ValidationError(f"invalid task status: {status}")
-        obj = self._get_task(task_id)
+        obj = self.load_task_for_mutation(task_id)
         previous_status = obj.status
         if obj.status == status:
             return TaskStatusResult(
@@ -145,12 +147,18 @@ class TaskMutationService:
         )
 
     def soft_delete_task(self, task_id: UUID) -> TaskDeleteResult:
-        service = ObjectDeletionService(self._graph._session, self._graph._user_id)
-        obj = service._get_owned_object(task_id)
-        if obj.kind != "task":
-            raise ValidationError("operation only supports task objects")
+        obj = self.load_task_for_mutation(task_id, allow_deleted=True)
         previous_status = obj.status
-        result = service.delete_object(task_id)
+        if is_object_tombstoned(obj) or obj.status == TASK_STATUS_DELETED:
+            return TaskDeleteResult(
+                object=obj,
+                changed=False,
+                previous_status=previous_status,
+                new_status=TASK_STATUS_DELETED,
+            )
+        result = ObjectDeletionService(self._graph._session, self._graph._user_id).delete_object(
+            task_id
+        )
         return TaskDeleteResult(
             object=result.object,
             changed=not result.already_deleted,

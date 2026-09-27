@@ -16,9 +16,7 @@ from app.db.models import Edge, Object
 from app.db.session import SessionLocal
 from app.domain.generic_relations import GENERIC_RELATION_TYPES
 from app.domain.labels import EDGE_TYPE_LABELED_WITH
-from app.domain.object_visibility import is_object_tombstoned
 from app.domain.task_lifecycle import (
-    TASK_STATUS_DELETED,
     TASK_STATUS_OPEN,
     canonical_task_status_for_model,
 )
@@ -998,16 +996,12 @@ class DomainToolService:
 
     def _get_task_for_mutation(self, object_id: UUID, *, allow_deleted: bool = False) -> Object:
         try:
-            obj = self._graph.get_object(object_id)
-        except NotFoundError as exc:
-            raise ToolError(f"object not found: {exc.entity_id}") from exc
-        if obj.kind != "task":
-            raise ToolError("operation only supports task objects")
-        if not allow_deleted and (
-            is_object_tombstoned(obj) or obj.status == TASK_STATUS_DELETED
-        ):
-            raise ToolError("deleted task cannot be modified")
-        return obj
+            return self._task_mutations().load_task_for_mutation(
+                object_id,
+                allow_deleted=allow_deleted,
+            )
+        except (NotFoundError, ValidationError) as exc:
+            raise self._tool_error_from_mutation(exc) from exc
 
     def create_task(self, input: CreateTaskInput) -> CreateTaskOutput:
         evidence_ids = self._dedupe_evidence_ids(input.evidence_object_ids)
