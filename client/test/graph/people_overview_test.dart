@@ -274,9 +274,17 @@ void main() {
     expect(harness.graph.positions['person-c'], isNot(harness.graph.positions['task-linked']));
     expect(find.text('Известные контакты'), findsOneWidget);
     expect(find.text('Маршруты'), findsOneWidget);
-    expect(find.text('Открытые задачи: 3'), findsOneWidget);
-    expect(find.text('Недавние коммуникации: 7'), findsOneWidget);
+    expect(find.text('Открытые задачи · 3'), findsOneWidget);
+    expect(find.text('Недавние коммуникации · 7'), findsOneWidget);
     expect(find.text('Отклонить'), findsWidgets);
+    final detailScroll = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(const ValueKey('graph-detail-panel')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    detailScroll.position.jumpTo(detailScroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Отклонить').first);
     await tester.pumpAndSettle();
     expect(find.text('Известные контакты'), findsOneWidget);

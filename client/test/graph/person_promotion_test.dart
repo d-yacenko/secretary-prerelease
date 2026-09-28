@@ -11,10 +11,10 @@ void main() {
   testWidgets('People overview can promote, hide, and restore an exact contact', (tester) async {
     final state = _PromotionState();
     await _open(tester, state);
-    expect(find.text('Предлагаемые люди'), findsOneWidget);
+    expect(find.text('Предлагаемые люди · 1'), findsOneWidget);
     expect(find.textContaining('Email'), findsWidgets);
     expect(find.textContaining('2 прямых контакта'), findsOneWidget);
-    expect(find.textContaining('сегодня'), findsOneWidget);
+    expect(find.textContaining('сегодня'), findsWidgets);
     expect(find.text('Hello Ada'), findsOneWidget);
     expect(find.textContaining('secret body'), findsNothing);
     await tester.tap(find.text('Hello Ada'));
@@ -28,19 +28,21 @@ void main() {
 
     await tester.tap(find.text('Не предлагать'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди'), findsNothing);
-    expect(find.text('Скрытые предложения'), findsOneWidget);
+    expect(find.text('Предлагаемые люди · 1'), findsNothing);
+    expect(find.text('Скрытые предложения · 1'), findsOneWidget);
     expect(state.actions, ['suppress']);
 
+    await tester.tap(find.text('Скрытые предложения · 1'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Вернуть'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди'), findsOneWidget);
-    expect(find.text('Скрытые предложения'), findsNothing);
+    expect(find.text('Предлагаемые люди · 1'), findsOneWidget);
+    expect(find.text('Скрытые предложения · 1'), findsNothing);
     expect(state.actions, ['suppress', 'retract']);
 
     await tester.tap(find.text('Добавить'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди'), findsNothing);
+    expect(find.text('Предлагаемые люди · 1'), findsNothing);
     expect(find.text('Ada'), findsWidgets);
     expect(state.actions, ['suppress', 'retract', 'approve']);
   });
@@ -48,7 +50,7 @@ void main() {
   testWidgets('rooted Person detail does not show promotion review', (tester) async {
     final state = _PromotionState(showPerson: true);
     await _open(tester, state);
-    await tester.tap(find.text('Ada').first);
+    await tester.tap(find.byKey(const Key('graph_node_person-ada')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();

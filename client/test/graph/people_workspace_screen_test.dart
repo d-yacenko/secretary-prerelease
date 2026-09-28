@@ -100,7 +100,7 @@ void main() {
     expect(tester.getSize(find.byKey(const ValueKey('graph-desktop-detail-pane'))).width, 360);
     expect(find.text('olga@example.com'), findsWidgets);
     expect(find.text('Reply to Olga'), findsOneWidget);
-    expect(find.text('Открытые задачи: 1'), findsOneWidget);
+    expect(find.text('Открытые задачи · 1'), findsOneWidget);
     expect(find.text('Письмо Olga'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'olga@example.com');

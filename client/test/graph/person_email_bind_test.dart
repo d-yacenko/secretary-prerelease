@@ -7,6 +7,18 @@ import 'package:http/testing.dart';
 
 import 'graph_test_harness.dart';
 
+Future<void> _tapAddEmail(WidgetTester tester) async {
+  final scroll = tester.state<ScrollableState>(
+    find.descendant(
+      of: find.byKey(const ValueKey('graph-detail-panel')),
+      matching: find.byType(Scrollable),
+    ),
+  );
+  scroll.position.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Добавить email'));
+}
+
 void main() {
   testWidgets('rooted Person detail can bind an exact email', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
@@ -29,7 +41,7 @@ void main() {
     expect(find.text('Добавить email'), findsOneWidget);
     expect(find.text('Отклонить'), findsNothing);
 
-    await tester.tap(find.text('Добавить email'));
+    await _tapAddEmail(tester);
     await tester.pumpAndSettle();
     expect(
       find.text(
@@ -66,7 +78,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Добавить email'));
+    await _tapAddEmail(tester);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)),
@@ -96,7 +108,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Добавить email'));
+    await _tapAddEmail(tester);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)),

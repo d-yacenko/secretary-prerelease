@@ -72,6 +72,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
   var _bookmarkReconcileScheduled = false;
+  bool _promotionReviewExpanded = true;
 
   @override
   void initState() {
@@ -531,38 +532,115 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   Widget _promotionReview(BuildContext context) {
     final controller = widget.controller;
+    final count = controller.promotionCandidates.length;
+    final scheme = Theme.of(context).colorScheme;
+    final maxHeight = math.min(260.0, MediaQuery.sizeOf(context).height * 0.32);
     return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      key: const ValueKey('promotion-review'),
+      color: scheme.surfaceContainerLow,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (controller.promotionCandidates.isNotEmpty ||
-                controller.promotionCandidatesTruncated)
-              const Text('Предлагаемые люди'),
-            if (controller.promotionCandidatesTruncated)
-              const Text(
-                'Показана часть предложений: просмотрены не все недавние сообщения.',
-              ),
-            ...controller.promotionCandidates.map(
-              (candidate) => _promotionCandidate(context, candidate),
-            ),
-            if (controller.promotionSuppressions.isNotEmpty)
-              const Text('Скрытые предложения'),
-            ...controller.promotionSuppressions.map(
-              (item) => ListTile(
-                dense: true,
-                title: Text(item.displayValue),
-                subtitle: Text(
-                  '${providerLabel(item.provider)} · ${item.canonicalValue}',
+            Row(
+              children: [
+                if (count > 0 || controller.promotionCandidatesTruncated)
+                  Expanded(
+                    child: Text(
+                      'Предлагаемые люди · $count',
+                      key: const ValueKey('promotion-review-title'),
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  )
+                else
+                  const Spacer(),
+                IconButton(
+                  key: const ValueKey('promotion-review-toggle'),
+                  tooltip: _promotionReviewExpanded ? 'Свернуть предложения' : 'Показать предложения',
+                  onPressed: () => setState(
+                    () => _promotionReviewExpanded = !_promotionReviewExpanded,
+                  ),
+                  icon: Icon(
+                    _promotionReviewExpanded ? Icons.expand_less : Icons.expand_more,
+                  ),
                 ),
-                trailing: TextButton(
-                  onPressed: () => _applyPromotion(item, 'retract'),
-                  child: const Text('Вернуть'),
+              ],
+            ),
+            if (_promotionReviewExpanded)
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: SingleChildScrollView(
+                  key: const ValueKey('promotion-review-scroll'),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8, bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (controller.promotionSuppressions.isNotEmpty) ...[
+                          ExpansionTile(
+                            key: const ValueKey('promotion-hidden-suggestions'),
+                            tilePadding: EdgeInsets.zero,
+                            initiallyExpanded: false,
+                            title: Text(
+                              'Скрытые предложения · ${controller.promotionSuppressions.length}',
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            children: [
+                              for (final item in controller.promotionSuppressions)
+                                ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                    item.displayValue,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: Text(
+                                    '${providerLabel(item.provider)} · ${item.canonicalValue}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  trailing: TextButton(
+                                    onPressed: () => _applyPromotion(item, 'retract'),
+                                    child: const Text('Вернуть'),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        if (controller.promotionCandidatesTruncated)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              'Показана часть предложений: просмотрены не все недавние сообщения.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final cardWidth = constraints.maxWidth < 680
+                                ? constraints.maxWidth
+                                : 320.0;
+                            return Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final candidate in controller.promotionCandidates)
+                                  SizedBox(
+                                    width: cardWidth,
+                                    child: _promotionCandidate(context, candidate),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -570,51 +648,177 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   Widget _promotionCandidate(BuildContext context, PersonPromotionCandidate candidate) {
-    final identity = candidate.displayValue == candidate.canonicalValue
-        ? candidate.displayValue
-        : '${candidate.displayValue} · ${candidate.canonicalValue}';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ListTile(
-          dense: true,
-          title: Text(identity),
-          subtitle: Text(
-            '${providerLabel(candidate.provider)} · ${_promotionExplanation(candidate)}',
-          ),
-        ),
-        Wrap(
-          spacing: 4,
+    final scheme = Theme.of(context).colorScheme;
+    final secondary = candidate.displayValue == candidate.canonicalValue
+        ? null
+        : candidate.canonicalValue;
+    return Material(
+      key: ValueKey('promotion-candidate-${candidate.canonicalValue}'),
+      color: scheme.surface,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextButton(
-              onPressed: () => _applyPromotion(candidate, 'approve'),
-              child: const Text('Добавить'),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 14,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                  child: Icon(iconForKind('person'), size: 16, color: scheme.onSurfaceVariant),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    candidate.displayValue,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            TextButton(
-              onPressed: () => _applyPromotion(candidate, 'suppress'),
-              child: const Text('Не предлагать'),
+            if (secondary != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  secondary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 4),
+            Text(
+              '${providerLabel(candidate.provider)} · ${_promotionExplanation(candidate)}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
             ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 4,
+              children: [
+                TextButton(
+                  key: ValueKey('promotion-approve-${candidate.canonicalValue}'),
+                  onPressed: () => _applyPromotion(candidate, 'approve'),
+                  child: const Text('Добавить'),
+                ),
+                TextButton(
+                  key: ValueKey('promotion-suppress-${candidate.canonicalValue}'),
+                  onPressed: () => _applyPromotion(candidate, 'suppress'),
+                  child: const Text('Не предлагать'),
+                ),
+              ],
+            ),
+            if (candidate.sources.isNotEmpty)
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final source in candidate.sources.take(3))
+                    _flowEvidenceTile(
+                      context,
+                      key: ValueKey(
+                        'promotion-source-${candidate.canonicalValue}-${source.objectId}',
+                      ),
+                      kind: source.kind,
+                      title: source.title ?? source.kind,
+                      provider: source.provider,
+                      occurredAt: source.occurredAt,
+                      onTap: () => openObjectDetail(
+                        context,
+                        objectId: source.objectId,
+                        apiClient: widget.apiClient,
+                        authController: widget.authController,
+                        captureController: widget.captureController,
+                        assistantController: widget.assistantController,
+                        onAskSecretary: widget.onAskSecretary,
+                        onShowInGraph: widget.controller.reRoot,
+                        bookmarkController: widget.bookmarkController,
+                      ),
+                    ),
+                ],
+              ),
           ],
         ),
-        ...candidate.sources.take(3).map(
-          (source) => ListTile(
-            dense: true,
-            title: Text(source.title ?? source.kind),
-            subtitle: Text(providerLabel(source.provider ?? '')),
-            onTap: () => openObjectDetail(
-              context,
-              objectId: source.objectId,
-              apiClient: widget.apiClient,
-              authController: widget.authController,
-              captureController: widget.captureController,
-              assistantController: widget.assistantController,
-              onAskSecretary: widget.onAskSecretary,
-              onShowInGraph: widget.controller.reRoot,
-              bookmarkController: widget.bookmarkController,
+      ),
+    );
+  }
+
+  Widget _flowEvidenceTile(
+    BuildContext context, {
+    required Key key,
+    required String kind,
+    required String title,
+    required String? provider,
+    required String? occurredAt,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final when = _promotionWhen(occurredAt);
+    return SizedBox(
+      key: key,
+      width: 148,
+      child: Material(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(iconForKind(kind), size: 14, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        provider == null || provider.isEmpty ? kind : providerLabel(provider),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (when != 'без даты')
+                  Text(
+                    when,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -1711,9 +1915,101 @@ class _PersonDetailSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cues = person.identities
+        .where((item) => item.state == 'effective')
+        .map((item) => item.displayValue)
+        .take(3)
+        .join(' · ');
+    final lastContact = _latestContactLabel(person);
     return Column(
+      key: const ValueKey('person-summary-header'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: scheme.surfaceContainerHighest,
+              child: Icon(iconForKind('person'), color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    person.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (cues.isNotEmpty)
+                    Text(
+                      cues,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (person.identityConflict)
+              Icon(
+                Icons.report_outlined,
+                color: scheme.error,
+                semanticLabel: 'Конфликт идентичности',
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            _metricChip(context, 'Открытые задачи · ${person.openTaskCount}'),
+            _metricChip(
+              context,
+              'Недавние коммуникации · ${person.recentCommunicationCount}',
+            ),
+            if (person.salience != null)
+              _metricChip(context, personSalienceTierLabel(person.salience!.tier)),
+            if (lastContact != null) _metricChip(context, 'Последний контакт · $lastContact'),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const _DetailSectionHeader(title: 'Участие в задачах'),
+        if (person.taskInvolvement.isEmpty)
+          const Text(
+            'Нет участия в текущих задачах',
+            key: ValueKey('person-task-empty'),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: person.taskInvolvement.map((row) => _taskTile(context, row)).toList(),
+          ),
+        if (person.taskInvolvementTruncated) const Text('Показаны не все задачи'),
+        const SizedBox(height: 8),
+        const _DetailSectionHeader(title: 'Недавние сообщения'),
+        if (person.recentCommunications.isEmpty)
+          const Text(
+            'Нет недавних коммуникаций',
+            key: ValueKey('person-flow-empty'),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: person.recentCommunications.map((row) => _flowTile(context, row)).toList(),
+          ),
+        if (person.recentCommunicationsTruncated) const Text('Показаны не все сообщения'),
+        const SizedBox(height: 12),
         const _DetailSectionHeader(title: 'Известные контакты'),
         if (person.salience != null)
           Align(
@@ -1779,23 +2075,7 @@ class _PersonDetailSection extends StatelessWidget {
             ),
           ),
         ],
-        Text('Открытые задачи: ${person.openTaskCount}'),
-        Text('Недавние коммуникации: ${person.recentCommunicationCount}'),
         if (person.salience != null) ...[
-          const _DetailSectionHeader(title: 'Участие в задачах'),
-          if (person.taskInvolvement.isEmpty)
-            const Text('Нет участия в текущих задачах')
-          else
-            ...person.taskInvolvement.map(_taskRow),
-          if (person.taskInvolvementTruncated)
-            const Text('Показаны не все задачи'),
-          const _DetailSectionHeader(title: 'Недавние сообщения'),
-          if (person.recentCommunications.isEmpty)
-            const Text('Нет недавних коммуникаций')
-          else
-            ...person.recentCommunications.map(_flowRow),
-          if (person.recentCommunicationsTruncated)
-            const Text('Показаны не все сообщения'),
           const _DetailSectionHeader(title: 'Активность'),
           Text(
             '${personSalienceTierLabel(person.salience!.tier)} · ${person.salience!.score}',
@@ -1896,21 +2176,123 @@ class _PersonDetailSection extends StatelessWidget {
     await onChanged();
   }
 
-  Widget _taskRow(PersonTaskInvolvement row) {
+  Widget _metricChip(BuildContext context, String label) {
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      padding: EdgeInsets.zero,
+    );
+  }
+
+  String? _latestContactLabel(PersonPresentation person) {
+    DateTime? latest;
+    for (final row in person.recentCommunications) {
+      final parsed = DateTime.tryParse(row.occurredAt ?? '');
+      if (parsed != null && (latest == null || parsed.isAfter(latest))) {
+        latest = parsed;
+      }
+    }
+    if (latest == null) {
+      return null;
+    }
+    return _shortWhen(latest.toIso8601String());
+  }
+
+  Widget _taskTile(BuildContext context, PersonTaskInvolvement row) {
     final proposal = taskRelationProposalLabel(row.edgeOrigin, row.edgeState);
     final due = _shortWhen(row.dueAt);
-    return ListTile(
-      dense: true,
-      title: Text(row.title),
-      subtitle: Text(
-        [
-          personActorRoleLabel(row.role),
-          if (proposal.isNotEmpty) proposal,
-          if (row.completionMode == 'ongoing') 'Направление',
-          if (due.isNotEmpty) due,
-        ].join(' · '),
+    final kind = row.completionMode == 'ongoing' ? 'Направление' : 'Задача';
+    return SizedBox(
+      width: 168,
+      child: Material(
+        key: ValueKey('person-task-tile-${row.taskId}'),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: () => onOpenTask(row.taskId),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  row.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  [
+                    kind,
+                    personActorRoleLabel(row.role),
+                    if (proposal.isNotEmpty) proposal,
+                    if (due.isNotEmpty) due,
+                  ].join(' · '),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      onTap: () => onOpenTask(row.taskId),
+    );
+  }
+
+  Widget _flowTile(BuildContext context, PersonFlowPreview row) {
+    final when = _shortWhen(row.occurredAt);
+    return SizedBox(
+      width: 148,
+      child: Material(
+        key: ValueKey('person-flow-tile-${row.objectId}'),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: () => onOpenFlow(row.objectId),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(iconForKind(row.kind), size: 14),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        row.provider == null ? row.kind : providerLabel(row.provider!),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  row.title ?? row.kind,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (when.isNotEmpty)
+                  Text(
+                    when,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2035,80 +2417,9 @@ class _GraphNodeCard extends StatelessWidget {
               width: selected ? 2 : 1,
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(iconForKind(object.kind), size: 16),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      humanTaskModeLabel(object),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ),
-                  if (person?.identityConflict == true)
-                    Icon(
-                      Icons.report_outlined,
-                      key: Key('person-identity-conflict-${object.id}'),
-                      size: 16,
-                      color: scheme.error,
-                      semanticLabel: 'Конфликт идентичности',
-                    ),
-                  if (person != null &&
-                      person!.identities.any(
-                        (item) => item.state == 'effective',
-                      ))
-                    Flexible(
-                      child: Text(
-                        person!.identities
-                            .where((item) => item.state == 'effective')
-                            .map((item) => providerLabel(item.provider))
-                            .take(2)
-                            .join(' · '),
-                        key: Key('person-provider-cues-${object.id}'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    )
-                  else if (object.provider != null)
-                    SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: FittedBox(
-                        child: providerBadge(context, object.provider!),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Expanded(
-                child: Text(
-                  object.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              Text(
-                person == null
-                    ? _graphNodeFooterLabel(object)
-                    : 'Задач: ${person!.openTaskCount} · сообщений: ${person!.recentCommunicationCount}',
-                key: person == null
-                    ? null
-                    : Key('person-activity-footer-${object.id}'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall
-                    ?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ],
-          ),
+          child: person == null
+              ? _genericNodeBody(context, scheme)
+              : _personNodeBody(context, scheme),
         ),
       ),
     );
@@ -2126,6 +2437,115 @@ class _GraphNodeCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _genericNodeBody(BuildContext context, ColorScheme scheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(iconForKind(object.kind), size: 16),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                humanTaskModeLabel(object),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ),
+            if (object.provider != null)
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: FittedBox(child: providerBadge(context, object.provider!)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: Text(
+            object.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ),
+        Text(
+          _graphNodeFooterLabel(object),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+
+  Widget _personNodeBody(BuildContext context, ColorScheme scheme) {
+    final current = person!;
+    final cues = current.identities
+        .where((item) => item.state == 'effective')
+        .map((item) => providerLabel(item.provider))
+        .take(2)
+        .join(' · ');
+    return Column(
+      key: ValueKey('person-summary-card-${object.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            CircleAvatar(
+              radius: 12,
+              backgroundColor: scheme.surfaceContainerHighest,
+              child: Icon(iconForKind('person'), size: 14, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                humanTaskModeLabel(object),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            if (current.identityConflict)
+              Icon(
+                Icons.report_outlined,
+                key: Key('person-identity-conflict-${object.id}'),
+                size: 16,
+                color: scheme.error,
+                semanticLabel: 'Конфликт идентичности',
+              ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          object.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        if (cues.isNotEmpty)
+          Text(
+            cues,
+            key: Key('person-provider-cues-${object.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        const Spacer(),
+        Text(
+          'Задач: ${current.openTaskCount} · сообщений: ${current.recentCommunicationCount}',
+          key: Key('person-activity-footer-${object.id}'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
     );
   }
 }
