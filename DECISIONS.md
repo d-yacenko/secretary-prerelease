@@ -175,3 +175,15 @@
 - The prompt orientation must not authorize unsupported relation types, automatic role inference, or mutation without the existing typed-tool/approval rules.
 - People social/organizational semantics are not yet canonical. Do not introduce ad-hoc `manager_of`, `colleague`, `role_at`, `member_of`, etc. until a dedicated Person/organization ontology design pass distinguishes roles-in-organization from Person-to-Person relations and their provenance/confirmation semantics.
 - Keep first-party UX, internal Assistant tools, MCP/Harness exposure, and prompt vocabulary aligned with the same canonical ontology; parity gaps should be explicit backlog items rather than silently divergent semantics.
+## Assisted Person promotion
+
+- Manual Person creation remains a fallback and is not the primary People acquisition workflow.
+- Observing a sender/participant in Flow does not by itself create a Person. Provider-native identities may remain only as source metadata / normalized identity evidence indefinitely.
+- Secretary may derive a bounded **Person promotion candidate** when stored first-party evidence gives a strong reason to remember a person. A promotion candidate is not yet a Person and creates no Person<->Flow edge.
+- Promotion must be grounded in a strong exact provider identity plus bounded local evidence. Display-name similarity alone must never create a Person or make a candidate confirmable.
+- The first-party UX may surface a small ranked set of promotion candidates at natural review points. It must explain why each candidate is being suggested and must not turn every incoming message into a notification.
+- Explicit user approval is the authority that creates the canonical Person and attaches the frozen exact identity. The creation/link operation must be atomic, idempotent, conflict-safe, and recorded as user-confirmed evidence.
+- A user must be able to suppress a wrong or unwanted unresolved identity so the same proposal does not repeatedly return. Suppression must be reversible and scoped to the exact normalized provider identity.
+- Person promotion and Person knowledge are separate decisions. Approving "remember this person" does not confirm manager, colleague, family, organization membership, authority, or any other durable relationship.
+- Relationship/role knowledge may later be suggested from evidence, but it requires its own explicit confirmation contract and context. Repeated task assignment or message volume alone does not prove that someone is the user's manager.
+- Promotion does not change Telegram AI eligibility, provider privacy gates, Flow provenance, Task actor semantics, or the core ontology.
