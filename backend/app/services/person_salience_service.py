@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
+from app.domain.person_assistant import MAX_PERSON_SCAN_ROWS
 from app.domain.person_salience import (
     MAX_ATTENTION_CANDIDATES,
     MAX_DIRECT_HITS,
@@ -45,13 +46,20 @@ class PersonSalienceService:
         self._now = now or datetime.now(UTC)
 
     def evaluate(self, person_id: UUID) -> PersonSalience:
+        return self._evaluate(person_id, scan_limit=MAX_SCAN_ROWS)
+
+    def evaluate_rooted(self, person_id: UUID) -> PersonSalience:
+        """Score one rooted Person on the same communication bound as rooted Flow."""
+        return self._evaluate(person_id, scan_limit=MAX_PERSON_SCAN_ROWS)
+
+    def _evaluate(self, person_id: UUID, *, scan_limit: int) -> PersonSalience:
         person = self._session.get(Object, person_id)
         if person is None or person.user_id != self._user_id or person.kind != PERSON_KIND:
             raise NotFoundError("person", person_id)
         if not _active_person(person):
             return empty_salience(person_id, eligible=False)
         index = self._identity_index([person_id])
-        hits, truncated = self._hits(index)
+        hits, truncated = self._hits(index, scan_limit=scan_limit)
         attention = self._attention([person_id])
         linked = self._task_calendar_people([person_id])
         route_choice, confirmed = attention.get(person_id, (False, False))
@@ -63,6 +71,7 @@ class PersonSalienceService:
             confirmed=confirmed,
             task_calendar=person_id in linked,
             truncated=truncated,
+            row_limit=scan_limit,
         )
 
     def rank(self) -> list[PersonSalience]:
@@ -73,7 +82,7 @@ class PersonSalienceService:
         Person-task/calendar edges. The result is the top of that pool, not a
         slice of the oldest stored rows.
         """
-        rows, scan_truncated = self._load_communication()
+        rows, scan_truncated = self._load_communication(scan_limit=MAX_SCAN_ROWS)
         index = self._index_for_messages(rows)
         hits, hit_truncated = self._attribute_rows(rows, index)
         attention_ids, attention_truncated = self._attention_candidates()
@@ -157,11 +166,7 @@ class PersonSalienceService:
 
     def _is_ranked_person(self, person_id: UUID) -> bool:
         person = self._session.get(Object, person_id)
-        return (
-            person is not None
-            and person.user_id == self._user_id
-            and _active_person(person)
-        )
+        return person is not None and person.user_id == self._user_id and _active_person(person)
 
     def _attention_candidates(self) -> tuple[set[UUID], bool]:
         confirmed_first = case(
@@ -256,15 +261,18 @@ class PersonSalienceService:
         return set(rows[:MAX_TASK_CANDIDATES]), truncated
 
     def _hits(
-        self, identity_index: dict[tuple[str, str, str], UUID]
+        self,
+        identity_index: dict[tuple[str, str, str], UUID],
+        *,
+        scan_limit: int,
     ) -> tuple[list[InteractionHit], bool]:
         if not identity_index:
             return [], False
-        rows, scan_truncated = self._load_communication()
+        rows, scan_truncated = self._load_communication(scan_limit=scan_limit)
         hits, hit_truncated = self._attribute_rows(rows, identity_index)
         return hits, scan_truncated or hit_truncated
 
-    def _load_communication(self) -> tuple[list[Object], bool]:
+    def _load_communication(self, *, scan_limit: int) -> tuple[list[Object], bool]:
         cutoff = self._now - timedelta(days=WINDOW_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
         rows = list(
@@ -278,10 +286,10 @@ class PersonSalienceService:
                     stamp >= cutoff,
                 )
                 .order_by(stamp.desc(), Object.id)
-                .limit(MAX_SCAN_ROWS + 1)
+                .limit(scan_limit + 1)
             )
         )
-        return rows[:MAX_SCAN_ROWS], len(rows) > MAX_SCAN_ROWS
+        return rows[:scan_limit], len(rows) > scan_limit
 
     def _attribute_rows(
         self,

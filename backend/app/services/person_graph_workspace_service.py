@@ -395,7 +395,7 @@ class PersonGraphWorkspaceService:
                 FindPersonCommunicationsInput(person_id=person.id, limit=_MAX_TRUTH_ROWS),
                 include_quarantined_telegram=True,
             )
-            salience = PersonSalienceService(self._session, self._user_id).evaluate(person.id)
+            salience = PersonSalienceService(self._session, self._user_id).evaluate_rooted(person.id)
             candidates, candidates_truncated = self._identity_candidates(person.id)
             payload.update(
                 {

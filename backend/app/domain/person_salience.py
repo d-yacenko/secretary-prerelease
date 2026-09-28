@@ -102,6 +102,7 @@ def score_person(
     confirmed: bool,
     task_calendar: bool,
     truncated: bool,
+    row_limit: int = MAX_SCAN_ROWS,
 ) -> PersonSalience:
     directness = 0
     public = 0
@@ -163,7 +164,7 @@ def score_person(
         eligible=True,
         truncated=truncated,
         window_days=WINDOW_DAYS,
-        row_limit=MAX_SCAN_ROWS,
+        row_limit=row_limit,
     )
 
 

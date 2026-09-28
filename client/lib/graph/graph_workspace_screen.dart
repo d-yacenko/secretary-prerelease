@@ -1647,6 +1647,10 @@ class _PersonDetailSection extends StatelessWidget {
           const Text(
             'Сигнал активности и контекста, не оценка важности человека или сообщения.',
           ),
+          if (person.salience!.truncated)
+            const Text(
+              'Показана часть активности: расчёт ограничен доступной выборкой коммуникаций.',
+            ),
           ...person.salience!.components.map(
             (component) => Text(
               '${personSalienceComponentLabel(component.name)}: ${component.value}',

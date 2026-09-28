@@ -102,7 +102,9 @@ def test_task_involvement_is_capped_in_due_order(people_client, db_session) -> N
         task = _task(db_session, f"Task {index:02d}", due_at=NOW + timedelta(days=index))
         relations.add_actor(task.id, person.id, INVOLVES)
     body = _root(people_client, person.id)
-    assert [row["title"] for row in body["task_involvement"]] == [f"Task {index:02d}" for index in range(8)]
+    assert [row["title"] for row in body["task_involvement"]] == [
+        f"Task {index:02d}" for index in range(8)
+    ]
     assert body["task_involvement_truncated"] is True
 
 
@@ -140,7 +142,9 @@ def test_first_party_flow_includes_telegram_while_assistant_stays_gated(
 
 def test_salience_projection_matches_the_canonical_service(people_client, db_session) -> None:
     person = _people(db_session).create_person("Ada")
-    expected = PersonSalienceService(db_session, BOOTSTRAP_USER_ID, now=NOW).evaluate(person.id)
+    expected = PersonSalienceService(db_session, BOOTSTRAP_USER_ID, now=NOW).evaluate_rooted(
+        person.id
+    )
     body = _root(people_client, person.id)["salience"]
     assert body["score"] == expected.score
     assert body["tier"] == expected.tier
@@ -152,20 +156,30 @@ def test_salience_projection_matches_the_canonical_service(people_client, db_ses
     ]
 
 
-def test_overview_and_search_do_not_load_rooted_truth(people_client, db_session, monkeypatch) -> None:
-    calls = {"evaluate": 0, "communications": 0}
+def test_overview_and_search_do_not_load_rooted_truth(
+    people_client, db_session, monkeypatch
+) -> None:
+    calls = {"evaluate": 0, "rooted": 0, "communications": 0}
     original_evaluate = PersonSalienceService.evaluate
+    original_rooted = PersonSalienceService.evaluate_rooted
     original_find = PersonAssistantService.find_communications
 
     def evaluate(self, person_id):
         calls["evaluate"] += 1
         return original_evaluate(self, person_id)
 
+    def evaluate_rooted(self, person_id):
+        calls["rooted"] += 1
+        return original_rooted(self, person_id)
+
     def find_communications(self, payload, *, include_quarantined_telegram=False):
         calls["communications"] += 1
-        return original_find(self, payload, include_quarantined_telegram=include_quarantined_telegram)
+        return original_find(
+            self, payload, include_quarantined_telegram=include_quarantined_telegram
+        )
 
     monkeypatch.setattr(PersonSalienceService, "evaluate", evaluate)
+    monkeypatch.setattr(PersonSalienceService, "evaluate_rooted", evaluate_rooted)
     monkeypatch.setattr(PersonAssistantService, "find_communications", find_communications)
     _people(db_session).create_person("Ada")
     overview = people_client.get("/graph/people-workspace")
@@ -177,7 +191,7 @@ def test_overview_and_search_do_not_load_rooted_truth(people_client, db_session,
         assert person["task_involvement"] == []
         assert person["recent_communications"] == []
         assert person["salience"] is None
-    assert calls == {"evaluate": 0, "communications": 0}
+    assert calls == {"evaluate": 0, "rooted": 0, "communications": 0}
 
 
 def _root(people_client, person_id) -> dict:
