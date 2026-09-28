@@ -1,166 +1,280 @@
-# Current task — PP1-HG2: usable promotion review without blocking People graph
+# Current task — PP1-HG2: People workspace visual baseline + usable promotion review
 
 ## State
 
 - PP1 backend is live in production at `07bd8bafdb2f53a6a8475fc2d792687fa373a149`, Alembic `0051`.
-- Human HG1 exact client proved real assisted-promotion suggestions are present and Add / Do-not-suggest work on production data.
-- Human gate is NOT accepted because the promotion review UX is unusable at realistic suggestion volume.
-- Current production must not be changed in this task.
-- This is a client-only UX correction plus a fresh human-gate Linux bundle.
+- Exact HG1 client proved real production promotion candidates are present and Add / Do-not-suggest work.
+- Human gate is NOT accepted: the current promotion review overflows, visually merges candidates/sources, and can hide the People graph.
+- The Architect and user now also want the first usable visual baseline for working with the People graph, not a one-off overflow patch.
+- No Executor implementation of HG2 has started yet; this task replaces the earlier narrower HG2 authorization.
+- This remains a client-only slice. Do not change production/backend/schema/API semantics.
 
-## Observed defect
+## Product goal
 
-Current `GraphWorkspaceScreen` inserts the promotion review as an unbounded `Column` before the `Expanded` People graph. Each candidate uses full-width `ListTile` rows for the person and every source Flow item.
+People should read as a workspace of meaningful human entities, not a generic object graph and not a text dump.
 
-With the current max-5 candidate batch this produces a long undifferentiated text stream, consumes most/all vertical space, triggers Flutter bottom overflow, and can make the People graph effectively inaccessible.
+Deliver two coherent visual layers in one client slice:
 
-Promotion review is auxiliary. It must never replace or block the People graph.
+1. **People overview graph** — compact person summary cards suitable for spatial scanning.
+2. **Person focus/detail** — richer factual summary with task/direction participation and compact recent Flow evidence.
+3. **Promotion review** — an auxiliary bounded/collapsible review surface using the same visual language and never blocking the graph.
 
-## Product/UX contract
+The result does not need final visual polish, but it must be deliberately designed, dense, legible, and usable enough that the People graph can be evaluated as a product rather than as raw plumbing.
 
-### 1. The People graph is always available
+## Semantic boundary
 
-On People overview with suggestions:
+Do not invent knowledge for visual completeness.
 
-- the graph canvas must remain rendered and visibly usable regardless of candidate/source count;
-- promotion review must have a bounded maximum height;
-- the promotion area must scroll independently when its content exceeds that bound;
-- the promotion area must be collapsible to a compact header without processing candidates;
-- collapsing/expanding must be a local UI action only and must not alter server data;
-- processing one candidate must not force the panel open again if the user collapsed it.
+Allowed factual material already present in the current API:
 
-Use a responsive bound, not an unbounded pre-graph Column. The graph must retain meaningful space on both wide desktop and smaller supported desktop windows.
+- Person title/name;
+- effective identity/provider cues;
+- identity conflict state;
+- open task count;
+- recent communication count;
+- rooted task involvement with canonical Task->Person actor role;
+- rooted recent attributable Flow previews;
+- rooted salience/activity explanation already present in the product.
 
-Do not solve this by hiding the graph behind a second route or requiring the user to finish proposals first.
+Do **not** display an inferred global role such as manager, colleague, family member, employee, organization membership, or company affiliation unless such a canonical confirmed fact already exists. It does not exist in this slice.
 
-### 2. Candidate = visually distinct card
+Task-specific actor roles may be shown on the corresponding task tile because those are existing canonical edges. They must not be promoted into a global Person role.
 
-Each suggested person must be a clearly separated card/container, not a continuation of a text list.
+There is no Organization/company ontology in this slice. Design visual primitives so a future object-kind icon could differ, but implement only the actual Person semantics now. Do not add a fake company kind.
 
-Each card must show:
+## A. People overview graph card
 
+Special-case `Object(kind=person)` presentation in the graph instead of rendering it as the generic object card.
+
+Keep the spatial graph compact. Do not turn every overview node into a huge dossier.
+
+Each Person node should have a deliberate dense layout with:
+
+- a clear Person/avatar placeholder area using an existing Material person icon; no network avatar/photo lookup;
+- Person name as the dominant text, visibly stronger than metadata;
+- provider/contact cues from effective identities/routes where available;
+- compact factual metrics such as:
+  - open tasks;
+  - recent communications;
+- conflict cue when identity conflict exists;
+- selected/bookmark behavior preserved.
+
+Do not show the raw numeric salience score as the main identity of the card. Salience remains an activity/context signal, not a social rank.
+
+Use the existing graph-node footprint unless a **small, bounded** Person-specific size increase is demonstrably required for readability. If size changes, update People overview spacing and edge endpoint sizing consistently and add regression coverage; do not destabilize Task graph geometry.
+
+The overview should remain scannable at roughly tens of people. A node must not contain a list of messages/tasks.
+
+## B. Person focus/detail = rich factual card
+
+When the user chooses a Person from People overview, there must be an obvious path into the existing rooted Person truth surface so the richer data is available.
+
+Prefer a simple interaction consistent with current graph navigation:
+- selecting/opening a Person should make the rooted Person context readily accessible;
+- do not require obscure secondary controls just to see participation/Flow.
+
+Rework the rooted Person detail presentation into a compact visual summary inspired by the human mockup:
+
+### Header
+
+- prominent Person icon/avatar placeholder;
+- name in a larger/bolder style;
+- effective provider/contact cues;
+- identity conflict cue if relevant.
+
+### Metrics strip
+
+Present a compact set of factual chips/metrics, for example:
+
+- `Открытые задачи · N`;
+- `Недавние коммуникации · N`;
+- activity tier text if already available and useful, without implying importance.
+
+If rooted recent Flow exists, a compact last-contact date may be derived from the newest returned preview. Do not imply completeness beyond the bounded truth surface.
+
+### Participation / tasks / directions
+
+Render existing rooted `taskInvolvement` as compact clickable tiles/cards, not full-width ListTiles.
+
+Each tile may show:
+
+- task/direction title;
+- `Направление` when completion_mode is ongoing, otherwise task semantics;
+- the canonical per-task actor role using existing labels;
+- due date when available;
+- proposal state cue where already supported.
+
+Use a Wrap/responsive tile layout so several short items can sit side by side.
+
+This section is factual participation, **not** a global Person role.
+
+### Recent Flow
+
+Render rooted recent communication previews as compact clickable evidence tiles in a Wrap-style layout:
+
+- email/chat/calendar/event/other existing object kind icon where supported;
+- title, max 1–2 lines with ellipsis;
+- provider cue;
+- compact date/time when available;
+- existing object-detail navigation on tap;
+- body/snippet must remain absent.
+
+The visual goal is the user's sketch: a dense set of evidence tiles, not a vertical list consuming half the screen.
+
+### Secondary truth
+
+Known contacts, identity candidates, routes, detailed salience components, and correction actions must remain accessible, but they should no longer dominate the first visual impression. Put them below the primary summary or in clearly separated sections using the existing data/semantics.
+
+Do not remove correction/reversibility functionality.
+
+## C. Promotion review must never block the graph
+
+On People overview:
+
+- graph canvas remains rendered and visibly usable regardless of suggestion count;
+- promotion review has bounded responsive max height;
+- overflowing review content scrolls independently;
+- review can be collapsed/expanded without processing candidates;
+- collapsed state survives Add / Do-not-suggest refreshes during the screen lifetime;
+- processing suggestions is never required to regain access to the graph.
+
+The review header should show only the current visible batch count, e.g. `Предлагаемые люди · 5`, plus existing partial-scan disclosure where applicable. Do not invent a total remaining count.
+
+## D. Promotion candidate visual design
+
+Each candidate is a visually distinct compact Person card using the same visual language as real Person cards:
+
+- person icon/avatar placeholder;
 - strong display name;
-- exact identity/contact in secondary text when different from display name;
+- exact identity/contact secondary text when different;
 - provider;
-- concise existing explanation such as direct-contact count + recency;
-- actions `Добавить` and `Не предлагать` visibly associated with that person.
+- direct-contact count + recency explanation;
+- Add / Do-not-suggest actions clearly attached to that candidate.
 
-Use a responsive card layout:
-- wide desktop: multiple candidate cards may sit beside each other where space allows;
-- narrow widths: cards may become one-per-row;
-- no horizontal page overflow.
+Wide desktop may place multiple cards beside each other; narrow supported widths fall back to one per row without horizontal overflow.
 
-The visual boundary between two people must be obvious without reading the text.
+### Promotion source evidence
 
-### 3. Source Flow = compact clickable tiles
+Candidate source previews must be compact clickable Flow tiles in a Wrap, not full-width ListTiles:
 
-Do not render source evidence as full-width `ListTile` rows.
+- title max 1–2 lines;
+- provider;
+- kind/icon where supported;
+- compact date if available;
+- existing object-detail navigation;
+- no body/snippet.
 
-Inside each candidate card, render the existing body-free source previews as compact clickable tiles/chips/cards in a `Wrap`-style layout:
+### Hidden suggestions
 
-- several source tiles can sit next to each other;
-- source title is bounded to a small number of lines with ellipsis;
-- provider remains visible;
-- optional existing date may be shown compactly if already available in the preview;
-- tapping a source must preserve the existing object-detail navigation;
-- no message body/snippet may be added.
+Keep hidden suggestions visually separate and compact, preferably collapsed by default inside the same bounded review surface. Restore remains exact-identity/reversible. Do not change backend suppression semantics.
 
-The source evidence should explain the proposal without making one candidate occupy half a screen.
+## Visual design baseline
 
-### 4. Review header and counts
+Use existing Material theme/color scheme, spacing primitives, icons, border radii, and typography. Do not introduce a new design system or arbitrary hard-coded colors.
 
-Use a compact review header that makes the surface understandable, for example:
+Minimum aesthetic intent:
 
-- `Предлагаемые люди · 5` for the currently visible batch;
-- existing partial/truncation disclosure when applicable;
-- clear `Свернуть` / `Развернуть` action.
+- clear visual hierarchy;
+- obvious card boundaries;
+- consistent rounded containers;
+- restrained elevation/borders;
+- compact spacing;
+- metadata visually quieter than names/titles;
+- actions visually attached to the entity they affect;
+- no giant blank regions inside cards;
+- no text collisions/overflow.
 
-Do NOT claim a total number of all possible candidates: backend intentionally exposes only a bounded current batch and scan truncation does not prove the exact remaining candidate count.
-
-It is acceptable to say only how many are shown now.
-
-### 5. Hidden suggestions stay compact
-
-`Скрытые предложения` must not become another tall list.
-
-Keep it visually separate and compact, preferably collapsed by default or represented as compact rows/chips inside the same bounded review panel. `Вернуть` remains reversible and exact-identity scoped.
-
-Do not change backend suppression semantics.
+The user's sketch is conceptual, not a pixel specification. Preserve its information hierarchy, not its hand-drawn geometry.
 
 ## Functional invariants
 
-Preserve all accepted PP1 behavior:
+Preserve:
 
-- max current candidate batch from backend unchanged;
-- candidate eligibility/ranking unchanged;
-- Add still approves exact identity and refreshes overview;
-- Do-not-suggest still suppresses exact identity;
-- Restore still retracts suppression;
-- source click still opens existing object detail;
-- no body/snippet;
-- rooted Person view does not show promotion review;
-- no relationship/manager/organization inference;
-- no backend/schema/API change unless a client compatibility blocker is found; if so STOP and report instead of expanding scope.
+- promotion max batch and eligibility/ranking;
+- Add exact approval semantics;
+- Do-not-suggest exact suppression;
+- Restore;
+- source object navigation;
+- no message bodies/snippets;
+- no promotion review on rooted Person;
+- manual Person fallback;
+- all identity correction/retract functionality;
+- Task graph appearance/geometry unless unavoidable shared code is proven safe;
+- backend/API/schema unchanged.
+
+If the required UI cannot be implemented from existing response data, STOP and report the exact missing field instead of silently widening the backend contract.
 
 ## Required Flutter regression coverage
 
-Add or update focused widget tests proving at minimum:
+At minimum prove:
 
-1. five candidates with three source previews each render without overflow at a representative desktop viewport;
-2. the graph canvas region still has non-zero meaningful height while promotion review is expanded;
-3. promotion review has a bounded independently scrollable content area;
-4. collapse reduces it to a compact header and leaves the graph available;
-5. collapsed state survives candidate refresh after Add/Do-not-suggest during the same screen lifetime;
-6. candidate cards are visually/seman­tically distinct and associated actions target the correct identity;
-7. source previews render as compact tiles rather than full-width evidence rows;
-8. source title overflow is bounded;
-9. tapping a source preserves existing object-detail navigation;
-10. Add / Do-not-suggest / Restore existing tests remain green;
-11. rooted Person detail still omits promotion review;
-12. narrow supported desktop width does not horizontally overflow.
+### Promotion layout
+1. five candidates x three source previews render at representative desktop viewport without vertical/horizontal overflow;
+2. graph canvas retains meaningful non-zero visible height while review expanded;
+3. review has bounded independently scrollable content;
+4. collapse/expand works and preserves graph access;
+5. collapsed state survives promotion refresh in same screen lifetime;
+6. candidate actions target the correct identity;
+7. candidate source evidence is compact/bounded and navigation still works;
+8. hidden suggestions stay compact and Restore remains functional;
+9. narrow supported desktop viewport has no horizontal overflow.
 
-Use stable keys where needed so the tests assert layout behavior rather than brittle text ordering.
+### People cards
+10. Person overview node uses the Person-specific summary card and shows strong name + factual metrics;
+11. multiple provider cues remain bounded;
+12. identity-conflict cue remains;
+13. Task-mode generic graph cards are not visually regressed.
 
-Run the relevant broader People/Graph client tests. Existing unrelated baseline Graph failures may be reported separately; do not fix them in this slice.
+### Rooted Person summary
+14. rooted Person header/metrics render;
+15. task involvement renders as compact clickable tiles with task-specific actor role;
+16. ongoing task is labeled as Direction/Направление rather than silently as finite task;
+17. recent Flow renders as compact body-free clickable tiles;
+18. long task/Flow titles ellipsize without overflow;
+19. correction/contact/salience truth remains reachable;
+20. a Person with no tasks or no recent Flow has a clean compact empty-state, not a large blank panel.
+
+Use stable keys for layout-sensitive assertions.
+
+Run focused People/promotion tests plus relevant broader Graph client suites. Existing unrelated baseline failures may be reported separately; do not fix them in this slice.
 
 Run Flutter analyze on touched files and `git diff --check`.
 
 ## Human-gate bundle
 
-Build a fresh Linux debug bundle from the completed HG2 implementation.
+Build a fresh Linux debug bundle from the completed HG2 implementation under a temp path containing `pp1-hg2`.
 
-Place it under a clearly named temp path containing `pp1-hg2`.
+Report:
 
-Provide:
-- exact implementation SHA;
+- implementation SHA;
 - executable path;
 - executable SHA-256;
-- focused test results;
+- focused/broader test results;
 - analyze result.
 
 Do not install or replace the user's existing client automatically.
 
 ## Explicitly out of scope
 
-- No production backend deploy.
-- No database/schema migration.
-- No production ref movement.
-- No provider/model call.
+- No backend/API/schema change.
+- No production deployment/ref movement.
+- No DB mutation.
+- No provider/model/avatar network lookup.
 - No synthetic production data.
-- No change to promotion eligibility/ranking.
-- No change to max-5 backend batch.
-- No Person Knowledge / manager / colleague / family inference.
-- No contextual task-creation prompts.
-- No Organization/social graph work.
-- No client auto-updater/versioning redesign.
-- No unrelated graph redesign.
+- No change to promotion eligibility/ranking/batch size.
+- No global manager/colleague/family/client inference.
+- No Organization/company ontology.
+- No Person-to-Person social graph.
+- No contextual task-creation promotion prompts.
+- No client updater/versioning redesign.
+- No unrelated Task graph redesign.
 
 ## Completion
 
-1. Commit the client UX fix and tests.
-2. Record exact implementation SHA, tests, analyze result, and HG2 bundle path/checksum in `PROJECT_STATE.md`.
-3. Return `CURRENT_TASK.md` to HOLD with PP1 human acceptance still pending.
+1. Commit client UX implementation and regressions.
+2. Record exact implementation SHA, tests, analyze result, bundle path/checksum in `PROJECT_STATE.md`.
+3. Return `CURRENT_TASK.md` to HOLD with PP1 human acceptance pending.
 4. Push implementation + HOLD to `main`.
-5. Report exact SHA/test/bundle results and STOP.
+5. Report exact SHA/tests/bundle and STOP.
 
 Human acceptance is performed by the user with the HG2 bundle.
