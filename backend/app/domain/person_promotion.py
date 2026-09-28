@@ -6,8 +6,11 @@ A qualifying row is not a Person. Display-name similarity is not authority.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from uuid import UUID
 
-from app.db.models import Object
+from app.connectors.mattermost.errors import MattermostSecurityError
+from app.connectors.mattermost.normalize import normalize_server_url
+from app.db.models import MattermostAccount, Object
 from app.domain.person_identity import (
     MATTERMOST_USER_ID,
     NormalizedPersonIdentity,
@@ -29,8 +32,6 @@ def direct_promotion_identity(source: Object) -> NormalizedPersonIdentity | None
     metadata = source.metadata_ if isinstance(source.metadata_, Mapping) else {}
     if source.kind == "email" and source.provider in {"gmail", "yandex_mail"}:
         return _direct_email(source.provider, metadata)
-    if source.kind == "chat_message" and source.provider == "mattermost":
-        return _direct_chat(source, _mattermost_direct(metadata))
     if source.kind == "chat_message" and source.provider == "teams":
         return _direct_chat(source, _teams_direct(metadata))
     if source.kind == "chat_message" and source.provider == "telegram":
@@ -52,8 +53,51 @@ def _direct_email(provider: str, metadata: Mapping) -> NormalizedPersonIdentity 
         return None
 
 
-def _mattermost_direct(metadata: Mapping) -> bool:
-    return str(metadata.get("channel_type") or "").upper() == "D"
+def mattermost_remote_identity(
+    source: Object,
+    account: MattermostAccount | None,
+) -> NormalizedPersonIdentity | None:
+    """Qualify a Mattermost DM only when stored account facts prove a remote author."""
+    if source.provider != "mattermost" or source.kind != "chat_message":
+        return None
+    metadata = source.metadata_ if isinstance(source.metadata_, Mapping) else {}
+    if metadata.get("channel_type") != "D":
+        return None
+    account_id = _uuid(metadata.get("account_id"))
+    if account is None or account_id is None or account.id != account_id:
+        return None
+    if account.user_id != source.user_id:
+        return None
+    author = metadata.get("author_user_id")
+    remote = account.remote_user_id
+    if not isinstance(author, str) or not author.strip():
+        return None
+    if not isinstance(remote, str) or not remote.strip() or author.strip() == remote.strip():
+        return None
+    try:
+        message_realm = normalize_server_url(str(metadata.get("server_url") or ""))
+        account_realm = normalize_server_url(account.server_url)
+    except MattermostSecurityError:
+        return None
+    if message_realm != account_realm:
+        return None
+    identities = [
+        item
+        for item in extract_person_identity_evidence(source)
+        if item.identity_type == MATTERMOST_USER_ID and item.canonical_value == author.strip()
+    ]
+    if len(identities) != 1:
+        return None
+    return identities[0]
+
+
+def _uuid(value: object) -> UUID | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
 
 
 def _teams_direct(metadata: Mapping) -> bool:
@@ -76,9 +120,6 @@ def _direct_chat(source: Object, direct: bool) -> NormalizedPersonIdentity | Non
     if not direct:
         return None
     identities = extract_person_identity_evidence(source)
-    if source.provider == "mattermost":
-        preferred = [item for item in identities if item.identity_type == MATTERMOST_USER_ID]
-        identities = tuple(preferred or identities[:1])
     if len(identities) != 1:
         return None
     identity = identities[0]

@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from app.db.models import (
     Edge,
+    MattermostAccount,
     Object,
     PersonIdentity,
     PersonIdentityEvidence,
@@ -16,8 +18,8 @@ from app.db.models import (
     User,
 )
 from app.domain.person_assistant import MAX_PERSON_SCAN_ROWS
-from app.domain.person_identity import normalize_email
-from app.services.errors import ConflictError
+from app.domain.person_identity import normalize_email, normalize_mattermost_user_id
+from app.services.errors import ConflictError, ValidationError
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
 from app.services.person_promotion_service import PersonPromotionService
@@ -72,22 +74,76 @@ def test_email_spelling_dedupes_to_one_candidate(db_session) -> None:
 
 def test_mattermost_dm_qualifies(db_session) -> None:
     user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id)
     for _index in range(2):
-        _chat(
-            db_session,
-            user_id,
-            provider="mattermost",
-            metadata={
-                "server_url": "https://chat.example.com",
-                "channel_type": "D",
-                "author_user_id": "user-ada",
-                "author_display_name": "Ada",
-            },
-        )
+        _mattermost(db_session, user_id, account, author="user-ada", name="Ada")
     candidates, _truncated, _hidden = _overview(db_session, user_id)
     assert len(candidates) == 1
     assert candidates[0]["provider"] == "mattermost"
     assert candidates[0]["identity_type"] == "mattermost_user_id"
+    assert candidates[0]["canonical_value"] == "user-ada"
+
+
+def test_mattermost_self_author_is_not_a_candidate(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id, remote_user_id="self-user")
+    for _index in range(2):
+        _mattermost(db_session, user_id, account, author="self-user", name="Me")
+    candidates, _truncated, _hidden = _overview(db_session, user_id)
+    assert candidates == []
+
+
+def test_mattermost_mixed_self_and_remote_needs_two_remote_hits(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id, remote_user_id="self-user")
+    _mattermost(db_session, user_id, account, author="self-user", name="Me")
+    _mattermost(db_session, user_id, account, author="user-ada", name="Ada")
+    candidates, _truncated, _hidden = _overview(db_session, user_id)
+    assert candidates == []
+
+
+def test_mattermost_account_verification_fails_closed(db_session) -> None:
+    other = _user(db_session)
+    foreign = _mattermost_account(db_session, other, server="https://other.example.com")
+    cases = (
+        {"account_id": None},
+        {"account_id": "not-a-uuid"},
+        {"account_id": str(uuid.uuid4())},
+        {"account": foreign},
+        {"server": "https://elsewhere.example.com"},
+        {"channel_type": "O"},
+    )
+    for case in cases:
+        user_id = _user(db_session)
+        account = case.get("account") or _mattermost_account(db_session, user_id)
+        for _index in range(2):
+            _mattermost(
+                db_session,
+                user_id,
+                account,
+                author="user-ada",
+                name="Ada",
+                server=case.get("server", "https://chat.example.com"),
+                account_id=case["account_id"] if "account_id" in case else str(account.id),
+                channel_type=case.get("channel_type", "D"),
+            )
+        candidates, _truncated, _hidden = _overview(db_session, user_id)
+        assert candidates == []
+
+
+def test_mattermost_self_approval_does_not_create_a_person(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id, remote_user_id="self-user")
+    for _index in range(2):
+        _mattermost(db_session, user_id, account, author="self-user", name="Me")
+    identity = normalize_mattermost_user_id("https://chat.example.com", "self-user")
+    before = _counts(db_session, user_id)
+    with pytest.raises(ValidationError, match="promotion candidate is not exposed"):
+        PersonPromotionService(db_session, user_id).approve(identity)
+    db_session.commit()
+    assert _counts(db_session, user_id) == before
+    again, _truncated, _hidden = _overview(db_session, user_id)
+    assert again == []
 
 
 def test_teams_one_on_one_qualifies_and_group_does_not(db_session) -> None:
@@ -345,6 +401,49 @@ def _chat(db_session, user_id, *, provider: str, metadata: dict) -> None:
         )
     )
     db_session.flush()
+
+
+def _mattermost_account(
+    db_session,
+    user_id,
+    *,
+    remote_user_id: str = "self-user",
+    server: str = "https://chat.example.com",
+) -> MattermostAccount:
+    account = MattermostAccount(
+        user_id=user_id,
+        server_url=server,
+        remote_user_id=remote_user_id,
+        username="me",
+        access_token_encrypted="token",
+    )
+    db_session.add(account)
+    db_session.flush()
+    return account
+
+
+def _mattermost(
+    db_session,
+    user_id,
+    account: MattermostAccount,
+    *,
+    author: str,
+    name: str,
+    server: str = "https://chat.example.com",
+    account_id: str | None = "",
+    channel_type: str = "D",
+) -> None:
+    metadata = {
+        "server_url": server,
+        "channel_type": channel_type,
+        "author_user_id": author,
+        "author_display_name": name,
+    }
+    if account_id != "":
+        metadata["account_id"] = account_id
+    else:
+        metadata["account_id"] = str(account.id)
+    _chat(db_session, user_id, provider="mattermost", metadata=metadata)
 
 
 def _noise(db_session, user_id, count: int) -> None:

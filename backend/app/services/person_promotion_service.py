@@ -14,7 +14,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import Object, PersonIdentity, PersonIdentityEvidence, PersonPromotionFeedback
+from app.db.models import (
+    MattermostAccount,
+    Object,
+    PersonIdentity,
+    PersonIdentityEvidence,
+    PersonPromotionFeedback,
+)
 from app.domain.object_visibility import object_is_active
 from app.domain.person_assistant import (
     MAX_PERSON_SCAN_ROWS,
@@ -29,6 +35,7 @@ from app.domain.person_promotion import (
     MIN_DIRECT_HITS,
     REPEATED_DIRECT_CONTACT,
     direct_promotion_identity,
+    mattermost_remote_identity,
 )
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.person_evidence_service import PersonEvidenceService
@@ -192,11 +199,18 @@ class PersonPromotionService:
             )
         )
         truncated = len(rows) > MAX_PERSON_SCAN_ROWS
+        accounts = self._mattermost_accounts()
         found: dict[tuple[str, str, str, str], _Hit] = {}
         for source in rows[:MAX_PERSON_SCAN_ROWS]:
             if source.provider == "telegram" and not include_quarantined_telegram:
                 continue
-            identity = direct_promotion_identity(source)
+            if source.provider == "mattermost":
+                account_id = _mattermost_account_id(source)
+                identity = mattermost_remote_identity(
+                    source, accounts.get(account_id) if account_id else None
+                )
+            else:
+                identity = direct_promotion_identity(source)
             if identity is None:
                 continue
             key = self._key(identity)
@@ -217,6 +231,12 @@ class PersonPromotionService:
             if current.display_value == identity.canonical_value and identity.display_value:
                 current.display_value = _label(identity.display_value, identity.canonical_value)
         return found, truncated
+
+    def _mattermost_accounts(self) -> dict[UUID, MattermostAccount]:
+        rows = self._session.scalars(
+            select(MattermostAccount).where(MattermostAccount.user_id == self._user_id)
+        )
+        return {row.id: row for row in rows}
 
     def _approval_label(self, identity: NormalizedPersonIdentity) -> str:
         hits, _truncated = self._hits(include_quarantined_telegram=True)
@@ -371,6 +391,17 @@ def _provenance(identity: NormalizedPersonIdentity) -> str:
     )
     digest = hashlib.sha256(raw.encode()).hexdigest()
     return f"graph_ui:promotion:{digest}"
+
+
+def _mattermost_account_id(source: Object) -> UUID | None:
+    metadata = source.metadata_ if isinstance(source.metadata_, dict) else {}
+    raw = metadata.get("account_id")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None
 
 
 def _label(display: str | None, canonical: str) -> str:
