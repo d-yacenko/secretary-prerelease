@@ -13,6 +13,9 @@ from app.api.schemas import (
     PersonEmailBindRequest,
     PersonIdentityCorrectionRequest,
     PersonPresentation,
+    PersonPromotionCandidateOut,
+    PersonPromotionRequest,
+    PersonPromotionSuppressionOut,
 )
 from app.core.current_user import CurrentUserContext
 from app.services.errors import (
@@ -146,7 +149,38 @@ def get_people_workspace(
         edges=[EdgeOut.from_model(edge) for edge in result.edges],
         truncated=result.truncated,
         people=[PersonPresentation.model_validate(person) for person in result.people],
+        promotion_candidates=[
+            PersonPromotionCandidateOut.model_validate(item) for item in result.promotion_candidates
+        ],
+        promotion_candidates_truncated=result.promotion_candidates_truncated,
+        promotion_suppressions=[
+            PersonPromotionSuppressionOut.model_validate(item) for item in result.promotion_suppressions
+        ],
     )
+
+
+@router.post("/graph/people/promotions")
+def apply_person_promotion(
+    body: PersonPromotionRequest,
+    service: PersonGraphWorkspaceService = Depends(_people_service),
+):
+    try:
+        return service.apply_promotion(
+            action=body.action,
+            identity_type=body.identity_type,
+            provider=body.provider,
+            realm=body.realm,
+            canonical_value=body.canonical_value,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
 
 
 @router.post("/graph/people/{person_id}/identity-correction")

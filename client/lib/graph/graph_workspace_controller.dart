@@ -40,6 +40,9 @@ class GraphWorkspaceController extends ChangeNotifier {
   String? errorMessage;
   String? rootId;
   bool truncated = false;
+  List<PersonPromotionCandidate> promotionCandidates = const [];
+  bool promotionCandidatesTruncated = false;
+  List<PersonPromotionSuppression> promotionSuppressions = const [];
   int windowIndex = 0;
   int windowCount = 1;
   bool hasPreviousWindow = false;
@@ -904,6 +907,11 @@ class GraphWorkspaceController extends ChangeNotifier {
     _applyWorkspace(workspace, layoutRoot: layoutRoot, freshRoot: freshRoot);
     rootId = rootIdAfter;
     truncated = workspace.truncated;
+    promotionCandidates = List<PersonPromotionCandidate>.from(workspace.promotionCandidates);
+    promotionCandidatesTruncated = workspace.promotionCandidatesTruncated;
+    promotionSuppressions = List<PersonPromotionSuppression>.from(
+      workspace.promotionSuppressions,
+    );
     windowIndex = workspace.windowIndex;
     windowCount = workspace.windowCount;
     hasPreviousWindow = workspace.hasPreviousWindow;

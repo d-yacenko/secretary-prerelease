@@ -1490,3 +1490,60 @@ class PersonIdentityEvidence(Base):
             postgresql_where=text("state = 'active'"),
         ),
     )
+
+
+class PersonPromotionFeedback(Base):
+    __tablename__ = "person_promotion_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(nullable=False)
+    identity_type: Mapped[str] = mapped_column(nullable=False)
+    realm: Mapped[str] = mapped_column(nullable=False, server_default="")
+    canonical_value: Mapped[str] = mapped_column(nullable=False)
+    display_value: Mapped[str | None] = mapped_column(nullable=True)
+    feedback_kind: Mapped[str] = mapped_column(nullable=False)
+    state: Mapped[str] = mapped_column(nullable=False)
+    origin: Mapped[str] = mapped_column(nullable=False)
+    provenance_key: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "feedback_kind = 'suppression'",
+            name="ck_person_promotion_feedback_kind",
+        ),
+        sa.CheckConstraint(
+            "state in ('active', 'retracted')",
+            name="ck_person_promotion_feedback_state",
+        ),
+        sa.CheckConstraint(
+            "origin = 'user'",
+            name="ck_person_promotion_feedback_origin",
+        ),
+        Index("ix_person_promotion_feedback_user", "user_id", "state"),
+        Index(
+            "uq_person_promotion_feedback_active_identity",
+            "user_id",
+            "provider",
+            "identity_type",
+            "realm",
+            "canonical_value",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+        ),
+    )

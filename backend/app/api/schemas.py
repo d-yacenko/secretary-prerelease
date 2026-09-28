@@ -667,6 +667,26 @@ class PersonPresentation(BaseModel):
     )
 
 
+class PersonPromotionCandidateOut(BaseModel):
+    provider: str
+    identity_type: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str
+    direct_hit_count: int
+    latest_occurred_at: datetime | None = None
+    reasons: list[str] = Field(default_factory=list)
+    sources: list[PersonFlowPreviewOut] = Field(default_factory=list)
+
+
+class PersonPromotionSuppressionOut(BaseModel):
+    provider: str
+    identity_type: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str
+
+
 class PeopleWorkspaceOut(BaseModel):
     root_id: UUID | None
     seed_ids: list[UUID]
@@ -674,6 +694,9 @@ class PeopleWorkspaceOut(BaseModel):
     edges: list[EdgeOut]
     truncated: bool
     people: list[PersonPresentation]
+    promotion_candidates: list[PersonPromotionCandidateOut] = Field(default_factory=list)
+    promotion_candidates_truncated: bool = False
+    promotion_suppressions: list[PersonPromotionSuppressionOut] = Field(default_factory=list)
 
 
 class PersonCreateRequest(BaseModel):
@@ -696,6 +719,16 @@ class PersonEmailBindRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str
+
+
+class PersonPromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["approve", "suppress", "retract"]
+    identity_type: str
+    provider: str
+    realm: str = ""
+    canonical_value: str
 
 
 class OpenTargetOut(BaseModel):

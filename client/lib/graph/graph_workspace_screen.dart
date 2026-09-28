@@ -267,6 +267,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               child: Text(widget.controller.errorMessage!),
             ),
           ),
+        if (_showPromotionReview) _promotionReview(context),
         if (widget.controller.truncated)
           Material(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -517,6 +518,161 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       return;
     }
     await widget.controller.reRoot(created.id);
+  }
+
+  bool get _showPromotionReview {
+    final controller = widget.controller;
+    return controller.mode == GraphWorkspaceMode.people &&
+        controller.rootId == null &&
+        (controller.promotionCandidates.isNotEmpty ||
+            controller.promotionSuppressions.isNotEmpty ||
+            controller.promotionCandidatesTruncated);
+  }
+
+  Widget _promotionReview(BuildContext context) {
+    final controller = widget.controller;
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (controller.promotionCandidates.isNotEmpty ||
+                controller.promotionCandidatesTruncated)
+              const Text('Предлагаемые люди'),
+            if (controller.promotionCandidatesTruncated)
+              const Text(
+                'Показана часть предложений: просмотрены не все недавние сообщения.',
+              ),
+            ...controller.promotionCandidates.map(
+              (candidate) => _promotionCandidate(context, candidate),
+            ),
+            if (controller.promotionSuppressions.isNotEmpty)
+              const Text('Скрытые предложения'),
+            ...controller.promotionSuppressions.map(
+              (item) => ListTile(
+                dense: true,
+                title: Text(item.displayValue),
+                subtitle: Text(
+                  '${providerLabel(item.provider)} · ${item.canonicalValue}',
+                ),
+                trailing: TextButton(
+                  onPressed: () => _applyPromotion(item, 'retract'),
+                  child: const Text('Вернуть'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _promotionCandidate(BuildContext context, PersonPromotionCandidate candidate) {
+    final identity = candidate.displayValue == candidate.canonicalValue
+        ? candidate.displayValue
+        : '${candidate.displayValue} · ${candidate.canonicalValue}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          title: Text(identity),
+          subtitle: Text(
+            '${providerLabel(candidate.provider)} · ${_promotionExplanation(candidate)}',
+          ),
+        ),
+        Wrap(
+          spacing: 4,
+          children: [
+            TextButton(
+              onPressed: () => _applyPromotion(candidate, 'approve'),
+              child: const Text('Добавить'),
+            ),
+            TextButton(
+              onPressed: () => _applyPromotion(candidate, 'suppress'),
+              child: const Text('Не предлагать'),
+            ),
+          ],
+        ),
+        ...candidate.sources.take(3).map(
+          (source) => ListTile(
+            dense: true,
+            title: Text(source.title ?? source.kind),
+            subtitle: Text(providerLabel(source.provider ?? '')),
+            onTap: () => openObjectDetail(
+              context,
+              objectId: source.objectId,
+              apiClient: widget.apiClient,
+              authController: widget.authController,
+              captureController: widget.captureController,
+              assistantController: widget.assistantController,
+              onAskSecretary: widget.onAskSecretary,
+              onShowInGraph: widget.controller.reRoot,
+              bookmarkController: widget.bookmarkController,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _applyPromotion(Object item, String action) async {
+    final String identityType;
+    final String provider;
+    final String realm;
+    final String canonicalValue;
+    if (item is PersonPromotionCandidate) {
+      identityType = item.identityType;
+      provider = item.provider;
+      realm = item.realm;
+      canonicalValue = item.canonicalValue;
+    } else if (item is PersonPromotionSuppression) {
+      identityType = item.identityType;
+      provider = item.provider;
+      realm = item.realm;
+      canonicalValue = item.canonicalValue;
+    } else {
+      return;
+    }
+    await widget.apiClient.applyPersonPromotion(
+      action: action,
+      identityType: identityType,
+      provider: provider,
+      realm: realm,
+      canonicalValue: canonicalValue,
+    );
+    if (!mounted) {
+      return;
+    }
+    await widget.controller.loadOverview();
+  }
+
+  String _promotionExplanation(PersonPromotionCandidate candidate) {
+    final count = candidate.directHitCount;
+    final hits = count == 1
+        ? '1 прямой контакт'
+        : count >= 2 && count <= 4
+            ? '$count прямых контакта'
+            : '$count прямых контактов';
+    return '$hits · последнее ${_promotionWhen(candidate.latestOccurredAt)}';
+  }
+
+  String _promotionWhen(String? iso) {
+    final parsed = iso == null ? null : DateTime.tryParse(iso);
+    if (parsed == null) {
+      return 'без даты';
+    }
+    final local = parsed.toLocal();
+    final now = DateTime.now();
+    final sameDay = local.year == now.year && local.month == now.month && local.day == now.day;
+    if (sameDay) {
+      return 'сегодня';
+    }
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    return '$day.$month.${local.year}';
   }
 
   Widget _buildCanvas(BuildContext context) {

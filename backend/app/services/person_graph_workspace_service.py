@@ -6,7 +6,7 @@ search or a rooted view, and this service does not create People or edges.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -33,6 +33,7 @@ from app.services.graph_workspace_service import (
 from app.services.person_assistant_service import PersonAssistantService
 from app.services.person_evidence_service import PersonEvidenceService, _identity_from_identity_row
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
+from app.services.person_promotion_service import PersonPromotionService, parse_promotion_identity
 from app.services.person_salience_service import PersonSalienceService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
 from app.tools.schemas import (
@@ -63,6 +64,9 @@ class PeopleWorkspaceResult:
     edges: list[Edge]
     truncated: bool
     people: list[dict]
+    promotion_candidates: list[dict]
+    promotion_candidates_truncated: bool
+    promotion_suppressions: list[dict]
 
 
 class PersonGraphWorkspaceService:
@@ -134,6 +138,28 @@ class PersonGraphWorkspaceService:
             return _feedback_output(person_id, row)
         raise ValidationError("person identity action is unknown")
 
+    def apply_promotion(
+        self,
+        *,
+        action: str,
+        identity_type: str,
+        provider: str,
+        realm: str,
+        canonical_value: str,
+    ) -> dict:
+        identity = parse_promotion_identity(identity_type, provider, realm, canonical_value)
+        promotions = PersonPromotionService(self._session, self._user_id)
+        if action == "approve":
+            person = promotions.approve(identity)
+            return {"action": "approve", "person_id": str(person.id)}
+        if action == "suppress":
+            row = promotions.suppress(identity, display_value=identity.display_value)
+            return {"action": "suppress", "state": row.state}
+        if action == "retract":
+            row = promotions.retract(identity)
+            return {"action": "retract", "state": row.state}
+        raise ValidationError("person promotion action is unknown")
+
     def bind_email(self, person_id: UUID, raw_email: str) -> PersonIdentityFeedbackOutput:
         self._require_person(person_id)
         try:
@@ -168,6 +194,18 @@ class PersonGraphWorkspaceService:
             self._session.flush()
         return _feedback_output(person_id, row)
 
+    def _with_promotions(self, result: PeopleWorkspaceResult) -> PeopleWorkspaceResult:
+        candidates, truncated, suppressions = PersonPromotionService(
+            self._session,
+            self._user_id,
+        ).overview(include_quarantined_telegram=True)
+        return replace(
+            result,
+            promotion_candidates=candidates,
+            promotion_candidates_truncated=truncated,
+            promotion_suppressions=suppressions,
+        )
+
     def _overview(self, seed_limit: int) -> PeopleWorkspaceResult:
         scores, ranked = self._ranked_people()
         positive = [person for person in ranked if scores.get(person.id, 0) > 0]
@@ -176,11 +214,15 @@ class PersonGraphWorkspaceService:
             visible = positive[:seed_limit]
             shown = {person.id for person in visible}
             truncated = len(positive) > seed_limit or self._other_person_exists(shown)
-            return self._result(None, visible, [], [], truncated, include_details=False, scores=scores)
+            return self._with_promotions(
+                self._result(None, visible, [], [], truncated, include_details=False, scores=scores)
+            )
         fill = seed_limit - len(positive)
         rest = self._people_page(exclude={person.id for person in positive}, limit=fill + 1)
         visible = [*positive, *rest[:fill]]
-        return self._result(None, visible, [], [], len(rest) > fill, include_details=False, scores=scores)
+        return self._with_promotions(
+            self._result(None, visible, [], [], len(rest) > fill, include_details=False, scores=scores)
+        )
 
     def _search(self, query: str, seed_limit: int) -> PeopleWorkspaceResult:
         folded = query.casefold()
@@ -233,6 +275,9 @@ class PersonGraphWorkspaceService:
             nodes=nodes,
             edges=edges,
             truncated=truncated,
+            promotion_candidates=[],
+            promotion_candidates_truncated=False,
+            promotion_suppressions=[],
             people=[
                 self._presentation(
                     person,

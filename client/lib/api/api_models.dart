@@ -2711,6 +2711,72 @@ class PersonPresentation {
   }
 }
 
+class PersonPromotionCandidate {
+  PersonPromotionCandidate({
+    required this.provider,
+    required this.identityType,
+    required this.realm,
+    required this.canonicalValue,
+    required this.displayValue,
+    required this.directHitCount,
+    required this.reasons,
+    required this.sources,
+    this.latestOccurredAt,
+  });
+
+  final String provider;
+  final String identityType;
+  final String realm;
+  final String canonicalValue;
+  final String displayValue;
+  final int directHitCount;
+  final String? latestOccurredAt;
+  final List<String> reasons;
+  final List<PersonFlowPreview> sources;
+
+  factory PersonPromotionCandidate.fromJson(Map<String, dynamic> json) {
+    return PersonPromotionCandidate(
+      provider: json['provider'] as String? ?? '',
+      identityType: json['identity_type'] as String? ?? '',
+      realm: json['realm'] as String? ?? '',
+      canonicalValue: json['canonical_value'] as String? ?? '',
+      displayValue: json['display_value'] as String? ?? '',
+      directHitCount: json['direct_hit_count'] as int? ?? 0,
+      latestOccurredAt: json['latest_occurred_at'] as String?,
+      reasons: (json['reasons'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
+      sources: (json['sources'] as List<dynamic>? ?? [])
+          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class PersonPromotionSuppression {
+  PersonPromotionSuppression({
+    required this.provider,
+    required this.identityType,
+    required this.realm,
+    required this.canonicalValue,
+    required this.displayValue,
+  });
+
+  final String provider;
+  final String identityType;
+  final String realm;
+  final String canonicalValue;
+  final String displayValue;
+
+  factory PersonPromotionSuppression.fromJson(Map<String, dynamic> json) {
+    return PersonPromotionSuppression(
+      provider: json['provider'] as String? ?? '',
+      identityType: json['identity_type'] as String? ?? '',
+      realm: json['realm'] as String? ?? '',
+      canonicalValue: json['canonical_value'] as String? ?? '',
+      displayValue: json['display_value'] as String? ?? '',
+    );
+  }
+}
+
 class GraphWorkspaceOut {
   GraphWorkspaceOut({
     this.rootId,
@@ -2719,6 +2785,9 @@ class GraphWorkspaceOut {
     required this.edges,
     required this.truncated,
     this.people = const [],
+    this.promotionCandidates = const [],
+    this.promotionCandidatesTruncated = false,
+    this.promotionSuppressions = const [],
     this.windowIndex = 0,
     this.windowCount = 1,
     this.hasPreviousWindow = false,
@@ -2733,6 +2802,9 @@ class GraphWorkspaceOut {
   final List<SecretaryEdge> edges;
   final bool truncated;
   final List<PersonPresentation> people;
+  final List<PersonPromotionCandidate> promotionCandidates;
+  final bool promotionCandidatesTruncated;
+  final List<PersonPromotionSuppression> promotionSuppressions;
   final int windowIndex;
   final int windowCount;
   final bool hasPreviousWindow;
@@ -2764,6 +2836,17 @@ class GraphWorkspaceOut {
       people: (json['people'] as List<dynamic>? ?? [])
           .map(
             (item) => PersonPresentation.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(),
+      promotionCandidates: (json['promotion_candidates'] as List<dynamic>? ?? [])
+          .map(
+            (item) => PersonPromotionCandidate.fromJson(item as Map<String, dynamic>),
+          )
+          .toList(),
+      promotionCandidatesTruncated: json['promotion_candidates_truncated'] as bool? ?? false,
+      promotionSuppressions: (json['promotion_suppressions'] as List<dynamic>? ?? [])
+          .map(
+            (item) => PersonPromotionSuppression.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
     );

@@ -775,6 +775,26 @@ class SecretaryApiClient {
     return GraphWorkspaceOut.fromJson(body);
   }
 
+  Future<Map<String, dynamic>> applyPersonPromotion({
+    required String action,
+    required String identityType,
+    required String provider,
+    required String realm,
+    required String canonicalValue,
+  }) async {
+    return _request(
+      'POST',
+      '/graph/people/promotions',
+      jsonBody: {
+        'action': action,
+        'identity_type': identityType,
+        'provider': provider,
+        'realm': realm,
+        'canonical_value': canonicalValue,
+      },
+    );
+  }
+
   Future<void> bindPersonEmail({
     required String personId,
     required String email,
