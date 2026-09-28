@@ -2638,6 +2638,7 @@ class PersonPresentation {
     required this.identityConflict,
     required this.openTaskCount,
     required this.recentCommunicationCount,
+    this.recentCommunicationCountTruncated = false,
     this.taskInvolvement = const [],
     this.taskInvolvementTruncated = false,
     this.recentCommunications = const [],
@@ -2656,6 +2657,7 @@ class PersonPresentation {
   final bool identityConflict;
   final int openTaskCount;
   final int recentCommunicationCount;
+  final bool recentCommunicationCountTruncated;
   final List<PersonTaskInvolvement> taskInvolvement;
   final bool taskInvolvementTruncated;
   final List<PersonFlowPreview> recentCommunications;
@@ -2686,6 +2688,8 @@ class PersonPresentation {
       identityConflict: json['identity_conflict'] as bool? ?? false,
       openTaskCount: json['open_task_count'] as int? ?? 0,
       recentCommunicationCount: json['recent_communication_count'] as int? ?? 0,
+      recentCommunicationCountTruncated:
+          json['recent_communication_count_truncated'] as bool? ?? false,
       taskInvolvement: (json['task_involvement'] as List<dynamic>? ?? [])
           .map((item) => PersonTaskInvolvement.fromJson(item as Map<String, dynamic>))
           .toList(),

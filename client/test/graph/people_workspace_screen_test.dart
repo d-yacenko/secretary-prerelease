@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:personal_secretary/graph/graph_workspace_screen.dart';
 
 import 'graph_test_harness.dart';
 
@@ -100,7 +99,7 @@ void main() {
     expect(tester.getSize(find.byKey(const ValueKey('graph-desktop-detail-pane'))).width, 360);
     expect(find.text('olga@example.com'), findsWidgets);
     expect(find.text('Reply to Olga'), findsOneWidget);
-    expect(find.text('Открытые задачи · 1'), findsOneWidget);
+    expect(find.text('Связанные задачи · 1'), findsWidgets);
     expect(find.text('Письмо Olga'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'olga@example.com');

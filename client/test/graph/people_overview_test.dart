@@ -245,9 +245,11 @@ void main() {
     expect(harness.graph.positions, canonical);
     expect(find.text('4242'), findsNothing);
     expect(find.text('Cara'), findsWidgets);
-    expect(find.text('Человек'), findsWidgets);
-    expect(find.text('Задач: 3 · сообщений: 7'), findsOneWidget);
-    expect(find.text('Задач: 1 · сообщений: 2'), findsOneWidget);
+    expect(find.text('Человек'), findsNothing);
+    expect(find.text('Связанные задачи · 3'), findsOneWidget);
+    expect(find.text('Сообщения · 7'), findsOneWidget);
+    expect(find.text('Связанные задачи · 1'), findsOneWidget);
+    expect(find.text('Сообщения · 2'), findsOneWidget);
     expect(find.byKey(const Key('person-activity-footer-person-plain')), findsNothing);
     expect(find.byIcon(Icons.person_outline), findsWidgets);
     final cues = tester.widget<Text>(find.byKey(const Key('person-provider-cues-person-c')));
@@ -274,8 +276,8 @@ void main() {
     expect(harness.graph.positions['person-c'], isNot(harness.graph.positions['task-linked']));
     expect(find.text('Известные контакты'), findsOneWidget);
     expect(find.text('Маршруты'), findsOneWidget);
-    expect(find.text('Открытые задачи · 3'), findsOneWidget);
-    expect(find.text('Недавние коммуникации · 7'), findsOneWidget);
+    expect(find.text('Связанные задачи · 3'), findsWidgets);
+    expect(find.text('Сообщения · 7'), findsWidgets);
     expect(find.text('Отклонить'), findsWidgets);
     final detailScroll = tester.state<ScrollableState>(
       find.descendant(

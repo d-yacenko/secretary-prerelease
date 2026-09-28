@@ -11,7 +11,7 @@ void main() {
   testWidgets('People overview can promote, hide, and restore an exact contact', (tester) async {
     final state = _PromotionState();
     await _open(tester, state);
-    expect(find.text('Предлагаемые люди · 1'), findsOneWidget);
+    expect(find.text('Предлагаемые · 1'), findsOneWidget);
     expect(find.textContaining('Email'), findsWidgets);
     expect(find.textContaining('2 прямых контакта'), findsOneWidget);
     expect(find.textContaining('сегодня'), findsWidgets);
@@ -28,7 +28,7 @@ void main() {
 
     await tester.tap(find.text('Не предлагать'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди · 1'), findsNothing);
+    expect(find.text('Предлагаемые · 1'), findsNothing);
     expect(find.text('Скрытые предложения · 1'), findsOneWidget);
     expect(state.actions, ['suppress']);
 
@@ -36,13 +36,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Вернуть'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди · 1'), findsOneWidget);
+    expect(find.text('Предлагаемые · 1'), findsOneWidget);
     expect(find.text('Скрытые предложения · 1'), findsNothing);
     expect(state.actions, ['suppress', 'retract']);
 
     await tester.tap(find.text('Добавить'));
     await tester.pumpAndSettle();
-    expect(find.text('Предлагаемые люди · 1'), findsNothing);
+    expect(find.text('Предлагаемые · 1'), findsNothing);
     expect(find.text('Ada'), findsWidgets);
     expect(state.actions, ['suppress', 'retract', 'approve']);
   });
@@ -79,6 +79,8 @@ Future<void> _open(WidgetTester tester, _PromotionState state) async {
   harness.configure();
   await openGraph(tester, harness);
   await tester.tap(find.text('Люди'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('people-inspector-toggle')));
   await tester.pumpAndSettle();
 }
 

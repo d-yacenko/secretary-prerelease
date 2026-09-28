@@ -655,6 +655,7 @@ class PersonPresentation(BaseModel):
     identity_conflict: bool
     open_task_count: int
     recent_communication_count: int
+    recent_communication_count_truncated: bool = False
     task_involvement: list[PersonTaskInvolvementOut] = Field(default_factory=list)
     task_involvement_truncated: bool = False
     recent_communications: list[PersonFlowPreviewOut] = Field(default_factory=list)

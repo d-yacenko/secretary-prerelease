@@ -21,10 +21,12 @@ void main() {
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Предлагаемые люди · 5'), findsOneWidget);
+    expect(find.byKey(const ValueKey('promotion-review')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('people-inspector-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('Предлагаемые · 5'), findsOneWidget);
+    expect(find.byType(Scrollbar), findsWidgets);
     expect(find.byKey(const ValueKey('promotion-candidate-person-4@example.com')), findsOneWidget);
-    final review = tester.getSize(find.byKey(const ValueKey('promotion-review-scroll')));
-    expect(review.height, lessThanOrEqualTo(260));
     final canvas = tester.getSize(find.byKey(const ValueKey('graph-canvas-region')));
     expect(canvas.height, greaterThan(200));
     final source = tester.getSize(
@@ -33,22 +35,24 @@ void main() {
     expect(source.width, lessThanOrEqualTo(148));
     expect(find.textContaining('тело письма'), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('promotion-review-toggle')));
+    await tester.tap(find.byKey(const ValueKey('people-inspector-close')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('promotion-review-scroll')), findsNothing);
     expect(tester.getSize(find.byKey(const ValueKey('graph-canvas-region'))).height, greaterThan(200));
   });
 
-  testWidgets('collapsed promotion review survives the same screen refresh', (tester) async {
+  testWidgets('closed inspector survives the same screen refresh', (tester) async {
     final harness = await _open(tester, const Size(1280, 900), client: _client());
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('promotion-review-toggle')));
+    await tester.tap(find.byKey(const ValueKey('people-inspector-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('people-inspector-close')));
     await tester.pumpAndSettle();
     await harness.graph.loadOverview();
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('promotion-review-scroll')), findsNothing);
-    expect(find.text('Предлагаемые люди · 5'), findsOneWidget);
+    expect(find.text('Кандидаты · 5'), findsOneWidget);
     expect(find.byKey(const ValueKey('graph-canvas-region')), findsOneWidget);
   });
 
@@ -56,6 +60,8 @@ void main() {
     final approved = <String>[];
     await _open(tester, const Size(800, 700), client: _client(approved: approved));
     await tester.tap(find.text('Люди'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('people-inspector-toggle')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const ValueKey('promotion-approve-person-2@example.com')));
     await tester.pumpAndSettle();
@@ -81,7 +87,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-summary-card-person-ada')), findsOneWidget);
     expect(find.text('Ada'), findsWidgets);
-    expect(find.text('Задач: 1 · сообщений: 1'), findsOneWidget);
+    expect(find.text('Связанные задачи · 1'), findsWidgets);
+    expect(find.text('Сообщения · 1'), findsWidgets);
     expect(find.byKey(const Key('person-provider-cues-person-ada')), findsOneWidget);
 
     await tester.tap(find.text('Ada').first);
@@ -90,8 +97,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('person-summary-header')), findsOneWidget);
-    expect(find.text('Открытые задачи · 1'), findsOneWidget);
-    expect(find.text('Недавние коммуникации · 1'), findsOneWidget);
+    expect(find.text('Связанные задачи · 1'), findsWidgets);
+    expect(find.text('Сообщения · 1'), findsWidgets);
     expect(find.byKey(const ValueKey('person-task-tile-task-1')), findsOneWidget);
     expect(find.textContaining('Направление'), findsWidgets);
     expect(find.textContaining('Участвует'), findsOneWidget);

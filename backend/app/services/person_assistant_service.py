@@ -125,34 +125,41 @@ class PersonAssistantService:
         person_ids: list[UUID],
         *,
         include_quarantined_telegram: bool = False,
-    ) -> dict[UUID, int]:
+    ) -> tuple[dict[UUID, int], bool]:
         """Count stored communications attributed by effective identity keys.
 
         One scan covers at most MAX_PERSON_SCAN_ROWS active messages inside
-        PERSON_LOOKBACK_DAYS. A truncated scan counts only examined rows.
-        This is not an edge count, a lifetime total, or live provider data.
-        The model-facing Telegram gate stays on unless the caller is the
-        first-party People surface.
+        PERSON_LOOKBACK_DAYS. A truncated scan counts only examined rows and
+        reports that the global scan stopped early. This is not an edge count,
+        a lifetime total, or live provider data. The model-facing Telegram gate
+        stays on unless the caller is the first-party People surface.
         """
         keys_by_person = {person_id: self._effective_keys(person_id) for person_id in person_ids}
         if not any(keys_by_person.values()):
-            return {person_id: 0 for person_id in person_ids}
-        messages = self._bounded_messages(
+            return {person_id: 0 for person_id in person_ids}, False
+        messages, truncated = self._bounded_messages(
             apply_telegram_ai_gate=not include_quarantined_telegram,
         )
-        return {
-            person_id: _count_attributable(messages, keys)
-            for person_id, keys in keys_by_person.items()
-        }
+        return (
+            {
+                person_id: _count_attributable(messages, keys)
+                for person_id, keys in keys_by_person.items()
+            },
+            truncated,
+        )
 
-    def _bounded_messages(self, *, apply_telegram_ai_gate: bool) -> list[Object]:
+    def _bounded_messages(self, *, apply_telegram_ai_gate: bool) -> tuple[list[Object], bool]:
         messages: list[Object] = []
-        for chunk, _scope_complete in self._message_chunks(
+        complete = True
+        yielded = False
+        for chunk, scope_complete in self._message_chunks(
             None,
             apply_telegram_ai_gate=apply_telegram_ai_gate,
         ):
+            yielded = True
             messages.extend(chunk)
-        return messages
+            complete = scope_complete
+        return messages, yielded and not complete
 
     def confirm_person_identity(
         self, payload: PersonIdentityFeedbackInput

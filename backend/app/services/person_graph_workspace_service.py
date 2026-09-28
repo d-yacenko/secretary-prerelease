@@ -268,7 +268,9 @@ class PersonGraphWorkspaceService:
             seed_ids = [person.id for person in people]
         if scores is None:
             scores = self._scores()
-        communication_counts = self._communication_counts([person.id for person in people])
+        communication_counts, communication_truncated = self._communication_counts(
+            [person.id for person in people]
+        )
         return PeopleWorkspaceResult(
             root_id=root_id,
             seed_ids=seed_ids,
@@ -285,6 +287,7 @@ class PersonGraphWorkspaceService:
                     include_details=include_details,
                     include_truth=include_details and person.id == root_id,
                     communication_count=communication_counts.get(person.id, 0),
+                    communication_count_truncated=communication_truncated,
                 )
                 for person in people
             ],
@@ -420,6 +423,7 @@ class PersonGraphWorkspaceService:
         include_details: bool,
         include_truth: bool,
         communication_count: int,
+        communication_count_truncated: bool = False,
     ) -> dict:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
         conflict = any(item["state"] == "conflicted" for item in identities)
@@ -433,6 +437,7 @@ class PersonGraphWorkspaceService:
             "identity_conflict": conflict,
             "open_task_count": self._open_task_count(person.id),
             "recent_communication_count": communication_count,
+            "recent_communication_count_truncated": communication_count_truncated,
         }
         if include_truth:
             involvement, involvement_truncated = self._task_involvement(person.id)
@@ -669,7 +674,7 @@ class PersonGraphWorkspaceService:
         )
         return int(count or 0)
 
-    def _communication_counts(self, person_ids: list[UUID]) -> dict[UUID, int]:
+    def _communication_counts(self, person_ids: list[UUID]) -> tuple[dict[UUID, int], bool]:
         # Identity-grounded count from one shared bounded scan, not graph edges.
         return self._assistant.count_attributable_communications(
             person_ids,

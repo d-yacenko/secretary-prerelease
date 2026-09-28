@@ -57,6 +57,7 @@ def test_effective_email_counts_matching_mail_once_without_an_edge(
     third = _email(db_session, "ada@example.com", when=NOW - timedelta(hours=3))
     body = _workspace(people_client, person.id)
     assert body["people"][0]["recent_communication_count"] == 3
+    assert body["people"][0]["recent_communication_count_truncated"] is False
     assert body["people"][0]["open_task_count"] == 0
     assert str(matched.id) not in {node["id"] for node in body["nodes"]}
     assert {str(second.id), str(third.id)}.isdisjoint({node["id"] for node in body["nodes"]})
@@ -228,7 +229,24 @@ def test_count_stops_at_the_communication_scan_budget(
     _people(db_session).attach(person.id, normalize_email("ada@example.com"))
     _email(db_session, "ada@example.com", when=NOW)
     _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1))
-    assert _count(people_client, person.id) == 1
+    body = _workspace(people_client, person.id)["people"][0]
+    assert body["recent_communication_count"] == 1
+    assert body["recent_communication_count_truncated"] is True
+
+
+def test_truncated_scan_does_not_report_a_missing_older_message_as_complete_zero(
+    people_client, db_session, monkeypatch
+) -> None:
+    import app.services.person_assistant_service as assistant_module
+
+    monkeypatch.setattr(assistant_module, "MAX_PERSON_SCAN_ROWS", 1)
+    person = _people(db_session).create_person("Ada Lovelace")
+    _people(db_session).attach(person.id, normalize_email("ada@example.com"))
+    _email(db_session, "other@example.com", when=NOW)
+    _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1))
+    body = _workspace(people_client, person.id)["people"][0]
+    assert body["recent_communication_count"] == 0
+    assert body["recent_communication_count_truncated"] is True
 
 
 def test_overview_attributes_people_from_one_shared_scan(

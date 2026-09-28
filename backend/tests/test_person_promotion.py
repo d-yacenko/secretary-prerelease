@@ -305,6 +305,107 @@ def test_approval_creates_person_identity_and_confirmation_without_edges(db_sess
     assert edges == []
     candidates, _truncated, _hidden = _overview(db_session, user_id)
     assert candidates == []
+    assert identities[0].display_value == "Ada"
+
+
+def test_list_id_email_is_not_promoted(db_session) -> None:
+    user_id = _user(db_session)
+    for _index in range(2):
+        _mail(
+            db_session,
+            user_id,
+            sender="Ada <ada@example.com>",
+            headers={"list-id": "<news.example.com>"},
+        )
+    candidates, _truncated, _hidden = _overview(db_session, user_id)
+    assert candidates == []
+
+
+def test_automated_mailbox_is_not_promoted_and_support_remains(db_session) -> None:
+    user_id = _user(db_session)
+    blocked = (
+        "calendar-notification@google.com",
+        "no-reply@example.com",
+        "noreply@example.com",
+        "do-not-reply@example.com",
+        "donotreply@example.com",
+        "mailer-daemon@example.com",
+        "postmaster@example.com",
+    )
+    for sender in blocked:
+        _mail(db_session, user_id, sender=sender)
+        _mail(db_session, user_id, sender=sender)
+    _mail(db_session, user_id, sender="Support <support@example.com>")
+    _mail(db_session, user_id, sender="support@example.com")
+    candidates, _truncated, _hidden = _overview(db_session, user_id)
+    assert [item["canonical_value"] for item in candidates] == ["support@example.com"]
+
+
+def test_automated_email_approval_is_rejected(db_session) -> None:
+    user_id = _user(db_session)
+    _mail(db_session, user_id, sender="calendar-notification@google.com")
+    _mail(db_session, user_id, sender="calendar-notification@google.com")
+    before = _counts(db_session, user_id)
+    with pytest.raises(ValidationError, match="not exposed"):
+        PersonPromotionService(db_session, user_id).approve(
+            normalize_email("calendar-notification@google.com")
+        )
+    assert _counts(db_session, user_id) == before
+
+
+def test_mattermost_display_name_survives_approval(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id)
+    for _index in range(2):
+        _mattermost(db_session, user_id, account, author="user-ada", name="Ada Lovelace")
+    service = PersonPromotionService(db_session, user_id)
+    candidates, _truncated, _hidden = service.overview(include_quarantined_telegram=True)
+    assert candidates[0]["display_value"] == "Ada Lovelace"
+    created = service.approve(normalize_mattermost_user_id("https://chat.example.com", "user-ada"))
+    identity = db_session.scalar(
+        select(PersonIdentity).where(PersonIdentity.person_object_id == created.id)
+    )
+    assert created.title == "Ada Lovelace"
+    assert identity.display_value == "Ada Lovelace"
+    assert identity.canonical_value == "user-ada"
+
+
+def test_mattermost_username_fallback_survives_approval(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id)
+    for _index in range(2):
+        _mattermost(db_session, user_id, account, author="user-ada", username="ada")
+    service = PersonPromotionService(db_session, user_id)
+    candidates, _truncated, _hidden = service.overview(include_quarantined_telegram=True)
+    assert candidates[0]["display_value"] == "ada"
+    created = service.approve(
+        normalize_mattermost_user_id(
+            "https://chat.example.com",
+            "user-ada",
+            display_value="client-supplied",
+        )
+    )
+    identity = db_session.scalar(
+        select(PersonIdentity).where(PersonIdentity.person_object_id == created.id)
+    )
+    assert created.title == "ada"
+    assert identity.display_value == "ada"
+
+
+def test_mattermost_without_display_uses_canonical_title(db_session) -> None:
+    user_id = _user(db_session)
+    account = _mattermost_account(db_session, user_id)
+    for _index in range(2):
+        _mattermost(db_session, user_id, account, author="user-ada")
+    service = PersonPromotionService(db_session, user_id)
+    candidates, _truncated, _hidden = service.overview(include_quarantined_telegram=True)
+    assert candidates[0]["display_value"] == "user-ada"
+    created = service.approve(normalize_mattermost_user_id("https://chat.example.com", "user-ada"))
+    identity = db_session.scalar(
+        select(PersonIdentity).where(PersonIdentity.person_object_id == created.id)
+    )
+    assert created.title == "user-ada"
+    assert identity.display_value is None
 
 
 def test_conflicting_ownership_does_not_create_an_orphan(db_session) -> None:
@@ -368,9 +469,19 @@ def _user(db_session) -> uuid.UUID:
 
 
 def _mail(
-    db_session, user_id, *, sender: str, to="me@example.com", title="note", body=None, when=None
+    db_session,
+    user_id,
+    *,
+    sender: str,
+    to="me@example.com",
+    title="note",
+    body=None,
+    when=None,
+    headers=None,
 ) -> None:
     metadata = {"folder": "inbox", "sender": sender, "to": to}
+    if headers is not None:
+        metadata["headers"] = headers
     db_session.add(
         Object(
             user_id=user_id,
@@ -428,7 +539,8 @@ def _mattermost(
     account: MattermostAccount,
     *,
     author: str,
-    name: str,
+    name: str | None = None,
+    username: str | None = None,
     server: str = "https://chat.example.com",
     account_id: str | None = "",
     channel_type: str = "D",
@@ -437,8 +549,11 @@ def _mattermost(
         "server_url": server,
         "channel_type": channel_type,
         "author_user_id": author,
-        "author_display_name": name,
     }
+    if name is not None:
+        metadata["author_display_name"] = name
+    if username is not None:
+        metadata["author_username"] = username
     if account_id != "":
         metadata["account_id"] = account_id
     else:

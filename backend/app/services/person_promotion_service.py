@@ -6,7 +6,7 @@ Reads do not create People. Approval creates one Person and one exact identity.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -149,13 +149,18 @@ class PersonPromotionService:
             raise ConflictError("person identity is already bound")
         if self._confirmation_people(identity):
             raise ConflictError("person identity is already bound")
-        if not self._eligible(identity):
+        hit = self._eligible_hit(identity)
+        if hit is None:
             raise ValidationError("promotion candidate is not exposed")
-        label = self._approval_label(identity)
+        label = hit.display_value
+        frozen = replace(
+            identity,
+            display_value=None if label == identity.canonical_value else label,
+        )
         try:
             with self._session.begin_nested():
                 person = self._people.create_person(label)
-                attached = self._people.attach(person.id, identity)
+                attached = self._people.attach(person.id, frozen)
                 evidence = self._evidence.record_confirmation(
                     person.id,
                     identity,
@@ -172,12 +177,14 @@ class PersonPromotionService:
                 return owner
             raise ConflictError("person identity is already bound") from None
 
-    def _eligible(self, identity: NormalizedPersonIdentity) -> bool:
+    def _eligible_hit(self, identity: NormalizedPersonIdentity) -> _Hit | None:
         if self._key(identity) in self._owned_keys() or self._active_for(identity) is not None:
-            return False
+            return None
         hits, _truncated = self._hits(include_quarantined_telegram=True)
         item = hits.get(self._key(identity))
-        return item is not None and item.count >= MIN_DIRECT_HITS
+        if item is None or item.count < MIN_DIRECT_HITS:
+            return None
+        return item
 
     def _hits(
         self, *, include_quarantined_telegram: bool
@@ -237,13 +244,6 @@ class PersonPromotionService:
             select(MattermostAccount).where(MattermostAccount.user_id == self._user_id)
         )
         return {row.id: row for row in rows}
-
-    def _approval_label(self, identity: NormalizedPersonIdentity) -> str:
-        hits, _truncated = self._hits(include_quarantined_telegram=True)
-        item = hits.get(self._key(identity))
-        if item is not None:
-            return item.display_value
-        return _label(identity.display_value, identity.canonical_value)
 
     def _owned_keys(self) -> set[tuple[str, str, str, str]]:
         rows = self._session.scalars(

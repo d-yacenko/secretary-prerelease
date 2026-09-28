@@ -39,18 +39,48 @@ def direct_promotion_identity(source: Object) -> NormalizedPersonIdentity | None
     return None
 
 
+_AUTOMATED_LOCAL_COMPACT = frozenset(
+    {
+        "noreply",
+        "donotreply",
+        "mailerdaemon",
+        "postmaster",
+        "calendarnotification",
+    }
+)
+
+
 def _direct_email(provider: str, metadata: Mapping) -> NormalizedPersonIdentity | None:
     if _email_direction(provider, dict(metadata)) != "inbound":
         return None
     if len(_email_audience(dict(metadata))) != 1:
         return None
+    if _has_list_id(metadata):
+        return None
     raw = metadata.get("sender") or metadata.get("from")
     if not isinstance(raw, str) or not raw.strip():
         return None
     try:
-        return normalize_email(raw)
+        identity = normalize_email(raw)
     except PersonIdentityInputError:
         return None
+    if _automated_email_local_part(identity.canonical_value):
+        return None
+    return identity
+
+
+def _has_list_id(metadata: Mapping) -> bool:
+    headers = metadata.get("headers")
+    if not isinstance(headers, Mapping):
+        return False
+    value = headers.get("list-id")
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _automated_email_local_part(canonical: str) -> bool:
+    local = canonical.split("@", 1)[0].casefold()
+    compact = local.replace("-", "").replace("_", "").replace(".", "")
+    return compact in _AUTOMATED_LOCAL_COMPACT
 
 
 def mattermost_remote_identity(

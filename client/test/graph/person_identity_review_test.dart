@@ -64,6 +64,14 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();
+    final detailScroll = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(const ValueKey('graph-detail-panel')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    detailScroll.position.jumpTo(detailScroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Это не этот человек'));
     await tester.pumpAndSettle();
     expect(find.text('Возможные контакты'), findsNothing);

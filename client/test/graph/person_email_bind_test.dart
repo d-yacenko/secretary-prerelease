@@ -34,7 +34,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ada').first);
     await tester.pumpAndSettle();
-    expect(find.text('Добавить email'), findsNothing);
+    expect(find.text('Добавить email'), findsOneWidget);
 
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();

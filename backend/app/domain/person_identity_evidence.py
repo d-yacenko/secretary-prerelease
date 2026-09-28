@@ -86,12 +86,17 @@ def _mattermost_evidence(metadata: Mapping[str, Any]) -> list[NormalizedPersonId
     if not isinstance(server_url, str) or not server_url.strip():
         return []
     display = _text(metadata.get("author_display_name"))
+    username = _text(metadata.get("author_username"))
     results: list[NormalizedPersonIdentity] = []
     user_id = metadata.get("author_user_id")
     if isinstance(user_id, str) and user_id.strip():
         try:
             results.append(
-                normalize_mattermost_user_id(server_url, user_id, display_value=display)
+                normalize_mattermost_user_id(
+                    server_url,
+                    user_id,
+                    display_value=display or username,
+                )
             )
         except PersonIdentityInputError:
             pass

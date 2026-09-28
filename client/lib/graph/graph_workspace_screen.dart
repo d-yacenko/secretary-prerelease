@@ -72,7 +72,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   Set<String> _reconciledVisibleIds = {};
   Set<String>? _inFlightReconcileIds;
   var _bookmarkReconcileScheduled = false;
-  bool _promotionReviewExpanded = true;
+  bool _peopleInspectorOpen = false;
+  bool _peopleInspectorCandidates = true;
+  PersonPresentation? _rootedPerson;
+  String? _rootedPersonId;
+  bool _rootedLoading = false;
+  String? _rootedError;
+  int _rootedToken = 0;
+  String? _trackedPersonId;
+  final ScrollController _promotionScroll = ScrollController();
 
   @override
   void initState() {
@@ -114,6 +122,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     widget.controller.removeListener(_onControllerChanged);
     widget.bookmarkController?.removeListener(_onBookmarksChanged);
     _searchController.dispose();
+    _promotionScroll.dispose();
     _transform.dispose();
     super.dispose();
   }
@@ -125,10 +134,97 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   void _onControllerChanged() {
+    _trackPersonSelection();
+    _adoptCenteredPerson();
     if (mounted) {
       setState(() {});
     }
     _scheduleVisibleBookmarkReconcile();
+  }
+
+  void _trackPersonSelection() {
+    if (widget.controller.mode != GraphWorkspaceMode.people) {
+      return;
+    }
+    final selected = widget.controller.selectedObject;
+    final id = selected != null && selected.kind == 'person' ? selected.id : null;
+    if (id == _trackedPersonId) {
+      return;
+    }
+    _trackedPersonId = id;
+    if (id == null) {
+      _rootedPerson = null;
+      _rootedPersonId = null;
+      _rootedLoading = false;
+      _rootedError = null;
+      return;
+    }
+    _peopleInspectorOpen = true;
+    _peopleInspectorCandidates = false;
+    _loadRootedPerson(id);
+  }
+
+  void _adoptCenteredPerson() {
+    final id = _trackedPersonId;
+    if (id == null || widget.controller.rootId != id) {
+      return;
+    }
+    final person = widget.controller.personFor(id);
+    if (person == null) {
+      return;
+    }
+    _rootedPerson = person;
+    _rootedPersonId = id;
+    _rootedLoading = false;
+    _rootedError = null;
+  }
+
+  Future<void> _loadRootedPerson(String personId) async {
+    final token = ++_rootedToken;
+    if (mounted) {
+      setState(() {
+        _rootedLoading = true;
+        _rootedError = null;
+        _rootedPerson = null;
+        _rootedPersonId = personId;
+      });
+    }
+    try {
+      final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
+      if (!mounted || token != _rootedToken) {
+        return;
+      }
+      PersonPresentation? match;
+      for (final person in workspace.people) {
+        if (person.personId == personId) {
+          match = person;
+          break;
+        }
+      }
+      setState(() {
+        _rootedLoading = false;
+        _rootedPerson = match;
+        _rootedError = match == null ? 'Не удалось загрузить карточку человека' : null;
+      });
+    } catch (_) {
+      if (!mounted || token != _rootedToken) {
+        return;
+      }
+      setState(() {
+        _rootedLoading = false;
+        _rootedPerson = null;
+        _rootedError = 'Не удалось загрузить карточку человека';
+      });
+    }
+  }
+
+  void _togglePeopleInspector() {
+    setState(() {
+      _peopleInspectorOpen = !_peopleInspectorOpen;
+      if (_peopleInspectorOpen && _trackedPersonId == null) {
+        _peopleInspectorCandidates = true;
+      }
+    });
   }
 
   void _scheduleVisibleBookmarkReconcile() {
@@ -247,14 +343,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   Widget build(BuildContext context) {
     final isWide = MediaQuery.sizeOf(context).width >= 900;
     final selected = widget.controller.selectedObject;
-    final showDesktopPane = isWide && selected != null;
+    final peopleMode = widget.controller.mode == GraphWorkspaceMode.people;
+    final showPeopleInspector = peopleMode && _peopleInspectorOpen;
+    final showDesktopPane = isWide && (showPeopleInspector || (!peopleMode && selected != null));
     final canvas = KeyedSubtree(
       key: const ValueKey('graph-canvas-region'),
       child: _buildCanvas(context),
     );
-    final details = selected == null
-        ? null
-        : _buildDetailPanel(context, compact: !isWide);
+    final details = peopleMode
+        ? (showPeopleInspector ? _peopleInspector(context, compact: !isWide) : null)
+        : selected == null
+            ? null
+            : _buildDetailPanel(context, compact: !isWide);
 
     return Column(
       children: [
@@ -268,7 +368,6 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               child: Text(widget.controller.errorMessage!),
             ),
           ),
-        if (_showPromotionReview) _promotionReview(context),
         if (widget.controller.truncated)
           Material(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -303,14 +402,19 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               : Stack(
                   children: [
                     Positioned.fill(child: canvas),
-                    if (selected != null)
+                    if (showPeopleInspector || (!peopleMode && selected != null))
                       Positioned(
                         left: 0,
                         right: 0,
                         bottom: 0,
                         child: Material(
                           elevation: 4,
-                          child: ConstrainedBox(
+                          child: peopleMode
+                              ? SizedBox(
+                                  height: MediaQuery.sizeOf(context).height * 0.45,
+                                  child: details,
+                                )
+                              : ConstrainedBox(
                             constraints: BoxConstraints(
                               maxHeight:
                                   MediaQuery.sizeOf(context).height * 0.45,
@@ -448,12 +552,21 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               onSubmitted: (value) => _runSearch(value),
             ),
           ),
-          if (widget.controller.mode == GraphWorkspaceMode.people)
+          if (widget.controller.mode == GraphWorkspaceMode.people) ...[
             OutlinedButton.icon(
               onPressed: _openAddPerson,
               icon: const Icon(Icons.person_add_alt_1_outlined),
               label: const Text('Добавить человека'),
             ),
+            OutlinedButton.icon(
+              key: const ValueKey('people-inspector-toggle'),
+              onPressed: _togglePeopleInspector,
+              icon: Icon(
+                _peopleInspectorOpen ? Icons.view_sidebar_outlined : Icons.view_sidebar,
+              ),
+              label: Text(_peopleInspectorCue()),
+            ),
+          ],
           if (widget.controller.mode == GraphWorkspaceMode.tasks)
             CompactObjectFilters(
               facets: _searchFacets,
@@ -521,62 +634,158 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     await widget.controller.reRoot(created.id);
   }
 
-  bool get _showPromotionReview {
-    final controller = widget.controller;
-    return controller.mode == GraphWorkspaceMode.people &&
-        controller.rootId == null &&
-        (controller.promotionCandidates.isNotEmpty ||
-            controller.promotionSuppressions.isNotEmpty ||
-            controller.promotionCandidatesTruncated);
+  String _peopleInspectorCue() {
+    final count = widget.controller.promotionCandidates.length;
+    if (count > 0) {
+      return 'Кандидаты · $count';
+    }
+    return 'Кандидаты';
   }
 
-  Widget _promotionReview(BuildContext context) {
-    final controller = widget.controller;
-    final count = controller.promotionCandidates.length;
-    final scheme = Theme.of(context).colorScheme;
-    final maxHeight = math.min(260.0, MediaQuery.sizeOf(context).height * 0.32);
+  Widget _peopleInspector(BuildContext context, {required bool compact}) {
+    final selected = widget.controller.selectedObject;
+    final personSelected = selected != null && selected.kind == 'person';
+    final showCandidates = !personSelected || _peopleInspectorCandidates;
     return Material(
-      key: const ValueKey('promotion-review'),
-      color: scheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      key: const ValueKey('people-inspector'),
+      color: Theme.of(context).colorScheme.surface,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+            child: Row(
               children: [
-                if (count > 0 || controller.promotionCandidatesTruncated)
+                if (personSelected)
                   Expanded(
-                    child: Text(
-                      'Предлагаемые люди · $count',
-                      key: const ValueKey('promotion-review-title'),
-                      style: Theme.of(context).textTheme.titleSmall,
+                    child: SegmentedButton<bool>(
+                      key: const ValueKey('people-inspector-switch'),
+                      segments: const [
+                        ButtonSegment(value: true, label: Text('Кандидаты')),
+                        ButtonSegment(value: false, label: Text('Детали')),
+                      ],
+                      selected: {_peopleInspectorCandidates},
+                      onSelectionChanged: (value) {
+                        setState(() => _peopleInspectorCandidates = value.first);
+                      },
                     ),
                   )
                 else
-                  const Spacer(),
+                  Expanded(
+                    child: Text(
+                      'Кандидаты',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
                 IconButton(
-                  key: const ValueKey('promotion-review-toggle'),
-                  tooltip: _promotionReviewExpanded ? 'Свернуть предложения' : 'Показать предложения',
-                  onPressed: () => setState(
-                    () => _promotionReviewExpanded = !_promotionReviewExpanded,
-                  ),
-                  icon: Icon(
-                    _promotionReviewExpanded ? Icons.expand_less : Icons.expand_more,
-                  ),
+                  key: const ValueKey('people-inspector-close'),
+                  tooltip: 'Закрыть',
+                  onPressed: () => setState(() => _peopleInspectorOpen = false),
+                  icon: const Icon(Icons.close),
                 ),
               ],
             ),
-            if (_promotionReviewExpanded)
-              ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: maxHeight),
-                child: SingleChildScrollView(
-                  key: const ValueKey('promotion-review-scroll'),
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 8, bottom: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+          ),
+          Expanded(
+            child: showCandidates
+                ? _promotionQueue(context)
+                : _buildDetailPanel(context, compact: compact),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rootedPersonDetail(BuildContext context, String personId) {
+    if (_rootedLoading || _rootedPersonId != personId) {
+      return const Padding(
+        key: ValueKey('person-detail-loading'),
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final person = _rootedPerson;
+    if (_rootedError != null || person == null) {
+      return Column(
+        key: const ValueKey('person-detail-error'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_rootedError ?? 'Не удалось загрузить карточку человека'),
+          TextButton(
+            key: const ValueKey('person-detail-retry'),
+            onPressed: () => _loadRootedPerson(personId),
+            child: const Text('Повторить'),
+          ),
+        ],
+      );
+    }
+    return _PersonDetailSection(
+      person: person,
+      apiClient: widget.apiClient,
+      onChanged: () async {
+        await widget.controller.refreshCurrentWorkspace();
+        await _loadRootedPerson(personId);
+      },
+      onRename: () => _renamePerson(person),
+      onOpenTask: (taskId) async {
+        await widget.controller.setMode(GraphWorkspaceMode.tasks);
+        if (!mounted) {
+          return;
+        }
+        await widget.controller.reRoot(taskId);
+      },
+      onOpenFlow: (objectId) {
+        return openObjectDetail(
+          context,
+          objectId: objectId,
+          apiClient: widget.apiClient,
+          authController: widget.authController,
+          captureController: widget.captureController,
+          assistantController: widget.assistantController,
+          onAskSecretary: widget.onAskSecretary,
+          onShowInGraph: widget.controller.reRoot,
+          bookmarkController: widget.bookmarkController,
+        );
+      },
+    );
+  }
+
+  Future<void> _renamePerson(PersonPresentation person) async {
+    final title = await showDialog<String>(
+      context: context,
+      builder: (context) => _RenamePersonDialog(initialTitle: person.title),
+    );
+    final cleaned = title?.trim() ?? '';
+    if (cleaned.isEmpty || !mounted) {
+      return;
+    }
+    final updated = await widget.apiClient.patchObject(person.personId, {'title': cleaned});
+    if (!mounted) {
+      return;
+    }
+    widget.controller.upsertObject(updated);
+    await widget.controller.refreshCurrentWorkspace();
+    await _loadRootedPerson(person.personId);
+  }
+
+  Widget _promotionQueue(BuildContext context) {
+    final controller = widget.controller;
+    final count = controller.promotionCandidates.length;
+    return Scrollbar(
+      key: const ValueKey('promotion-review'),
+      controller: _promotionScroll,
+      thumbVisibility: true,
+      child: ListView(
+        key: const ValueKey('promotion-review-scroll'),
+        controller: _promotionScroll,
+        padding: const EdgeInsets.fromLTRB(12, 0, 16, 12),
+        children: [
+          if (count > 0 || controller.promotionCandidatesTruncated)
+            Text(
+              'Предлагаемые · $count',
+              key: const ValueKey('promotion-review-title'),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          const SizedBox(height: 8),
                         if (controller.promotionSuppressions.isNotEmpty) ...[
                           ExpansionTile(
                             key: const ValueKey('promotion-hidden-suggestions'),
@@ -636,13 +845,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                             );
                           },
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -1315,7 +1518,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               ),
             IconButton(
               tooltip: 'Закрыть',
-              onPressed: () => widget.controller.selectObject(null),
+              onPressed: () {
+                if (widget.controller.mode == GraphWorkspaceMode.people) {
+                  setState(() => _peopleInspectorOpen = false);
+                } else {
+                  widget.controller.selectObject(null);
+                }
+              },
               icon: const Icon(Icons.close),
             ),
           ],
@@ -1456,33 +1665,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           compact: compact,
           onTaskUpdated: widget.controller.applyTaskMutation,
         ),
-        if (widget.controller.personFor(object.id) != null) ...[
+        if (object.kind == 'person') ...[
           const SizedBox(height: 12),
-          _PersonDetailSection(
-            person: widget.controller.personFor(object.id)!,
-            apiClient: widget.apiClient,
-            onChanged: widget.controller.refreshCurrentWorkspace,
-            onOpenTask: (taskId) async {
-              await widget.controller.setMode(GraphWorkspaceMode.tasks);
-              if (!mounted) {
-                return;
-              }
-              await widget.controller.reRoot(taskId);
-            },
-            onOpenFlow: (objectId) {
-              return openObjectDetail(
-                context,
-                objectId: objectId,
-                apiClient: widget.apiClient,
-                authController: widget.authController,
-                captureController: widget.captureController,
-                assistantController: widget.assistantController,
-                onAskSecretary: widget.onAskSecretary,
-                onShowInGraph: widget.controller.reRoot,
-                bookmarkController: widget.bookmarkController,
-              );
-            },
-          ),
+          _rootedPersonDetail(context, object.id),
         ],
         const SizedBox(height: 12),
         _DetailSectionHeader(title: 'Связи'),
@@ -1903,6 +2088,7 @@ class _PersonDetailSection extends StatelessWidget {
     required this.person,
     required this.apiClient,
     required this.onChanged,
+    required this.onRename,
     required this.onOpenTask,
     required this.onOpenFlow,
   });
@@ -1910,6 +2096,7 @@ class _PersonDetailSection extends StatelessWidget {
   final PersonPresentation person;
   final SecretaryApiClient apiClient;
   final Future<void> Function() onChanged;
+  final Future<void> Function() onRename;
   final Future<void> Function(String taskId) onOpenTask;
   final Future<void> Function(String objectId) onOpenFlow;
 
@@ -1946,6 +2133,11 @@ class _PersonDetailSection extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
+                  TextButton(
+                    key: const ValueKey('person-rename'),
+                    onPressed: onRename,
+                    child: const Text('Переименовать'),
+                  ),
                   if (cues.isNotEmpty)
                     Text(
                       cues,
@@ -1971,11 +2163,18 @@ class _PersonDetailSection extends StatelessWidget {
           spacing: 6,
           runSpacing: 6,
           children: [
-            _metricChip(context, 'Открытые задачи · ${person.openTaskCount}'),
-            _metricChip(
-              context,
-              'Недавние коммуникации · ${person.recentCommunicationCount}',
-            ),
+            _metricChip(context, linkedTaskMetric(person.openTaskCount)),
+            if (messageCountMetric(
+                  person.recentCommunicationCount,
+                  truncated: person.recentCommunicationCountTruncated,
+                )
+                case final message?)
+              _metricChip(context, message)
+            else
+              Tooltip(
+                message: 'Переписка посчитана не полностью',
+                child: _metricChip(context, 'Сообщения · часть'),
+              ),
             if (person.salience != null)
               _metricChip(context, personSalienceTierLabel(person.salience!.tier)),
             if (lastContact != null) _metricChip(context, 'Последний контакт · $lastContact'),
@@ -2358,6 +2557,18 @@ class _PersonDetailSection extends StatelessWidget {
   }
 }
 
+String linkedTaskMetric(int count) => 'Связанные задачи · $count';
+
+String? messageCountMetric(int count, {required bool truncated}) {
+  if (truncated && count == 0) {
+    return null;
+  }
+  if (truncated) {
+    return 'Сообщения · ≥$count';
+  }
+  return 'Сообщения · $count';
+}
+
 String _identityStateLabel(String state) {
   switch (state) {
     case 'effective':
@@ -2417,9 +2628,9 @@ class _GraphNodeCard extends StatelessWidget {
               width: selected ? 2 : 1,
             ),
           ),
-          child: person == null
-              ? _genericNodeBody(context, scheme)
-              : _personNodeBody(context, scheme),
+          child: object.kind == 'person'
+              ? _personNodeBody(context, scheme)
+              : _genericNodeBody(context, scheme),
         ),
       ),
     );
@@ -2484,7 +2695,27 @@ class _GraphNodeCard extends StatelessWidget {
   }
 
   Widget _personNodeBody(BuildContext context, ColorScheme scheme) {
-    final current = person!;
+    final current = person;
+    if (current == null) {
+      return Row(
+        children: [
+          CircleAvatar(
+            radius: 12,
+            backgroundColor: scheme.surfaceContainerHighest,
+            child: Icon(iconForKind('person'), size: 14, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              object.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      );
+    }
     final cues = current.identities
         .where((item) => item.state == 'effective')
         .map((item) => providerLabel(item.provider))
@@ -2504,11 +2735,11 @@ class _GraphNodeCard extends StatelessWidget {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                humanTaskModeLabel(object),
+                object.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -2522,13 +2753,6 @@ class _GraphNodeCard extends StatelessWidget {
               ),
           ],
         ),
-        const SizedBox(height: 2),
-        Text(
-          object.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-        ),
         if (cues.isNotEmpty)
           Text(
             cues,
@@ -2539,12 +2763,35 @@ class _GraphNodeCard extends StatelessWidget {
           ),
         const Spacer(),
         Text(
-          'Задач: ${current.openTaskCount} · сообщений: ${current.recentCommunicationCount}',
+          linkedTaskMetric(current.openTaskCount),
           key: Key('person-activity-footer-${object.id}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
         ),
+        if (messageCountMetric(
+              current.recentCommunicationCount,
+              truncated: current.recentCommunicationCountTruncated,
+            )
+            case final message?)
+          Text(
+            message,
+            key: Key('person-message-metric-${object.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          )
+        else
+          Tooltip(
+            message: 'Переписка посчитана не полностью',
+            child: Text(
+              'Сообщения · часть',
+              key: Key('person-message-partial-${object.id}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
       ],
     );
   }
@@ -2927,6 +3174,48 @@ String _emailBindError(ApiException error) {
     return 'Укажите точный email.';
   }
   return message;
+}
+
+class _RenamePersonDialog extends StatefulWidget {
+  const _RenamePersonDialog({required this.initialTitle});
+
+  final String initialTitle;
+
+  @override
+  State<_RenamePersonDialog> createState() => _RenamePersonDialogState();
+}
+
+class _RenamePersonDialogState extends State<_RenamePersonDialog> {
+  late final TextEditingController _name = TextEditingController(text: widget.initialTitle);
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Переименовать'),
+      content: TextField(
+        controller: _name,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Имя'),
+        onSubmitted: (value) => Navigator.of(context).pop(value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_name.text),
+          child: const Text('Сохранить'),
+        ),
+      ],
+    );
+  }
 }
 
 class _AddPersonDialog extends StatefulWidget {
