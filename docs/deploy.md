@@ -301,3 +301,50 @@ application has started, that downgrade is allowed only when
 nonzero or a safety query fails, the harness keeps `api` and `worker`
 stopped, does not downgrade, does not delete rows, and emits
 `BREAK_GLASS_REQUIRED=true`.
+
+## Person promotion migration 0050 -> 0051
+
+Normal `ops/production/deploy.py` remains forbidden for this release because
+it adds migration `0051`. The only entrypoint is:
+
+```bash
+python3 ops/production/migrate_person_promotion_0051.py \
+  --release-sha 07bd8bafdb2f53a6a8475fc2d792687fa373a149 \
+  --rollback-sha 9c9f0b0e72ffa7cf4ba74fcee60f7f05aeb6dffa \
+  --from-alembic 0050 \
+  --to-alembic 0051
+```
+
+Both SHAs and the revision pair are fixed. The Alembic delta must be exactly
+the added file `backend/alembic/versions/0051_person_promotion_feedback.py`,
+with `revision = "0051"` and `down_revision = "0050"`, and no changes to
+Alembic env, config, template, or earlier revisions. The harness reuses the
+pinned production target and host-key contract. Preparing this entrypoint
+does not authorize a live rollout.
+
+The remote helper requires `origin/production` to equal
+`07bd8bafdb2f53a6a8475fc2d792687fa373a149`. The checkout must be the rollback
+runtime with Alembic `0050`, or already the release with Alembic `0051`. The
+second case verifies the `person_promotion_feedback` table, its required
+columns, and the active exact-identity unique index, then returns without
+migrating again. Any other checkout/revision pair fails closed.
+
+On a first rollout it checks out the release and builds `api` and `worker`
+while the previous containers keep serving, then stops only those two
+services. It runs `alembic upgrade 0051` with `--rm --no-deps`, requires
+revision `0051`, and requires the new table, its columns, and its unique
+index, with zero rows, before the release runtime starts. Those checks print
+booleans and a zero count only. Only then does it recreate `api` and
+`worker`. The database container, volume, and `.env` stay in place. `db` is
+never included in `up`.
+
+Before the release runtime starts, a failed rollout may downgrade
+`0051 -> 0050` and restore the rollback application only after
+`person_promotion_feedback` is directly proven empty. If that proof fails,
+the harness does not downgrade. After the release application has started,
+downgrade is allowed only when that same table is proven empty. If the count
+is nonzero, a safety query fails, or another proof fails, the harness keeps
+`api` and `worker` stopped, does not downgrade, does not delete or edit the
+table, and emits `BREAK_GLASS_REQUIRED=true`. Rows written by PP1 approval
+into `objects`, `person_identities`, or `person_identity_evidence` are not
+deleted.
