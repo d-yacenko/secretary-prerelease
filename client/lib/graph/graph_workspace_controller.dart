@@ -17,6 +17,10 @@ const String taskTopologyRefreshFailureMessage =
 const String localContextHideFailureMessage =
     'Не удалось скрыть связи. Обновите обзор и повторите.';
 
+bool isTerminalTaskStatusForReads(String? status) {
+  return status != null && _terminalTaskStatusesForReads.contains(status);
+}
+
 const Set<String> _terminalTaskStatusesForReads = {
   'done',
   'completed',
@@ -889,7 +893,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   }
 
   bool _isTerminalForActiveOverview(String? status) {
-    return status != null && _terminalTaskStatusesForReads.contains(status);
+    return isTerminalTaskStatusForReads(status);
   }
 
   void _replaceWorkspaceState({

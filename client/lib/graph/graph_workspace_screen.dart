@@ -3519,7 +3519,10 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
     setState(() {
       _results = found
           .where(
-            (item) => item.kind == 'task' && item.deletedAt == null && item.status != 'deleted',
+            (item) =>
+                item.kind == 'task' &&
+                item.deletedAt == null &&
+                !isTerminalTaskStatusForReads(item.status),
           )
           .toList();
     });

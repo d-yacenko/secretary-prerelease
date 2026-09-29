@@ -110,6 +110,40 @@ def test_same_task_keeps_distinct_actor_edges(people_client, db_session) -> None
         ("requested_by", str(asked.id), "confirmed", "user"),
         ("waiting_on", str(waiting.id), "confirmed", "user"),
     ]
+    assert _root(people_client, person.id)["open_task_count"] == 1
+
+
+def test_linked_task_count_is_distinct_active_tasks(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Ada")
+    shared = _task(db_session, "Shared", due_at=NOW)
+    other = _task(db_session, "Other", due_at=NOW + timedelta(days=1))
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    relations.add_actor(shared.id, person.id, REQUESTED_BY)
+    relations.add_actor(shared.id, person.id, WAITING_ON)
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=shared.id,
+            target_id=person.id,
+            type="related_to",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+        )
+    )
+    relations.add_actor(other.id, person.id, INVOLVES)
+    done = _task(db_session, "Done", status="done")
+    relations.add_actor(done.id, person.id, REQUESTED_BY)
+    rejected_task = _task(db_session, "Rejected edge")
+    rejected = relations.add_actor(rejected_task.id, person.id, REQUESTED_BY)[0]
+    rejected.state = "rejected"
+    db_session.flush()
+
+    body = _root(people_client, person.id)
+    assert [(row["title"], row["role"]) for row in body["task_involvement"]] == [
+        ("Shared", "requested_by"),
+        ("Shared", "waiting_on"),
+        ("Other", "involves"),
+    ]
+    assert body["open_task_count"] == 2
 
 
 def test_task_involvement_is_capped_in_due_order(people_client, db_session) -> None:

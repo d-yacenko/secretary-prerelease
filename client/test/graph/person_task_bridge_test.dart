@@ -27,7 +27,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'Ship');
     await tester.pumpAndSettle();
-    expect(find.textContaining('Открыта'), findsOneWidget);
+    expect(find.textContaining('Открыта'), findsWidgets);
     expect(find.byKey(const ValueKey('person-task-option-task-deleted')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('person-task-option-task-ship')));
     await tester.pumpAndSettle();
@@ -36,7 +36,7 @@ void main() {
 
     expect(state.calls, contains('POST /tasks/task-ship/actors waiting_on'));
     expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
-    expect(find.text('Связанные задачи · 4'), findsWidgets);
+    expect(find.text('Связанные задачи · 3'), findsWidgets);
 
     await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
     await tester.tap(find.byKey(const ValueKey('person-task-link')));
@@ -52,6 +52,35 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
     expect(state.calls.where((call) => call.startsWith('POST /tasks/task-ship/actors')), hasLength(2));
     expect(harness.graph.selectedObjectId, 'person-ada');
+  });
+
+  testWidgets('task picker hides terminal tasks and a second role keeps the count', (tester) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    expect(find.text('Связанные задачи · 2'), findsWidgets);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
+    await tester.tap(find.byKey(const ValueKey('person-task-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'task');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-option-task-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-option-task-progress')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-option-task-legacy')), findsOneWidget);
+    for (final status in ['done', 'completed', 'cancelled', 'archived', 'deleted']) {
+      expect(find.byKey(ValueKey('person-task-option-task-$status')), findsNothing);
+    }
+
+    await tester.tap(find.byKey(const ValueKey('person-task-role-delegated_to')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ask')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-add')));
+    await tester.pumpAndSettle();
+    expect(state.calls, contains('POST /tasks/task-ask/actors delegated_to'));
+    expect(find.text('Связанные задачи · 2'), findsWidgets);
+    expect(find.textContaining('Делегировано'), findsOneWidget);
+    expect(find.textContaining('Попросил(а)'), findsOneWidget);
   });
 
   testWidgets('confirmed actor is removed through the task actor endpoint', (tester) async {
@@ -183,20 +212,29 @@ MockClient _client(_BridgeState state) {
     if (request.url.path == '/search') {
       return jsonUtf8Response([
         graphObjectJson(id: 'task-ship', title: 'Ship report', kind: 'task', status: 'open', dueAt: '2026-10-01T09:00:00Z'),
-        graphObjectJson(id: 'task-deleted', title: 'Gone', kind: 'task', status: 'deleted'),
+        graphObjectJson(id: 'task-ask', title: 'Ask', kind: 'task', status: 'open'),
+        graphObjectJson(id: 'task-progress', title: 'Moving', kind: 'task', status: 'in_progress'),
+        {...graphObjectJson(id: 'task-legacy', title: 'Legacy active', kind: 'task'), 'status': null},
+        for (final status in ['done', 'completed', 'cancelled', 'archived', 'deleted'])
+          graphObjectJson(id: 'task-$status', title: 'Terminal $status', kind: 'task', status: status),
       ]);
     }
-    if (request.method == 'POST' && request.url.path == '/tasks/task-ship/actors') {
+    if (request.method == 'POST' && request.url.path.startsWith('/tasks/') && request.url.path.endsWith('/actors')) {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final taskId = request.url.path.split('/')[2];
       final role = body['role'] as String;
-      state.calls.add('POST /tasks/task-ship/actors $role');
-      final existing = state.rows.where((row) => row['task_id'] == 'task-ship' && row['role'] == role);
+      state.calls.add('POST ${request.url.path} $role');
+      final existing = state.rows.where((row) => row['task_id'] == taskId && row['role'] == role);
       final created = existing.isEmpty;
+      final edgeId = created
+          ? (taskId == 'task-ship' ? 'edge-ship' : 'edge-$taskId-$role')
+          : existing.first['edge_id'] as String;
       if (created) {
-        state.rows.add(_row('edge-ship', 'task-ship', 'Ship report', role));
+        final title = taskId == 'task-ship' ? 'Ship report' : 'Ask';
+        state.rows.add(_row(edgeId, taskId, title, role));
       }
       return jsonUtf8Response({
-        'edge': _edge(created ? 'edge-ship' : existing.first['edge_id'] as String, 'task-ship', role),
+        'edge': _edge(edgeId, taskId, role),
         'created': created,
         'changed': created,
       });
@@ -264,7 +302,7 @@ Map<String, dynamic> _workspace(_BridgeState state, String? root) {
         'identities': const [],
         'routes': const [],
         'identity_conflict': false,
-        'open_task_count': state.rows.length,
+        'open_task_count': state.rows.map((row) => row['task_id']).toSet().length,
         'recent_communication_count': 0,
         'task_involvement': root == null ? <Map<String, dynamic>>[] : state.rows,
         'recent_communications': const [],

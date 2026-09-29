@@ -676,7 +676,7 @@ class PersonGraphWorkspaceService:
     def _open_task_count(self, person_id: UUID) -> int:
         other = aliased(Object)
         count = self._session.scalar(
-            select(func.count())
+            select(func.count(func.distinct(other.id)))
             .select_from(Edge)
             .join(other, _linked_object(person_id, other))
             .where(
