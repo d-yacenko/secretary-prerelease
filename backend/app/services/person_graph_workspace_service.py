@@ -660,6 +660,7 @@ class PersonGraphWorkspaceService:
         visible = rows[:_MAX_TRUTH_ROWS]
         return [
             {
+                "edge_id": edge.id,
                 "task_id": item.id,
                 "title": item.title,
                 "status": item.status,

@@ -593,6 +593,7 @@ class PersonRoutePresentation(BaseModel):
 
 
 class PersonTaskInvolvementOut(BaseModel):
+    edge_id: UUID
     task_id: UUID
     title: str
     status: str | None = None

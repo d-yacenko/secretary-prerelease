@@ -2458,11 +2458,13 @@ class PersonTaskInvolvement {
     required this.role,
     required this.edgeState,
     required this.edgeOrigin,
+    this.edgeId = '',
     this.status,
     this.completionMode,
     this.dueAt,
   });
 
+  final String edgeId;
   final String taskId;
   final String title;
   final String? status;
@@ -2480,6 +2482,7 @@ class PersonTaskInvolvement {
       completionMode: json['completion_mode'] as String?,
       dueAt: json['due_at'] as String?,
       role: json['role'] as String? ?? '',
+      edgeId: json['edge_id'] as String? ?? '',
       edgeState: json['edge_state'] as String? ?? '',
       edgeOrigin: json['edge_origin'] as String? ?? '',
     );

@@ -2218,6 +2218,14 @@ class _PersonDetailSection extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         const _DetailSectionHeader(title: 'Участие в задачах'),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            key: const ValueKey('person-task-link'),
+            onPressed: () => _linkTask(context),
+            child: const Text('Связать с задачей'),
+          ),
+        ),
         if (person.taskInvolvement.isEmpty)
           const Text(
             'Нет участия в текущих задачах',
@@ -2470,48 +2478,112 @@ class _PersonDetailSection extends StatelessWidget {
     final proposal = taskRelationProposalLabel(row.edgeOrigin, row.edgeState);
     final due = _shortWhen(row.dueAt);
     final kind = row.completionMode == 'ongoing' ? 'Направление' : 'Задача';
+    final tileId = row.edgeId.isEmpty ? row.taskId : row.edgeId;
+    final removable = row.edgeId.isNotEmpty &&
+        row.edgeState == 'confirmed' &&
+        (row.edgeOrigin == 'user' || row.edgeOrigin == 'agent');
+    final proposed = row.edgeId.isNotEmpty && row.edgeState == 'proposed';
     return SizedBox(
       width: 168,
       child: Material(
-        key: ValueKey('person-task-tile-${row.taskId}'),
+        key: ValueKey('person-task-tile-$tileId'),
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: () => onOpenTask(row.taskId),
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  row.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              onTap: () => onOpenTask(row.taskId),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      row.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        kind,
+                        personActorRoleLabel(row.role),
+                        if (proposal.isNotEmpty) proposal,
+                        if (due.isNotEmpty) due,
+                      ].join(' · '),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  [
-                    kind,
-                    personActorRoleLabel(row.role),
-                    if (proposal.isNotEmpty) proposal,
-                    if (due.isNotEmpty) due,
-                  ].join(' · '),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+            if (proposed)
+              Row(
+                children: [
+                  IconButton(
+                    key: ValueKey('person-task-confirm-${row.edgeId}'),
+                    tooltip: 'Подтвердить',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.check_circle_outline, size: 18),
+                    onPressed: () => _changeTaskLink(
+                      () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'confirm'),
+                    ),
+                  ),
+                  IconButton(
+                    key: ValueKey('person-task-reject-${row.edgeId}'),
+                    tooltip: 'Отклонить',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.cancel_outlined, size: 18),
+                    onPressed: () => _changeTaskLink(
+                      () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'reject'),
+                    ),
+                  ),
+                ],
+              ),
+            if (removable)
+              IconButton(
+                key: ValueKey('person-task-remove-${row.edgeId}'),
+                tooltip: 'Убрать роль',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () => _changeTaskLink(
+                  () => apiClient.removeTaskActor(taskId: row.taskId, edgeId: row.edgeId),
+                ),
+              ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _linkTask(BuildContext context) async {
+    final selected = await showDialog<(String, String)>(
+      context: context,
+      builder: (context) => _LinkPersonTaskDialog(apiClient: apiClient),
+    );
+    if (selected == null) {
+      return;
+    }
+    await apiClient.addTaskActor(
+      taskId: selected.$2,
+      personId: person.personId,
+      role: selected.$1,
+    );
+    await onChanged();
+  }
+
+  Future<void> _changeTaskLink(Future<Object?> Function() action) async {
+    await action();
+    await onChanged();
   }
 
   Widget _flowTile(BuildContext context, PersonFlowPreview row) {
@@ -3400,6 +3472,111 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
           key: const ValueKey('person-merge-confirm'),
           onPressed: preview != null && preview.canMerge && !_busy ? _confirm : null,
           child: const Text('Объединить людей'),
+        ),
+      ],
+    );
+  }
+}
+
+class _LinkPersonTaskDialog extends StatefulWidget {
+  const _LinkPersonTaskDialog({required this.apiClient});
+
+  final SecretaryApiClient apiClient;
+
+  @override
+  State<_LinkPersonTaskDialog> createState() => _LinkPersonTaskDialogState();
+}
+
+class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
+  static const _roles = <(String, String)>[
+    ('requested_by', 'Запросил'),
+    ('delegated_to', 'Поручено'),
+    ('waiting_on', 'Ждём'),
+    ('involves', 'Участвует'),
+  ];
+
+  final _query = TextEditingController();
+  String? _role;
+  SecretaryObject? _task;
+  List<SecretaryObject> _results = const [];
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String value) async {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) {
+      setState(() => _results = const []);
+      return;
+    }
+    final found = await widget.apiClient.searchObjects(query: cleaned, kind: 'task');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _results = found
+          .where(
+            (item) => item.kind == 'task' && item.deletedAt == null && item.status != 'deleted',
+          )
+          .toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Связать с задачей'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 6,
+              children: [
+                for (final item in _roles)
+                  ChoiceChip(
+                    key: ValueKey('person-task-role-${item.$1}'),
+                    label: Text(item.$2),
+                    selected: _role == item.$1,
+                    onSelected: (selected) => setState(() => _role = selected ? item.$1 : null),
+                  ),
+              ],
+            ),
+            TextField(
+              key: const ValueKey('person-task-search'),
+              controller: _query,
+              decoration: const InputDecoration(labelText: 'Найти задачу'),
+              onChanged: _search,
+            ),
+            for (final item in _results)
+              ListTile(
+                key: ValueKey('person-task-option-${item.id}'),
+                title: Text(item.title),
+                subtitle: Text(
+                  [
+                    taskStatusLabel(item.status),
+                    if (item.dueAt != null && item.dueAt!.isNotEmpty) item.dueAt!,
+                  ].join(' · '),
+                ),
+                selected: _task?.id == item.id,
+                onTap: () => setState(() => _task = item),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Отмена')),
+        FilledButton(
+          key: const ValueKey('person-task-add'),
+          onPressed: _role == null || _task == null
+              ? null
+              : () => Navigator.of(context).pop((_role!, _task!.id)),
+          child: const Text('Добавить'),
         ),
       ],
     );

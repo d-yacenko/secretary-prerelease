@@ -50,10 +50,10 @@ def test_rooted_detail_lists_exact_actor_roles(people_client, db_session) -> Non
     waiting = _task(db_session, "Wait", due_at=NOW + timedelta(days=2), completion_mode="ongoing")
     involved = _task(db_session, "Join", due_at=NOW + timedelta(days=3))
     relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
-    relations.add_actor(asked.id, person.id, REQUESTED_BY)
-    relations.add_actor(delegated.id, person.id, DELEGATED_TO)
-    relations.add_actor(waiting.id, person.id, WAITING_ON)
-    relations.add_actor(
+    asked_edge, _ = relations.add_actor(asked.id, person.id, REQUESTED_BY)
+    delegated_edge, _ = relations.add_actor(delegated.id, person.id, DELEGATED_TO)
+    waiting_edge, _ = relations.add_actor(waiting.id, person.id, WAITING_ON)
+    involved_edge, _ = relations.add_actor(
         involved.id,
         person.id,
         INVOLVES,
@@ -85,14 +85,31 @@ def test_rooted_detail_lists_exact_actor_roles(people_client, db_session) -> Non
     db_session.flush()
 
     rows = _root(people_client, person.id)["task_involvement"]
-    assert [(row["title"], row["role"], row["edge_state"], row["edge_origin"]) for row in rows] == [
-        ("Ask", "requested_by", "confirmed", "user"),
-        ("Do", "delegated_to", "confirmed", "user"),
-        ("Wait", "waiting_on", "confirmed", "user"),
-        ("Join", "involves", "proposed", "agent"),
+    assert [(row["title"], row["role"], row["edge_state"], row["edge_origin"], row["edge_id"]) for row in rows] == [
+        ("Ask", "requested_by", "confirmed", "user", str(asked_edge.id)),
+        ("Do", "delegated_to", "confirmed", "user", str(delegated_edge.id)),
+        ("Wait", "waiting_on", "confirmed", "user", str(waiting_edge.id)),
+        ("Join", "involves", "proposed", "agent", str(involved_edge.id)),
     ]
+    titles = {row["title"] for row in rows}
+    assert "Generic" not in titles
+    assert {"Done", "Deleted", "Hidden", "Rejected edge"}.isdisjoint(titles)
+    assert all(row["role"] != "related_to" for row in rows)
     assert rows[2]["completion_mode"] == "ongoing"
     assert _root(people_client, person.id)["open_task_count"] >= 5
+
+
+def test_same_task_keeps_distinct_actor_edges(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Ada")
+    task = _task(db_session, "Shared", due_at=NOW)
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    asked, _ = relations.add_actor(task.id, person.id, REQUESTED_BY)
+    waiting, _ = relations.add_actor(task.id, person.id, WAITING_ON)
+    rows = _root(people_client, person.id)["task_involvement"]
+    assert [(row["role"], row["edge_id"], row["edge_state"], row["edge_origin"]) for row in rows] == [
+        ("requested_by", str(asked.id), "confirmed", "user"),
+        ("waiting_on", str(waiting.id), "confirmed", "user"),
+    ]
 
 
 def test_task_involvement_is_capped_in_due_order(people_client, db_session) -> None:
