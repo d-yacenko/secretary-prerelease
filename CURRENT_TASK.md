@@ -1,59 +1,18 @@
-# Current task — PT1-H2-R1: schema-neutral production rollout
+# Current task — HOLD
 
 ## State
 
-- PT1-H2 source-ready release: `44407ed6e972a05809d55874acaa966cc7e141c8`.
-- Current production/runtime/origin-production: `02855ee49cc2fe31cd68f4649235d61665dbbcb1`.
-- Alembic: `0051`.
-- Compare production -> H2: 12 commits ahead, 0 behind.
-- Changes since production are docs + Flutter UI/tests only.
-- No backend or Alembic-path changes.
-- Canonical `ops/production/deploy.py` is unchanged.
-- PT1 is not yet human-accepted.
+- PT1-H2-R1 rollout: SUCCESS.
+- Previous production SHA: `02855ee49cc2fe31cd68f4649235d61665dbbcb1`.
+- Production application/runtime, release, and `origin/production`: `44407ed6e972a05809d55874acaa966cc7e141c8`.
+- Production Alembic: `0051 / 0051`.
+- Production health: PASS.
+- PT1-H2 is deployed and has no new human-gate bundle.
+- PT1 is not human-accepted.
 - People Landscape and later roadmap slices remain unauthorized.
 
-## Goal
+## Stop
 
-Perform the canonical schema-neutral production rollout of exact release:
+No further Executor work is authorized.
 
-`44407ed6e972a05809d55874acaa966cc7e141c8`
-
-This is deployment/provenance only. Do not change product source.
-
-## Rollout discipline
-
-1. Verify current production and `origin/production` are still exactly `02855ee49cc2fe31cd68f4649235d61665dbbcb1`.
-2. Verify `44407ed6e972a05809d55874acaa966cc7e141c8` is a clean non-force fast-forward.
-3. Use canonical `ops/production/deploy.py`.
-4. Require `DEPLOYMENT=PASS`, health PASS, and exact `RELEASE_HEAD=44407ed6e972a05809d55874acaa966cc7e141c8`.
-5. Verify runtime/release/origin-production all resolve to exact H2 SHA.
-6. Verify Alembic remains `0051 / 0051`.
-
-## Production safety
-
-Do not:
-- create/remove/confirm/reject Task↔Person actor relations;
-- write Person data;
-- repair or alter the human tester's real relation;
-- install or replace the client;
-- build the new human-gate bundle;
-- start People Landscape or later roadmap work.
-
-DB container, DB volume, and `.env` must remain unchanged; if the canonical harness indicates otherwise, STOP rather than improvise.
-
-## Completion
-
-Record in `PROJECT_STATE.md`:
-- previous/new production SHA;
-- fast-forward result;
-- deploy harness + health;
-- runtime/release/origin-production SHA;
-- Alembic before/after;
-- DB container/volume/.env status;
-- recreated services;
-- rollback status;
-- explicit confirmation of no Person or Task↔Person production writes.
-
-Return `CURRENT_TASK.md` to HOLD, push documentation to `main`, report exact HOLD SHA, and STOP.
-
-Do not build the new human-gate bundle until separately authorized.
+Do not build a new human-gate bundle. Do not move `origin/production`. Do not write Person or Task↔Person data in production. Do not repair the human tester's relation. Do not start People Landscape, Person removal, Secretary Person context, social roles, graph stabilization, MCP, G3B, or S3.
