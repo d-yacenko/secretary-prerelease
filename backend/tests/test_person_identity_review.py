@@ -14,6 +14,14 @@ from app.core.config import settings
 from app.db.models import Edge, Object, PersonIdentity, User
 from app.domain.object_visibility import tombstone_object
 from app.domain.person_assistant import MAX_PERSON_CANDIDATES
+from app.domain.person_candidate_score import (
+    GRAPH_CONTEXT,
+    LLM_SUGGESTION,
+    NAME_SIMILARITY,
+    ORGANIZATION_MATCH,
+    USER_CONFIRMED,
+    USER_ROUTE_CHOICE,
+)
 from app.domain.person_identity import (
     normalize_email,
     normalize_mattermost_user_id,
@@ -24,6 +32,7 @@ from app.domain.person_identity_evidence import extract_person_identity_evidence
 from app.main import app
 from app.services.person_assistant_service import PersonAssistantService
 from app.services.person_enrichment_service import PersonEnrichmentService
+from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_identity_service import PersonIdentityService
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 from tests.conftest import AuthTestClient, apply_embedding_service_overrides
@@ -261,14 +270,12 @@ def test_other_person_ownership_stays_conflicted_and_is_not_reassigned(
     owned = normalize_email(f"{NAME} <ada@example.com>")
     PersonIdentityService(db_session, BOOTSTRAP_USER_ID).attach(other.id, owned)
     _email(db_session, f"{NAME} <ada@example.com>")
-    item = _one(_root(people_client, person.id), "ada@example.com")
-    assert item["confirmable"] is False
-    assert item["state"] == "conflicted"
-    assert "identity_conflict" in item["reasons"]
-    assert item["conflicting_person_id"] is None
+    card = _root(people_client, person.id)
+    assert all(item["canonical_value"] != owned.canonical_value for item in card["identity_candidates"])
+    assert all(item["conflicting_person_id"] is None for item in card["identity_candidates"])
     blocked = people_client.post(
         f"/graph/people/{person.id}/identity-correction",
-        json={"action": "confirm", **_payload(item)},
+        json={"action": "confirm", **_identity_body(owned)},
     )
     assert blocked.status_code == 422
     owner = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).resolve(owned)
@@ -285,6 +292,65 @@ def test_unrelated_owned_identity_is_not_a_merge_suggestion(people_client, db_se
     card = _root(people_client, person.id)
     assert all(item["canonical_value"] != "zzz-opaque@example.com" for item in card["identity_candidates"])
     assert all(item["conflicting_person_id"] is None for item in card["identity_candidates"])
+
+
+@pytest.mark.parametrize(
+    "evidence_type",
+    [NAME_SIMILARITY, ORGANIZATION_MATCH, GRAPH_CONTEXT, LLM_SUGGESTION],
+)
+def test_weak_evidence_does_not_ground_occupied_identity(
+    people_client, db_session, evidence_type: str
+) -> None:
+    person, _other, identity = _occupied_email(db_session, "weak-opaque@example.com")
+    PersonEvidenceService(db_session, BOOTSTRAP_USER_ID).record(
+        person.id,
+        identity,
+        evidence_type,
+        provenance_kind="test",
+        provenance_key=f"weak:{evidence_type}",
+    )
+    card = _root(people_client, person.id)
+    assert all(item["canonical_value"] != identity.canonical_value for item in card["identity_candidates"])
+    assert all(item["conflicting_person_id"] is None for item in card["identity_candidates"])
+
+
+@pytest.mark.parametrize("evidence_type", [USER_CONFIRMED, USER_ROUTE_CHOICE])
+def test_explicit_exact_evidence_grounds_occupied_identity(
+    people_client, db_session, evidence_type: str
+) -> None:
+    person, other, identity = _occupied_email(db_session, "exact-opaque@example.com")
+    PersonEvidenceService(db_session, BOOTSTRAP_USER_ID).record(
+        person.id,
+        identity,
+        evidence_type,
+        provenance_kind="user_feedback",
+        provenance_key=f"explicit:{evidence_type}",
+    )
+    item = _one(_root(people_client, person.id), identity.canonical_value)
+    assert item["confirmable"] is False
+    assert item["conflicting_person_id"] == str(other.id)
+    blocked = people_client.post(
+        f"/graph/people/{person.id}/identity-correction",
+        json={"action": "confirm", **_identity_body(identity)},
+    )
+    assert blocked.status_code == 422
+    owner = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).resolve(identity)
+    assert owner is not None and owner.id == other.id
+
+
+def test_rejected_exact_evidence_does_not_ground_occupied_identity(people_client, db_session) -> None:
+    person, _other, identity = _occupied_email(db_session, "rejected-opaque@example.com")
+    evidence = PersonEvidenceService(db_session, BOOTSTRAP_USER_ID)
+    evidence.record(
+        person.id,
+        identity,
+        USER_ROUTE_CHOICE,
+        provenance_kind="user_feedback",
+        provenance_key="explicit:route",
+    )
+    evidence.record_rejection(person.id, identity, "user:rejected")
+    card = _root(people_client, person.id)
+    assert all(item["canonical_value"] != identity.canonical_value for item in card["identity_candidates"])
 
 
 def test_same_source_cooccurrence_exposes_merge_target(people_client, db_session) -> None:
@@ -396,6 +462,24 @@ def _one(card: dict, canonical: str) -> dict:
     found = [item for item in card["identity_candidates"] if item["canonical_value"] == canonical]
     assert len(found) == 1
     return found[0]
+
+
+def _occupied_email(db_session, canonical: str):
+    person = _person(db_session)
+    other = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Other owner")
+    identity = normalize_email(canonical)
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).attach(other.id, identity)
+    _email(db_session, canonical)
+    return person, other, identity
+
+
+def _identity_body(identity) -> dict:
+    return {
+        "identity_type": identity.identity_type,
+        "provider": identity.provider,
+        "realm": identity.realm,
+        "canonical_value": identity.canonical_value,
+    }
 
 
 def _payload(item: dict) -> dict:

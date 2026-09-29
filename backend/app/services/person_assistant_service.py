@@ -27,6 +27,7 @@ from app.domain.person_assistant import (
     feedback_identity_key,
     parse_feedback_identity,
 )
+from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED, USER_ROUTE_CHOICE
 from app.domain.person_enrichment import provider_category
 from app.domain.person_identity import (
     NormalizedPersonIdentity,
@@ -651,18 +652,12 @@ class PersonAssistantService:
                 continue
             source_ids = tuple(message.id for message, _identity in rows[:3])
             if owner is not None and owner.id != person_id:
-                proposals = self._evidence.propose_candidates(identity, identity.display_value)
-                matched = next((item for item in proposals if item.person_id == person_id), None)
-                grounded = self._grounded_duplicate(person_id, identity, rows)
-                if matched is None and not grounded:
+                if not self._grounded_duplicate(person_id, identity, rows):
                     continue
-                reasons = ["identity_conflict"]
-                if grounded:
-                    reasons.append("grounded_duplicate")
                 candidates.append(
                     PersonSourceCandidateOut(
                         confirmable=False,
-                        reasons=tuple(reasons),
+                        reasons=("identity_conflict", "grounded_duplicate"),
                         assessment_resolution=self._evidence.score(person_id, identity).resolution,
                         identity=_summary(identity),
                         source_object_ids=source_ids,
@@ -685,7 +680,10 @@ class PersonAssistantService:
         return candidates
 
     def _grounded_duplicate(self, person_id: UUID, identity: NormalizedPersonIdentity, rows: list) -> bool:
-        if any(row.state == "active" for row in self._evidence.history(person_id, identity)):
+        active = [row for row in self._evidence.history(person_id, identity) if row.state == "active"]
+        if any(row.evidence_type == USER_REJECTED for row in active):
+            return False
+        if any(row.evidence_type in {USER_CONFIRMED, USER_ROUTE_CHOICE} for row in active):
             return True
         wanted = feedback_identity_key(identity)
         for message, _found in rows:
