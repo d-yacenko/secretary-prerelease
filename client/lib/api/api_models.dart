@@ -2887,6 +2887,9 @@ class GraphWorkspaceOut {
     this.hasNextWindow = false,
     this.constellationRootIds = const [],
     this.semanticWindowComplete = false,
+    this.landscapeTasks = const [],
+    this.landscapeTaskEdges = const [],
+    this.landscapeTaskContextComplete = true,
   });
 
   final String? rootId;
@@ -2904,6 +2907,9 @@ class GraphWorkspaceOut {
   final bool hasNextWindow;
   final List<String> constellationRootIds;
   final bool semanticWindowComplete;
+  final List<SecretaryObject> landscapeTasks;
+  final List<SecretaryEdge> landscapeTaskEdges;
+  final bool landscapeTaskContextComplete;
 
   factory GraphWorkspaceOut.fromJson(Map<String, dynamic> json) {
     return GraphWorkspaceOut(
@@ -2926,6 +2932,13 @@ class GraphWorkspaceOut {
           .map((item) => item as String)
           .toList(),
       semanticWindowComplete: json['semantic_window_complete'] as bool? ?? false,
+      landscapeTasks: (json['landscape_tasks'] as List<dynamic>? ?? [])
+          .map((item) => SecretaryObject.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      landscapeTaskEdges: (json['landscape_task_edges'] as List<dynamic>? ?? [])
+          .map((item) => SecretaryEdge.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      landscapeTaskContextComplete: json['landscape_task_context_complete'] as bool? ?? true,
       people: (json['people'] as List<dynamic>? ?? [])
           .map(
             (item) => PersonPresentation.fromJson(item as Map<String, dynamic>),

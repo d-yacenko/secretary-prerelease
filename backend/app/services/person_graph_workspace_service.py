@@ -29,6 +29,7 @@ from app.services.graph_workspace_service import (
     DEFAULT_SEED_LIMIT,
     MAX_NEIGHBOR_LIMIT,
     MAX_SEED_LIMIT,
+    GraphWorkspaceService,
 )
 from app.services.person_assistant_service import PersonAssistantService
 from app.services.person_consolidation_service import PersonConsolidationService
@@ -67,6 +68,9 @@ class PeopleWorkspaceResult:
     edges: list[Edge]
     truncated: bool
     people: list[dict]
+    landscape_tasks: list[Object]
+    landscape_task_edges: list[Edge]
+    landscape_task_context_complete: bool
     promotion_candidates: list[dict]
     promotion_candidates_truncated: bool
     promotion_suppressions: list[dict]
@@ -274,6 +278,27 @@ class PersonGraphWorkspaceService:
         person_ids = [person.id for person in people]
         communication_counts, communication_truncated = self._communication_counts(person_ids)
         landscape_anchors = self._landscape_task_anchors(person_ids)
+        people_payloads = [
+            self._presentation(
+                person,
+                scores.get(person.id, 0),
+                include_details=include_details,
+                include_truth=include_details and person.id == root_id,
+                communication_count=communication_counts.get(person.id, 0),
+                communication_count_truncated=communication_truncated,
+                landscape_task_ids=landscape_anchors[person.id][0],
+                landscape_task_ids_complete=landscape_anchors[person.id][1],
+            )
+            for person in people
+        ]
+        anchor_ids: set[UUID] = set()
+        for payload in people_payloads:
+            if payload["landscape_task_ids_complete"]:
+                anchor_ids.update(payload["landscape_task_ids"])
+        context_tasks, context_edges, context_complete = GraphWorkspaceService(
+            self._session,
+            self._user_id,
+        ).landscape_task_context(anchor_ids)
         return PeopleWorkspaceResult(
             root_id=root_id,
             seed_ids=seed_ids,
@@ -283,19 +308,10 @@ class PersonGraphWorkspaceService:
             promotion_candidates=[],
             promotion_candidates_truncated=False,
             promotion_suppressions=[],
-            people=[
-                self._presentation(
-                    person,
-                    scores.get(person.id, 0),
-                    include_details=include_details,
-                    include_truth=include_details and person.id == root_id,
-                    communication_count=communication_counts.get(person.id, 0),
-                    communication_count_truncated=communication_truncated,
-                    landscape_task_ids=landscape_anchors[person.id][0],
-                    landscape_task_ids_complete=landscape_anchors[person.id][1],
-                )
-                for person in people
-            ],
+            people=people_payloads,
+            landscape_tasks=context_tasks,
+            landscape_task_edges=context_edges,
+            landscape_task_context_complete=context_complete,
         )
 
     def _scores(self) -> dict[UUID, int]:

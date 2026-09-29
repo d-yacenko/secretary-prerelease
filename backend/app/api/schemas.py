@@ -709,6 +709,9 @@ class PeopleWorkspaceOut(BaseModel):
     promotion_candidates: list[PersonPromotionCandidateOut] = Field(default_factory=list)
     promotion_candidates_truncated: bool = False
     promotion_suppressions: list[PersonPromotionSuppressionOut] = Field(default_factory=list)
+    landscape_tasks: list[ObjectOut] = Field(default_factory=list)
+    landscape_task_edges: list[EdgeOut] = Field(default_factory=list)
+    landscape_task_context_complete: bool = True
 
 
 class PersonCreateRequest(BaseModel):

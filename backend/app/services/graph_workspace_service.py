@@ -26,6 +26,7 @@ DEFAULT_NODE_LIMIT = 80
 MAX_NODE_LIMIT = 120
 SOFT_WINDOW_NODE_TARGET = 80
 MAX_COMPLETE_WINDOW_NODES = 500
+PEOPLE_LANDSCAPE_TASK_CONTEXT_CAP = 500
 PRIORITY_TASK_FLOW_TYPES = ("references", "related_to", "depends_on")
 PRIORITY_TASK_FLOW_ORIGINS = (USER_ORIGIN, AGENT_ORIGIN)
 
@@ -308,6 +309,35 @@ class GraphWorkspaceService:
                 seen.add(child_id)
                 pending.append(child_id)
         return seen
+
+    def landscape_task_context(
+        self,
+        anchor_ids: set[UUID],
+    ) -> tuple[list[Object], list[Edge], bool]:
+        """Full confirmed part_of Task constellations for later client projection.
+
+        Returns tasks, Task↔Task edges, and completeness. Overflow or an anchor
+        outside the visible Task universe fails closed with an empty context.
+        """
+        if not anchor_ids:
+            return [], [], True
+        visible = self._visible_tasks()
+        if any(anchor_id not in visible for anchor_id in anchor_ids):
+            return [], [], False
+        parent_of, children_of = self._confirmed_part_of_forest(set(visible))
+        member_ids: set[UUID] = set()
+        for anchor_id in anchor_ids:
+            root_id = anchor_id
+            seen_up: set[UUID] = set()
+            while root_id in parent_of and root_id not in seen_up:
+                seen_up.add(root_id)
+                root_id = parent_of[root_id]
+            member_ids.update(self._descendant_ids(root_id, children_of))
+        if len(member_ids) > PEOPLE_LANDSCAPE_TASK_CONTEXT_CAP:
+            return [], [], False
+        tasks = [visible[task_id] for task_id in sorted(member_ids)]
+        edges = self._complete_edges_among_nodes({}, {task.id: task for task in tasks})
+        return tasks, [edges[edge_id] for edge_id in sorted(edges)], True
 
     def _priority_flows_for_tasks(self, task_ids: set[UUID]) -> dict[UUID, Object]:
         buckets = self._priority_task_flow_buckets(task_ids)

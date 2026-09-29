@@ -167,6 +167,9 @@ def get_people_workspace(
         promotion_suppressions=[
             PersonPromotionSuppressionOut.model_validate(item) for item in result.promotion_suppressions
         ],
+        landscape_tasks=[ObjectOut.from_model(task) for task in result.landscape_tasks],
+        landscape_task_edges=[EdgeOut.from_model(edge) for edge in result.landscape_task_edges],
+        landscape_task_context_complete=result.landscape_task_context_complete,
     )
 
 
