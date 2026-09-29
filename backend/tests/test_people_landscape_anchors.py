@@ -12,7 +12,13 @@ from app.main import app
 from app.services.graph_service import GraphService
 from app.services.person_graph_workspace_service import PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP
 from app.services.person_identity_service import PersonIdentityService
-from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, PROPOSED_STATE, USER_ORIGIN
+from app.services.provenance import (
+    AGENT_ORIGIN,
+    CONFIRMED_STATE,
+    PROPOSED_STATE,
+    REJECTED_STATE,
+    USER_ORIGIN,
+)
 from app.services.task_relation_service import TaskRelationService
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 from tests.conftest import AuthTestClient, apply_embedding_service_overrides
@@ -43,6 +49,7 @@ def test_confirmed_actor_tasks_are_distinct_anchors(people_client, db_session) -
     generic = _task(db_session, "Generic")
     done = _task(db_session, "Done", status="done")
     hidden = _task(db_session, "Hidden")
+    rejected_object = _task(db_session, "Rejected object")
     relations.add_actor(shared.id, ada.id, REQUESTED_BY)
     relations.add_actor(shared.id, ada.id, WAITING_ON)
     relations.add_actor(other.id, ada.id, DELEGATED_TO)
@@ -67,7 +74,9 @@ def test_confirmed_actor_tasks_are_distinct_anchors(people_client, db_session) -
     )
     relations.add_actor(done.id, ada.id, REQUESTED_BY)
     relations.add_actor(hidden.id, ada.id, REQUESTED_BY)
+    relations.add_actor(rejected_object.id, ada.id, DELEGATED_TO)
     tombstone_object(hidden)
+    rejected_object.state = REJECTED_STATE
     db_session.flush()
 
     found = people_client.get(
@@ -86,6 +95,7 @@ def test_confirmed_actor_tasks_are_distinct_anchors(people_client, db_session) -
         str(proposed.id)
     }
     assert str(proposed.id) not in rooted["landscape_task_ids"]
+    assert str(rejected_object.id) not in rooted["landscape_task_ids"]
 
 
 def test_anchor_cap_is_deterministic_and_incomplete(people_client, db_session) -> None:

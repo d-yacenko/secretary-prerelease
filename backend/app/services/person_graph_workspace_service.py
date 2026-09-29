@@ -696,6 +696,7 @@ class PersonGraphWorkspaceService:
                 Edge.state == CONFIRMED_STATE,
                 task.user_id == self._user_id,
                 task.kind == "task",
+                task.state != REJECTED_STATE,
                 object_is_active(task),
                 or_(
                     task.status.is_(None),
