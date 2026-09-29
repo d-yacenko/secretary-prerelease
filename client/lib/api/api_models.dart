@@ -2643,6 +2643,8 @@ class PersonPresentation {
     required this.routes,
     required this.identityConflict,
     required this.openTaskCount,
+    this.landscapeTaskIds = const [],
+    this.landscapeTaskIdsComplete = true,
     required this.recentCommunicationCount,
     this.recentCommunicationCountTruncated = false,
     this.taskInvolvement = const [],
@@ -2663,6 +2665,8 @@ class PersonPresentation {
   final List<PersonRoutePresentation> routes;
   final bool identityConflict;
   final int openTaskCount;
+  final List<String> landscapeTaskIds;
+  final bool landscapeTaskIdsComplete;
   final int recentCommunicationCount;
   final bool recentCommunicationCountTruncated;
   final List<PersonTaskInvolvement> taskInvolvement;
@@ -2695,6 +2699,10 @@ class PersonPresentation {
           .toList(),
       identityConflict: json['identity_conflict'] as bool? ?? false,
       openTaskCount: json['open_task_count'] as int? ?? 0,
+      landscapeTaskIds: (json['landscape_task_ids'] as List<dynamic>? ?? [])
+          .map((item) => item as String)
+          .toList(),
+      landscapeTaskIdsComplete: json['landscape_task_ids_complete'] as bool? ?? true,
       recentCommunicationCount: json['recent_communication_count'] as int? ?? 0,
       recentCommunicationCountTruncated:
           json['recent_communication_count_truncated'] as bool? ?? false,

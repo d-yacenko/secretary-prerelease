@@ -662,6 +662,8 @@ class PersonPresentation(BaseModel):
     routes: list[PersonRoutePresentation]
     identity_conflict: bool
     open_task_count: int
+    landscape_task_ids: list[UUID] = Field(default_factory=list)
+    landscape_task_ids_complete: bool = True
     recent_communication_count: int
     recent_communication_count_truncated: bool = False
     task_involvement: list[PersonTaskInvolvementOut] = Field(default_factory=list)

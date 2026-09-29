@@ -54,6 +54,8 @@ _FORBIDDEN_EDGE_TYPES = frozenset(
 )
 # Rooted neighbor walks stop after this many edges. Counts use SQL aggregates.
 PEOPLE_EDGE_SCAN_CAP = 64
+# Distinct confirmed Task anchors returned for later landscape projection.
+PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP = 64
 _FEEDBACK_TYPES = frozenset({USER_CONFIRMED, USER_REJECTED})
 
 
@@ -269,9 +271,9 @@ class PersonGraphWorkspaceService:
             seed_ids = [person.id for person in people]
         if scores is None:
             scores = self._scores()
-        communication_counts, communication_truncated = self._communication_counts(
-            [person.id for person in people]
-        )
+        person_ids = [person.id for person in people]
+        communication_counts, communication_truncated = self._communication_counts(person_ids)
+        landscape_anchors = self._landscape_task_anchors(person_ids)
         return PeopleWorkspaceResult(
             root_id=root_id,
             seed_ids=seed_ids,
@@ -289,6 +291,8 @@ class PersonGraphWorkspaceService:
                     include_truth=include_details and person.id == root_id,
                     communication_count=communication_counts.get(person.id, 0),
                     communication_count_truncated=communication_truncated,
+                    landscape_task_ids=landscape_anchors[person.id][0],
+                    landscape_task_ids_complete=landscape_anchors[person.id][1],
                 )
                 for person in people
             ],
@@ -425,6 +429,8 @@ class PersonGraphWorkspaceService:
         include_truth: bool,
         communication_count: int,
         communication_count_truncated: bool = False,
+        landscape_task_ids: list[UUID] | None = None,
+        landscape_task_ids_complete: bool = True,
     ) -> dict:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
         conflict = any(item["state"] == "conflicted" for item in identities)
@@ -439,6 +445,8 @@ class PersonGraphWorkspaceService:
             "open_task_count": self._open_task_count(person.id),
             "recent_communication_count": communication_count,
             "recent_communication_count_truncated": communication_count_truncated,
+            "landscape_task_ids": landscape_task_ids or [],
+            "landscape_task_ids_complete": landscape_task_ids_complete,
         }
         if include_truth:
             involvement, involvement_truncated = self._task_involvement(person.id)
@@ -672,6 +680,51 @@ class PersonGraphWorkspaceService:
             }
             for edge, item in visible
         ], len(rows) > _MAX_TRUTH_ROWS
+
+    def _landscape_task_anchors(self, person_ids: list[UUID]) -> dict[UUID, tuple[list[UUID], bool]]:
+        result = {person_id: ([], True) for person_id in person_ids}
+        if not person_ids:
+            return result
+        task = aliased(Object)
+        pairs = (
+            select(Edge.target_id.label("person_id"), task.id.label("task_id"))
+            .join(task, task.id == Edge.source_id)
+            .where(
+                Edge.user_id == self._user_id,
+                Edge.target_id.in_(person_ids),
+                Edge.type.in_(tuple(TASK_ACTOR_ROLES)),
+                Edge.state == CONFIRMED_STATE,
+                task.user_id == self._user_id,
+                task.kind == "task",
+                object_is_active(task),
+                or_(
+                    task.status.is_(None),
+                    task.status.notin_(tuple(TERMINAL_TASK_STATUSES_FOR_READS)),
+                ),
+            )
+            .distinct()
+            .subquery()
+        )
+        ranked = select(
+            pairs.c.person_id,
+            pairs.c.task_id,
+            func.row_number()
+            .over(partition_by=pairs.c.person_id, order_by=pairs.c.task_id)
+            .label("rn"),
+        ).subquery()
+        rows = self._session.execute(
+            select(ranked.c.person_id, ranked.c.task_id).where(
+                ranked.c.rn <= PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP + 1
+            )
+        )
+        grouped: dict[UUID, list[UUID]] = {}
+        for person_id, task_id in rows:
+            grouped.setdefault(person_id, []).append(task_id)
+        for person_id, task_ids in grouped.items():
+            ordered = sorted(task_ids)
+            complete = len(ordered) <= PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP
+            result[person_id] = (ordered[:PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP], complete)
+        return result
 
     def _open_task_count(self, person_id: UUID) -> int:
         other = aliased(Object)
