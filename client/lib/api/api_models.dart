@@ -2571,6 +2571,7 @@ class PersonIdentityCandidate {
     required this.reasons,
     required this.sources,
     this.assessmentResolution,
+    this.conflictingPersonId,
   });
 
   final String provider;
@@ -2582,6 +2583,7 @@ class PersonIdentityCandidate {
   final String state;
   final List<String> reasons;
   final String? assessmentResolution;
+  final String? conflictingPersonId;
   final List<PersonFlowPreview> sources;
 
   factory PersonIdentityCandidate.fromJson(Map<String, dynamic> json) {
@@ -2595,6 +2597,7 @@ class PersonIdentityCandidate {
       state: json['state'] as String? ?? '',
       reasons: (json['reasons'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
       assessmentResolution: json['assessment_resolution'] as String?,
+      conflictingPersonId: json['conflicting_person_id'] as String?,
       sources: (json['sources'] as List<dynamic>? ?? [])
           .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
           .toList(),
@@ -2647,6 +2650,7 @@ class PersonPresentation {
     this.identityCandidates = const [],
     this.identityCandidatesTruncated = false,
     this.rejectedIdentityCandidates = const [],
+    this.consolidations = const [],
   });
 
   final String personId;
@@ -2666,6 +2670,7 @@ class PersonPresentation {
   final List<PersonIdentityCandidate> identityCandidates;
   final bool identityCandidatesTruncated;
   final List<PersonRejectedIdentityCandidate> rejectedIdentityCandidates;
+  final List<PersonConsolidation> consolidations;
 
   factory PersonPresentation.fromJson(Map<String, dynamic> json) {
     return PersonPresentation(
@@ -2711,6 +2716,79 @@ class PersonPresentation {
             (item) => PersonRejectedIdentityCandidate.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
+      consolidations: (json['consolidations'] as List<dynamic>? ?? [])
+          .map((item) => PersonConsolidation.fromJson(item as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class PersonConsolidation {
+  PersonConsolidation({
+    required this.duplicateId,
+    required this.duplicateTitle,
+    required this.undoAvailable,
+  });
+
+  final String duplicateId;
+  final String duplicateTitle;
+  final bool undoAvailable;
+
+  factory PersonConsolidation.fromJson(Map<String, dynamic> json) {
+    return PersonConsolidation(
+      duplicateId: json['duplicate_id'] as String,
+      duplicateTitle: json['duplicate_title'] as String? ?? '',
+      undoAvailable: json['undo_available'] as bool? ?? false,
+    );
+  }
+}
+
+class PersonMergePreview {
+  PersonMergePreview({
+    required this.survivorId,
+    required this.duplicateId,
+    required this.survivorTitle,
+    required this.duplicateTitle,
+    required this.identityCount,
+    required this.identities,
+    required this.actorCounts,
+    required this.evidenceCount,
+    required this.canMerge,
+    required this.blockers,
+  });
+
+  final String survivorId;
+  final String duplicateId;
+  final String survivorTitle;
+  final String duplicateTitle;
+  final int identityCount;
+  final List<String> identities;
+  final Map<String, int> actorCounts;
+  final int evidenceCount;
+  final bool canMerge;
+  final List<String> blockers;
+
+  factory PersonMergePreview.fromJson(Map<String, dynamic> json) {
+    final survivor = json['survivor'] as Map<String, dynamic>? ?? const {};
+    final duplicate = json['duplicate'] as Map<String, dynamic>? ?? const {};
+    final counts = json['actor_counts'] as Map<String, dynamic>? ?? const {};
+    return PersonMergePreview(
+      survivorId: json['survivor_id'] as String,
+      duplicateId: json['duplicate_id'] as String,
+      survivorTitle: survivor['title'] as String? ?? '',
+      duplicateTitle: duplicate['title'] as String? ?? '',
+      identityCount: json['identity_count'] as int? ?? 0,
+      identities: (json['identities'] as List<dynamic>? ?? [])
+          .map((item) {
+            final row = item as Map<String, dynamic>;
+            return (row['display_value'] as String?) ?? (row['canonical_value'] as String?) ?? '';
+          })
+          .where((item) => item.isNotEmpty)
+          .toList(),
+      actorCounts: counts.map((key, value) => MapEntry(key, (value as num).toInt())),
+      evidenceCount: json['evidence_count'] as int? ?? 0,
+      canMerge: json['can_merge'] as bool? ?? false,
+      blockers: (json['blockers'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
     );
   }
 }

@@ -12,6 +12,9 @@ from app.api.schemas import (
     PersonCreateRequest,
     PersonEmailBindRequest,
     PersonIdentityCorrectionRequest,
+    PersonMergePreviewOut,
+    PersonMergeRequest,
+    PersonMergeResultOut,
     PersonPresentation,
     PersonPromotionCandidateOut,
     PersonPromotionRequest,
@@ -33,6 +36,7 @@ from app.services.graph_workspace_service import (
     MAX_SEED_LIMIT,
     GraphWorkspaceService,
 )
+from app.services.person_consolidation_service import PersonConsolidationService
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
 
@@ -107,6 +111,13 @@ def _people_service(
     return PersonGraphWorkspaceService(session, current_user.user_id)
 
 
+def _merge_service(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> PersonConsolidationService:
+    return PersonConsolidationService(session, current_user.user_id)
+
+
 @router.post("/graph/people", response_model=ObjectOut)
 def create_person(
     body: PersonCreateRequest,
@@ -157,6 +168,49 @@ def get_people_workspace(
             PersonPromotionSuppressionOut.model_validate(item) for item in result.promotion_suppressions
         ],
     )
+
+
+@router.post("/graph/people/merges/preview", response_model=PersonMergePreviewOut)
+def preview_person_merge(
+    body: PersonMergeRequest,
+    service: PersonConsolidationService = Depends(_merge_service),
+) -> PersonMergePreviewOut:
+    try:
+        return PersonMergePreviewOut.model_validate(service.preview(body.survivor_id, body.duplicate_id))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+
+
+@router.post("/graph/people/merges", response_model=PersonMergeResultOut)
+def apply_person_merge(
+    body: PersonMergeRequest,
+    service: PersonConsolidationService = Depends(_merge_service),
+) -> PersonMergeResultOut:
+    try:
+        return PersonMergeResultOut.model_validate(service.apply(body.survivor_id, body.duplicate_id))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+
+
+@router.post("/graph/people/merges/undo", response_model=PersonMergeResultOut)
+def undo_person_merge(
+    body: PersonMergeRequest,
+    service: PersonConsolidationService = Depends(_merge_service),
+) -> PersonMergeResultOut:
+    try:
+        return PersonMergeResultOut.model_validate(service.undo(body.survivor_id, body.duplicate_id))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
 
 
 @router.post("/graph/people/promotions")

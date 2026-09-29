@@ -795,6 +795,41 @@ class SecretaryApiClient {
     );
   }
 
+  Future<PersonMergePreview> previewPersonMerge({
+    required String survivorId,
+    required String duplicateId,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/graph/people/merges/preview',
+      jsonBody: {'survivor_id': survivorId, 'duplicate_id': duplicateId},
+    );
+    return PersonMergePreview.fromJson(body);
+  }
+
+  Future<String> applyPersonMerge({
+    required String survivorId,
+    required String duplicateId,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/graph/people/merges',
+      jsonBody: {'survivor_id': survivorId, 'duplicate_id': duplicateId},
+    );
+    return body['survivor_id'] as String;
+  }
+
+  Future<void> undoPersonMerge({
+    required String survivorId,
+    required String duplicateId,
+  }) async {
+    await _request(
+      'POST',
+      '/graph/people/merges/undo',
+      jsonBody: {'survivor_id': survivorId, 'duplicate_id': duplicateId},
+    );
+  }
+
   Future<void> bindPersonEmail({
     required String personId,
     required String email,

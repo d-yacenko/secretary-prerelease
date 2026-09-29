@@ -621,7 +621,14 @@ class PersonIdentityCandidateOut(BaseModel):
     state: Literal["candidate", "conflicted"]
     reasons: list[str] = Field(default_factory=list)
     assessment_resolution: str | None = None
+    conflicting_person_id: UUID | None = None
     sources: list[PersonFlowPreviewOut] = Field(default_factory=list)
+
+
+class PersonConsolidationHistoryOut(BaseModel):
+    duplicate_id: UUID
+    duplicate_title: str
+    undo_available: bool
 
 
 class PersonRejectedIdentityCandidateOut(BaseModel):
@@ -666,6 +673,7 @@ class PersonPresentation(BaseModel):
     rejected_identity_candidates: list[PersonRejectedIdentityCandidateOut] = Field(
         default_factory=list
     )
+    consolidations: list[PersonConsolidationHistoryOut] = Field(default_factory=list)
 
 
 class PersonPromotionCandidateOut(BaseModel):
@@ -720,6 +728,47 @@ class PersonEmailBindRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str
+
+
+class PersonMergeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    survivor_id: UUID
+    duplicate_id: UUID
+
+
+class PersonMergeSideOut(BaseModel):
+    person_id: UUID
+    title: str
+    cues: list[str] = Field(default_factory=list)
+
+
+class PersonMergeIdentityOut(BaseModel):
+    provider: str
+    identity_type: str
+    realm: str = ""
+    canonical_value: str
+    display_value: str | None = None
+
+
+class PersonMergePreviewOut(BaseModel):
+    survivor_id: UUID
+    duplicate_id: UUID
+    survivor: PersonMergeSideOut
+    duplicate: PersonMergeSideOut
+    identities: list[PersonMergeIdentityOut] = Field(default_factory=list)
+    identity_count: int
+    actor_counts: dict[str, int]
+    evidence_count: int
+    duplicate_bookmarked: bool
+    blockers: list[str] = Field(default_factory=list)
+    can_merge: bool
+
+
+class PersonMergeResultOut(BaseModel):
+    survivor_id: UUID
+    duplicate_id: UUID
+    idempotent: bool
 
 
 class PersonPromotionRequest(BaseModel):

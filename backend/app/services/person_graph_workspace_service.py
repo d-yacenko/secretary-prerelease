@@ -31,6 +31,7 @@ from app.services.graph_workspace_service import (
     MAX_SEED_LIMIT,
 )
 from app.services.person_assistant_service import PersonAssistantService
+from app.services.person_consolidation_service import PersonConsolidationService
 from app.services.person_evidence_service import PersonEvidenceService, _identity_from_identity_row
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
 from app.services.person_promotion_service import PersonPromotionService, parse_promotion_identity
@@ -476,6 +477,9 @@ class PersonGraphWorkspaceService:
                     "identity_candidates": candidates,
                     "identity_candidates_truncated": candidates_truncated,
                     "rejected_identity_candidates": self._rejected_identity_candidates(person.id),
+                    "consolidations": PersonConsolidationService(
+                        self._session, self._user_id
+                    ).history_for(person.id),
                 }
             )
         return payload
@@ -499,20 +503,31 @@ class PersonGraphWorkspaceService:
         found = []
         for item in page.candidates:
             state = "conflicted" if "identity_conflict" in item.reasons else "candidate"
-            found.append(
-                {
-                    "provider": item.identity.provider,
-                    "identity_type": item.identity.identity_type,
-                    "realm": item.identity.realm,
-                    "canonical_value": item.identity.canonical_value,
-                    "display_value": item.identity.display_value or item.identity.canonical_value,
-                    "confirmable": item.confirmable,
-                    "state": state,
-                    "reasons": list(item.reasons),
-                    "assessment_resolution": item.assessment_resolution,
-                    "sources": self._source_previews(item.source_object_ids),
-                }
-            )
+            payload = {
+                "provider": item.identity.provider,
+                "identity_type": item.identity.identity_type,
+                "realm": item.identity.realm,
+                "canonical_value": item.identity.canonical_value,
+                "display_value": item.identity.display_value or item.identity.canonical_value,
+                "confirmable": item.confirmable,
+                "state": state,
+                "reasons": list(item.reasons),
+                "assessment_resolution": item.assessment_resolution,
+                "sources": self._source_previews(item.source_object_ids),
+            }
+            if state == "conflicted":
+                owner = self._people.resolve(
+                    NormalizedPersonIdentity(
+                        identity_type=item.identity.identity_type,
+                        provider=item.identity.provider,
+                        realm=item.identity.realm,
+                        canonical_value=item.identity.canonical_value,
+                        display_value=item.identity.display_value,
+                    )
+                )
+                if owner is not None and owner.id != person_id:
+                    payload["conflicting_person_id"] = owner.id
+            found.append(payload)
         return found, page.truncated
 
     def _source_previews(self, object_ids: tuple[UUID, ...]) -> list[dict]:

@@ -726,6 +726,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         await _loadRootedPerson(personId);
       },
       onRename: () => _renamePerson(person),
+      onMerged: (survivorId) async {
+        widget.controller.selectObject(survivorId);
+        await widget.controller.refreshCurrentWorkspace();
+        if (!mounted) {
+          return;
+        }
+        await _loadRootedPerson(survivorId);
+      },
       onOpenTask: (taskId) async {
         await widget.controller.setMode(GraphWorkspaceMode.tasks);
         if (!mounted) {
@@ -2089,6 +2097,7 @@ class _PersonDetailSection extends StatelessWidget {
     required this.apiClient,
     required this.onChanged,
     required this.onRename,
+    required this.onMerged,
     required this.onOpenTask,
     required this.onOpenFlow,
   });
@@ -2097,6 +2106,7 @@ class _PersonDetailSection extends StatelessWidget {
   final SecretaryApiClient apiClient;
   final Future<void> Function() onChanged;
   final Future<void> Function() onRename;
+  final Future<void> Function(String survivorId) onMerged;
   final Future<void> Function(String taskId) onOpenTask;
   final Future<void> Function(String objectId) onOpenFlow;
 
@@ -2138,6 +2148,11 @@ class _PersonDetailSection extends StatelessWidget {
                     onPressed: onRename,
                     child: const Text('Переименовать'),
                   ),
+                  TextButton(
+                    key: const ValueKey('person-merge'),
+                    onPressed: () => _openMerge(context),
+                    child: const Text('Объединить с…'),
+                  ),
                   if (cues.isNotEmpty)
                     Text(
                       cues,
@@ -2158,6 +2173,27 @@ class _PersonDetailSection extends StatelessWidget {
               ),
           ],
         ),
+        if (person.consolidations.isNotEmpty)
+          for (final item in person.consolidations)
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 4,
+              children: [
+                Text('Объединено: ${item.duplicateTitle}'),
+                if (item.undoAvailable)
+                  TextButton(
+                    key: ValueKey('person-merge-undo-${item.duplicateId}'),
+                    onPressed: () async {
+                      await apiClient.undoPersonMerge(
+                        survivorId: person.personId,
+                        duplicateId: item.duplicateId,
+                      );
+                      await onChanged();
+                    },
+                    child: const Text('Отменить'),
+                  ),
+              ],
+            ),
         const SizedBox(height: 8),
         Wrap(
           spacing: 6,
@@ -2256,7 +2292,7 @@ class _PersonDetailSection extends StatelessWidget {
         if (person.salience != null &&
             (person.identityCandidates.isNotEmpty || person.identityCandidatesTruncated)) ...[
           const _DetailSectionHeader(title: 'Возможные контакты'),
-          ...person.identityCandidates.map(_candidateBlock),
+          ...person.identityCandidates.map((candidate) => _candidateBlock(context, candidate)),
           if (person.identityCandidatesTruncated)
             const Text('Показаны не все возможные контакты'),
         ],
@@ -2296,7 +2332,23 @@ class _PersonDetailSection extends StatelessWidget {
     );
   }
 
-  Widget _candidateBlock(PersonIdentityCandidate candidate) {
+  Future<void> _openMerge(BuildContext context, {String? otherPersonId}) async {
+    final survivorId = await showDialog<String>(
+      context: context,
+      builder: (context) => _MergePersonDialog(
+        apiClient: apiClient,
+        currentPersonId: person.personId,
+        currentTitle: person.title,
+        otherPersonId: otherPersonId,
+      ),
+    );
+    if (survivorId == null) {
+      return;
+    }
+    await onMerged(survivorId);
+  }
+
+  Widget _candidateBlock(BuildContext context, PersonIdentityCandidate candidate) {
     final exact = candidate.displayValue == candidate.canonicalValue
         ? ''
         : candidate.canonicalValue;
@@ -2328,6 +2380,12 @@ class _PersonDetailSection extends StatelessWidget {
                 child: const Text('Это не этот человек'),
               ),
             ],
+          ),
+        if (candidate.state == 'conflicted' && candidate.conflictingPersonId != null)
+          TextButton(
+            key: ValueKey('person-merge-conflict-${candidate.canonicalValue}'),
+            onPressed: () => _openMerge(context, otherPersonId: candidate.conflictingPersonId),
+            child: const Text('Возможно, это один человек → Объединить'),
           ),
         ...candidate.sources.take(3).map(_flowRow),
       ],
@@ -3174,6 +3232,160 @@ String _emailBindError(ApiException error) {
     return 'Укажите точный email.';
   }
   return message;
+}
+
+class _MergePersonDialog extends StatefulWidget {
+  const _MergePersonDialog({
+    required this.apiClient,
+    required this.currentPersonId,
+    required this.currentTitle,
+    this.otherPersonId,
+  });
+
+  final SecretaryApiClient apiClient;
+  final String currentPersonId;
+  final String currentTitle;
+  final String? otherPersonId;
+
+  @override
+  State<_MergePersonDialog> createState() => _MergePersonDialogState();
+}
+
+class _MergePersonDialogState extends State<_MergePersonDialog> {
+  final _query = TextEditingController();
+  List<SecretaryObject> _results = const [];
+  String? _otherId;
+  var _currentSurvives = true;
+  PersonMergePreview? _preview;
+  var _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _otherId = widget.otherPersonId;
+    if (_otherId != null) {
+      _loadPreview();
+    }
+  }
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search(String value) async {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) {
+      setState(() => _results = const []);
+      return;
+    }
+    final found = await widget.apiClient.searchObjects(query: cleaned, kind: 'person');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _results = found.where((item) => item.id != widget.currentPersonId && item.kind == 'person').toList();
+    });
+  }
+
+  Future<void> _loadPreview() async {
+    final otherId = _otherId;
+    if (otherId == null) {
+      return;
+    }
+    final survivorId = _currentSurvives ? widget.currentPersonId : otherId;
+    final duplicateId = _currentSurvives ? otherId : widget.currentPersonId;
+    final preview = await widget.apiClient.previewPersonMerge(
+      survivorId: survivorId,
+      duplicateId: duplicateId,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _preview = preview);
+  }
+
+  Future<void> _confirm() async {
+    final preview = _preview;
+    if (preview == null || !preview.canMerge || _busy) {
+      return;
+    }
+    setState(() => _busy = true);
+    final survivorId = await widget.apiClient.applyPersonMerge(
+      survivorId: preview.survivorId,
+      duplicateId: preview.duplicateId,
+    );
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop(survivorId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = _preview;
+    final viewport = MediaQuery.sizeOf(context).width;
+    return AlertDialog(
+      title: const Text('Объединить с…'),
+      content: SizedBox(
+        width: viewport < 480 ? viewport - 112 : 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              key: const ValueKey('person-merge-search'),
+              controller: _query,
+              decoration: const InputDecoration(labelText: 'Найти человека'),
+              onChanged: _search,
+            ),
+            for (final item in _results)
+              ListTile(
+                key: ValueKey('person-merge-option-${item.id}'),
+                title: Text(item.title),
+                onTap: () {
+                  setState(() => _otherId = item.id);
+                  _loadPreview();
+                },
+              ),
+            if (preview != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Остаётся: ${preview.survivorTitle}',
+                key: const ValueKey('person-merge-survivor'),
+              ),
+              Text(
+                'Исчезает: ${preview.duplicateTitle}',
+                key: const ValueKey('person-merge-duplicate'),
+              ),
+              Text('Контакты: ${preview.identityCount}'),
+              for (final cue in preview.identities) Text(cue),
+              Text('Связанные задачи: ${preview.actorCounts.values.fold<int>(0, (sum, value) => sum + value)}'),
+              if (preview.blockers.isNotEmpty)
+                Text(preview.blockers.join(' '), key: const ValueKey('person-merge-blocker')),
+              TextButton(
+                key: const ValueKey('person-merge-swap'),
+                onPressed: () {
+                  setState(() => _currentSurvives = !_currentSurvives);
+                  _loadPreview();
+                },
+                child: const Text('Поменять, кто останется'),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Отмена')),
+        FilledButton(
+          key: const ValueKey('person-merge-confirm'),
+          onPressed: preview != null && preview.canMerge && !_busy ? _confirm : null,
+          child: const Text('Объединить людей'),
+        ),
+      ],
+    );
+  }
 }
 
 class _RenamePersonDialog extends StatefulWidget {
