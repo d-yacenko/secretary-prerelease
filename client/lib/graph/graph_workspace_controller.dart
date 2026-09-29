@@ -63,6 +63,9 @@ class GraphWorkspaceController extends ChangeNotifier {
   final Map<String, SecretaryObject> _nodes = {};
   final Map<String, PersonPresentation> _people = {};
   final List<SecretaryEdge> _edges = [];
+  List<SecretaryObject> _landscapeTasks = const [];
+  List<SecretaryEdge> _landscapeTaskEdges = const [];
+  bool _landscapeTaskContextComplete = true;
   final Map<String, Offset> _positions = {};
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
@@ -91,6 +94,10 @@ class GraphWorkspaceController extends ChangeNotifier {
       _positions.entries.where((entry) => visibleIds.contains(entry.key)),
     );
   }
+
+  List<SecretaryObject> get landscapeTasks => List.unmodifiable(_landscapeTasks);
+  List<SecretaryEdge> get landscapeTaskEdges => List.unmodifiable(_landscapeTaskEdges);
+  bool get landscapeTaskContextComplete => _landscapeTaskContextComplete;
 
   PersonPresentation? personFor(String id) => _people[id];
   List<String> get seedIds => List.unmodifiable(_seedIds);
@@ -136,6 +143,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     _positions.clear();
     _people.clear();
     _seedIds = const [];
+    _landscapeTasks = const [];
+    _landscapeTaskEdges = const [];
+    _landscapeTaskContextComplete = true;
     _localContextAnchorIds.clear();
     mode = GraphWorkspaceMode.tasks;
     notifyListeners();
@@ -922,6 +932,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     hasNextWindow = workspace.hasNextWindow;
     semanticWindowComplete = workspace.semanticWindowComplete;
     constellationRootIds = List<String>.from(workspace.constellationRootIds);
+    _landscapeTasks = List<SecretaryObject>.from(workspace.landscapeTasks);
+    _landscapeTaskEdges = List<SecretaryEdge>.from(workspace.landscapeTaskEdges);
+    _landscapeTaskContextComplete = workspace.landscapeTaskContextComplete;
     selectedObjectId = selectObjectId;
     selectedEdgeId = null;
     shouldFitAfterLayout = fitAfterLayout;

@@ -1,7 +1,21 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import '../api/api_models.dart';
 import 'graph_layout.dart';
+import 'task_map_hierarchy.dart';
+
+/// Clearance between canonical Task bounds and the unanchored Person shelf.
+///
+/// One card width plus the ordinary node gap keeps a 186×100 Person card
+/// from overlapping Task bounds. The shelf means only “no current Task anchor”.
+const double kPeopleLandscapeShelfGap = kGraphNodeWidth + kGraphNodeHorizontalGap;
+
+/// Shelf columns. Rows continue with the ordinary graph node step.
+const int kPeopleLandscapeShelfColumns = kGraphOverviewColumns;
+
+/// Shelf origin when the Task context has no Task nodes.
+const Offset kPeopleLandscapeNeutralShelfOrigin = Offset.zero;
 
 const int _angularSlots = 24;
 const int _maxRings = 48;
@@ -27,6 +41,126 @@ Map<String, Offset> projectPeopleFromTasks({
   final placed = <String, Offset>{};
   for (final personId in ordered) {
     placed[personId] = _place(bases[personId]!, placed);
+  }
+  return placed;
+}
+
+class PeopleLandscapeOverview {
+  const PeopleLandscapeOverview({
+    required this.usable,
+    required this.positions,
+    required this.anchoredPersonIds,
+    required this.unanchoredPersonIds,
+    required this.unresolvedPersonIds,
+    required this.taskBounds,
+  });
+
+  final bool usable;
+  final Map<String, Offset> positions;
+  final List<String> anchoredPersonIds;
+  final List<String> unanchoredPersonIds;
+  final List<String> unresolvedPersonIds;
+
+  /// Canonical Task bounds when the projection is usable and Tasks exist.
+  final Rect? taskBounds;
+}
+
+PeopleLandscapeOverview projectPeopleLandscapeOverview({
+  required Iterable<String> personIds,
+  required Iterable<PersonPresentation> people,
+  required List<SecretaryObject> landscapeTasks,
+  required List<SecretaryEdge> landscapeTaskEdges,
+  required bool landscapeTaskContextComplete,
+}) {
+  final visibleIds = personIds.toList();
+  if (!landscapeTaskContextComplete) {
+    return _unusable(visibleIds);
+  }
+  final hierarchy = projectTaskMapHierarchy(
+    nodes: landscapeTasks,
+    edges: landscapeTaskEdges,
+  );
+  final peopleById = {for (final person in people) person.personId: person};
+  final anchored = <String, List<String>>{};
+  final unanchored = <String>[];
+  final unresolved = <String>[];
+  for (final personId in visibleIds) {
+    final person = peopleById[personId];
+    if (person == null || !person.landscapeTaskIdsComplete) {
+      unresolved.add(personId);
+      continue;
+    }
+    final anchors = person.landscapeTaskIds.toSet().toList()..sort();
+    if (anchors.isEmpty) {
+      unanchored.add(personId);
+      continue;
+    }
+    if (anchors.any((id) => !hierarchy.positions.containsKey(id))) {
+      unresolved.add(personId);
+      continue;
+    }
+    anchored[personId] = person.landscapeTaskIds.toList();
+  }
+  if (unresolved.isNotEmpty) {
+    return _unusable(unresolved);
+  }
+  final tasks = landscapeTasks.where((node) => node.kind == 'task').toList();
+  final anchoredPositions = projectPeopleFromTasks(
+    personIds: anchored.keys,
+    taskPositions: hierarchy.positions,
+    taskIdsByPerson: anchored,
+  );
+  final taskBounds = tasks.isEmpty ? null : hierarchy.taskBounds;
+  final positions = Map<String, Offset>.from(anchoredPositions);
+  positions.addAll(_shelfPositions(unanchored, taskBounds, anchoredPositions));
+  return PeopleLandscapeOverview(
+    usable: true,
+    positions: positions,
+    anchoredPersonIds: anchored.keys.toList()..sort(),
+    unanchoredPersonIds: unanchored..sort(),
+    unresolvedPersonIds: const [],
+    taskBounds: taskBounds,
+  );
+}
+
+PeopleLandscapeOverview _unusable(List<String> unresolved) {
+  final ids = List<String>.from(unresolved)..sort();
+  return PeopleLandscapeOverview(
+    usable: false,
+    positions: const {},
+    anchoredPersonIds: const [],
+    unanchoredPersonIds: const [],
+    unresolvedPersonIds: ids,
+    taskBounds: null,
+  );
+}
+
+Map<String, Offset> _shelfPositions(
+  List<String> personIds,
+  Rect? taskBounds,
+  Map<String, Offset> anchoredPositions,
+) {
+  final ordered = List<String>.from(personIds)..sort();
+  if (ordered.isEmpty) {
+    return const {};
+  }
+  var origin = kPeopleLandscapeNeutralShelfOrigin;
+  if (taskBounds != null) {
+    // Stay right of Task bounds and of already placed anchored cards.
+    var right = taskBounds.right;
+    for (final position in anchoredPositions.values) {
+      right = math.max(right, position.dx + kGraphNodeWidth);
+    }
+    origin = Offset(right + kPeopleLandscapeShelfGap, taskBounds.top);
+  }
+  final placed = <String, Offset>{};
+  for (var index = 0; index < ordered.length; index++) {
+    final column = index % kPeopleLandscapeShelfColumns;
+    final row = index ~/ kPeopleLandscapeShelfColumns;
+    placed[ordered[index]] = Offset(
+      origin.dx + column * GraphLayout.overviewColumnStep,
+      origin.dy + row * GraphLayout.overviewRowStep,
+    );
   }
   return placed;
 }
