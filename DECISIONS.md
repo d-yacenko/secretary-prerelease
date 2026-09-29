@@ -187,3 +187,14 @@
 - Person promotion and Person knowledge are separate decisions. Approving "remember this person" does not confirm manager, colleague, family, organization membership, authority, or any other durable relationship.
 - Relationship/role knowledge may later be suggested from evidence, but it requires its own explicit confirmation contract and context. Repeated task assignment or message volume alone does not prove that someone is the user's manager.
 - Promotion does not change Telegram AI eligibility, provider privacy gates, Flow provenance, Task actor semantics, or the core ontology.
+
+## Person context budget for Secretary
+
+- The Secretary must **not** receive the full People registry, full People graph, or all Person salience records in every base prompt.
+- Person knowledge is a lazy, bounded retrieval surface. Load it only when a named/selected Person, an explicit Task actor relation, a recipient/route decision, or another concrete workflow needs Person context.
+- Retrieval order should prefer the most authoritative and cheapest facts first: exact Person identity; explicit current Task->Person actor roles; later confirmed contextual relationship facts; then bounded recent attributable Flow/salience only when needed.
+- Salience allocates retrieval/ranking budget; it is never permission to dump all high-salience People into the prompt and never establishes message importance by itself.
+- A Task or Assistant action should receive only the small set of Persons actually relevant to that action, with explicit truncation/unknown when bounded reads are incomplete.
+- Human-facing People can be richer than model-facing context. UI visibility does not imply that all displayed data is automatically transmitted to an LLM.
+- Any later Person-aware Assistant slice must prove bounded tool/read behavior and prompt-budget discipline before proactive/global injection is considered.
+
