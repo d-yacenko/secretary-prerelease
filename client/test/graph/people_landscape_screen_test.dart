@@ -30,6 +30,11 @@ void main() {
     expect(find.byKey(const Key('graph_node_task-a')), findsNothing);
     expect(find.text('Ada'), findsOneWidget);
     expect(find.text('Bea'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('graph_node_person-ada'))),
+      const Size(kPeopleLandscapeOverviewCardWidth, kPeopleLandscapeOverviewCardHeight),
+    );
+    expect(find.text('Связанные задачи'), findsNothing);
 
     final drawn = _delta(tester, 'person-ada', 'person-bea');
     final landscape = _landscape(_loaded(tester));
@@ -96,16 +101,29 @@ void main() {
     );
     final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
     final viewport = tester.getSize(find.byType(InteractiveViewer));
+    final landscape = _landscape(harness.graph);
+    final card = const Size(
+      kPeopleLandscapeOverviewCardWidth,
+      kPeopleLandscapeOverviewCardHeight,
+    );
+    final sizes = {for (final id in landscape.positions.keys) id: card};
     final landscapeFit = GraphLayout.fitTransform(
-      positions: _landscape(harness.graph).positions,
+      positions: landscape.positions,
       viewportSize: viewport,
+      nodeSizes: sizes,
     );
     final gridFit = GraphLayout.fitTransform(
       positions: _grid(harness.graph),
       viewportSize: viewport,
+      nodeSizes: sizes,
+    );
+    final fullCardFit = GraphLayout.fitTransform(
+      positions: landscape.positions,
+      viewportSize: viewport,
     );
     expect(viewer.transformationController!.value.storage, landscapeFit.storage);
     expect(viewer.transformationController!.value.storage, isNot(gridFit.storage));
+    expect(viewer.transformationController!.value.storage, isNot(fullCardFit.storage));
 
     viewer.transformationController!.value = Matrix4.identity();
     await tester.tap(find.byTooltip('Уместить граф'));
@@ -164,6 +182,39 @@ void main() {
     final landscape = _landscape(harness.graph);
     expect(landscape.usable, isTrue);
     expect(drawn, isNot(_offsetDelta(landscape.positions, 'person-ada', 'person-bea')));
+    expect(
+      tester.getSize(find.byKey(const Key('graph_node_person-ada'))),
+      const Size(kGraphNodeWidth, kGraphNodeHeight),
+    );
+  });
+
+  testWidgets('a Person card keeps its own landscape position after rebuild', (tester) async {
+    await _pumpPeople(
+      tester,
+      _workspace(
+        people: [
+          _person('person-bea', anchors: const ['task-b']),
+          _person('person-ada', anchors: const ['task-a']),
+        ],
+        tasks: [
+          _task('task-a', 'Левая задача'),
+          _task('task-b', 'Правая задача'),
+        ],
+      ),
+    );
+    final controller = _loaded(tester);
+    final landscape = _landscape(controller);
+    final ada = _origin(tester, 'person-ada');
+    final bea = _origin(tester, 'person-bea');
+    expect(bea - ada, _offsetDelta(landscape.positions, 'person-ada', 'person-bea'));
+    expect(find.text('Левая задача'), findsNothing);
+    expect(find.text('Правая задача'), findsNothing);
+    await controller.loadOverview();
+    await tester.pump();
+    expect(_origin(tester, 'person-ada'), ada);
+    expect(_origin(tester, 'person-bea'), bea);
+    expect(find.byKey(const ValueKey('drawn-person-ada')), findsOneWidget);
+    expect(find.byKey(const ValueKey('drawn-person-bea')), findsOneWidget);
   });
 }
 

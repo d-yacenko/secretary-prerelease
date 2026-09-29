@@ -5,7 +5,6 @@ import 'package:personal_secretary/api/secretary_api_client.dart';
 import 'package:personal_secretary/auth/auth_controller.dart';
 import 'package:personal_secretary/auth/server_url_store.dart';
 import 'package:personal_secretary/auth/token_store.dart';
-import 'package:personal_secretary/graph/graph_layout.dart';
 import 'package:personal_secretary/graph/graph_workspace_controller.dart';
 import 'package:personal_secretary/graph/people_landscape.dart';
 import 'package:personal_secretary/graph/task_map_hierarchy.dart';
@@ -72,9 +71,20 @@ PeopleLandscapeOverview _project({
   );
 }
 
-bool _cardsOverlap(Offset left, Offset right) {
-  return GraphLayout.nodeRectsOverlap(left, right);
+bool _compactCardsOverlap(Offset left, Offset right) {
+  final card = const Size(
+    kPeopleLandscapeOverviewCardWidth,
+    kPeopleLandscapeOverviewCardHeight,
+  );
+  return Rect.fromLTWH(left.dx, left.dy, card.width, card.height).overlaps(
+    Rect.fromLTWH(right.dx, right.dy, card.width, card.height),
+  );
 }
+
+const _compactSize = Size(
+  kPeopleLandscapeOverviewCardWidth,
+  kPeopleLandscapeOverviewCardHeight,
+);
 
 void main() {
   test('one complete Task anchor uses canonical Task geography', () {
@@ -146,14 +156,32 @@ void main() {
     expect(overview.positions['person-anchored'], anchoredOnly.positions['person-anchored']);
     expect(overview.unanchoredPersonIds, ['person-shelf-a', 'person-shelf-b']);
     final bounds = overview.taskBounds!;
+    final stripX = overview.positions['person-shelf-a']!.dx;
+    expect(overview.positions['person-shelf-b']!.dx, stripX);
+    expect(
+      overview.positions['person-shelf-a']!.dy,
+      lessThan(overview.positions['person-shelf-b']!.dy),
+    );
+    expect(
+      overview.positions['person-anchored']!.dx + kPeopleLandscapeOverviewCardWidth,
+      lessThan(stripX),
+    );
     for (final id in overview.unanchoredPersonIds) {
       final topLeft = overview.positions[id]!;
       expect(topLeft.dx, greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap));
-      final card = Rect.fromLTWH(topLeft.dx, topLeft.dy, kGraphNodeWidth, kGraphNodeHeight);
+      final card = Rect.fromLTWH(
+        topLeft.dx,
+        topLeft.dy,
+        kPeopleLandscapeOverviewCardWidth,
+        kPeopleLandscapeOverviewCardHeight,
+      );
       expect(card.overlaps(bounds), isFalse);
     }
     expect(
-      _cardsOverlap(overview.positions['person-shelf-a']!, overview.positions['person-shelf-b']!),
+      _compactCardsOverlap(
+        overview.positions['person-shelf-a']!,
+        overview.positions['person-shelf-b']!,
+      ),
       isFalse,
     );
     final reversed = _project(
@@ -179,10 +207,14 @@ void main() {
     expect(overview.positions['person-a'], kPeopleLandscapeNeutralShelfOrigin);
     expect(
       overview.positions['person-b'],
-      const Offset(kGraphNodeWidth + kGraphNodeHorizontalGap, 0),
+      const Offset(
+        0,
+        kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap,
+      ),
     );
+    expect(overview.positions['person-a']!.dx, overview.positions['person-b']!.dx);
     expect(
-      _cardsOverlap(overview.positions['person-a']!, overview.positions['person-b']!),
+      _compactCardsOverlap(overview.positions['person-a']!, overview.positions['person-b']!),
       isFalse,
     );
   });
@@ -272,6 +304,86 @@ void main() {
     expect(controller.landscapeTasks, isEmpty);
     expect(controller.landscapeTaskEdges, isEmpty);
     expect(controller.landscapeTaskContextComplete, isTrue);
+  });
+
+  test('person ids keep their projected positions when input order changes', () {
+    final tasks = [_task('task-left'), _task('task-right')];
+    final edges = [_partOf('edge-1', 'task-right', 'task-left')];
+    final forward = _project(
+      personIds: const ['person-b', 'person-a'],
+      people: [
+        _person('person-b', anchors: const ['task-right']),
+        _person('person-a', anchors: const ['task-left']),
+      ],
+      tasks: tasks,
+      edges: edges,
+    );
+    final reversed = _project(
+      personIds: const ['person-a', 'person-b'],
+      people: [
+        _person('person-a', anchors: const ['task-left']),
+        _person('person-b', anchors: const ['task-right']),
+      ],
+      tasks: tasks,
+      edges: edges,
+    );
+    expect(forward.usable, isTrue);
+    expect(forward.positions, reversed.positions);
+    expect(forward.positions['person-a'], isNot(forward.positions['person-b']));
+    final hierarchy = projectTaskMapHierarchy(nodes: tasks, edges: edges);
+    expect(forward.positions['person-a'], hierarchy.positions['task-left']);
+    expect(forward.positions['person-b'], hierarchy.positions['task-right']);
+  });
+
+  test('shared and near anchors separate locally without overlap', () {
+    const shared = Offset(480, 220);
+    final identical = projectPeopleFromTasks(
+      personIds: const ['person-b', 'person-a', 'person-c'],
+      taskPositions: const {'task-shared': shared},
+      taskIdsByPerson: const {
+        'person-a': ['task-shared'],
+        'person-b': ['task-shared'],
+        'person-c': ['task-shared'],
+      },
+      cardSize: _compactSize,
+      nearGap: kPeopleLandscapeOverviewCardGap,
+    );
+    final repeated = projectPeopleFromTasks(
+      personIds: const ['person-c', 'person-a', 'person-b'],
+      taskPositions: const {'task-shared': shared},
+      taskIdsByPerson: const {
+        'person-c': ['task-shared'],
+        'person-a': ['task-shared'],
+        'person-b': ['task-shared'],
+      },
+      cardSize: _compactSize,
+      nearGap: kPeopleLandscapeOverviewCardGap,
+    );
+    expect(identical, repeated);
+    expect(identical['person-a'], shared);
+    expect(_compactCardsOverlap(identical['person-a']!, identical['person-b']!), isFalse);
+    expect(_compactCardsOverlap(identical['person-a']!, identical['person-c']!), isFalse);
+    expect(_compactCardsOverlap(identical['person-b']!, identical['person-c']!), isFalse);
+    for (final position in identical.values) {
+      expect((position - shared).distance, lessThan(400));
+    }
+
+    const left = Offset(10, 30);
+    const right = Offset(18, 34);
+    final near = projectPeopleFromTasks(
+      personIds: const ['person-b', 'person-a'],
+      taskPositions: const {'task-left': left, 'task-right': right},
+      taskIdsByPerson: const {
+        'person-a': ['task-left'],
+        'person-b': ['task-right'],
+      },
+      cardSize: _compactSize,
+      nearGap: kPeopleLandscapeOverviewCardGap,
+    );
+    expect(_compactCardsOverlap(near['person-a']!, near['person-b']!), isFalse);
+    expect((near['person-a']! - left).distance, lessThan(400));
+    expect((near['person-b']! - right).distance, lessThan(400));
+    expect(near['person-a']!.dx, lessThan(near['person-b']!.dx + kPeopleLandscapeOverviewCardWidth));
   });
 }
 

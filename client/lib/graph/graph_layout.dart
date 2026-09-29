@@ -555,7 +555,10 @@ class GraphLayout {
   }
 
   /// Bounds of node rectangles in graph coordinates.
-  static Rect computeBounds(Map<String, Offset> positions) {
+  static Rect computeBounds(
+    Map<String, Offset> positions, {
+    Map<String, Size>? nodeSizes,
+  }) {
     if (positions.isEmpty) {
       return const Rect.fromLTWH(-100, -100, 200, 200);
     }
@@ -563,18 +566,22 @@ class GraphLayout {
     double minY = double.infinity;
     double maxX = -double.infinity;
     double maxY = -double.infinity;
-    for (final position in positions.values) {
-      minX = math.min(minX, position.dx);
-      minY = math.min(minY, position.dy);
-      maxX = math.max(maxX, position.dx + kGraphNodeWidth);
-      maxY = math.max(maxY, position.dy + kGraphNodeHeight);
+    for (final entry in positions.entries) {
+      final size = nodeSizes?[entry.key] ?? const Size(kGraphNodeWidth, kGraphNodeHeight);
+      minX = math.min(minX, entry.value.dx);
+      minY = math.min(minY, entry.value.dy);
+      maxX = math.max(maxX, entry.value.dx + size.width);
+      maxY = math.max(maxY, entry.value.dy + size.height);
     }
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   /// Graph bounds mapped into canvas-local coordinates (matches node placement).
-  static Rect canvasBoundsFromPositions(Map<String, Offset> positions) {
-    final graphBounds = computeBounds(positions);
+  static Rect canvasBoundsFromPositions(
+    Map<String, Offset> positions, {
+    Map<String, Size>? nodeSizes,
+  }) {
+    final graphBounds = computeBounds(positions, nodeSizes: nodeSizes);
     return Rect.fromLTWH(
       kGraphCanvasPadding,
       kGraphCanvasPadding,
@@ -587,11 +594,12 @@ class GraphLayout {
     required Map<String, Offset> positions,
     required Size viewportSize,
     double padding = kGraphCanvasPadding,
+    Map<String, Size>? nodeSizes,
   }) {
     if (positions.isEmpty || viewportSize.isEmpty) {
       return Matrix4.identity();
     }
-    final canvasBounds = canvasBoundsFromPositions(positions);
+    final canvasBounds = canvasBoundsFromPositions(positions, nodeSizes: nodeSizes);
     final graphWidth = canvasBounds.width;
     final graphHeight = canvasBounds.height;
     if (graphWidth <= 0 || graphHeight <= 0) {
@@ -614,13 +622,15 @@ class GraphLayout {
     required Map<String, Offset> positions,
     required Size viewportSize,
     double padding = kGraphCanvasPadding,
+    Map<String, Size>? nodeSizes,
   }) {
     final transform = fitTransform(
       positions: positions,
       viewportSize: viewportSize,
       padding: padding,
+      nodeSizes: nodeSizes,
     );
-    final canvasBounds = canvasBoundsFromPositions(positions);
+    final canvasBounds = canvasBoundsFromPositions(positions, nodeSizes: nodeSizes);
     final topLeft = MatrixUtils.transformPoint(transform, canvasBounds.topLeft);
     final bottomRight = MatrixUtils.transformPoint(transform, canvasBounds.bottomRight);
     return Rect.fromPoints(topLeft, bottomRight);

@@ -5,17 +5,22 @@ import '../api/api_models.dart';
 import 'graph_layout.dart';
 import 'task_map_hierarchy.dart';
 
-/// Clearance between canonical Task bounds and the unanchored Person shelf.
+/// Clearance between anchored Task geography and the unanchored strip.
 ///
-/// One card width plus the ordinary node gap keeps a 186×100 Person card
-/// from overlapping Task bounds. The shelf means only “no current Task anchor”.
+/// The strip means only “no current Task anchor”.
 const double kPeopleLandscapeShelfGap = kGraphNodeWidth + kGraphNodeHorizontalGap;
 
-/// Shelf columns. Rows continue with the ordinary graph node step.
-const int kPeopleLandscapeShelfColumns = kGraphOverviewColumns;
+/// Unrooted People overview card. Smaller than the rooted 186×100 card.
+const double kPeopleLandscapeOverviewCardWidth = 156;
+const double kPeopleLandscapeOverviewCardHeight = 56;
 
-/// Shelf origin when the Task context has no Task nodes.
+/// Local gap used when compact cards would touch or nearly touch.
+const double kPeopleLandscapeOverviewCardGap = 8;
+
+/// Origin of the vertical unanchored strip when no Task geography exists.
 const Offset kPeopleLandscapeNeutralShelfOrigin = Offset.zero;
+
+const int kPeopleLandscapeCompactCueLimit = 28;
 
 const int _angularSlots = 24;
 const int _maxRings = 48;
@@ -29,6 +34,8 @@ Map<String, Offset> projectPeopleFromTasks({
   required Iterable<String> personIds,
   required Map<String, Offset> taskPositions,
   required Map<String, Iterable<String>> taskIdsByPerson,
+  Size cardSize = const Size(kGraphNodeWidth, kGraphNodeHeight),
+  double nearGap = 0,
 }) {
   final bases = <String, Offset>{};
   for (final personId in personIds) {
@@ -40,7 +47,7 @@ Map<String, Offset> projectPeopleFromTasks({
   final ordered = bases.keys.toList()..sort();
   final placed = <String, Offset>{};
   for (final personId in ordered) {
-    placed[personId] = _place(bases[personId]!, placed);
+    placed[personId] = _place(bases[personId]!, placed, cardSize, nearGap);
   }
   return placed;
 }
@@ -105,10 +112,16 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
     return _unusable(unresolved);
   }
   final tasks = landscapeTasks.where((node) => node.kind == 'task').toList();
+  const cardSize = Size(
+    kPeopleLandscapeOverviewCardWidth,
+    kPeopleLandscapeOverviewCardHeight,
+  );
   final anchoredPositions = projectPeopleFromTasks(
     personIds: anchored.keys,
     taskPositions: hierarchy.positions,
     taskIdsByPerson: anchored,
+    cardSize: cardSize,
+    nearGap: kPeopleLandscapeOverviewCardGap,
   );
   final taskBounds = tasks.isEmpty ? null : hierarchy.taskBounds;
   final positions = Map<String, Offset>.from(anchoredPositions);
@@ -145,22 +158,20 @@ Map<String, Offset> _shelfPositions(
     return const {};
   }
   var origin = kPeopleLandscapeNeutralShelfOrigin;
-  if (taskBounds != null) {
-    // Stay right of Task bounds and of already placed anchored cards.
-    var right = taskBounds.right;
+  if (taskBounds != null || anchoredPositions.isNotEmpty) {
+    var right = taskBounds?.right ?? double.negativeInfinity;
     for (final position in anchoredPositions.values) {
-      right = math.max(right, position.dx + kGraphNodeWidth);
+      right = math.max(right, position.dx + kPeopleLandscapeOverviewCardWidth);
     }
-    origin = Offset(right + kPeopleLandscapeShelfGap, taskBounds.top);
+    origin = Offset(
+      right + kPeopleLandscapeShelfGap,
+      taskBounds?.top ?? kPeopleLandscapeNeutralShelfOrigin.dy,
+    );
   }
   final placed = <String, Offset>{};
+  final step = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap;
   for (var index = 0; index < ordered.length; index++) {
-    final column = index % kPeopleLandscapeShelfColumns;
-    final row = index ~/ kPeopleLandscapeShelfColumns;
-    placed[ordered[index]] = Offset(
-      origin.dx + column * GraphLayout.overviewColumnStep,
-      origin.dy + row * GraphLayout.overviewRowStep,
-    );
+    placed[ordered[index]] = Offset(origin.dx, origin.dy + index * step);
   }
   return placed;
 }
@@ -181,25 +192,25 @@ Offset? _anchor(Iterable<String> taskIds, Map<String, Offset> taskPositions) {
   return Offset(x / count, y / count);
 }
 
-Offset _place(Offset base, Map<String, Offset> placed) {
-  if (!_overlaps(base, placed)) {
+Offset _place(Offset base, Map<String, Offset> placed, Size cardSize, double nearGap) {
+  if (!_overlaps(base, placed, cardSize, nearGap)) {
     return base;
   }
-  final step = _minCenterSeparation();
+  final step = _minCenterSeparation(cardSize, nearGap);
   final angleStep = (2 * math.pi) / _angularSlots;
   for (var ring = 0; ring < _maxRings; ring++) {
     final radius = step + ring * step;
     for (var slot = 0; slot < _angularSlots; slot++) {
       final angle = angleStep * slot - math.pi / 2;
       final center = Offset(
-        base.dx + kGraphNodeWidth / 2 + math.cos(angle) * radius,
-        base.dy + kGraphNodeHeight / 2 + math.sin(angle) * radius,
+        base.dx + cardSize.width / 2 + math.cos(angle) * radius,
+        base.dy + cardSize.height / 2 + math.sin(angle) * radius,
       );
       final candidate = Offset(
-        center.dx - kGraphNodeWidth / 2,
-        center.dy - kGraphNodeHeight / 2,
+        center.dx - cardSize.width / 2,
+        center.dy - cardSize.height / 2,
       );
-      if (!_overlaps(candidate, placed)) {
+      if (!_overlaps(candidate, placed, cardSize, nearGap)) {
         return candidate;
       }
     }
@@ -207,17 +218,29 @@ Offset _place(Offset base, Map<String, Offset> placed) {
   throw StateError('no free local slot for person landscape');
 }
 
-bool _overlaps(Offset candidate, Map<String, Offset> placed) {
+bool _overlaps(Offset candidate, Map<String, Offset> placed, Size cardSize, double nearGap) {
+  final probe = _cardRect(candidate, cardSize, nearGap);
   for (final other in placed.values) {
-    if (GraphLayout.nodeRectsOverlap(candidate, other)) {
+    if (probe.overlaps(_cardRect(other, cardSize, nearGap))) {
       return true;
     }
   }
   return false;
 }
 
-double _minCenterSeparation() {
-  final sepW = kGraphNodeWidth + kGraphNodeHorizontalGap;
-  final sepH = kGraphNodeHeight + kGraphNodeVerticalGap;
+Rect _cardRect(Offset topLeft, Size cardSize, double nearGap) {
+  return Rect.fromLTWH(
+    topLeft.dx - nearGap / 2,
+    topLeft.dy - nearGap / 2,
+    cardSize.width + nearGap,
+    cardSize.height + nearGap,
+  );
+}
+
+double _minCenterSeparation(Size cardSize, double nearGap) {
+  final gapX = nearGap > 0 ? nearGap : kGraphNodeHorizontalGap;
+  final gapY = nearGap > 0 ? nearGap : kGraphNodeVerticalGap;
+  final sepW = cardSize.width + gapX;
+  final sepH = cardSize.height + gapY;
   return math.sqrt(sepW * sepW + sepH * sepH);
 }

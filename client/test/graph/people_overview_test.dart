@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:personal_secretary/api/api_models.dart';
 import 'package:personal_secretary/graph/graph_layout.dart';
+import 'package:personal_secretary/graph/people_landscape.dart';
 import 'package:personal_secretary/graph/people_overview.dart';
 
 import 'graph_test_harness.dart';
@@ -246,12 +247,18 @@ void main() {
     expect(find.text('4242'), findsNothing);
     expect(find.text('Cara'), findsWidgets);
     expect(find.text('Человек'), findsNothing);
-    expect(find.text('Связанные задачи · 3'), findsOneWidget);
-    expect(find.text('Сообщения · 7'), findsOneWidget);
-    expect(find.text('Связанные задачи · 1'), findsOneWidget);
-    expect(find.text('Сообщения · 2'), findsOneWidget);
+    expect(find.text('Связанные задачи · 3'), findsNothing);
+    expect(find.text('Сообщения · 7'), findsNothing);
+    expect(find.text('Связанные задачи · 1'), findsNothing);
+    expect(find.text('Сообщения · 2'), findsNothing);
     expect(find.byKey(const Key('person-activity-footer-person-plain')), findsNothing);
-    expect(find.byIcon(Icons.person_outline), findsWidgets);
+    expect(
+      tester.getSize(find.byKey(const Key('graph_node_person-c'))),
+      const Size(
+        kPeopleLandscapeOverviewCardWidth,
+        kPeopleLandscapeOverviewCardHeight,
+      ),
+    );
     final cues = tester.widget<Text>(find.byKey(const Key('person-provider-cues-person-c')));
     expect(cues.data, 'Gmail · Telegram');
     expect(find.textContaining('Яндекс'), findsNothing);
@@ -269,6 +276,11 @@ void main() {
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();
     expect(harness.graph.rootId, 'person-c');
+    expect(
+      tester.getSize(find.byKey(const Key('graph_node_person-c'))),
+      const Size(kGraphNodeWidth, kGraphNodeHeight),
+    );
+    expect(find.byIcon(Icons.person_outline), findsWidgets);
     expect(find.text('Linked task'), findsOneWidget);
     expect(find.text('Hello Cara'), findsOneWidget);
     expect(find.byKey(const Key('person-activity-footer-task-linked')), findsNothing);

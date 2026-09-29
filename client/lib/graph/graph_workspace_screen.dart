@@ -334,12 +334,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       );
       return;
     }
+    final nodes = widget.controller.visibleNodes;
     _transform.value = GraphLayout.fitTransform(
       positions: _drawnPositions(
-        nodes: widget.controller.visibleNodes,
+        nodes: nodes,
         edges: widget.controller.visibleEdges,
       ),
       viewportSize: viewportSize,
+      nodeSizes: _peopleOverviewCardSizes(nodes),
     );
   }
 
@@ -383,6 +385,27 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       rootId: widget.controller.rootId,
     );
   }
+
+  /// Compact card sizes for the unrooted People overview. Other modes keep
+  /// the ordinary 186×100 node rectangle.
+  Map<String, Size>? _peopleOverviewCardSizes(List<SecretaryObject> nodes) {
+    if (!_compactPeopleOverview) {
+      return null;
+    }
+    return {
+      for (final node in nodes)
+        node.id: node.kind == 'person'
+            ? const Size(
+                kPeopleLandscapeOverviewCardWidth,
+                kPeopleLandscapeOverviewCardHeight,
+              )
+            : const Size(kGraphNodeWidth, kGraphNodeHeight),
+    };
+  }
+
+  bool get _compactPeopleOverview =>
+      widget.controller.mode == GraphWorkspaceMode.people &&
+      widget.controller.rootId == null;
 
   @override
   Widget build(BuildContext context) {
@@ -1218,9 +1241,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     ).visibleOnTasksMap,
               )
               .toList();
+    final overviewSizes = _peopleOverviewCardSizes(nodes);
     final bounds = hybrid != null
         ? hybridPresentationBounds(hybrid)
-        : GraphLayout.computeBounds(positions);
+        : GraphLayout.computeBounds(positions, nodeSizes: overviewSizes);
     _hybridGraphBounds = hybrid != null ? bounds : null;
     const canvasPad = kGraphCanvasPadding;
     final canvasWidth = bounds.width + canvasPad * 2;
@@ -1248,6 +1272,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 : GraphLayout.fitTransform(
                     positions: positions,
                     viewportSize: viewportSize,
+                    nodeSizes: overviewSizes,
                   );
             widget.controller.clearFitRequest();
           });
@@ -1302,7 +1327,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     HybridFocusPresentation? hybrid,
   ) {
     final edgePositions = Map<String, Offset>.from(positions);
-    final nodeSizes = <String, Size>{};
+    final nodeSizes = <String, Size>{
+      ...?_peopleOverviewCardSizes(nodes),
+    };
     if (hybrid != null) {
       for (final node in hybrid.scene.nodes) {
         edgePositions[node.id] = hybrid.displayTopLeft[node.id] ?? node.topLeft;
@@ -1367,6 +1394,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 node.id,
               );
               return Positioned(
+                key: ValueKey('drawn-${node.id}'),
                 left: position.dx - bounds.left + canvasPad,
                 top: position.dy - bounds.top + canvasPad,
                 child: ongoingAnchor
@@ -1395,6 +1423,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                         object: node,
                         selected: selected,
                         focusDimmed: focusMode && !emphasized,
+                        compact: _compactPeopleOverview && node.kind == 'person',
                         person: widget.controller.personFor(node.id),
                         bookmarkColor: bookmarkColor,
                         onTap: () => widget.controller.selectObject(node.id),
@@ -2764,6 +2793,7 @@ class _GraphNodeCard extends StatelessWidget {
     required this.selected,
     required this.focusDimmed,
     required this.onTap,
+    this.compact = false,
     this.person,
     this.bookmarkColor,
   });
@@ -2772,6 +2802,7 @@ class _GraphNodeCard extends StatelessWidget {
   final bool selected;
   final bool focusDimmed;
   final VoidCallback onTap;
+  final bool compact;
   final PersonPresentation? person;
   final String? bookmarkColor;
 
@@ -2792,9 +2823,9 @@ class _GraphNodeCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: kGraphNodeWidth,
-          height: kGraphNodeHeight,
-          padding: const EdgeInsets.all(8),
+          width: compact ? kPeopleLandscapeOverviewCardWidth : kGraphNodeWidth,
+          height: compact ? kPeopleLandscapeOverviewCardHeight : kGraphNodeHeight,
+          padding: EdgeInsets.all(compact ? 6 : 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
@@ -2803,7 +2834,9 @@ class _GraphNodeCard extends StatelessWidget {
             ),
           ),
           child: object.kind == 'person'
-              ? _personNodeBody(context, scheme)
+              ? (compact
+                    ? _compactPersonNodeBody(context, scheme)
+                    : _personNodeBody(context, scheme))
               : _genericNodeBody(context, scheme),
         ),
       ),
@@ -2864,6 +2897,57 @@ class _GraphNodeCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
         ),
+      ],
+    );
+  }
+
+  Widget _compactPersonNodeBody(BuildContext context, ColorScheme scheme) {
+    final current = person;
+    final cue = current == null
+        ? ''
+        : current.identities
+              .where((item) => item.state == 'effective')
+              .map((item) => providerLabel(item.provider))
+              .where((label) => label.isNotEmpty)
+              .take(2)
+              .join(' · ');
+    final shortCue = cue.length <= kPeopleLandscapeCompactCueLimit ? cue : '';
+    return Column(
+      key: ValueKey('person-summary-card-${object.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                object.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (current?.identityConflict ?? false)
+              Icon(
+                Icons.report_outlined,
+                key: Key('person-identity-conflict-${object.id}'),
+                size: 14,
+                color: scheme.error,
+                semanticLabel: 'Конфликт идентичности',
+              ),
+          ],
+        ),
+        if (shortCue.isNotEmpty)
+          Text(
+            shortCue,
+            key: Key('person-provider-cues-${object.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
       ],
     );
   }
