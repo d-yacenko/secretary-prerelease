@@ -127,6 +127,19 @@ class PersonConsolidationService:
             blockers.append("duplicate has too many evidence rows")
         if len(actor_edges) > MAX_ACTOR_EDGES:
             blockers.append("duplicate has too many task roles")
+        for edge in actor_edges:
+            if self._active_task(edge.source_id) is None:
+                blockers.append("duplicate task role is not on an active task")
+                break
+            current = self._survivor_actor_edges(edge.source_id, survivor.id, edge.type)
+            if any(not _same_actor_fact(item, edge) for item in current):
+                blockers.append("survivor already has a different task role")
+                break
+        for row in evidence:
+            existing = self._matching_evidence(survivor.id, row)
+            if existing is not None and not _same_evidence_payload(existing, row):
+                blockers.append("survivor already has different identity evidence")
+                break
         bookmark = self._session.get(ObjectBookmark, (self._user_id, duplicate.id))
         counts = {role: 0 for role in sorted(TASK_ACTOR_ROLES)}
         for edge in actor_edges:
@@ -177,6 +190,8 @@ class PersonConsolidationService:
             key = _tuple_key(row)
             existing = self._matching_evidence(assessed.survivor.id, row)
             if existing is not None:
+                if not _same_evidence_payload(existing, row):
+                    raise ValidationError("survivor already has different identity evidence")
                 continue
             copy = PersonIdentityEvidence(
                 user_id=self._user_id,
@@ -201,15 +216,16 @@ class PersonConsolidationService:
             created_evidence.append(str(copy.id))
         created_edges: list[dict] = []
         for edge in assessed.actor_edges:
-            if self._actor_fact_exists(edge.source_id, assessed.survivor.id, edge.type):
-                continue
-            task = self._session.get(Object, edge.source_id)
-            if (
-                task is None
-                or task.user_id != self._user_id
-                or task.kind != "task"
-                or is_object_hidden_from_active_reads(task)
-            ):
+            if self._active_task(edge.source_id) is None:
+                raise ValidationError("duplicate task role is not on an active task")
+            current = self._survivor_actor_edges(
+                edge.source_id,
+                assessed.survivor.id,
+                edge.type,
+            )
+            if any(not _same_actor_fact(item, edge) for item in current):
+                raise ValidationError("survivor already has a different task role")
+            if current:
                 continue
             created_edge, created = self._tasks.add_actor(
                 edge.source_id,
@@ -219,15 +235,16 @@ class PersonConsolidationService:
                 state=edge.state,
                 confidence=edge.confidence,
             )
-            if created:
-                created_edges.append(
-                    {
-                        "id": str(created_edge.id),
-                        "task_id": str(created_edge.source_id),
-                        "role": created_edge.type,
-                        "state": created_edge.state,
-                    }
-                )
+            if not created or not _same_actor_fact(created_edge, edge):
+                raise ValidationError("task role was not copied")
+            created_edges.append(
+                {
+                    "id": str(created_edge.id),
+                    "task_id": str(created_edge.source_id),
+                    "role": created_edge.type,
+                    "state": created_edge.state,
+                }
+            )
         when = datetime.now(UTC)
         tombstone_object(assessed.duplicate, when=when)
         if assessed.bookmark_color is not None:
@@ -412,7 +429,34 @@ class PersonConsolidationService:
         if edge.target_id != person_id or edge.type not in TASK_ACTOR_ROLES:
             return False
         source = self._session.get(Object, edge.source_id)
-        return source is not None and source.user_id == self._user_id and source.kind == "task"
+        return source is not None and source.kind == "task"
+
+    def _active_task(self, task_id: UUID) -> Object | None:
+        task = self._session.get(Object, task_id)
+        if (
+            task is None
+            or task.user_id != self._user_id
+            or task.kind != "task"
+            or task.state == REJECTED_STATE
+            or is_object_hidden_from_active_reads(task)
+        ):
+            return None
+        return task
+
+    def _survivor_actor_edges(self, task_id: UUID, person_id: UUID, role: str) -> list[Edge]:
+        return list(
+            self._session.scalars(
+                select(Edge)
+                .where(
+                    Edge.user_id == self._user_id,
+                    Edge.source_id == task_id,
+                    Edge.target_id == person_id,
+                    Edge.type == role,
+                    Edge.state != REJECTED_STATE,
+                )
+                .order_by(Edge.id)
+            )
+        )
 
     def _matching_evidence(
         self,
@@ -432,20 +476,6 @@ class PersonConsolidationService:
                 PersonIdentityEvidence.polarity == row.polarity,
                 PersonIdentityEvidence.provenance_key == row.provenance_key,
             )
-        )
-
-    def _actor_fact_exists(self, task_id: UUID, person_id: UUID, role: str) -> bool:
-        return (
-            self._session.scalar(
-                select(Edge.id).where(
-                    Edge.user_id == self._user_id,
-                    Edge.source_id == task_id,
-                    Edge.target_id == person_id,
-                    Edge.type == role,
-                    Edge.state != REJECTED_STATE,
-                )
-            )
-            is not None
         )
 
     def _side(self, person: Object) -> dict:
@@ -501,6 +531,32 @@ def _tuple_payload(row: PersonIdentity) -> dict:
         "canonical_value": row.canonical_value,
         "display_value": row.display_value,
     }
+
+
+def _same_actor_fact(existing: Edge, incoming: Edge) -> bool:
+    return (
+        existing.source_id == incoming.source_id
+        and existing.type == incoming.type
+        and existing.state == incoming.state
+        and existing.origin == incoming.origin
+        and _confidence_equal(existing.confidence, incoming.confidence)
+    )
+
+
+def _confidence_equal(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    return float(left) == float(right)
+
+
+def _same_evidence_payload(existing: PersonIdentityEvidence, incoming: PersonIdentityEvidence) -> bool:
+    return (
+        existing.weight == incoming.weight
+        and existing.provenance_kind == incoming.provenance_kind
+        and existing.source_object_id == incoming.source_object_id
+        and existing.explanation == incoming.explanation
+        and (existing.details or {}) == (incoming.details or {})
+    )
 
 
 def _identity_from_audit(item: dict) -> NormalizedPersonIdentity:

@@ -11,7 +11,8 @@ from sqlalchemy import select
 
 from app.api.schemas import EdgeCreate, ObjectCreate
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence, User
-from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.object_visibility import is_object_hidden_from_active_reads, tombstone_object
+from app.domain.person_candidate_score import USER_CONFIRMED
 from app.domain.person_identity import normalize_email, normalize_telegram_user_id
 from app.domain.task_relations import DELEGATED_TO, INVOLVES, REQUESTED_BY, WAITING_ON
 from app.services.errors import ConflictError, NotFoundError, ValidationError
@@ -25,7 +26,13 @@ from app.services.person_consolidation_service import (
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
-from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
+from app.services.provenance import (
+    AGENT_ORIGIN,
+    CONFIRMED_STATE,
+    PROPOSED_STATE,
+    REJECTED_STATE,
+    USER_ORIGIN,
+)
 from app.services.task_relation_service import TaskRelationService
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 
@@ -265,6 +272,222 @@ def test_diverged_undo_leaves_the_merge_in_place(db_session) -> None:
         _merge(db_session).undo(survivor.id, duplicate.id)
     assert is_object_hidden_from_active_reads(duplicate)
     assert _people(db_session).resolve(email).id == survivor.id
+
+
+def test_divergent_task_roles_block_merge(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    _people(db_session).attach(duplicate.id, normalize_email("ada@example.com"))
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    service = _merge(db_session)
+    before = _identity_owners(db_session)
+    cases = [
+        ("Confirmed", INVOLVES, {"state": CONFIRMED_STATE}, {"state": PROPOSED_STATE}),
+        ("Proposed", INVOLVES, {"state": PROPOSED_STATE}, {"state": CONFIRMED_STATE}),
+        ("Confidence", WAITING_ON, {"confidence": 0.2}, {"confidence": 0.9}),
+        ("Origin", DELEGATED_TO, {"origin": USER_ORIGIN}, {"origin": AGENT_ORIGIN}),
+    ]
+    for title, role, duplicate_kwargs, survivor_kwargs in cases:
+        task = _task(db_session, title)
+        relations.add_actor(task.id, duplicate.id, role, **duplicate_kwargs)
+        relations.add_actor(task.id, survivor.id, role, **survivor_kwargs)
+        preview = service.preview(survivor.id, duplicate.id)
+        assert preview["can_merge"] is False
+        assert "different task role" in preview["blockers"][0]
+        assert _identity_owners(db_session) == before
+        with pytest.raises(ValidationError, match="different task role"):
+            service.apply(survivor.id, duplicate.id)
+        assert duplicate.deleted_at is None
+        _reject_actor(db_session, task.id, duplicate.id)
+        _reject_actor(db_session, task.id, survivor.id)
+
+    equivalent = _task(db_session, "Same")
+    relations.add_actor(
+        equivalent.id,
+        duplicate.id,
+        INVOLVES,
+        origin=USER_ORIGIN,
+        state=CONFIRMED_STATE,
+        confidence=0.5,
+    )
+    relations.add_actor(
+        equivalent.id,
+        survivor.id,
+        INVOLVES,
+        origin=USER_ORIGIN,
+        state=CONFIRMED_STATE,
+        confidence=0.5,
+    )
+    preview = service.preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is True
+    service.apply(survivor.id, duplicate.id)
+    assert (
+        len(
+            list(
+                db_session.scalars(
+                    select(Edge).where(
+                        Edge.source_id == equivalent.id,
+                        Edge.target_id == survivor.id,
+                        Edge.type == INVOLVES,
+                        Edge.state != REJECTED_STATE,
+                    )
+                )
+            )
+        )
+        == 1
+    )
+
+
+def test_inactive_task_actor_blocks_merge(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    email = normalize_email("ada@example.com")
+    _people(db_session).attach(duplicate.id, email)
+    relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
+    hidden = _task(db_session, "Hidden")
+    relations.add_actor(hidden.id, duplicate.id, REQUESTED_BY)
+    tombstone_object(hidden)
+    service = _merge(db_session)
+    preview = service.preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is False
+    assert "not on an active task" in preview["blockers"][0]
+    with pytest.raises(ValidationError, match="not on an active task"):
+        service.apply(survivor.id, duplicate.id)
+    assert duplicate.deleted_at is None
+    assert _people(db_session).resolve(email).id == duplicate.id
+
+    hidden_edge = _active_edge(db_session, hidden.id, duplicate.id, REQUESTED_BY)
+    assert hidden_edge is not None
+    hidden_edge.state = REJECTED_STATE
+    db_session.flush()
+    rejected = _task(db_session, "Rejected")
+    relations.add_actor(rejected.id, duplicate.id, REQUESTED_BY)
+    rejected.state = REJECTED_STATE
+    db_session.flush()
+    preview = service.preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is False
+    with pytest.raises(ValidationError, match="not on an active task"):
+        service.apply(survivor.id, duplicate.id)
+    assert duplicate.deleted_at is None
+    assert _active_edge(db_session, rejected.id, duplicate.id, REQUESTED_BY) is not None
+
+
+def test_actor_copy_preserves_fact_and_failure_rolls_back(db_session, monkeypatch) -> None:
+    survivor, duplicate = _pair(db_session)
+    email = normalize_email("ada@example.com")
+    _people(db_session).attach(duplicate.id, email)
+    task = _task(db_session, "Exact")
+    TaskRelationService(db_session, BOOTSTRAP_USER_ID).add_actor(
+        task.id,
+        duplicate.id,
+        INVOLVES,
+        origin=AGENT_ORIGIN,
+        state=PROPOSED_STATE,
+        confidence=0.4,
+    )
+    service = _merge(db_session)
+
+    def fail_copy(*_args, **_kwargs):
+        raise ValidationError("copy failed")
+
+    monkeypatch.setattr(service._tasks, "add_actor", fail_copy)
+    with pytest.raises(ValidationError, match="copy failed"):
+        service.apply(survivor.id, duplicate.id)
+    assert duplicate.deleted_at is None
+    assert _people(db_session).resolve(email).id == duplicate.id
+    assert _active_edge(db_session, task.id, survivor.id, INVOLVES) is None
+
+    monkeypatch.undo()
+    service.apply(survivor.id, duplicate.id)
+    copied = _active_edge(db_session, task.id, survivor.id, INVOLVES)
+    assert copied is not None
+    assert copied.state == PROPOSED_STATE
+    assert copied.origin == AGENT_ORIGIN
+    assert float(copied.confidence) == 0.4
+
+
+def test_non_equivalent_evidence_blocks_and_equivalent_evidence_is_reused(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    email = normalize_email("ada@example.com")
+    _people(db_session).attach(duplicate.id, email)
+    source = _email(db_session, "ada@example.com")
+    other = _email(db_session, "ada@example.com")
+    duplicate_row = _evidence(db_session, duplicate.id, email, source.id, "same-key")
+    survivor_row = _evidence(db_session, survivor.id, email, source.id, "same-key")
+    service = _merge(db_session)
+    before = _identity_owners(db_session)
+
+    survivor_row.weight = duplicate_row.weight + 1
+    db_session.flush()
+    _assert_evidence_blocked(db_session, service, survivor, duplicate, before)
+
+    survivor_row.weight = duplicate_row.weight
+    survivor_row.provenance_kind = "other_kind"
+    db_session.flush()
+    _assert_evidence_blocked(db_session, service, survivor, duplicate, before)
+
+    survivor_row.provenance_kind = duplicate_row.provenance_kind
+    survivor_row.source_object_id = other.id
+    db_session.flush()
+    _assert_evidence_blocked(db_session, service, survivor, duplicate, before)
+
+    survivor_row.source_object_id = source.id
+    survivor_row.explanation = "different"
+    db_session.flush()
+    _assert_evidence_blocked(db_session, service, survivor, duplicate, before)
+
+    survivor_row.explanation = duplicate_row.explanation
+    survivor_row.details = {"note": "different"}
+    db_session.flush()
+    _assert_evidence_blocked(db_session, service, survivor, duplicate, before)
+
+    survivor_row.details = dict(duplicate_row.details or {})
+    db_session.flush()
+    preview = service.preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is True
+    assert _identity_owners(db_session) == before
+    service.apply(survivor.id, duplicate.id)
+    kept = list(
+        db_session.scalars(
+            select(PersonIdentityEvidence).where(
+                PersonIdentityEvidence.person_object_id == survivor.id,
+                PersonIdentityEvidence.provenance_key == "same-key",
+                PersonIdentityEvidence.state == "active",
+            )
+        )
+    )
+    assert [row.id for row in kept] == [survivor_row.id]
+
+
+def _assert_evidence_blocked(db_session, service, survivor, duplicate, before) -> None:
+    preview = service.preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is False
+    assert "different identity evidence" in preview["blockers"][0]
+    assert _identity_owners(db_session) == before
+    with pytest.raises(ValidationError, match="different identity evidence"):
+        service.apply(survivor.id, duplicate.id)
+    assert duplicate.deleted_at is None
+
+
+def _evidence(db_session, person_id, identity, source_id, key) -> PersonIdentityEvidence:
+    return PersonEvidenceService(db_session, BOOTSTRAP_USER_ID).record(
+        person_id,
+        identity,
+        USER_CONFIRMED,
+        provenance_kind="user_feedback",
+        provenance_key=key,
+        source_object_id=source_id,
+        explanation="kept",
+        details={"note": "same"},
+    )
+
+
+def _reject_actor(db_session, task_id, person_id) -> None:
+    edge = _active_edge(db_session, task_id, person_id, INVOLVES) or _active_edge(
+        db_session, task_id, person_id, WAITING_ON
+    ) or _active_edge(db_session, task_id, person_id, DELEGATED_TO) or _active_edge(
+        db_session, task_id, person_id, REQUESTED_BY
+    )
+    assert edge is not None
+    TaskRelationService(db_session, BOOTSTRAP_USER_ID).remove_actor(task_id, edge.id)
 
 
 def _pair(db_session) -> tuple[Object, Object]:
