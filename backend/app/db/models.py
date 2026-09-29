@@ -1547,3 +1547,83 @@ class PersonPromotionFeedback(Base):
             postgresql_where=text("state = 'active'"),
         ),
     )
+
+
+class TaskLayoutState(Base):
+    """One user-scoped Task world-space layout revision. Presentation only."""
+
+    __tablename__ = "task_layout_states"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    topology_revision: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    snapshot_revision: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    algorithm_version: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "topology_revision >= 1",
+            name="ck_task_layout_states_topology_revision",
+        ),
+        sa.CheckConstraint(
+            "snapshot_revision IS NULL OR "
+            "(snapshot_revision >= 1 AND snapshot_revision <= topology_revision)",
+            name="ck_task_layout_states_snapshot_revision",
+        ),
+    )
+
+
+class TaskLayoutPosition(Base):
+    """Task center in the user's world coordinate system, tagged by snapshot revision."""
+
+    __tablename__ = "task_layout_positions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("objects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    snapshot_revision: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
+    world_x: Mapped[float] = mapped_column(sa.Float, nullable=False)
+    world_y: Mapped[float] = mapped_column(sa.Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "snapshot_revision >= 1",
+            name="ck_task_layout_positions_snapshot_revision",
+        ),
+        sa.CheckConstraint(
+            "world_x = world_x AND world_y = world_y "
+            "AND world_x > '-infinity'::float8 AND world_x < 'infinity'::float8 "
+            "AND world_y > '-infinity'::float8 AND world_y < 'infinity'::float8",
+            name="ck_task_layout_positions_finite",
+        ),
+        Index("ix_task_layout_positions_user_snapshot", "user_id", "snapshot_revision"),
+    )
