@@ -27,7 +27,7 @@ void main() {
 
     expect(find.text('Известные контакты'), findsOneWidget);
     expect(find.text('Маршруты'), findsOneWidget);
-    expect(find.textContaining('Попросил(а)'), findsOneWidget);
+    expect(find.textContaining('Просит выполнить'), findsOneWidget);
     expect(find.textContaining('Предложено секретарём'), findsOneWidget);
     expect(find.textContaining('Секретное тело'), findsNothing);
     expect(

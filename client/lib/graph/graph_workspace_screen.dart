@@ -2568,7 +2568,10 @@ class _PersonDetailSection extends StatelessWidget {
   Future<void> _linkTask(BuildContext context) async {
     final selected = await showDialog<(String, String)>(
       context: context,
-      builder: (context) => _LinkPersonTaskDialog(apiClient: apiClient),
+      builder: (context) => _LinkPersonTaskDialog(
+        apiClient: apiClient,
+        personTitle: person.title,
+      ),
     );
     if (selected == null) {
       return;
@@ -3479,20 +3482,21 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
 }
 
 class _LinkPersonTaskDialog extends StatefulWidget {
-  const _LinkPersonTaskDialog({required this.apiClient});
+  const _LinkPersonTaskDialog({required this.apiClient, required this.personTitle});
 
   final SecretaryApiClient apiClient;
+  final String personTitle;
 
   @override
   State<_LinkPersonTaskDialog> createState() => _LinkPersonTaskDialogState();
 }
 
 class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
-  static const _roles = <(String, String)>[
-    ('requested_by', 'Запросил'),
-    ('delegated_to', 'Поручено'),
-    ('waiting_on', 'Ждём'),
-    ('involves', 'Участвует'),
+  static const _roles = [
+    'requested_by',
+    'delegated_to',
+    'waiting_on',
+    'involves',
   ];
 
   final _query = TextEditingController();
@@ -3541,12 +3545,12 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
             Wrap(
               spacing: 6,
               children: [
-                for (final item in _roles)
+                for (final role in _roles)
                   ChoiceChip(
-                    key: ValueKey('person-task-role-${item.$1}'),
-                    label: Text(item.$2),
-                    selected: _role == item.$1,
-                    onSelected: (selected) => setState(() => _role = selected ? item.$1 : null),
+                    key: ValueKey('person-task-role-$role'),
+                    label: Text(personTaskLinkChoiceLabel(role)),
+                    selected: _role == role,
+                    onSelected: (selected) => setState(() => _role = selected ? role : null),
                   ),
               ],
             ),
@@ -3568,6 +3572,18 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
                 ),
                 selected: _task?.id == item.id,
                 onTap: () => setState(() => _task = item),
+              ),
+            if (_role != null && _task != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  personTaskLinkFact(
+                    role: _role!,
+                    personTitle: widget.personTitle,
+                    taskTitle: _task!.title,
+                  ),
+                  key: const ValueKey('person-task-role-summary'),
+                ),
               ),
           ],
         ),

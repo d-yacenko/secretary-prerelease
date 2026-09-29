@@ -12,8 +12,8 @@ void main() {
   testWidgets('person can link a task role and a repeat stays one row', (tester) async {
     final state = _BridgeState();
     final harness = await _open(tester, _client(state));
-    expect(find.textContaining('Попросил(а)'), findsOneWidget);
-    expect(find.textContaining('Ждём от'), findsOneWidget);
+    expect(find.textContaining('Просит выполнить'), findsOneWidget);
+    expect(find.textContaining('Ждём от этого человека'), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
 
@@ -62,6 +62,33 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
     await tester.tap(find.byKey(const ValueKey('person-task-link')));
     await tester.pumpAndSettle();
+    expect(find.text('Этот человек попросил выполнить'), findsOneWidget);
+    expect(find.text('Задача поручена этому человеку'), findsOneWidget);
+    expect(find.text('Ждём от этого человека'), findsOneWidget);
+    expect(find.text('Этот человек участвует'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('person-task-role-requested_by')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'task');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ship')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Ada просит выполнить задачу «Ship report»'),
+      findsOneWidget,
+    );
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('person-task-add'))).onPressed, isNotNull);
+
+    await tester.tap(find.byKey(const ValueKey('person-task-role-delegated_to')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ask')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Задача «Ask» поручена человеку Ada'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('поручил'), findsNothing);
+
     await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'task');
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-task-option-task-ship')), findsOneWidget);
@@ -71,16 +98,13 @@ void main() {
       expect(find.byKey(ValueKey('person-task-option-task-$status')), findsNothing);
     }
 
-    await tester.tap(find.byKey(const ValueKey('person-task-role-delegated_to')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ask')));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('person-task-add')));
     await tester.pumpAndSettle();
     expect(state.calls, contains('POST /tasks/task-ask/actors delegated_to'));
     expect(find.text('Связанные задачи · 2'), findsWidgets);
-    expect(find.textContaining('Делегировано'), findsOneWidget);
-    expect(find.textContaining('Попросил(а)'), findsOneWidget);
+    expect(find.textContaining('Поручена этому человеку'), findsOneWidget);
+    expect(find.textContaining('Делегировано'), findsNothing);
+    expect(find.textContaining('Просит выполнить'), findsOneWidget);
   });
 
   testWidgets('confirmed actor is removed through the task actor endpoint', (tester) async {

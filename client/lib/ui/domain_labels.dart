@@ -99,15 +99,49 @@ String personCandidateExplanation(List<String> reasons) {
 String personActorRoleLabel(String role) {
   switch (role) {
     case 'requested_by':
-      return 'Попросил(а)';
+      return 'Просит выполнить';
     case 'delegated_to':
-      return 'Делегировано';
+      return 'Поручена этому человеку';
     case 'waiting_on':
-      return 'Ждём от';
+      return 'Ждём от этого человека';
     case 'involves':
       return 'Участвует';
     default:
       return role;
+  }
+}
+
+String personTaskLinkChoiceLabel(String role) {
+  switch (role) {
+    case 'requested_by':
+      return 'Этот человек попросил выполнить';
+    case 'delegated_to':
+      return 'Задача поручена этому человеку';
+    case 'waiting_on':
+      return 'Ждём от этого человека';
+    case 'involves':
+      return 'Этот человек участвует';
+    default:
+      return personActorRoleLabel(role);
+  }
+}
+
+String personTaskLinkFact({
+  required String role,
+  required String personTitle,
+  required String taskTitle,
+}) {
+  switch (role) {
+    case 'requested_by':
+      return '$personTitle просит выполнить задачу «$taskTitle»';
+    case 'delegated_to':
+      return 'Задача «$taskTitle» поручена человеку $personTitle';
+    case 'waiting_on':
+      return 'Ждём задачу «$taskTitle» от человека $personTitle';
+    case 'involves':
+      return '$personTitle участвует в задаче «$taskTitle»';
+    default:
+      return '$personTitle · $taskTitle';
   }
 }
 
