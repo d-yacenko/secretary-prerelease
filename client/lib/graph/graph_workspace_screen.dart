@@ -2332,7 +2332,11 @@ class _PersonDetailSection extends StatelessWidget {
     );
   }
 
-  Future<void> _openMerge(BuildContext context, {String? otherPersonId}) async {
+  Future<void> _openMerge(
+    BuildContext context, {
+    String? otherPersonId,
+    String? identityCue,
+  }) async {
     final survivorId = await showDialog<String>(
       context: context,
       builder: (context) => _MergePersonDialog(
@@ -2340,6 +2344,7 @@ class _PersonDetailSection extends StatelessWidget {
         currentPersonId: person.personId,
         currentTitle: person.title,
         otherPersonId: otherPersonId,
+        identityCue: identityCue,
       ),
     );
     if (survivorId == null) {
@@ -2384,7 +2389,13 @@ class _PersonDetailSection extends StatelessWidget {
         if (candidate.state == 'conflicted' && candidate.conflictingPersonId != null)
           TextButton(
             key: ValueKey('person-merge-conflict-${candidate.canonicalValue}'),
-            onPressed: () => _openMerge(context, otherPersonId: candidate.conflictingPersonId),
+            onPressed: () => _openMerge(
+              context,
+              otherPersonId: candidate.conflictingPersonId,
+              identityCue: candidate.displayValue == candidate.canonicalValue
+                  ? candidate.canonicalValue
+                  : '${candidate.displayValue} · ${candidate.canonicalValue}',
+            ),
             child: const Text('Возможно, это один человек → Объединить'),
           ),
         ...candidate.sources.take(3).map(_flowRow),
@@ -3240,12 +3251,14 @@ class _MergePersonDialog extends StatefulWidget {
     required this.currentPersonId,
     required this.currentTitle,
     this.otherPersonId,
+    this.identityCue,
   });
 
   final SecretaryApiClient apiClient;
   final String currentPersonId;
   final String currentTitle;
   final String? otherPersonId;
+  final String? identityCue;
 
   @override
   State<_MergePersonDialog> createState() => _MergePersonDialogState();
@@ -3253,7 +3266,7 @@ class _MergePersonDialog extends StatefulWidget {
 
 class _MergePersonDialogState extends State<_MergePersonDialog> {
   final _query = TextEditingController();
-  List<SecretaryObject> _results = const [];
+  List<PersonPresentation> _results = const [];
   String? _otherId;
   var _currentSurvives = true;
   PersonMergePreview? _preview;
@@ -3280,12 +3293,12 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
       setState(() => _results = const []);
       return;
     }
-    final found = await widget.apiClient.searchObjects(query: cleaned, kind: 'person');
+    final found = await widget.apiClient.getPeopleWorkspace(query: cleaned, seedLimit: 24);
     if (!mounted) {
       return;
     }
     setState(() {
-      _results = found.where((item) => item.id != widget.currentPersonId && item.kind == 'person').toList();
+      _results = found.people.where((item) => item.personId != widget.currentPersonId).toList();
     });
   }
 
@@ -3342,12 +3355,17 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
             ),
             for (final item in _results)
               ListTile(
-                key: ValueKey('person-merge-option-${item.id}'),
+                key: ValueKey('person-merge-option-${item.personId}'),
                 title: Text(item.title),
                 onTap: () {
-                  setState(() => _otherId = item.id);
+                  setState(() => _otherId = item.personId);
                   _loadPreview();
                 },
+              ),
+            if (widget.identityCue != null)
+              Text(
+                'Предложен из-за контакта: ${widget.identityCue}',
+                key: const ValueKey('person-merge-conflict-cue'),
               ),
             if (preview != null) ...[
               const SizedBox(height: 8),

@@ -515,7 +515,7 @@ class PersonGraphWorkspaceService:
                 "assessment_resolution": item.assessment_resolution,
                 "sources": self._source_previews(item.source_object_ids),
             }
-            if state == "conflicted":
+            if state == "conflicted" and "grounded_duplicate" in item.reasons:
                 owner = self._people.resolve(
                     NormalizedPersonIdentity(
                         identity_type=item.identity.identity_type,
@@ -525,7 +525,7 @@ class PersonGraphWorkspaceService:
                         display_value=item.identity.display_value,
                     )
                 )
-                if owner is not None and owner.id != person_id:
+                if owner is not None and owner.id != person_id and self._is_active_person(owner.id):
                     payload["conflicting_person_id"] = owner.id
             found.append(payload)
         return found, page.truncated
@@ -788,11 +788,21 @@ class PersonGraphWorkspaceService:
                 PersonIdentityEvidence.canonical_value == identity.canonical_value,
             )
         )
-        people = {row.person_object_id for row in rows}
+        people = {row.person_object_id for row in rows if self._is_active_person(row.person_object_id)}
         owner = self._people.resolve(identity)
-        if owner is not None:
+        if owner is not None and self._is_active_person(owner.id):
             people.add(owner.id)
         return len(people) > 1
+
+    def _is_active_person(self, person_id: UUID) -> bool:
+        person = self._session.get(Object, person_id)
+        return (
+            person is not None
+            and person.user_id == self._user_id
+            and person.kind == PERSON_KIND
+            and person.state != REJECTED_STATE
+            and not is_object_hidden_from_active_reads(person)
+        )
 
     def _active_confirmation(
         self,
@@ -814,7 +824,9 @@ class PersonGraphWorkspaceService:
 
     def _confirmed_by_other_person(self, person_id: UUID, identity: NormalizedPersonIdentity) -> bool:
         other = self._session.scalar(
-            select(PersonIdentityEvidence.id).where(
+            select(PersonIdentityEvidence.id)
+            .join(Object, Object.id == PersonIdentityEvidence.person_object_id)
+            .where(
                 PersonIdentityEvidence.user_id == self._user_id,
                 PersonIdentityEvidence.person_object_id != person_id,
                 PersonIdentityEvidence.state == "active",
@@ -823,7 +835,12 @@ class PersonGraphWorkspaceService:
                 PersonIdentityEvidence.identity_type == identity.identity_type,
                 PersonIdentityEvidence.realm == identity.realm,
                 PersonIdentityEvidence.canonical_value == identity.canonical_value,
-            ).limit(1)
+                Object.user_id == self._user_id,
+                Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
+            )
+            .limit(1)
         )
         return other is not None
 

@@ -265,6 +265,7 @@ def test_other_person_ownership_stays_conflicted_and_is_not_reassigned(
     assert item["confirmable"] is False
     assert item["state"] == "conflicted"
     assert "identity_conflict" in item["reasons"]
+    assert item["conflicting_person_id"] is None
     blocked = people_client.post(
         f"/graph/people/{person.id}/identity-correction",
         json={"action": "confirm", **_payload(item)},
@@ -273,6 +274,35 @@ def test_other_person_ownership_stays_conflicted_and_is_not_reassigned(
     owner = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).resolve(owned)
     assert owner is not None and owner.id == other.id
     assert _root(people_client, person.id)["identities"] == []
+
+
+def test_unrelated_owned_identity_is_not_a_merge_suggestion(people_client, db_session) -> None:
+    person = _person(db_session)
+    other = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Unrelated owner")
+    owned = normalize_email("zzz-opaque@example.com")
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).attach(other.id, owned)
+    _email(db_session, "zzz-opaque@example.com")
+    card = _root(people_client, person.id)
+    assert all(item["canonical_value"] != "zzz-opaque@example.com" for item in card["identity_candidates"])
+    assert all(item["conflicting_person_id"] is None for item in card["identity_candidates"])
+
+
+def test_same_source_cooccurrence_exposes_merge_target(people_client, db_session) -> None:
+    person = _person(db_session)
+    people = PersonIdentityService(db_session, BOOTSTRAP_USER_ID)
+    people.attach(person.id, normalize_email(f"{NAME} <ada@example.com>"))
+    other = people.create_person("Other owner")
+    people.attach(other.id, normalize_email("other@example.com"))
+    _email(
+        db_session,
+        f"{NAME} <ada@example.com>",
+        metadata={"reply_to": "Other <other@example.com>"},
+    )
+    item = _one(_root(people_client, person.id), "other@example.com")
+    assert item["state"] == "conflicted"
+    assert item["confirmable"] is False
+    assert "identity_conflict" in item["reasons"]
+    assert item["conflicting_person_id"] == str(other.id)
 
 
 def test_reject_suppresses_the_active_candidate(people_client, db_session) -> None:

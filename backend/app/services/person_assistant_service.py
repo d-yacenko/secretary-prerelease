@@ -651,10 +651,18 @@ class PersonAssistantService:
                 continue
             source_ids = tuple(message.id for message, _identity in rows[:3])
             if owner is not None and owner.id != person_id:
+                proposals = self._evidence.propose_candidates(identity, identity.display_value)
+                matched = next((item for item in proposals if item.person_id == person_id), None)
+                grounded = self._grounded_duplicate(person_id, identity, rows)
+                if matched is None and not grounded:
+                    continue
+                reasons = ["identity_conflict"]
+                if grounded:
+                    reasons.append("grounded_duplicate")
                 candidates.append(
                     PersonSourceCandidateOut(
                         confirmable=False,
-                        reasons=("identity_conflict",),
+                        reasons=tuple(reasons),
                         assessment_resolution=self._evidence.score(person_id, identity).resolution,
                         identity=_summary(identity),
                         source_object_ids=source_ids,
@@ -675,6 +683,19 @@ class PersonAssistantService:
                 )
             )
         return candidates
+
+    def _grounded_duplicate(self, person_id: UUID, identity: NormalizedPersonIdentity, rows: list) -> bool:
+        if any(row.state == "active" for row in self._evidence.history(person_id, identity)):
+            return True
+        wanted = feedback_identity_key(identity)
+        for message, _found in rows:
+            for other in extract_person_identity_evidence(message):
+                if feedback_identity_key(other) == wanted:
+                    continue
+                owner = self._people.resolve(other)
+                if owner is not None and owner.id == person_id and not self._suppressed(person_id, other):
+                    return True
+        return False
 
     def _matching_messages(
         self,

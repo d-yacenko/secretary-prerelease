@@ -24,7 +24,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('person-merge-search')), 'Person');
     await tester.pumpAndSettle();
-    expect(state.calls, contains('search:person'));
+    expect(state.calls, contains('people-search:Person'));
     expect(find.byKey(const ValueKey('person-merge-option-person-a')), findsNothing);
     expect(find.byKey(const ValueKey('person-merge-option-task-home')), findsNothing);
 
@@ -60,6 +60,22 @@ void main() {
     expect(find.byKey(const Key('graph_node_person-b')), findsOneWidget);
     expect(find.text('Объединено: Person B'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('partial identity substring finds the other person', (tester) async {
+    final state = _MergeState();
+    await _open(tester, const Size(1280, 900), client: _client(state));
+    await tester.tap(find.text('Люди'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('graph_node_person-a')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-merge')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-merge-search')), 'zz9');
+    await tester.pumpAndSettle();
+    expect(state.calls, contains('people-search:zz9'));
+    expect(find.byKey(const ValueKey('person-merge-option-person-a')), findsNothing);
+    expect(find.byKey(const ValueKey('person-merge-option-person-b')), findsOneWidget);
   });
 
   testWidgets('blocked preview cannot be applied', (tester) async {
@@ -109,6 +125,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Остаётся: Person A'), findsOneWidget);
     expect(find.text('Исчезает: Person B'), findsOneWidget);
+    expect(find.text('Предложен из-за контакта: ada@example.com'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-merge-swap')), findsOneWidget);
     expect(state.calls.where((call) => call == 'apply'), isEmpty);
     expect(find.byKey(const Key('graph_node_person-b')), findsOneWidget);
   });
@@ -260,6 +278,25 @@ MockClient _client(_MergeState state) {
     }
     if (request.url.path == '/graph/people-workspace') {
       final root = request.url.queryParameters['root_id'];
+      final query = request.url.queryParameters['q'];
+      if (query != null && query.isNotEmpty) {
+        state.calls.add('people-search:$query');
+        final payload = _workspace(state, null);
+        final folded = query.toLowerCase();
+        final people = (payload['people'] as List).where((item) {
+          final card = item as Map<String, dynamic>;
+          if ((card['title'] as String).toLowerCase().contains(folded)) {
+            return true;
+          }
+          return (card['identities'] as List).any((row) {
+            final identity = row as Map<String, dynamic>;
+            final canonical = (identity['canonical_value'] as String).toLowerCase();
+            final display = (identity['display_value'] as String).toLowerCase();
+            return canonical.contains(folded) || display.contains(folded);
+          });
+        }).toList();
+        return jsonUtf8Response({...payload, 'people': people, 'root_id': null});
+      }
       return jsonUtf8Response(_workspace(state, root));
     }
     return http.Response('{}', 404);
@@ -278,7 +315,13 @@ Map<String, dynamic> _workspace(_MergeState state, String? root) {
       conflict: state.conflict && !state.merged,
       consolidations: state.merged,
     ),
-    if (!state.merged) _person('person-b', 'Person B', identities: ['bob@example.com'], tasks: 1),
+    if (!state.merged)
+      _person(
+        'person-b',
+        'Person B',
+        identities: ['bob@example.com', 'opaque-zz9-token'],
+        tasks: 1,
+      ),
   ];
   final visible = root == null ? people : people.where((item) => item['person_id'] == root);
   return {

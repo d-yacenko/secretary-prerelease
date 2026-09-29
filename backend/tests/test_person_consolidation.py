@@ -457,6 +457,44 @@ def test_non_equivalent_evidence_blocks_and_equivalent_evidence_is_reused(db_ses
     assert [row.id for row in kept] == [survivor_row.id]
 
 
+def test_tombstoned_confirmation_does_not_conflict_survivor(db_session) -> None:
+    people = _people(db_session)
+    survivor = people.create_person("Ada")
+    duplicate = people.create_person("Other Ada")
+    identity = normalize_email("ada@example.com", display_value="Ada")
+    people.attach(duplicate.id, identity)
+    evidence = PersonEvidenceService(db_session, BOOTSTRAP_USER_ID)
+    evidence.record_confirmation(duplicate.id, identity, "user:duplicate")
+    evidence.record_confirmation(survivor.id, identity, "user:survivor")
+    workspace = PersonGraphWorkspaceService(db_session, BOOTSTRAP_USER_ID)
+    before = _card(workspace, duplicate.id)
+    assert before["identity_conflict"] is True
+    service = _merge(db_session)
+    service.apply(survivor.id, duplicate.id)
+    historical = db_session.scalar(
+        select(PersonIdentityEvidence).where(
+            PersonIdentityEvidence.person_object_id == duplicate.id,
+            PersonIdentityEvidence.evidence_type == USER_CONFIRMED,
+            PersonIdentityEvidence.state == "active",
+            PersonIdentityEvidence.provenance_key == "user:duplicate",
+        )
+    )
+    assert historical is not None
+    after = _card(workspace, survivor.id)
+    assert after["identity_conflict"] is False
+    known = [row for row in after["identities"] if row["canonical_value"] == "ada@example.com"]
+    assert len(known) == 1
+    assert known[0]["state"] == "effective"
+    service.undo(survivor.id, duplicate.id)
+    restored = _card(workspace, duplicate.id)
+    assert restored["identity_conflict"] is True
+
+
+def _card(workspace: PersonGraphWorkspaceService, person_id) -> dict:
+    result = workspace.get_workspace(root_id=person_id)
+    return next(item for item in result.people if item["person_id"] == person_id)
+
+
 def _assert_evidence_blocked(db_session, service, survivor, duplicate, before) -> None:
     preview = service.preview(survivor.id, duplicate.id)
     assert preview["can_merge"] is False
