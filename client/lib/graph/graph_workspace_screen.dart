@@ -26,6 +26,7 @@ import 'graph_geometry.dart';
 import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
+import 'people_landscape.dart';
 import 'people_overview.dart';
 import 'graph_workspace_controller.dart';
 import 'task_map_hierarchy.dart';
@@ -334,8 +335,52 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       return;
     }
     _transform.value = GraphLayout.fitTransform(
-      positions: widget.controller.visiblePositions,
+      positions: _drawnPositions(
+        nodes: widget.controller.visibleNodes,
+        edges: widget.controller.visibleEdges,
+      ),
       viewportSize: viewportSize,
+    );
+  }
+
+  Map<String, Offset> _drawnPositions({
+    required List<SecretaryObject> nodes,
+    required List<SecretaryEdge> edges,
+  }) {
+    final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
+    if (widget.controller.mode == GraphWorkspaceMode.tasks) {
+      positions.addAll(
+        projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
+      );
+    } else if (widget.controller.rootId == null) {
+      positions.addAll(_peopleOverviewPositions(nodes));
+    }
+    return positions;
+  }
+
+  Map<String, Offset> _peopleOverviewPositions(List<SecretaryObject> nodes) {
+    final personIds = [
+      for (final node in nodes)
+        if (node.kind == 'person') node.id,
+    ];
+    final people = <PersonPresentation>[
+      for (final id in personIds)
+        if (widget.controller.personFor(id) case final person?) person,
+    ];
+    final projection = projectPeopleLandscapeOverview(
+      personIds: personIds,
+      people: people,
+      landscapeTasks: widget.controller.landscapeTasks,
+      landscapeTaskEdges: widget.controller.landscapeTaskEdges,
+      landscapeTaskContextComplete: widget.controller.landscapeTaskContextComplete,
+    );
+    if (projection.usable) {
+      return projection.positions;
+    }
+    return projectPeopleOverview(
+      nodes: nodes,
+      seedIds: widget.controller.seedIds,
+      rootId: widget.controller.rootId,
     );
   }
 
@@ -1112,22 +1157,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
     final nodes = widget.controller.visibleNodes;
     final edges = widget.controller.visibleEdges;
-    final positions = Map<String, Offset>.from(
-      widget.controller.visiblePositions,
-    );
-    if (widget.controller.mode == GraphWorkspaceMode.tasks) {
-      positions.addAll(
-        projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
-      );
-    } else if (widget.controller.rootId == null) {
-      positions.addAll(
-        projectPeopleOverview(
-          nodes: nodes,
-          seedIds: widget.controller.seedIds,
-          rootId: widget.controller.rootId,
-        ),
-      );
-    }
+    final positions = _drawnPositions(nodes: nodes, edges: edges);
     if (widget.controller.mode == GraphWorkspaceMode.people && nodes.isEmpty) {
       return const Center(child: Text('Добавьте человека, чтобы начать.'));
     }
