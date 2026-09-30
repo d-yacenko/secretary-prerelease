@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -207,7 +208,7 @@ void main() {
                 _card('person-a', 'Anna', openTasks: 1, messages: 2),
               ],
               nodes: [
-                graphObjectJson(id: 'person-c', title: 'Cara', kind: 'person'),
+                graphObjectJson(id: 'person-c', title: 'Cara Lovelace', kind: 'person'),
                 graphObjectJson(id: 'person-a', title: 'Anna', kind: 'person'),
                 graphObjectJson(id: 'person-plain', title: 'Plain', kind: 'person'),
               ],
@@ -245,22 +246,38 @@ void main() {
     );
     expect(harness.graph.positions, canonical);
     expect(find.text('4242'), findsNothing);
-    expect(find.text('Cara'), findsWidgets);
+    expect(find.text('Cara Lovelace'), findsWidgets);
     expect(find.text('Человек'), findsNothing);
     expect(find.text('Связанные задачи · 3'), findsNothing);
     expect(find.text('Сообщения · 7'), findsNothing);
     expect(find.text('Связанные задачи · 1'), findsNothing);
     expect(find.text('Сообщения · 2'), findsNothing);
     expect(find.byKey(const Key('person-activity-footer-person-plain')), findsNothing);
+    expect(kPeopleLandscapeOverviewCardWidth, 128);
+    expect(kPeopleLandscapeOverviewCardHeight, 56);
     expect(
       tester.getSize(find.byKey(const Key('graph_node_person-c'))),
-      const Size(
-        kPeopleLandscapeOverviewCardWidth,
-        kPeopleLandscapeOverviewCardHeight,
+      const Size(128, 56),
+    );
+    final title = tester.widget<Text>(find.byKey(const Key('person-compact-title-person-c')));
+    expect(title.maxLines, 2);
+    expect(title.overflow, TextOverflow.ellipsis);
+    expect(title.data, 'Cara Lovelace');
+    final titleTheme = Theme.of(tester.element(find.byKey(const Key('person-compact-title-person-c'))));
+    expect(title.style?.fontSize, titleTheme.textTheme.bodyMedium?.fontSize);
+    expect(title.style?.fontWeight, FontWeight.w600);
+    expect(
+      tester.renderObject<RenderParagraph>(find.byKey(const Key('person-compact-title-person-c'))).size.height,
+      greaterThan(titleTheme.textTheme.bodyMedium!.fontSize! * 1.5),
+    );
+    final glyph = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('graph_node_person-c')),
+        matching: find.byIcon(Icons.person_outline),
       ),
     );
-    final cues = tester.widget<Text>(find.byKey(const Key('person-provider-cues-person-c')));
-    expect(cues.data, 'Gmail');
+    expect(glyph.size, 28);
+    expect(find.byKey(const Key('person-provider-cues-person-c')), findsNothing);
     expect(find.textContaining('Яндекс'), findsNothing);
     expect(find.textContaining('old@example.com'), findsNothing);
     expect(find.byKey(const Key('person-identity-conflict-person-c')), findsOneWidget);
@@ -271,7 +288,7 @@ void main() {
     expect(tester.getTopLeft(find.byKey(const Key('graph_node_person-c'))), firstCara);
     expect(harness.graph.positions, canonical);
 
-    await tester.tap(find.text('Cara').first);
+    await tester.tap(find.text('Cara Lovelace').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('В центр'));
     await tester.pumpAndSettle();

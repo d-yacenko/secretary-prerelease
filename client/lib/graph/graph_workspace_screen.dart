@@ -3038,53 +3038,45 @@ class _GraphNodeCard extends StatelessWidget {
 
   Widget _compactPersonNodeBody(BuildContext context, ColorScheme scheme) {
     final current = person;
-    final cue = current == null
-        ? ''
-        : current.identities
-              .where((item) => item.state == 'effective')
-              .map((item) => providerLabel(item.provider))
-              .where((label) => label.isNotEmpty)
-              .take(1)
-              .join();
-    final shortCue = cue.length <= kPeopleLandscapeCompactCueLimit ? cue : '';
-    return Column(
+    final titleStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
+      fontWeight: FontWeight.w600,
+    );
+    return Row(
       key: ValueKey('person-summary-card-${object.id}'),
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Row(
-          children: [
-            Icon(Icons.person_outline, size: 14, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(
-                object.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w700,
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(Icons.person_outline, size: 28, color: scheme.onSurfaceVariant),
+              if (current?.identityConflict ?? false)
+                Positioned(
+                  right: -2,
+                  bottom: -2,
+                  child: Icon(
+                    Icons.report_outlined,
+                    key: Key('person-identity-conflict-${object.id}'),
+                    size: 14,
+                    color: scheme.error,
+                    semanticLabel: 'Конфликт идентичности',
+                  ),
                 ),
-              ),
-            ),
-            if (current?.identityConflict ?? false)
-              Icon(
-                Icons.report_outlined,
-                key: Key('person-identity-conflict-${object.id}'),
-                size: 14,
-                color: scheme.error,
-                semanticLabel: 'Конфликт идентичности',
-              ),
-          ],
-        ),
-        if (shortCue.isNotEmpty)
-          Text(
-            shortCue,
-            key: Key('person-provider-cues-${object.id}'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            ],
           ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            object.title,
+            key: Key('person-compact-title-${object.id}'),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: titleStyle,
+          ),
+        ),
       ],
     );
   }

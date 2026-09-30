@@ -10,8 +10,8 @@ import 'graph_layout.dart';
 const double kPeopleLandscapeShelfGap = kGraphNodeWidth + kGraphNodeHorizontalGap;
 
 /// Unrooted People marker. Smaller than the rooted 186×100 card.
-const double kPeopleLandscapeOverviewCardWidth = 140;
-const double kPeopleLandscapeOverviewCardHeight = 44;
+const double kPeopleLandscapeOverviewCardWidth = 128;
+const double kPeopleLandscapeOverviewCardHeight = 56;
 
 /// Local gap used when compact cards would touch or nearly touch.
 const double kPeopleLandscapeOverviewCardGap = 8;
@@ -21,8 +21,6 @@ const double kPeopleLandscapeIntraClusterGap = 6;
 
 /// Origin of the vertical unanchored strip when no Task geography exists.
 const Offset kPeopleLandscapeNeutralShelfOrigin = Offset.zero;
-
-const int kPeopleLandscapeCompactCueLimit = 28;
 
 const int _angularSlots = 24;
 const int _maxRings = 48;
