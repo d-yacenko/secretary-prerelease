@@ -27,6 +27,7 @@ import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'people_landscape.dart';
+import 'shared_world_frame.dart';
 import 'people_overview.dart';
 import 'graph_workspace_controller.dart';
 import 'task_layout_world.dart';
@@ -63,8 +64,10 @@ class GraphWorkspaceScreen extends StatefulWidget {
 
 class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   final TransformationController _transform = TransformationController();
-  Offset? _worldFrameOrigin;
+  final GlobalKey _graphViewportKey = GlobalKey();
   bool _worldFrameShared = false;
+  Offset? _viewportGlobal;
+  SharedWorldFrame? _sharedFrame;
   final TextEditingController _searchController = TextEditingController();
   List<SecretaryObject> _searchResults = [];
   bool _searching = false;
@@ -328,6 +331,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     if (viewportSize == null || viewportSize.isEmpty) {
       return;
     }
+    final sharedFrame = _sharedFrame;
+    if (sharedFrame != null) {
+      _transform.value = fitSharedLayer(
+        frame: sharedFrame,
+        viewportSize: viewportSize,
+      );
+      return;
+    }
     final hybridBounds = _hybridGraphBounds;
     if (widget.controller.mode == GraphWorkspaceMode.tasks &&
         hybridBounds != null) {
@@ -441,14 +452,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       widget.controller.rootId == null &&
       widget.controller.canonicalTaskCentersActive;
 
-  /// Keeps a world point on the same viewport pixel when the canvas origin moves.
-  void _holdWorldPoint(Offset previousOrigin, Offset nextOrigin) {
-    final scale = _transform.value.getMaxScaleOnAxis();
+  /// Keeps a world point on the same global screen pixel when the viewport
+  /// widget itself moves, for example when the Task window banner appears.
+  void _shiftCameraByScreenDelta(Offset delta) {
     final translation = _transform.value.getTranslation();
     final next = _transform.value.clone();
     next.setTranslationRaw(
-      translation.x + scale * (nextOrigin.dx - previousOrigin.dx),
-      translation.y + scale * (nextOrigin.dy - previousOrigin.dy),
+      translation.x - delta.dx,
+      translation.y - delta.dy,
       translation.z,
     );
     _transform.value = next;
@@ -1305,50 +1316,75 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ? hybridPresentationBounds(hybrid)
         : GraphLayout.computeBounds(positions, nodeSizes: overviewSizes);
     _hybridGraphBounds = hybrid != null ? bounds : null;
+    final canonicalBounds = _sharedWorldCamera
+        ? canonicalTaskWorldBounds(widget.controller.canonicalTaskCenters)
+        : null;
+    final sharedFrame = canonicalBounds == null
+        ? null
+        : SharedWorldFrame.around(
+            canonicalBounds: canonicalBounds,
+            layerBounds: bounds,
+          );
+    _sharedFrame = sharedFrame;
+    final paintBounds = sharedFrame?.paintBounds ?? bounds;
     const canvasPad = kGraphCanvasPadding;
-    final canvasWidth = bounds.width + canvasPad * 2;
-    final canvasHeight = bounds.height + canvasPad * 2;
+    final canvasWidth = paintBounds.width + canvasPad * 2;
+    final canvasHeight = paintBounds.height + canvasPad * 2;
     final selectedObjectId = widget.controller.selectedObjectId;
     final focusMode = selectedObjectId != null;
     final focusNeighborIds = _focusNeighborIds(edges, selectedObjectId);
 
     return LayoutBuilder(
+      key: _graphViewportKey,
       builder: (context, constraints) {
         final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
         if (_canvasViewportSize != viewportSize) {
           _canvasViewportSize = viewportSize;
         }
-        final frameOrigin = Offset(bounds.left, bounds.top);
-        final holdCamera = _sharedWorldCamera &&
-            _worldFrameShared &&
-            _worldFrameOrigin != null &&
-            _worldFrameOrigin != frameOrigin;
-        if (widget.controller.shouldFitAfterLayout || holdCamera) {
+        final usingShared = sharedFrame != null;
+        if (widget.controller.shouldFitAfterLayout || usingShared || _worldFrameShared) {
+          final fitMatrix = widget.controller.shouldFitAfterLayout
+              ? (usingShared
+                  ? fitSharedLayer(frame: sharedFrame, viewportSize: viewportSize)
+                  : hybrid != null
+                      ? hybridFitTransform(
+                          graphBounds: bounds,
+                          viewportSize: viewportSize,
+                        )
+                      : GraphLayout.fitTransform(
+                          positions: positions,
+                          viewportSize: viewportSize,
+                          nodeSizes: overviewSizes,
+                        ))
+              : null;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) {
               return;
             }
-            if (widget.controller.shouldFitAfterLayout) {
-              _transform.value = hybrid != null
-                  ? hybridFitTransform(
-                      graphBounds: bounds,
-                      viewportSize: viewportSize,
-                    )
-                  : GraphLayout.fitTransform(
-                      positions: positions,
-                      viewportSize: viewportSize,
-                      nodeSizes: overviewSizes,
-                    );
+            if (fitMatrix != null && widget.controller.shouldFitAfterLayout) {
+              _transform.value = fitMatrix;
               widget.controller.clearFitRequest();
-            } else if (_worldFrameOrigin != null && _worldFrameOrigin != frameOrigin) {
-              _holdWorldPoint(_worldFrameOrigin!, frameOrigin);
             }
-            _worldFrameOrigin = frameOrigin;
-            _worldFrameShared = _sharedWorldCamera;
+            final box = _graphViewportKey.currentContext?.findRenderObject() as RenderBox?;
+            if (usingShared && box != null && box.attached && box.hasSize) {
+              final global = box.localToGlobal(Offset.zero);
+              final previous = _viewportGlobal;
+              if (_worldFrameShared && previous != null && fitMatrix == null) {
+                final delta = global - previous;
+                if (delta.distance > 0.5) {
+                  _shiftCameraByScreenDelta(delta);
+                }
+              }
+              _viewportGlobal = global;
+              _worldFrameShared = true;
+            } else if (!usingShared) {
+              _viewportGlobal = null;
+              _worldFrameShared = false;
+            }
           });
         } else {
-          _worldFrameOrigin = frameOrigin;
-          _worldFrameShared = _sharedWorldCamera;
+          _viewportGlobal = null;
+          _worldFrameShared = false;
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1369,7 +1405,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 positions,
                 drawnNodes,
                 drawnEdges,
-                bounds,
+                paintBounds,
                 canvasWidth,
                 canvasHeight,
                 canvasPad,

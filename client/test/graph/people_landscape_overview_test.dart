@@ -68,6 +68,23 @@ PeopleLandscapeOverview _project({
   );
 }
 
+Offset _clusterCenter(Map<String, Offset> positions) {
+  var x = 0.0;
+  var y = 0.0;
+  for (final topLeft in positions.values) {
+    final center = peopleMarkerCenter(topLeft);
+    x += center.dx;
+    y += center.dy;
+  }
+  return Offset(x / positions.length, y / positions.length);
+}
+
+double _edgeGap(Offset first, Offset second) {
+  final left = first.dx <= second.dx ? first : second;
+  final right = first.dx <= second.dx ? second : first;
+  return right.dx - (left.dx + kPeopleLandscapeOverviewCardWidth);
+}
+
 bool _compactCardsOverlap(Offset left, Offset right) {
   final card = const Size(
     kPeopleLandscapeOverviewCardWidth,
@@ -386,13 +403,34 @@ void main() {
     final identical = project(const ['person-b', 'person-a', 'person-c']);
     final repeated = project(const ['person-c', 'person-a', 'person-b']);
     expect(identical.positions, repeated.positions);
-    expect(peopleMarkerCenter(identical.positions['person-a']!), shared);
+    expect(_clusterCenter(identical.positions).dx, closeTo(shared.dx, 0.01));
+    expect(_clusterCenter(identical.positions).dy, closeTo(shared.dy, 0.01));
     expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-b']!), isFalse);
     expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-c']!), isFalse);
     expect(_compactCardsOverlap(identical.positions['person-b']!, identical.positions['person-c']!), isFalse);
+    expect(
+      _edgeGap(identical.positions['person-a']!, identical.positions['person-b']!),
+      closeTo(kPeopleLandscapeIntraClusterGap, 0.01),
+    );
     for (final position in identical.positions.values) {
-      expect((peopleMarkerCenter(position) - shared).distance, lessThan(400));
+      expect((peopleMarkerCenter(position) - shared).distance, lessThan(160));
     }
+
+    final pair = project(const ['person-b', 'person-a']);
+    final pairAgain = project(const ['person-a', 'person-b']);
+    expect(pair.positions, pairAgain.positions);
+    expect(_clusterCenter(pair.positions).dx, closeTo(shared.dx, 0.01));
+    expect(_clusterCenter(pair.positions).dy, closeTo(shared.dy, 0.01));
+    expect(
+      _edgeGap(pair.positions['person-a']!, pair.positions['person-b']!),
+      closeTo(kPeopleLandscapeIntraClusterGap, 0.01),
+    );
+    expect(
+      (peopleMarkerCenter(pair.positions['person-a']!) -
+              peopleMarkerCenter(pair.positions['person-b']!))
+          .distance,
+      closeTo(kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap, 0.01),
+    );
 
     const left = Offset(10, 30);
     const right = Offset(18, 34);
@@ -405,8 +443,9 @@ void main() {
       taskCenters: const {'task-left': left, 'task-right': right},
     );
     expect(_compactCardsOverlap(near.positions['person-a']!, near.positions['person-b']!), isFalse);
-    expect((peopleMarkerCenter(near.positions['person-a']!) - left).distance, lessThan(400));
-    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, lessThan(400));
+    expect(peopleMarkerCenter(near.positions['person-a']!), left);
+    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, greaterThan(0));
+    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, lessThan(220));
   });
 }
 

@@ -7,6 +7,7 @@ import 'package:personal_secretary/graph/graph_workspace_controller.dart';
 import 'package:personal_secretary/graph/graph_workspace_screen.dart';
 import 'package:personal_secretary/graph/people_landscape.dart';
 import 'package:personal_secretary/graph/people_overview.dart';
+import 'package:personal_secretary/graph/shared_world_frame.dart';
 
 import 'graph_test_harness.dart';
 
@@ -110,11 +111,11 @@ void main() {
       kPeopleLandscapeOverviewCardHeight,
     );
     final sizes = {for (final id in landscape.positions.keys) id: card};
-    final landscapeFit = GraphLayout.fitTransform(
-      positions: landscape.positions,
-      viewportSize: viewport,
-      nodeSizes: sizes,
+    final frame = SharedWorldFrame.around(
+      canonicalBounds: canonicalTaskWorldBounds(harness.graph.canonicalTaskCenters)!,
+      layerBounds: GraphLayout.computeBounds(landscape.positions, nodeSizes: sizes),
     );
+    final landscapeFit = fitSharedLayer(frame: frame, viewportSize: viewport);
     final gridFit = GraphLayout.fitTransform(
       positions: _grid(harness.graph),
       viewportSize: viewport,

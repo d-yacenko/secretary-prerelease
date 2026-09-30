@@ -16,6 +16,9 @@ const double kPeopleLandscapeOverviewCardHeight = 44;
 /// Local gap used when compact cards would touch or nearly touch.
 const double kPeopleLandscapeOverviewCardGap = 8;
 
+/// Gap between markers that share one exact Task-anchor set.
+const double kPeopleLandscapeIntraClusterGap = 6;
+
 /// Origin of the vertical unanchored strip when no Task geography exists.
 const Offset kPeopleLandscapeNeutralShelfOrigin = Offset.zero;
 
@@ -158,14 +161,29 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
     kPeopleLandscapeOverviewCardHeight,
   );
   final ordered = bases.keys.toList()..sort();
-  final anchoredPositions = <String, Offset>{};
+  final groups = <String, List<String>>{};
+  final anchorOf = <String, Offset>{};
   for (final personId in ordered) {
-    anchoredPositions[personId] = _place(
-      peopleMarkerTopLeft(bases[personId]!),
-      anchoredPositions,
-      cardSize,
-      kPeopleLandscapeOverviewCardGap,
-    );
+    final anchors = peopleById[personId]!.landscapeTaskIds.toSet().toList()..sort();
+    final key = anchors.join('\u0001');
+    (groups[key] ??= <String>[]).add(personId);
+    anchorOf[key] = bases[personId]!;
+  }
+  final groupKeys = groups.keys.toList()
+    ..sort((a, b) => groups[a]!.first.compareTo(groups[b]!.first));
+  final anchoredPositions = <String, Offset>{};
+  for (final key in groupKeys) {
+    final members = groups[key]!;
+    final packed = _packSameAnchorCluster(members.length);
+    final anchor = anchorOf[key]!;
+    final cluster = <String, Offset>{
+      for (var index = 0; index < members.length; index++)
+        members[index]: packed[index] + anchor,
+    };
+    final delta = _separateCluster(cluster, anchoredPositions, cardSize);
+    anchoredPositions.addAll({
+      for (final entry in cluster.entries) entry.key: entry.value + delta,
+    });
   }
   final taskBounds = canonicalTaskWorldBounds(taskCenters);
   final positions = Map<String, Offset>.from(anchoredPositions);
@@ -221,6 +239,76 @@ double _occupiedRight(Rect? taskBounds, Map<String, Offset> anchoredPositions) {
     right = math.max(right, topLeft.dx + kPeopleLandscapeOverviewCardWidth);
   }
   return right;
+}
+
+List<Offset> _packSameAnchorCluster(int count) {
+  if (count <= 0) {
+    return const [];
+  }
+  final cols = count == 1
+      ? 1
+      : count == 2
+          ? 2
+          : math.max(1, math.sqrt(count).ceil());
+  final stepX = kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap;
+  final stepY = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeIntraClusterGap;
+  final topLefts = <Offset>[
+    for (var index = 0; index < count; index++)
+      Offset((index % cols) * stepX, (index ~/ cols) * stepY),
+  ];
+  var sumX = 0.0;
+  var sumY = 0.0;
+  for (final topLeft in topLefts) {
+    final center = peopleMarkerCenter(topLeft);
+    sumX += center.dx;
+    sumY += center.dy;
+  }
+  final shift = Offset(sumX / count, sumY / count);
+  return [for (final topLeft in topLefts) topLeft - shift];
+}
+
+Offset _separateCluster(
+  Map<String, Offset> cluster,
+  Map<String, Offset> placed,
+  Size cardSize,
+) {
+  if (placed.isEmpty || !_clusterHits(cluster, placed, cardSize)) {
+    return Offset.zero;
+  }
+  for (var ring = 1; ring <= 64; ring++) {
+    final radius = ring * kPeopleLandscapeIntraClusterGap;
+    for (var slot = 0; slot < 8; slot++) {
+      final angle = slot * math.pi / 4;
+      final delta = Offset(math.cos(angle) * radius, math.sin(angle) * radius);
+      final shifted = {
+        for (final entry in cluster.entries) entry.key: entry.value + delta,
+      };
+      if (!_clusterHits(shifted, placed, cardSize)) {
+        return delta;
+      }
+    }
+  }
+  throw StateError('no free local slot for person landscape');
+}
+
+bool _clusterHits(
+  Map<String, Offset> cluster,
+  Map<String, Offset> placed,
+  Size cardSize,
+) {
+  for (final candidate in cluster.values) {
+    final probe = _cardRect(candidate, cardSize, 0);
+    for (final other in placed.values) {
+      final rect = _cardRect(other, cardSize, 0);
+      if (probe.left < rect.right - 0.01 &&
+          probe.right > rect.left + 0.01 &&
+          probe.top < rect.bottom - 0.01 &&
+          probe.bottom > rect.top + 0.01) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 Offset? _anchor(Iterable<String> taskIds, Map<String, Offset> taskPositions) {
