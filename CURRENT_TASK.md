@@ -14,8 +14,19 @@ Build a clean Linux debug bundle from detached source `04ea802233bc2bf33fa25dc2e
 ## Source/provenance
 
 1. Build from a clean detached checkout of exactly the candidate SHA above, not from `main`.
-2. Verify the candidate is descended from current production source and that the candidate delta since production is client-only.
-3. Do not modify product source while building.
+2. Verify the candidate is descended from current production source. The compare against production is **not required to be repository-wide client-only**: this candidate intentionally also contains already-reviewed non-runtime ledger/harness/test files created after the production release.
+
+   The exact permitted non-client delta is:
+   - `CURRENT_TASK.md`;
+   - `PROJECT_STATE.md`;
+   - `backend/tests/test_task_layout_0052_migration_harness.py`;
+   - `ops/production/migrate_task_layout_0052.py`;
+   - `ops/production/remote_migrate_task_layout_0052.py`.
+
+   Client-side candidate changes are the reviewed G4.2 files under `client/`.
+
+   Fail closed if the compare contains any unexpected backend application/API file, Alembic file, dependency/runtime configuration, production deployment configuration, or any other path outside the exact known compare set. In particular, `backend/app/**` and `backend/alembic/**` must be unchanged from production. The listed ops/test/ledger files are repository metadata/tooling and are not part of the Linux Flutter client runtime; their presence does not block the bundle.
+3. Do not modify product source while building. Build the Flutter client from the exact detached candidate checkout; do not cherry-pick or synthesize a client-only commit.
 4. Record:
    - exact candidate SHA;
    - production backend SHA;
