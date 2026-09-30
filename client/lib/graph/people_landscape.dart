@@ -169,7 +169,7 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
   }
   final taskBounds = canonicalTaskWorldBounds(taskCenters);
   final positions = Map<String, Offset>.from(anchoredPositions);
-  positions.addAll(_shelfPositions(unanchored, taskBounds));
+  positions.addAll(_shelfPositions(unanchored, taskBounds, anchoredPositions));
   return PeopleLandscapeOverview(
     usable: true,
     positions: positions,
@@ -192,16 +192,20 @@ PeopleLandscapeOverview _unusable(List<String> unresolved) {
   );
 }
 
-Map<String, Offset> _shelfPositions(List<String> personIds, Rect? taskBounds) {
+Map<String, Offset> _shelfPositions(
+  List<String> personIds,
+  Rect? taskBounds,
+  Map<String, Offset> anchoredPositions,
+) {
   final ordered = List<String>.from(personIds)..sort();
   if (ordered.isEmpty) {
     return const {};
   }
-  final origin = taskBounds == null
+  final origin = taskBounds == null && anchoredPositions.isEmpty
       ? kPeopleLandscapeNeutralShelfOrigin
       : Offset(
-          taskBounds.right + kPeopleLandscapeShelfGap,
-          taskBounds.top,
+          _occupiedRight(taskBounds, anchoredPositions) + kPeopleLandscapeShelfGap,
+          taskBounds?.top ?? kPeopleLandscapeNeutralShelfOrigin.dy,
         );
   final placed = <String, Offset>{};
   final step = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap;
@@ -209,6 +213,14 @@ Map<String, Offset> _shelfPositions(List<String> personIds, Rect? taskBounds) {
     placed[ordered[index]] = Offset(origin.dx, origin.dy + index * step);
   }
   return placed;
+}
+
+double _occupiedRight(Rect? taskBounds, Map<String, Offset> anchoredPositions) {
+  var right = taskBounds?.right ?? double.negativeInfinity;
+  for (final topLeft in anchoredPositions.values) {
+    right = math.max(right, topLeft.dx + kPeopleLandscapeOverviewCardWidth);
+  }
+  return right;
 }
 
 Offset? _anchor(Iterable<String> taskIds, Map<String, Offset> taskPositions) {

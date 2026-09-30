@@ -319,6 +319,58 @@ void main() {
     expect(peopleMarkerCenter(forward.positions['person-b']!), centers['task-right']);
   });
 
+  test('dense anchored spread stays left of the unanchored strip', () {
+    const center = Offset(0, 0);
+    final people = [
+      for (var index = 0; index < 40; index++)
+        _person('person-${index.toString().padLeft(2, '0')}', anchors: const ['task-shared']),
+      _person('person-shelf-b'),
+      _person('person-shelf-a'),
+    ];
+    final ids = [for (final person in people) person.personId];
+    final overview = _project(
+      personIds: ids.reversed.toList(),
+      people: people.reversed.toList(),
+      taskCenters: const {'task-shared': center, 'task-far': Offset(40, 0)},
+    );
+    final again = _project(
+      personIds: ids,
+      people: people,
+      taskCenters: const {'task-shared': center, 'task-far': Offset(40, 0)},
+    );
+    expect(overview.usable, isTrue);
+    expect(overview.positions, again.positions);
+    expect(overview.unanchoredPersonIds, ['person-shelf-a', 'person-shelf-b']);
+    final stripX = overview.positions['person-shelf-a']!.dx;
+    expect(overview.positions['person-shelf-b']!.dx, stripX);
+    expect(
+      overview.positions['person-shelf-a']!.dy,
+      lessThan(overview.positions['person-shelf-b']!.dy),
+    );
+    final bounds = overview.taskBounds!;
+    var anchoredRight = double.negativeInfinity;
+    for (final id in overview.anchoredPersonIds) {
+      final right = overview.positions[id]!.dx + kPeopleLandscapeOverviewCardWidth;
+      anchoredRight = right > anchoredRight ? right : anchoredRight;
+      expect(right, lessThan(stripX));
+    }
+    expect(anchoredRight, greaterThan(bounds.right));
+    expect(stripX, greaterThanOrEqualTo(anchoredRight + kPeopleLandscapeShelfGap));
+    expect(stripX, greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap));
+
+    final withoutShelf = _project(
+      personIds: overview.anchoredPersonIds,
+      people: [
+        for (final id in overview.anchoredPersonIds)
+          _person(id, anchors: const ['task-shared']),
+      ],
+      taskCenters: const {'task-shared': center, 'task-far': Offset(40, 0)},
+    );
+    for (final id in overview.anchoredPersonIds) {
+      expect(overview.positions[id], withoutShelf.positions[id]);
+    }
+  });
+
   test('shared and near anchors separate locally without overlap', () {
     const shared = Offset(480, 220);
     PeopleLandscapeOverview project(List<String> ids) {
