@@ -232,7 +232,11 @@ class TaskManagementActions extends StatelessWidget {
       SecretaryObject updated = task;
       if (!request.isEmpty) {
         final response = await apiClient.patchTask(task.id, request);
-        updated = response.object;
+        updated = acceptedTaskEdit(
+          previous: task,
+          request: request,
+          response: response,
+        );
       }
       if (plannedPayload.isNotEmpty) {
         updated = await apiClient.patchObject(task.id, plannedPayload);
@@ -332,6 +336,25 @@ class TaskManagementActions extends StatelessWidget {
     }
     return options.where((item) => item != 'done').toList();
   }
+}
+
+/// A confirmed title edit must stay visible even when the mutation object
+/// still carries the previous title.
+SecretaryObject acceptedTaskEdit({
+  required SecretaryObject previous,
+  required TaskPatchRequest request,
+  required TaskMutationResponse response,
+}) {
+  final updated = response.object;
+  final requestedTitle = request.titleSet ? request.title?.trim() : null;
+  if (!response.changed ||
+      requestedTitle == null ||
+      requestedTitle.isEmpty ||
+      requestedTitle == previous.title ||
+      updated.title != previous.title) {
+    return updated;
+  }
+  return updated.withTitle(requestedTitle);
 }
 
 Future<void> confirmAndDeleteTask(

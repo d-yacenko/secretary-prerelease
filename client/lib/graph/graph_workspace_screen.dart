@@ -2355,21 +2355,32 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                         });
                       },
                     ),
-                    ...options.map(
-                      (item) => ListTile(
-                        key: ValueKey('relation-target-${item.id}'),
-                        title: Text(
-                          relationTargetLabel(
-                            object: item,
-                            results: options,
-                            confirmedParentTitleByTaskId: confirmedParentTitles,
-                          ),
+                    if (options.isNotEmpty)
+                      Flexible(
+                        fit: FlexFit.loose,
+                        child: ListView.builder(
+                          key: const ValueKey('relation-target-list'),
+                          shrinkWrap: true,
+                          itemCount: options.length,
+                          itemBuilder: (context, index) {
+                            final item = options[index];
+                            return ListTile(
+                              key: ValueKey('relation-target-${item.id}'),
+                              title: Text(
+                                relationTargetLabel(
+                                  object: item,
+                                  results: options,
+                                  confirmedParentTitleByTaskId:
+                                      confirmedParentTitles,
+                                ),
+                              ),
+                              subtitle: Text(objectKindLabel(item.kind)),
+                              selected: target?.id == item.id,
+                              onTap: () => setState(() => target = item),
+                            );
+                          },
                         ),
-                        subtitle: Text(objectKindLabel(item.kind)),
-                        selected: target?.id == item.id,
-                        onTap: () => setState(() => target = item),
                       ),
-                    ),
                   ],
                 ),
               ),

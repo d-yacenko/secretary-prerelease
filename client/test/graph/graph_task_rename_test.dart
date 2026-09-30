@@ -97,6 +97,65 @@ void main() {
     expect(_workspaceCalls, workspaceCalls);
     expect(_cameraOf(tester).getMaxScaleOnAxis(), camera.getMaxScaleOnAxis());
   });
+
+  testWidgets('a stale successful rename still replaces the visible title', (
+    tester,
+  ) async {
+    final layoutWrites = <String>[];
+    final harness = _harness(layoutWrites: layoutWrites, staleTitle: true);
+    harness.configure();
+    await _open(tester, harness);
+    harness.graph.selectObject('task-a');
+    await tester.pumpAndSettle();
+    final camera = _zoom(tester);
+    await tester.pump();
+    final workspaceCalls = _workspaceCalls;
+
+    await _rename(tester, 'Новое имя');
+    await tester.pump();
+
+    expect(find.text('Новое имя'), findsWidgets);
+    expect(find.text('Старое имя'), findsNothing);
+    expect(harness.graph.nodeById('task-a')?.title, 'Новое имя');
+    expect(harness.graph.nodeById('task-a')?.id, 'task-a');
+    expect(harness.graph.rootId, isNull);
+    expect(harness.graph.selectedObjectId, 'task-a');
+    expect(harness.graph.windowIndex, 0);
+    expect(harness.graph.canonicalTaskCenters['task-a'], const Offset(100, 80));
+    expect(harness.graph.canonicalTaskCentersActive, isTrue);
+    expect(_workspaceCalls, workspaceCalls);
+    expect(layoutWrites, isEmpty);
+    expect(_cameraOf(tester).storage, camera.storage);
+  });
+
+  testWidgets('a stale successful rename keeps the rooted view stable', (
+    tester,
+  ) async {
+    final layoutWrites = <String>[];
+    final harness = _harness(layoutWrites: layoutWrites, staleTitle: true);
+    harness.configure();
+    await _open(tester, harness);
+    await harness.graph.reRoot('task-a');
+    await tester.pumpAndSettle();
+    harness.graph.selectObject('task-a');
+    await tester.pumpAndSettle();
+    final camera = _zoom(tester);
+    await tester.pump();
+    final workspaceCalls = _workspaceCalls;
+
+    await _rename(tester, 'Новое имя');
+    await tester.pump();
+
+    expect(harness.graph.nodeById('task-a')?.title, 'Новое имя');
+    expect(find.text('Старое имя'), findsNothing);
+    expect(harness.graph.rootId, 'task-a');
+    expect(harness.graph.selectedObjectId, 'task-a');
+    expect(harness.graph.windowIndex, 0);
+    expect(harness.graph.canonicalTaskCenters['task-a'], const Offset(100, 80));
+    expect(_workspaceCalls, workspaceCalls);
+    expect(layoutWrites, isEmpty);
+    expect(_cameraOf(tester).storage, camera.storage);
+  });
 }
 
 var _workspaceCalls = 0;
@@ -134,7 +193,10 @@ Matrix4 _cameraOf(WidgetTester tester) {
   return viewer.transformationController!.value.clone();
 }
 
-GraphTestHarness _harness({List<String>? layoutWrites}) {
+GraphTestHarness _harness({
+  List<String>? layoutWrites,
+  bool staleTitle = false,
+}) {
   return GraphTestHarness(
     MockClient((request) async {
       if (request.url.path == '/notifications') {
@@ -181,8 +243,9 @@ GraphTestHarness _harness({List<String>? layoutWrites}) {
       }
       if (request.method == 'PATCH' && request.url.path == '/tasks/task-a') {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final title = staleTitle ? 'Старое имя' : body['title'] as String;
         return jsonUtf8Response({
-          'object': graphObjectJson(id: 'task-a', title: body['title'] as String),
+          'object': graphObjectJson(id: 'task-a', title: title),
           'changed': true,
         });
       }

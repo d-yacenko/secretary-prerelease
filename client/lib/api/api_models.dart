@@ -845,6 +845,35 @@ class SecretaryObject {
   final String createdAt;
   final String updatedAt;
 
+  SecretaryObject withTitle(String title) {
+    if (this.title == title) {
+      return this;
+    }
+    return SecretaryObject(
+      id: id,
+      kind: kind,
+      title: title,
+      body: body,
+      provider: provider,
+      externalId: externalId,
+      canonicalUri: canonicalUri,
+      status: status,
+      completionMode: completionMode,
+      startAt: startAt,
+      dueAt: dueAt,
+      plannedStartAt: plannedStartAt,
+      plannedEndAt: plannedEndAt,
+      occurredAt: occurredAt,
+      deletedAt: deletedAt,
+      metadata: metadata,
+      origin: origin,
+      state: state,
+      confidence: confidence,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
+
   bool get isOngoingTask => kind == 'task' && completionMode == 'ongoing';
 
   /// Missing or unknown Task mode reads as finite. Dates are not consulted.
