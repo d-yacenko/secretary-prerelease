@@ -141,12 +141,20 @@ void main() {
     final laid = projectTaskMapHierarchy(nodes: tasks, edges: edges);
     final wide = laid.placements['wide']!;
     expect(laid.maxDepth, 2);
-    expect(wide.sectorEnd - wide.sectorStart, greaterThan(laid.placements['leaf-a']!.sectorEnd - laid.placements['leaf-a']!.sectorStart));
+    expect(
+      wide.sectorEnd - wide.sectorStart,
+      greaterThan(
+        laid.placements['leaf-a']!.sectorEnd - laid.placements['leaf-a']!.sectorStart,
+      ),
+    );
+    final wideCenter = _center(laid.positions['wide']!);
+    final rootCenter = _center(laid.positions['root']!);
+    final leafDistance = (_center(laid.positions['leaf-a']!) - rootCenter).distance;
     for (final id in ['g1', 'g2', 'g3']) {
-      final grand = laid.placements[id]!;
-      expect(grand.radius, greaterThan(wide.radius));
-      expect(grand.sectorStart, greaterThanOrEqualTo(wide.sectorStart - 1e-9));
-      expect(grand.sectorEnd, lessThanOrEqualTo(wide.sectorEnd + 1e-9));
+      final grandCenter = _center(laid.positions[id]!);
+      final local = (grandCenter - wideCenter).distance;
+      expect(local, lessThan((grandCenter - rootCenter).distance));
+      expect(local, lessThan(leafDistance * 1.35));
     }
     expect(laid.taskRectOverlaps, 0);
     _printMetrics('D', laid, laid.taskBounds, laid.taskBounds);

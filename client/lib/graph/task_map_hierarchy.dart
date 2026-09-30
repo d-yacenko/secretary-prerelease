@@ -307,17 +307,17 @@ _DraftComponent _draftVisualComponent({
         ? Offset.zero
         : rootBaseline - primaryBaseline;
     membersByRoot[rootId] = _treeMembers(rootId, childrenOf, memberIds);
-    _placeRadial(
+    _placeLocalTree(
       id: rootId,
       parentId: null,
       rootId: rootId,
       depth: 0,
-      radius: 0,
       sectorStart: -math.pi,
       sectorEnd: math.pi,
       origin: origin,
       taskById: taskById,
       childrenOf: childrenOf,
+      layoutEdges: layoutEdges,
       baselinePositions: baselinePositions,
       centers: centers,
       placements: placements,
@@ -583,27 +583,100 @@ class _PlacedComponent {
   final int column;
 }
 
-void _placeRadial({
+class _LocalTree {
+  _LocalTree({
+    required this.id,
+    required this.relative,
+    required this.extent,
+    required this.slots,
+  });
+
+  final String id;
+
+  /// Centers relative to this Task. This Task is at [Offset.zero].
+  final Map<String, Offset> relative;
+  final double extent;
+  final List<_ChildSlot> slots;
+}
+
+class _ChildSlot {
+  const _ChildSlot({
+    required this.tree,
+    required this.angle,
+    required this.distance,
+    required this.rotation,
+    required this.sectorStart,
+    required this.sectorEnd,
+  });
+
+  final _LocalTree tree;
+  final double angle;
+  final double distance;
+  final double rotation;
+  final double sectorStart;
+  final double sectorEnd;
+
+  Offset get center =>
+      Offset(math.cos(angle) * distance, math.sin(angle) * distance);
+}
+
+void _placeLocalTree({
   required String id,
   required String? parentId,
   required String rootId,
   required int depth,
-  required double radius,
   required double sectorStart,
   required double sectorEnd,
   required Offset origin,
   required Map<String, SecretaryObject> taskById,
   required Map<String, List<String>> childrenOf,
+  required List<SecretaryEdge> layoutEdges,
   required Map<String, Offset> baselinePositions,
   required Map<String, Offset> centers,
   required Map<String, TaskHierarchyPlacement> placements,
 }) {
-  final sweep = sectorEnd - sectorStart;
-  final angle = sectorStart + sweep / 2;
-  final center = origin + Offset(math.cos(angle) * radius, math.sin(angle) * radius);
-  centers[id] = center;
-  placements[id] = TaskHierarchyPlacement(
+  final tree = _measureLocalTree(
     id: id,
+    taskById: taskById,
+    childrenOf: childrenOf,
+    layoutEdges: layoutEdges,
+    baselinePositions: baselinePositions,
+    seen: <String>{},
+  );
+  _stampLocalTree(
+    tree: tree,
+    origin: origin,
+    rotation: 0,
+    parentId: parentId,
+    rootId: rootId,
+    depth: depth,
+    sectorStart: sectorStart,
+    sectorEnd: sectorEnd,
+    centers: centers,
+    placements: placements,
+  );
+}
+
+void _stampLocalTree({
+  required _LocalTree tree,
+  required Offset origin,
+  required double rotation,
+  required String? parentId,
+  required String rootId,
+  required int depth,
+  required double sectorStart,
+  required double sectorEnd,
+  required Map<String, Offset> centers,
+  required Map<String, TaskHierarchyPlacement> placements,
+}) {
+  final parentCenter = parentId == null ? null : centers[parentId];
+  final radius = parentCenter == null ? 0.0 : (origin - parentCenter).distance;
+  final angle = parentCenter == null
+      ? 0.0
+      : math.atan2(origin.dy - parentCenter.dy, origin.dx - parentCenter.dx);
+  centers[tree.id] = origin;
+  placements[tree.id] = TaskHierarchyPlacement(
+    id: tree.id,
     parentId: parentId,
     rootId: rootId,
     depth: depth,
@@ -612,6 +685,39 @@ void _placeRadial({
     sectorStart: sectorStart,
     sectorEnd: sectorEnd,
   );
+  for (final slot in tree.slots) {
+    final local = _rotate(slot.center, rotation);
+    _stampLocalTree(
+      tree: slot.tree,
+      origin: origin + local,
+      rotation: rotation + slot.rotation,
+      parentId: tree.id,
+      rootId: rootId,
+      depth: depth + 1,
+      sectorStart: slot.sectorStart,
+      sectorEnd: slot.sectorEnd,
+      centers: centers,
+      placements: placements,
+    );
+  }
+}
+
+_LocalTree _measureLocalTree({
+  required String id,
+  required Map<String, SecretaryObject> taskById,
+  required Map<String, List<String>> childrenOf,
+  required List<SecretaryEdge> layoutEdges,
+  required Map<String, Offset> baselinePositions,
+  required Set<String> seen,
+}) {
+  if (!seen.add(id)) {
+    return _LocalTree(
+      id: id,
+      relative: {id: Offset.zero},
+      extent: taskCircumradius(taskById[id]!),
+      slots: const [],
+    );
+  }
   final children = List<String>.from(childrenOf[id] ?? const <String>[])
     ..sort(
       (a, b) => _siblingOrder(
@@ -622,38 +728,227 @@ void _placeRadial({
       ),
     );
   if (children.isEmpty) {
-    return;
-  }
-  final weights = [
-    for (final child in children) _subtreeWeight(child, childrenOf),
-  ];
-  final total = weights.fold<int>(0, (sum, weight) => sum + weight);
-  var cursor = sectorStart;
-  for (var index = 0; index < children.length; index++) {
-    final child = children[index];
-    final childSweep = sweep * weights[index] / total;
-    final childRadius =
-        radius +
-        taskCircumradius(taskById[id]!) +
-        kTaskMapHierarchyGap +
-        taskCircumradius(taskById[child]!);
-    _placeRadial(
-      id: child,
-      parentId: id,
-      rootId: rootId,
-      depth: depth + 1,
-      radius: childRadius,
-      sectorStart: cursor,
-      sectorEnd: cursor + childSweep,
-      origin: origin,
-      taskById: taskById,
-      childrenOf: childrenOf,
-      baselinePositions: baselinePositions,
-      centers: centers,
-      placements: placements,
+    return _LocalTree(
+      id: id,
+      relative: {id: Offset.zero},
+      extent: taskCircumradius(taskById[id]!),
+      slots: const [],
     );
+  }
+  final childTrees = [
+    for (final child in children)
+      _measureLocalTree(
+        id: child,
+        taskById: taskById,
+        childrenOf: childrenOf,
+        layoutEdges: layoutEdges,
+        baselinePositions: baselinePositions,
+        seen: seen,
+      ),
+  ];
+  final slots = _arrangeChildren(
+    parentId: id,
+    parentRadius: taskCircumradius(taskById[id]!),
+    children: childTrees,
+    layoutEdges: layoutEdges,
+  );
+  final relative = <String, Offset>{id: Offset.zero};
+  for (final slot in slots) {
+    for (final entry in slot.tree.relative.entries) {
+      relative[entry.key] = slot.center + _rotate(entry.value, slot.rotation);
+    }
+  }
+  return _LocalTree(
+    id: id,
+    relative: relative,
+    extent: _moduleExtent(relative, taskById),
+    slots: slots,
+  );
+}
+
+List<_ChildSlot> _arrangeChildren({
+  required String parentId,
+  required double parentRadius,
+  required List<_LocalTree> children,
+  required List<SecretaryEdge> layoutEdges,
+}) {
+  final orders = [children, children.reversed.toList()];
+  const spins = <double>[0, math.pi / 2, math.pi, 3 * math.pi / 2];
+  List<_ChildSlot>? best;
+  var bestScore = double.infinity;
+  for (final order in orders) {
+    for (final spin in spins) {
+      final slots = _slotsFor(order, parentRadius, spin);
+      final tuned = _tuneRotations(
+        parentId: parentId,
+        slots: slots,
+        layoutEdges: layoutEdges,
+      );
+      final score = _secondaryDistance(
+        parentId: parentId,
+        slots: tuned,
+        layoutEdges: layoutEdges,
+      );
+      if (score < bestScore - 1e-6) {
+        bestScore = score;
+        best = tuned;
+      }
+    }
+  }
+  return best ?? _slotsFor(children, parentRadius, 0);
+}
+
+List<_ChildSlot> _slotsFor(List<_LocalTree> children, double parentRadius, double spin) {
+  final weights = [for (final child in children) math.max(child.extent, 1.0)];
+  final total = weights.fold<double>(0, (sum, weight) => sum + weight);
+  const sweep = math.pi * 2;
+  const start = -math.pi;
+  var cursor = start;
+  final angles = <double>[];
+  final sectors = <(double, double)>[];
+  for (var index = 0; index < children.length; index++) {
+    final childSweep = sweep * weights[index] / total;
+    angles.add(cursor + childSweep / 2 + spin);
+    sectors.add((cursor + spin, cursor + childSweep + spin));
     cursor += childSweep;
   }
+  var ring = 0.0;
+  for (final child in children) {
+    ring = math.max(ring, parentRadius + kTaskMapHierarchyGap + child.extent);
+  }
+  if (children.length > 1) {
+    for (var index = 0; index < children.length; index++) {
+      final next = (index + 1) % children.length;
+      final gap = _forwardAngle(angles[index], angles[next]);
+      final separation =
+          children[index].extent + kTaskMapHierarchyGap + children[next].extent;
+      final half = gap / 2;
+      final sine = math.sin(half);
+      if (sine < 1e-4) {
+        ring = math.max(ring, separation);
+      } else {
+        ring = math.max(ring, separation / (2 * sine));
+      }
+    }
+  }
+  return [
+    for (var index = 0; index < children.length; index++)
+      _ChildSlot(
+        tree: children[index],
+        angle: angles[index],
+        distance: ring,
+        rotation: 0,
+        sectorStart: sectors[index].$1,
+        sectorEnd: sectors[index].$2,
+      ),
+  ];
+}
+
+List<_ChildSlot> _tuneRotations({
+  required String parentId,
+  required List<_ChildSlot> slots,
+  required List<SecretaryEdge> layoutEdges,
+}) {
+  final tuned = [...slots];
+  const steps = 12;
+  for (var index = 0; index < tuned.length; index++) {
+    final slot = tuned[index];
+    if (slot.tree.relative.length < 2) {
+      continue;
+    }
+    var bestRotation = 0.0;
+    var bestScore = double.infinity;
+    for (var step = 0; step < steps; step++) {
+      final rotation = step * math.pi * 2 / steps;
+      tuned[index] = _ChildSlot(
+        tree: slot.tree,
+        angle: slot.angle,
+        distance: slot.distance,
+        rotation: rotation,
+        sectorStart: slot.sectorStart,
+        sectorEnd: slot.sectorEnd,
+      );
+      final score = _secondaryDistance(
+        parentId: parentId,
+        slots: tuned,
+        layoutEdges: layoutEdges,
+      );
+      if (score < bestScore - 1e-6) {
+        bestScore = score;
+        bestRotation = rotation;
+      }
+    }
+    tuned[index] = _ChildSlot(
+      tree: slot.tree,
+      angle: slot.angle,
+      distance: slot.distance,
+      rotation: bestRotation,
+      sectorStart: slot.sectorStart,
+      sectorEnd: slot.sectorEnd,
+    );
+  }
+  return tuned;
+}
+
+double _secondaryDistance({
+  required String parentId,
+  required List<_ChildSlot> slots,
+  required List<SecretaryEdge> layoutEdges,
+}) {
+  final frame = <String, Offset>{parentId: Offset.zero};
+  for (final slot in slots) {
+    for (final entry in slot.tree.relative.entries) {
+      frame[entry.key] = slot.center + _rotate(entry.value, slot.rotation);
+    }
+  }
+  final ids = frame.keys.toSet();
+  var score = 0.0;
+  var counted = 0;
+  for (final edge in layoutEdges) {
+    if (edge.state != 'confirmed' || edge.type == 'part_of') {
+      continue;
+    }
+    if (!ids.contains(edge.sourceId) || !ids.contains(edge.targetId)) {
+      continue;
+    }
+    score += (frame[edge.sourceId]! - frame[edge.targetId]!).distance;
+    counted += 1;
+  }
+  if (counted == 0) {
+    return 0;
+  }
+  return score;
+}
+
+double _moduleExtent(
+  Map<String, Offset> relative,
+  Map<String, SecretaryObject> taskById,
+) {
+  var extent = 0.0;
+  for (final entry in relative.entries) {
+    extent = math.max(
+      extent,
+      entry.value.distance + taskCircumradius(taskById[entry.key]!),
+    );
+  }
+  return extent;
+}
+
+Offset _rotate(Offset point, double rotation) {
+  if (rotation == 0) {
+    return point;
+  }
+  final cos = math.cos(rotation);
+  final sin = math.sin(rotation);
+  return Offset(point.dx * cos - point.dy * sin, point.dx * sin + point.dy * cos);
+}
+
+double _forwardAngle(double from, double to) {
+  var delta = to - from;
+  while (delta <= 1e-9) {
+    delta += math.pi * 2;
+  }
+  return delta;
 }
 
 int _siblingOrder(
@@ -680,22 +975,6 @@ double _baselineAngle(
     return 0;
   }
   return math.atan2(child.dy - parentCenter.dy, child.dx - parentCenter.dx);
-}
-
-int _subtreeWeight(
-  String id,
-  Map<String, List<String>> childrenOf, [
-  Set<String>? seen,
-]) {
-  final guard = seen ?? <String>{};
-  if (!guard.add(id)) {
-    return 0;
-  }
-  var weight = 1;
-  for (final child in childrenOf[id] ?? const <String>[]) {
-    weight += _subtreeWeight(child, childrenOf, guard);
-  }
-  return weight;
 }
 
 Set<String> _treeMembers(

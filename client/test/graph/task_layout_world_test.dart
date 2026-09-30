@@ -57,6 +57,31 @@ void main() {
     expect(controller.taskLayoutWarning, isNull);
   });
 
+  test('a usable task-map-v1 snapshot is replaced by task-map-v2', () async {
+    final calls = <String>[];
+    Map<String, dynamic>? putBody;
+    final topology = _topology(['task-a', 'task-b']);
+    final controller = _controller(
+      _layoutMock(
+        calls: calls,
+        layout: _snapshot(
+          usable: true,
+          algorithmVersion: 'task-map-v1',
+          centers: _centers(),
+        ),
+        topology: topology,
+        onPut: (body) => putBody = body,
+      ),
+    );
+    await controller.loadOverview();
+    expect(calls.where((call) => call == 'GET /graph/task-layout/topology'), hasLength(1));
+    expect(calls.where((call) => call == 'PUT /graph/task-layout'), hasLength(1));
+    expect(putBody!['algorithm_version'], 'task-map-v2');
+    expect((putBody!['centers'] as List).length, 2);
+    expect(controller.canonicalTaskCentersActive, isTrue);
+    expect(controller.taskLayoutWarning, isNull);
+  });
+
   test('algorithm mismatch recomputes even when the snapshot is usable', () async {
     final calls = <String>[];
     final controller = _controller(

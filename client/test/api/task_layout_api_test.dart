@@ -31,7 +31,7 @@ void main() {
     );
     expect(replacement.toJson(), {
       'expected_topology_revision': 4,
-      'algorithm_version': 'task-map-v1',
+      'algorithm_version': 'task-map-v2',
       'centers': [
         {'task_id': 'task-a', 'world_x': 10, 'world_y': 20},
         {'task_id': 'task-b', 'world_x': 30.5, 'world_y': 40},
