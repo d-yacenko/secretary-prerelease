@@ -225,6 +225,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(posts, hasLength(1));
   });
+
+  testWidgets('a rejected async part_of can be dragged again', (tester) async {
+    final posts = <Map<String, dynamic>>[];
+    final gate = Completer<http.Response>();
+    final harness = _harness(posts: posts, holdFirst: gate);
+    harness.configure();
+    await _open(tester, harness);
+    harness.graph.selectObject('A');
+    await tester.pump();
+
+    final first = await tester.startGesture(_handle(tester, 'A'));
+    await first.moveTo(_card(tester, 'B'));
+    await first.up();
+    await tester.pump();
+    expect(posts, hasLength(1));
+
+    final blocked = await tester.startGesture(_handle(tester, 'A'));
+    await blocked.moveTo(_card(tester, 'B'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('part-of-drag-preview')), findsNothing);
+    await blocked.up();
+    await tester.pump();
+    expect(posts, hasLength(1));
+
+    gate.complete(
+      jsonUtf8Response({
+        'detail': 'Задача уже входит в другую задачу.',
+      }, statusCode: 422),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Задача уже входит в другую задачу.'), findsOneWidget);
+    expect(harness.graph.edges, isEmpty);
+
+    await _drag(tester, _handle(tester, 'A'), _card(tester, 'B'));
+    expect(posts, hasLength(2));
+    expect(posts[1], {'source_id': 'A', 'target_id': 'B', 'type': 'part_of'});
+    expect(
+      harness.graph.edges.where(
+        (edge) =>
+            edge.type == 'part_of' &&
+            edge.sourceId == 'A' &&
+            edge.targetId == 'B',
+      ),
+      hasLength(1),
+    );
+  });
 }
 
 Future<void> _open(WidgetTester tester, GraphTestHarness harness) async {
@@ -256,8 +302,10 @@ GraphTestHarness _harness({
   List<Map<String, dynamic>>? posts,
   bool reject = false,
   Completer<http.Response>? gate,
+  Completer<http.Response>? holdFirst,
 }) {
   var linked = false;
+  var heldFirst = false;
   return GraphTestHarness(
     MockClient((request) async {
       if (request.url.path == '/notifications') {
@@ -318,6 +366,10 @@ GraphTestHarness _harness({
       if (request.method == 'POST' && request.url.path == '/relations') {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         posts?.add(body);
+        if (holdFirst != null && !heldFirst) {
+          heldFirst = true;
+          return holdFirst.future;
+        }
         if (reject) {
           return jsonUtf8Response({
             'detail': 'Задача уже входит в другую задачу.',

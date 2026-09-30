@@ -1934,7 +1934,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
     } finally {
-      _partOfSubmitting = false;
+      if (mounted) {
+        setState(() => _partOfSubmitting = false);
+      } else {
+        _partOfSubmitting = false;
+      }
     }
   }
 
