@@ -152,13 +152,13 @@ TaskMapHierarchyProjection projectTaskMapHierarchy({
     ).visibleOnTasksMap) {
       continue;
     }
-    if (edge.state == 'rejected') {
-      continue;
-    }
     if (edge.type == 'part_of') {
       if (edge.state == 'confirmed') {
         confirmedPartOf.add(edge);
       }
+      continue;
+    }
+    if (edge.state != 'confirmed') {
       continue;
     }
     layoutEdges.add(edge);

@@ -3672,7 +3672,7 @@ class AssignLabelResult {
 }
 
 /// Explicit client layout algorithm. Not derived from the app version.
-const String kTaskLayoutAlgorithmVersion = 'task-map-v2.1';
+const String kTaskLayoutAlgorithmVersion = 'task-map-v2.1.1';
 
 class TaskLayoutCenter {
   TaskLayoutCenter({
