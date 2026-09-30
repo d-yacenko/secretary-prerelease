@@ -28,6 +28,7 @@ import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'people_landscape.dart';
 import 'shared_world_frame.dart';
+import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
 import 'graph_workspace_controller.dart';
 import 'task_layout_world.dart';
@@ -64,6 +65,7 @@ class GraphWorkspaceScreen extends StatefulWidget {
 
 class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   final TransformationController _transform = TransformationController();
+  PeopleLandscapeOverview? _healthyPeopleLandscape;
   final GlobalKey _graphViewportKey = GlobalKey();
   bool _worldFrameShared = false;
   Offset? _viewportGlobal;
@@ -92,6 +94,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   @override
   void initState() {
     super.initState();
+    _transform.addListener(_onCameraMoved);
     widget.controller.addListener(_onControllerChanged);
     widget.bookmarkController?.addListener(_onBookmarksChanged);
     _loadFacets();
@@ -126,12 +129,19 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   @override
   void dispose() {
+    _transform.removeListener(_onCameraMoved);
     widget.controller.removeListener(_onControllerChanged);
     widget.bookmarkController?.removeListener(_onBookmarksChanged);
     _searchController.dispose();
     _promotionScroll.dispose();
     _transform.dispose();
     super.dispose();
+  }
+
+  void _onCameraMoved() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _onBookmarksChanged() {
@@ -363,6 +373,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     required List<SecretaryObject> nodes,
     required List<SecretaryEdge> edges,
   }) {
+    _healthyPeopleLandscape = null;
     final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
     if (widget.controller.mode == GraphWorkspaceMode.tasks) {
       final canonical = _canonicalTaskTopLefts(nodes);
@@ -418,6 +429,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       canonicalCentersActive: widget.controller.canonicalTaskCentersActive,
     );
     if (projection.usable) {
+      _healthyPeopleLandscape = projection;
       return projection.positions;
     }
     return projectPeopleOverview(
@@ -1398,49 +1410,109 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ),
               ),
             Expanded(
-              child: Stack(
-                children: [
-                  _graphViewport(
-                context,
-                positions,
-                drawnNodes,
-                drawnEdges,
-                paintBounds,
-                canvasWidth,
-                canvasHeight,
-                canvasPad,
-                selectedObjectId,
-                focusMode,
-                focusNeighborIds,
-                projection,
-                hybrid,
-              ),
-                  if (widget.controller.taskLayoutWarning != null &&
-                      widget.controller.mode == GraphWorkspaceMode.tasks &&
-                      widget.controller.rootId == null)
-                    Positioned(
-                      left: 12,
-                      right: 12,
-                      top: 12,
-                      child: IgnorePointer(
-                        child: Material(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          child: Text(
-                            widget.controller.taskLayoutWarning!,
-                            key: const ValueKey('task-layout-warning'),
+              child: LayoutBuilder(
+                builder: (context, viewerConstraints) {
+                  final viewerSize = Size(
+                    viewerConstraints.maxWidth,
+                    viewerConstraints.maxHeight,
+                  );
+                  final shelfCue = _unanchoredShelfCue(
+                    viewport: viewerSize,
+                    paintBounds: paintBounds,
+                    canvasPad: canvasPad,
+                  );
+                  return Stack(
+                    children: [
+                      _graphViewport(
+                        context,
+                        positions,
+                        drawnNodes,
+                        drawnEdges,
+                        paintBounds,
+                        canvasWidth,
+                        canvasHeight,
+                        canvasPad,
+                        selectedObjectId,
+                        focusMode,
+                        focusNeighborIds,
+                        projection,
+                        hybrid,
+                      ),
+                      if (shelfCue != null) shelfCue,
+                      if (widget.controller.taskLayoutWarning != null &&
+                          widget.controller.mode == GraphWorkspaceMode.tasks &&
+                          widget.controller.rootId == null)
+                        Positioned(
+                          left: 12,
+                          right: 12,
+                          top: 12,
+                          child: IgnorePointer(
+                            child: Material(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                child: Text(
+                                  widget.controller.taskLayoutWarning!,
+                                  key: const ValueKey('task-layout-warning'),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                      ),
-                    ),
-                ],
+                    ],
+                  );
+                },
               ),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget? _unanchoredShelfCue({
+    required Size viewport,
+    required Rect paintBounds,
+    required double canvasPad,
+  }) {
+    final landscape = _healthyPeopleLandscape;
+    if (landscape == null) {
+      return null;
+    }
+    final world = unanchoredShelfWorldBounds(landscape);
+    if (world == null) {
+      return null;
+    }
+    final placement = placeUnanchoredShelfCue(
+      shelfViewport: worldRectToViewport(
+        world: world,
+        paintOrigin: paintBounds.topLeft,
+        canvasPadding: canvasPad,
+        transform: _transform.value,
+      ),
+      viewportSize: viewport,
+      count: landscape.unanchoredPersonIds.length,
+    );
+    if (placement == null) {
+      return null;
+    }
+    return Positioned(
+      left: placement.onLeft ? 0 : null,
+      right: placement.onLeft ? null : 0,
+      top: placement.top,
+      child: _UnanchoredShelfEdgeTab(
+        count: placement.count,
+        onLeft: placement.onLeft,
+        onTap: () {
+          _transform.value = panToCenterWorldRect(
+            current: _transform.value,
+            world: world,
+            paintOrigin: paintBounds.topLeft,
+            canvasPadding: canvasPad,
+            viewportSize: viewport,
+          );
+        },
+      ),
     );
   }
 
@@ -2917,6 +2989,63 @@ String _identityStateLabel(String state) {
       return 'кандидат';
     default:
       return state;
+  }
+}
+
+class _UnanchoredShelfEdgeTab extends StatelessWidget {
+  const _UnanchoredShelfEdgeTab({
+    required this.count,
+    required this.onLeft,
+    required this.onTap,
+  });
+
+  final int count;
+  final bool onLeft;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = 'Люди без привязки к задачам · $count';
+    final radius = BorderRadius.horizontal(
+      left: onLeft ? Radius.zero : const Radius.circular(12),
+      right: onLeft ? const Radius.circular(12) : Radius.zero,
+    );
+    return Tooltip(
+      message: label,
+      child: Material(
+        color: scheme.surfaceContainerHigh,
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: RoundedRectangleBorder(borderRadius: radius),
+          child: Semantics(
+            button: true,
+            label: label,
+            child: SizedBox(
+              key: const ValueKey('unanchored-shelf-cue'),
+              width: kUnanchoredShelfCueWidth,
+              height: kUnanchoredShelfCueHeight,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.person_outline, size: 16, color: scheme.onSurfaceVariant),
+                  Text(
+                    '$count',
+                    key: const ValueKey('unanchored-shelf-cue-count'),
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
