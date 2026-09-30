@@ -334,13 +334,15 @@ void main() {
     await tester.tap(find.text('Сохранить'));
     await tester.pumpAndSettle();
 
+    final callsAfterEdit = graphCalls;
     await tester.pageBack();
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
     expect(harness.graph.rootId, 'task-a');
     expect(find.text('Renamed A'), findsWidgets);
-    expect(graphCalls, greaterThanOrEqualTo(3));
+    expect(find.text('Task A'), findsNothing);
+    expect(graphCalls, callsAfterEdit);
   });
 
   testWidgets('Details delete refreshes overview without deleted task', (tester) async {

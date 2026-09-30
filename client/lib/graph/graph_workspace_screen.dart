@@ -30,6 +30,7 @@ import 'people_landscape.dart';
 import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
+import 'relation_target_label.dart';
 import 'graph_workspace_controller.dart';
 import 'task_layout_world.dart';
 import 'task_map_hierarchy.dart';
@@ -1862,23 +1863,33 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               child: OutlinedButton.icon(
                 onPressed: () async {
                   final controller = widget.controller;
-                  final result = await openObjectDetail(
-                    context,
-                    objectId: object.id,
-                    apiClient: widget.apiClient,
-                    authController: widget.authController,
-                    captureController: widget.captureController,
-                    assistantController: widget.assistantController,
-                    onAskSecretary: widget.onAskSecretary,
-                    onShowInGraph: (id) => controller.reRoot(id),
-                    onTaskUpdated: controller.applyTaskMutation,
-                    bookmarkController: widget.bookmarkController,
-                  );
+                  controller.beginTaskDetailVisit();
+                  ObjectDetailNavigationResult? result;
+                  var preserveView = false;
+                  try {
+                    result = await openObjectDetail(
+                      context,
+                      objectId: object.id,
+                      apiClient: widget.apiClient,
+                      authController: widget.authController,
+                      captureController: widget.captureController,
+                      assistantController: widget.assistantController,
+                      onAskSecretary: widget.onAskSecretary,
+                      onShowInGraph: (id) => controller.reRoot(id),
+                      onTaskUpdated: controller.applyTaskMutation,
+                      bookmarkController: widget.bookmarkController,
+                    );
+                  } finally {
+                    preserveView = controller.endTaskDetailVisit();
+                  }
                   if (!mounted) {
                     return;
                   }
                   if (result != null) {
                     controller.removeObjectImmediately(result.deletedObjectId);
+                  }
+                  if (preserveView) {
+                    return;
                   }
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!mounted) {
@@ -1987,6 +1998,29 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     );
   }
 
+  Future<Map<String, String?>> _confirmedParentsForDuplicateTasks(
+    List<SecretaryObject> results,
+  ) async {
+    final duplicated = tasksWithDuplicatedTitles(results);
+    if (duplicated.isEmpty) {
+      return {};
+    }
+    final entries = await Future.wait(
+      duplicated.map((task) async {
+        try {
+          final profile = await widget.apiClient.getTaskProfile(task.id);
+          return MapEntry(
+            task.id,
+            confirmedPartOfParentTitle(profile.parentTask),
+          );
+        } catch (_) {
+          return MapEntry(task.id, null);
+        }
+      }),
+    );
+    return Map.fromEntries(entries);
+  }
+
   Future<void> _addRelation(
     BuildContext context,
     SecretaryObject source,
@@ -1995,6 +2029,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     SecretaryObject? target;
     final queryController = TextEditingController();
     List<SecretaryObject> options = [];
+    var confirmedParentTitles = <String, String?>{};
 
     await showDialog<void>(
       context: context,
@@ -2058,6 +2093,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           if (crossesPartOf) {
                             target = null;
                             options = [];
+                            confirmedParentTitles = {};
                           }
                         });
                       },
@@ -2080,22 +2116,40 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           query: value,
                           kind: partOf ? 'task' : null,
                         );
+                        if (!context.mounted) {
+                          return;
+                        }
+                        final filtered = partOf
+                            ? results
+                                  .where(
+                                    (item) =>
+                                        item.kind == 'task' &&
+                                        item.id != source.id,
+                                  )
+                                  .toList()
+                            : results;
+                        final parents = await _confirmedParentsForDuplicateTasks(
+                          filtered,
+                        );
+                        if (!context.mounted) {
+                          return;
+                        }
                         setState(() {
-                          options = partOf
-                              ? results
-                                    .where(
-                                      (item) =>
-                                          item.kind == 'task' &&
-                                          item.id != source.id,
-                                    )
-                                    .toList()
-                              : results;
+                          options = filtered;
+                          confirmedParentTitles = parents;
                         });
                       },
                     ),
                     ...options.map(
                       (item) => ListTile(
-                        title: Text(item.title),
+                        key: ValueKey('relation-target-${item.id}'),
+                        title: Text(
+                          relationTargetLabel(
+                            object: item,
+                            results: options,
+                            confirmedParentTitleByTaskId: confirmedParentTitles,
+                          ),
+                        ),
                         subtitle: Text(objectKindLabel(item.kind)),
                         selected: target?.id == item.id,
                         onTap: () => setState(() => target = item),

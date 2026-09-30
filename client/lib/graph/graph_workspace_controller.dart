@@ -71,6 +71,8 @@ class GraphWorkspaceController extends ChangeNotifier {
   final Map<String, Offset> _canonicalTaskCenters = {};
   bool canonicalTaskCentersActive = false;
   String? taskLayoutWarning;
+  bool _detailVisitOpen = false;
+  bool _detailVisitPreservesView = false;
   int _unrootedTasksWindow = 0;
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
@@ -825,6 +827,22 @@ class GraphWorkspaceController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Marks the Graph «Подробнее» visit so an in-place Task edit can stay on
+  /// the current camera, root, window, and canonical centers.
+  void beginTaskDetailVisit() {
+    _detailVisitOpen = true;
+    _detailVisitPreservesView = false;
+  }
+
+  /// True when this visit applied a Task update that is not a topology change.
+  /// The caller must not reload the workspace afterward.
+  bool endTaskDetailVisit() {
+    final preserve = _detailVisitOpen && _detailVisitPreservesView;
+    _detailVisitOpen = false;
+    _detailVisitPreservesView = false;
+    return preserve;
+  }
+
   Future<void> applyTaskMutation(SecretaryObject object) async {
     if (object.kind != 'task') {
       _nodes[object.id] = object;
@@ -833,6 +851,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
 
     if (object.isDeletedTask) {
+      _detailVisitPreservesView = false;
       _removeObjectFromWorkspace(object.id);
       if (rootId == object.id) {
         await loadOverview();
@@ -841,12 +860,26 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
 
     if (rootId == null && _isTerminalForActiveOverview(object.status)) {
+      _detailVisitPreservesView = false;
       _removeObjectFromWorkspace(object.id);
       return;
     }
 
-    _nodes[object.id] = object;
+    _storeTaskObject(object);
+    if (_detailVisitOpen) {
+      _detailVisitPreservesView = true;
+    }
     notifyListeners();
+  }
+
+  void _storeTaskObject(SecretaryObject object) {
+    _nodes[object.id] = object;
+    if (_landscapeTasks.any((task) => task.id == object.id)) {
+      _landscapeTasks = [
+        for (final task in _landscapeTasks)
+          if (task.id == object.id) object else task,
+      ];
+    }
   }
 
   void selectObject(String? objectId) {
