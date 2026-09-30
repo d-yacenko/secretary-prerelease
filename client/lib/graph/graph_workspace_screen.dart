@@ -63,6 +63,8 @@ class GraphWorkspaceScreen extends StatefulWidget {
 
 class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   final TransformationController _transform = TransformationController();
+  Offset? _worldFrameOrigin;
+  bool _worldFrameShared = false;
   final TextEditingController _searchController = TextEditingController();
   List<SecretaryObject> _searchResults = [];
   bool _searching = false;
@@ -401,9 +403,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final projection = projectPeopleLandscapeOverview(
       personIds: personIds,
       people: people,
-      landscapeTasks: widget.controller.landscapeTasks,
-      landscapeTaskEdges: widget.controller.landscapeTaskEdges,
-      landscapeTaskContextComplete: widget.controller.landscapeTaskContextComplete,
+      taskCenters: widget.controller.canonicalTaskCenters,
+      canonicalCentersActive: widget.controller.canonicalTaskCentersActive,
     );
     if (projection.usable) {
       return projection.positions;
@@ -435,6 +436,23 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool get _compactPeopleOverview =>
       widget.controller.mode == GraphWorkspaceMode.people &&
       widget.controller.rootId == null;
+
+  bool get _sharedWorldCamera =>
+      widget.controller.rootId == null &&
+      widget.controller.canonicalTaskCentersActive;
+
+  /// Keeps a world point on the same viewport pixel when the canvas origin moves.
+  void _holdWorldPoint(Offset previousOrigin, Offset nextOrigin) {
+    final scale = _transform.value.getMaxScaleOnAxis();
+    final translation = _transform.value.getTranslation();
+    final next = _transform.value.clone();
+    next.setTranslationRaw(
+      translation.x + scale * (nextOrigin.dx - previousOrigin.dx),
+      translation.y + scale * (nextOrigin.dy - previousOrigin.dy),
+      translation.z,
+    );
+    _transform.value = next;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1300,23 +1318,37 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         if (_canvasViewportSize != viewportSize) {
           _canvasViewportSize = viewportSize;
         }
-        if (widget.controller.shouldFitAfterLayout) {
+        final frameOrigin = Offset(bounds.left, bounds.top);
+        final holdCamera = _sharedWorldCamera &&
+            _worldFrameShared &&
+            _worldFrameOrigin != null &&
+            _worldFrameOrigin != frameOrigin;
+        if (widget.controller.shouldFitAfterLayout || holdCamera) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) {
               return;
             }
-            _transform.value = hybrid != null
-                ? hybridFitTransform(
-                    graphBounds: bounds,
-                    viewportSize: viewportSize,
-                  )
-                : GraphLayout.fitTransform(
-                    positions: positions,
-                    viewportSize: viewportSize,
-                    nodeSizes: overviewSizes,
-                  );
-            widget.controller.clearFitRequest();
+            if (widget.controller.shouldFitAfterLayout) {
+              _transform.value = hybrid != null
+                  ? hybridFitTransform(
+                      graphBounds: bounds,
+                      viewportSize: viewportSize,
+                    )
+                  : GraphLayout.fitTransform(
+                      positions: positions,
+                      viewportSize: viewportSize,
+                      nodeSizes: overviewSizes,
+                    );
+              widget.controller.clearFitRequest();
+            } else if (_worldFrameOrigin != null && _worldFrameOrigin != frameOrigin) {
+              _holdWorldPoint(_worldFrameOrigin!, frameOrigin);
+            }
+            _worldFrameOrigin = frameOrigin;
+            _worldFrameShared = _sharedWorldCamera;
           });
+        } else {
+          _worldFrameOrigin = frameOrigin;
+          _worldFrameShared = _sharedWorldCamera;
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2890,7 +2922,9 @@ class _GraphNodeCard extends StatelessWidget {
         child: Container(
           width: compact ? kPeopleLandscapeOverviewCardWidth : kGraphNodeWidth,
           height: compact ? kPeopleLandscapeOverviewCardHeight : kGraphNodeHeight,
-          padding: EdgeInsets.all(compact ? 6 : 8),
+          padding: compact
+              ? const EdgeInsets.fromLTRB(6, 2, 6, 2)
+              : const EdgeInsets.all(8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
@@ -2974,8 +3008,8 @@ class _GraphNodeCard extends StatelessWidget {
               .where((item) => item.state == 'effective')
               .map((item) => providerLabel(item.provider))
               .where((label) => label.isNotEmpty)
-              .take(2)
-              .join(' · ');
+              .take(1)
+              .join();
     final shortCue = cue.length <= kPeopleLandscapeCompactCueLimit ? cue : '';
     return Column(
       key: ValueKey('person-summary-card-${object.id}'),
@@ -2983,6 +3017,8 @@ class _GraphNodeCard extends StatelessWidget {
       children: [
         Row(
           children: [
+            Icon(Icons.person_outline, size: 14, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 4),
             Expanded(
               child: Text(
                 object.title,

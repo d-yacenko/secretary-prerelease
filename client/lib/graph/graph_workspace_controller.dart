@@ -71,6 +71,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   final Map<String, Offset> _canonicalTaskCenters = {};
   bool canonicalTaskCentersActive = false;
   String? taskLayoutWarning;
+  int _unrootedTasksWindow = 0;
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
 
@@ -148,6 +149,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _edges.clear();
     _positions.clear();
     _clearCanonicalTaskCenters();
+    _unrootedTasksWindow = 0;
     _people.clear();
     _seedIds = const [];
     _landscapeTasks = const [];
@@ -162,12 +164,23 @@ class GraphWorkspaceController extends ChangeNotifier {
     if (mode == next || loadState == GraphWorkspaceLoadState.loading) {
       return;
     }
+    final unrooted = rootId == null;
+    if (mode == GraphWorkspaceMode.tasks && unrooted) {
+      _unrootedTasksWindow = windowIndex;
+    }
+    final healthyUnrooted = unrooted && canonicalTaskCentersActive;
+    final resolveCanonical = !canonicalTaskCentersActive;
     mode = next;
     selectedObjectId = null;
     selectedEdgeId = null;
     searchKindFilter = null;
     searchProviderFilter = null;
-    await loadOverview();
+    await _loadOverviewInternal(
+      setLoading: true,
+      windowIndex: next == GraphWorkspaceMode.tasks ? _unrootedTasksWindow : 0,
+      fitAfterLayout: !healthyUnrooted,
+      resolveCanonical: resolveCanonical,
+    );
   }
 
   Future<GraphWorkspaceOut> _fetchWorkspace({
@@ -259,6 +272,8 @@ class GraphWorkspaceController extends ChangeNotifier {
     required bool setLoading,
     int windowIndex = 0,
     bool preserveSelection = false,
+    bool fitAfterLayout = true,
+    bool resolveCanonical = true,
   }) async {
     if (setLoading) {
       loadState = GraphWorkspaceLoadState.loading;
@@ -279,9 +294,9 @@ class GraphWorkspaceController extends ChangeNotifier {
         freshRoot: true,
         rootIdAfter: null,
         selectObjectId: keptSelection,
-        fitAfterLayout: true,
+        fitAfterLayout: fitAfterLayout,
       );
-      if (mode == GraphWorkspaceMode.tasks) {
+      if (resolveCanonical && rootId == null) {
         await _resolveUnrootedTaskLayout();
       }
       loadState = GraphWorkspaceLoadState.ready;

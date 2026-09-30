@@ -48,8 +48,11 @@ void main() {
   });
 
   testWidgets('incomplete landscape falls back to the whole People grid', (tester) async {
-    Future<void> expectGrid(Map<String, dynamic> workspace) async {
-      await _pumpPeople(tester, workspace);
+    Future<void> expectGrid(
+      Map<String, dynamic> workspace, {
+      bool layoutUsable = true,
+    }) async {
+      await _pumpPeople(tester, workspace, layoutUsable: layoutUsable);
       final drawn = _delta(tester, 'person-ada', 'person-bea');
       final grid = _grid(_loaded(tester));
       expect(drawn, _offsetDelta(grid, 'person-ada', 'person-bea'));
@@ -65,8 +68,8 @@ void main() {
           _person('person-bea', anchors: const []),
         ],
         tasks: [_task('task-a', 'Скрытая задача')],
-        contextComplete: false,
       ),
+      layoutUsable: false,
     );
     await expectGrid(
       _workspace(
@@ -245,9 +248,8 @@ PeopleLandscapeOverview _landscape(GraphWorkspaceController controller) {
   return projectPeopleLandscapeOverview(
     personIds: people.map((node) => node.id),
     people: [for (final node in people) controller.personFor(node.id)!],
-    landscapeTasks: controller.landscapeTasks,
-    landscapeTaskEdges: controller.landscapeTaskEdges,
-    landscapeTaskContextComplete: controller.landscapeTaskContextComplete,
+    taskCenters: controller.canonicalTaskCenters,
+    canonicalCentersActive: controller.canonicalTaskCentersActive,
   );
 }
 
@@ -263,6 +265,7 @@ Future<GraphTestHarness> _pumpPeople(
   WidgetTester tester,
   Map<String, dynamic> overview, {
   Map<String, dynamic>? rooted,
+  bool layoutUsable = true,
 }) async {
   tester.view.physicalSize = const Size(1400, 900);
   tester.view.devicePixelRatio = 1;
@@ -270,6 +273,26 @@ Future<GraphTestHarness> _pumpPeople(
   addTearDown(tester.view.resetDevicePixelRatio);
   final harness = GraphTestHarness(
     MockClient((request) async {
+      if (request.method == 'GET' && request.url.path == '/graph/task-layout') {
+        if (!layoutUsable) {
+          return http.Response('missing', 404);
+        }
+        final tasks = (overview['landscape_tasks'] as List?) ?? const [];
+        return jsonUtf8Response({
+          'topology_revision': 1,
+          'snapshot_revision': 1,
+          'algorithm_version': 'task-map-v1',
+          'usable': true,
+          'centers': [
+            for (var index = 0; index < tasks.length; index++)
+              {
+                'task_id': (tasks[index] as Map)['id'],
+                'world_x': 500.0 + index * 800,
+                'world_y': 240.0,
+              },
+          ],
+        });
+      }
       if (request.url.path == '/graph/people-workspace') {
         final rootId = request.url.queryParameters['root_id'];
         return jsonUtf8Response(rootId == null ? overview : rooted ?? overview);

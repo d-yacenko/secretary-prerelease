@@ -3,16 +3,15 @@ import 'dart:ui';
 
 import '../api/api_models.dart';
 import 'graph_layout.dart';
-import 'task_map_hierarchy.dart';
 
 /// Clearance between anchored Task geography and the unanchored strip.
 ///
 /// The strip means only “no current Task anchor”.
 const double kPeopleLandscapeShelfGap = kGraphNodeWidth + kGraphNodeHorizontalGap;
 
-/// Unrooted People overview card. Smaller than the rooted 186×100 card.
-const double kPeopleLandscapeOverviewCardWidth = 156;
-const double kPeopleLandscapeOverviewCardHeight = 56;
+/// Unrooted People marker. Smaller than the rooted 186×100 card.
+const double kPeopleLandscapeOverviewCardWidth = 140;
+const double kPeopleLandscapeOverviewCardHeight = 44;
 
 /// Local gap used when compact cards would touch or nearly touch.
 const double kPeopleLandscapeOverviewCardGap = 8;
@@ -72,23 +71,59 @@ class PeopleLandscapeOverview {
   final Rect? taskBounds;
 }
 
+/// Bounds of every canonical Task card, including Tasks outside the current window.
+Rect? canonicalTaskWorldBounds(Map<String, Offset> taskCenters) {
+  if (taskCenters.isEmpty) {
+    return null;
+  }
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  const halfW = kGraphNodeWidth / 2;
+  const halfH = kGraphNodeHeight / 2;
+  for (final center in taskCenters.values) {
+    minX = math.min(minX, center.dx - halfW);
+    minY = math.min(minY, center.dy - halfH);
+    maxX = math.max(maxX, center.dx + halfW);
+    maxY = math.max(maxY, center.dy + halfH);
+  }
+  return Rect.fromLTRB(minX, minY, maxX, maxY);
+}
+
+Offset peopleMarkerTopLeft(Offset center) {
+  return center -
+      const Offset(
+        kPeopleLandscapeOverviewCardWidth / 2,
+        kPeopleLandscapeOverviewCardHeight / 2,
+      );
+}
+
+Offset peopleMarkerCenter(Offset topLeft) {
+  return topLeft +
+      const Offset(
+        kPeopleLandscapeOverviewCardWidth / 2,
+        kPeopleLandscapeOverviewCardHeight / 2,
+      );
+}
+
+/// People markers on the canonical Task-center world.
+///
+/// [taskCenters] are persisted Task centers, not card top-lefts. Returned
+/// positions are marker top-lefts, so an unspread marker's center is the
+/// Task center or the unweighted centroid of distinct anchors.
 PeopleLandscapeOverview projectPeopleLandscapeOverview({
   required Iterable<String> personIds,
   required Iterable<PersonPresentation> people,
-  required List<SecretaryObject> landscapeTasks,
-  required List<SecretaryEdge> landscapeTaskEdges,
-  required bool landscapeTaskContextComplete,
+  required Map<String, Offset> taskCenters,
+  required bool canonicalCentersActive,
 }) {
   final visibleIds = personIds.toList();
-  if (!landscapeTaskContextComplete) {
+  if (!canonicalCentersActive) {
     return _unusable(visibleIds);
   }
-  final hierarchy = projectTaskMapHierarchy(
-    nodes: landscapeTasks,
-    edges: landscapeTaskEdges,
-  );
   final peopleById = {for (final person in people) person.personId: person};
-  final anchored = <String, List<String>>{};
+  final bases = <String, Offset>{};
   final unanchored = <String>[];
   final unresolved = <String>[];
   for (final personId in visibleIds) {
@@ -102,34 +137,43 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
       unanchored.add(personId);
       continue;
     }
-    if (anchors.any((id) => !hierarchy.positions.containsKey(id))) {
+    if (anchors.any((id) => !taskCenters.containsKey(id))) {
       unresolved.add(personId);
       continue;
     }
-    anchored[personId] = person.landscapeTaskIds.toList();
+    var x = 0.0;
+    var y = 0.0;
+    for (final id in anchors) {
+      final center = taskCenters[id]!;
+      x += center.dx;
+      y += center.dy;
+    }
+    bases[personId] = Offset(x / anchors.length, y / anchors.length);
   }
   if (unresolved.isNotEmpty) {
     return _unusable(unresolved);
   }
-  final tasks = landscapeTasks.where((node) => node.kind == 'task').toList();
   const cardSize = Size(
     kPeopleLandscapeOverviewCardWidth,
     kPeopleLandscapeOverviewCardHeight,
   );
-  final anchoredPositions = projectPeopleFromTasks(
-    personIds: anchored.keys,
-    taskPositions: hierarchy.positions,
-    taskIdsByPerson: anchored,
-    cardSize: cardSize,
-    nearGap: kPeopleLandscapeOverviewCardGap,
-  );
-  final taskBounds = tasks.isEmpty ? null : hierarchy.taskBounds;
+  final ordered = bases.keys.toList()..sort();
+  final anchoredPositions = <String, Offset>{};
+  for (final personId in ordered) {
+    anchoredPositions[personId] = _place(
+      peopleMarkerTopLeft(bases[personId]!),
+      anchoredPositions,
+      cardSize,
+      kPeopleLandscapeOverviewCardGap,
+    );
+  }
+  final taskBounds = canonicalTaskWorldBounds(taskCenters);
   final positions = Map<String, Offset>.from(anchoredPositions);
-  positions.addAll(_shelfPositions(unanchored, taskBounds, anchoredPositions));
+  positions.addAll(_shelfPositions(unanchored, taskBounds));
   return PeopleLandscapeOverview(
     usable: true,
     positions: positions,
-    anchoredPersonIds: anchored.keys.toList()..sort(),
+    anchoredPersonIds: ordered,
     unanchoredPersonIds: unanchored..sort(),
     unresolvedPersonIds: const [],
     taskBounds: taskBounds,
@@ -148,26 +192,17 @@ PeopleLandscapeOverview _unusable(List<String> unresolved) {
   );
 }
 
-Map<String, Offset> _shelfPositions(
-  List<String> personIds,
-  Rect? taskBounds,
-  Map<String, Offset> anchoredPositions,
-) {
+Map<String, Offset> _shelfPositions(List<String> personIds, Rect? taskBounds) {
   final ordered = List<String>.from(personIds)..sort();
   if (ordered.isEmpty) {
     return const {};
   }
-  var origin = kPeopleLandscapeNeutralShelfOrigin;
-  if (taskBounds != null || anchoredPositions.isNotEmpty) {
-    var right = taskBounds?.right ?? double.negativeInfinity;
-    for (final position in anchoredPositions.values) {
-      right = math.max(right, position.dx + kPeopleLandscapeOverviewCardWidth);
-    }
-    origin = Offset(
-      right + kPeopleLandscapeShelfGap,
-      taskBounds?.top ?? kPeopleLandscapeNeutralShelfOrigin.dy,
-    );
-  }
+  final origin = taskBounds == null
+      ? kPeopleLandscapeNeutralShelfOrigin
+      : Offset(
+          taskBounds.right + kPeopleLandscapeShelfGap,
+          taskBounds.top,
+        );
   final placed = <String, Offset>{};
   final step = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap;
   for (var index = 0; index < ordered.length; index++) {

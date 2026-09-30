@@ -7,7 +7,6 @@ import 'package:personal_secretary/auth/server_url_store.dart';
 import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/graph/graph_workspace_controller.dart';
 import 'package:personal_secretary/graph/people_landscape.dart';
-import 'package:personal_secretary/graph/task_map_hierarchy.dart';
 
 SecretaryObject _task(String id) {
   return SecretaryObject(
@@ -58,16 +57,14 @@ PersonPresentation _person(
 PeopleLandscapeOverview _project({
   required List<String> personIds,
   required List<PersonPresentation> people,
-  List<SecretaryObject> tasks = const [],
-  List<SecretaryEdge> edges = const [],
-  bool complete = true,
+  Map<String, Offset> taskCenters = const {},
+  bool active = true,
 }) {
   return projectPeopleLandscapeOverview(
     personIds: personIds,
     people: people,
-    landscapeTasks: tasks,
-    landscapeTaskEdges: edges,
-    landscapeTaskContextComplete: complete,
+    taskCenters: taskCenters,
+    canonicalCentersActive: active,
   );
 }
 
@@ -81,22 +78,16 @@ bool _compactCardsOverlap(Offset left, Offset right) {
   );
 }
 
-const _compactSize = Size(
-  kPeopleLandscapeOverviewCardWidth,
-  kPeopleLandscapeOverviewCardHeight,
-);
-
 void main() {
   test('one complete Task anchor uses canonical Task geography', () {
-    final tasks = [_task('task-a')];
-    final hierarchy = projectTaskMapHierarchy(nodes: tasks, edges: const []);
+    const center = Offset(400, 220);
     final overview = _project(
       personIds: const ['person-a'],
       people: [_person('person-a', anchors: const ['task-a'])],
-      tasks: tasks,
+      taskCenters: const {'task-a': center},
     );
     expect(overview.usable, isTrue);
-    expect(overview.positions['person-a'], hierarchy.positions['task-a']);
+    expect(peopleMarkerCenter(overview.positions['person-a']!), center);
     expect(overview.anchoredPersonIds, ['person-a']);
     expect(overview.unanchoredPersonIds, isEmpty);
   });
@@ -105,7 +96,7 @@ void main() {
     final overview = _project(
       personIds: const ['person-a', 'person-z'],
       people: [_person('person-a', anchors: const ['task-a'])],
-      tasks: [_task('task-a')],
+      taskCenters: const {'task-a': Offset(10, 20)},
     );
     expect(overview.usable, isFalse);
     expect(overview.positions, isEmpty);
@@ -113,34 +104,32 @@ void main() {
   });
 
   test('several Tasks use the centroid of canonical positions', () {
-    final tasks = [_task('task-a'), _task('task-b')];
-    final edges = [_partOf('edge-1', 'task-b', 'task-a')];
-    final hierarchy = projectTaskMapHierarchy(nodes: tasks, edges: edges);
+    const left = Offset(100, 80);
+    const right = Offset(300, 160);
     final overview = _project(
       personIds: const ['person-a'],
       people: [
         _person('person-a', anchors: const ['task-a', 'task-a', 'task-b']),
       ],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: const {'task-a': left, 'task-b': right},
     );
-    final left = hierarchy.positions['task-a']!;
-    final right = hierarchy.positions['task-b']!;
     expect(overview.usable, isTrue);
     expect(
-      overview.positions['person-a'],
-      Offset((left.dx + right.dx) / 2, (left.dy + right.dy) / 2),
+      peopleMarkerCenter(overview.positions['person-a']!),
+      const Offset(200, 120),
     );
   });
 
   test('unanchored People sit outside Task bounds without moving anchors', () {
-    final tasks = [_task('task-a'), _task('task-b')];
-    final edges = [_partOf('edge-1', 'task-b', 'task-a')];
+    const centers = {
+      'task-a': Offset(100, 80),
+      'task-b': Offset(300, 160),
+      'task-far': Offset(2000, 80),
+    };
     final anchoredOnly = _project(
       personIds: const ['person-anchored'],
       people: [_person('person-anchored', anchors: const ['task-a', 'task-b'])],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: centers,
     );
     final overview = _project(
       personIds: const ['person-shelf-b', 'person-anchored', 'person-shelf-a'],
@@ -149,8 +138,7 @@ void main() {
         _person('person-shelf-b'),
         _person('person-shelf-a'),
       ],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: centers,
     );
     expect(overview.usable, isTrue);
     expect(overview.positions['person-anchored'], anchoredOnly.positions['person-anchored']);
@@ -191,8 +179,7 @@ void main() {
         _person('person-anchored', anchors: const ['task-b', 'task-a']),
         _person('person-shelf-b'),
       ],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: centers,
     );
     expect(reversed.positions, overview.positions);
   });
@@ -219,12 +206,12 @@ void main() {
     );
   });
 
-  test('incomplete Task context yields no Person positions', () {
+  test('inactive canonical centers yield no Person positions', () {
     final overview = _project(
       personIds: const ['person-a'],
       people: [_person('person-a', anchors: const ['task-a'])],
-      tasks: [_task('task-a')],
-      complete: false,
+      taskCenters: const {'task-a': Offset(10, 20)},
+      active: false,
     );
     expect(overview.usable, isFalse);
     expect(overview.positions, isEmpty);
@@ -232,14 +219,13 @@ void main() {
   });
 
   test('an incomplete Person anchor set blocks every position', () {
-    final tasks = [_task('task-a')];
     final overview = _project(
       personIds: const ['person-ready', 'person-partial'],
       people: [
         _person('person-ready', anchors: const ['task-a']),
         _person('person-partial', anchors: const ['task-a'], complete: false),
       ],
-      tasks: tasks,
+      taskCenters: const {'task-a': Offset(10, 20)},
     );
     expect(overview.usable, isFalse);
     expect(overview.positions, isEmpty);
@@ -254,7 +240,7 @@ void main() {
         _person('person-a', anchors: const ['task-a']),
         _person('person-b', anchors: const ['task-a', 'task-missing']),
       ],
-      tasks: [_task('task-a')],
+      taskCenters: const {'task-a': Offset(10, 20)},
     );
     expect(overview.usable, isFalse);
     expect(overview.positions, isEmpty);
@@ -307,16 +293,17 @@ void main() {
   });
 
   test('person ids keep their projected positions when input order changes', () {
-    final tasks = [_task('task-left'), _task('task-right')];
-    final edges = [_partOf('edge-1', 'task-right', 'task-left')];
+    const centers = {
+      'task-left': Offset(80, 40),
+      'task-right': Offset(640, 40),
+    };
     final forward = _project(
       personIds: const ['person-b', 'person-a'],
       people: [
         _person('person-b', anchors: const ['task-right']),
         _person('person-a', anchors: const ['task-left']),
       ],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: centers,
     );
     final reversed = _project(
       personIds: const ['person-a', 'person-b'],
@@ -324,66 +311,50 @@ void main() {
         _person('person-a', anchors: const ['task-left']),
         _person('person-b', anchors: const ['task-right']),
       ],
-      tasks: tasks,
-      edges: edges,
+      taskCenters: centers,
     );
     expect(forward.usable, isTrue);
     expect(forward.positions, reversed.positions);
-    expect(forward.positions['person-a'], isNot(forward.positions['person-b']));
-    final hierarchy = projectTaskMapHierarchy(nodes: tasks, edges: edges);
-    expect(forward.positions['person-a'], hierarchy.positions['task-left']);
-    expect(forward.positions['person-b'], hierarchy.positions['task-right']);
+    expect(peopleMarkerCenter(forward.positions['person-a']!), centers['task-left']);
+    expect(peopleMarkerCenter(forward.positions['person-b']!), centers['task-right']);
   });
 
   test('shared and near anchors separate locally without overlap', () {
     const shared = Offset(480, 220);
-    final identical = projectPeopleFromTasks(
-      personIds: const ['person-b', 'person-a', 'person-c'],
-      taskPositions: const {'task-shared': shared},
-      taskIdsByPerson: const {
-        'person-a': ['task-shared'],
-        'person-b': ['task-shared'],
-        'person-c': ['task-shared'],
-      },
-      cardSize: _compactSize,
-      nearGap: kPeopleLandscapeOverviewCardGap,
-    );
-    final repeated = projectPeopleFromTasks(
-      personIds: const ['person-c', 'person-a', 'person-b'],
-      taskPositions: const {'task-shared': shared},
-      taskIdsByPerson: const {
-        'person-c': ['task-shared'],
-        'person-a': ['task-shared'],
-        'person-b': ['task-shared'],
-      },
-      cardSize: _compactSize,
-      nearGap: kPeopleLandscapeOverviewCardGap,
-    );
-    expect(identical, repeated);
-    expect(identical['person-a'], shared);
-    expect(_compactCardsOverlap(identical['person-a']!, identical['person-b']!), isFalse);
-    expect(_compactCardsOverlap(identical['person-a']!, identical['person-c']!), isFalse);
-    expect(_compactCardsOverlap(identical['person-b']!, identical['person-c']!), isFalse);
-    for (final position in identical.values) {
-      expect((position - shared).distance, lessThan(400));
+    PeopleLandscapeOverview project(List<String> ids) {
+      return _project(
+        personIds: ids,
+        people: [
+          for (final id in ids) _person(id, anchors: const ['task-shared']),
+        ],
+        taskCenters: const {'task-shared': shared},
+      );
+    }
+
+    final identical = project(const ['person-b', 'person-a', 'person-c']);
+    final repeated = project(const ['person-c', 'person-a', 'person-b']);
+    expect(identical.positions, repeated.positions);
+    expect(peopleMarkerCenter(identical.positions['person-a']!), shared);
+    expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-b']!), isFalse);
+    expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-c']!), isFalse);
+    expect(_compactCardsOverlap(identical.positions['person-b']!, identical.positions['person-c']!), isFalse);
+    for (final position in identical.positions.values) {
+      expect((peopleMarkerCenter(position) - shared).distance, lessThan(400));
     }
 
     const left = Offset(10, 30);
     const right = Offset(18, 34);
-    final near = projectPeopleFromTasks(
+    final near = _project(
       personIds: const ['person-b', 'person-a'],
-      taskPositions: const {'task-left': left, 'task-right': right},
-      taskIdsByPerson: const {
-        'person-a': ['task-left'],
-        'person-b': ['task-right'],
-      },
-      cardSize: _compactSize,
-      nearGap: kPeopleLandscapeOverviewCardGap,
+      people: [
+        _person('person-a', anchors: const ['task-left']),
+        _person('person-b', anchors: const ['task-right']),
+      ],
+      taskCenters: const {'task-left': left, 'task-right': right},
     );
-    expect(_compactCardsOverlap(near['person-a']!, near['person-b']!), isFalse);
-    expect((near['person-a']! - left).distance, lessThan(400));
-    expect((near['person-b']! - right).distance, lessThan(400));
-    expect(near['person-a']!.dx, lessThan(near['person-b']!.dx + kPeopleLandscapeOverviewCardWidth));
+    expect(_compactCardsOverlap(near.positions['person-a']!, near.positions['person-b']!), isFalse);
+    expect((peopleMarkerCenter(near.positions['person-a']!) - left).distance, lessThan(400));
+    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, lessThan(400));
   });
 }
 

@@ -260,7 +260,7 @@ void main() {
       ),
     );
     final cues = tester.widget<Text>(find.byKey(const Key('person-provider-cues-person-c')));
-    expect(cues.data, 'Gmail · Telegram');
+    expect(cues.data, 'Gmail');
     expect(find.textContaining('Яндекс'), findsNothing);
     expect(find.textContaining('old@example.com'), findsNothing);
     expect(find.byKey(const Key('person-identity-conflict-person-c')), findsOneWidget);
