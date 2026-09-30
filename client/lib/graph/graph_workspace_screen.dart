@@ -29,6 +29,7 @@ import 'graph_layout.dart';
 import 'people_landscape.dart';
 import 'people_overview.dart';
 import 'graph_workspace_controller.dart';
+import 'task_layout_world.dart';
 import 'task_map_hierarchy.dart';
 import 'task_profile_section.dart';
 
@@ -351,13 +352,41 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }) {
     final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
     if (widget.controller.mode == GraphWorkspaceMode.tasks) {
-      positions.addAll(
-        projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
-      );
+      final canonical = _canonicalTaskTopLefts(nodes);
+      if (canonical != null) {
+        positions.addAll(canonical);
+      } else {
+        positions.addAll(
+          projectTaskMapHierarchy(nodes: nodes, edges: edges).positions,
+        );
+      }
     } else if (widget.controller.rootId == null) {
       positions.addAll(_peopleOverviewPositions(nodes));
     }
     return positions;
+  }
+
+  /// Top-lefts for the unrooted Tasks overview when a complete canonical
+  /// snapshot is installed. Null asks the caller to keep the temporary
+  /// window layout, including when any visible Task has no center.
+  Map<String, Offset>? _canonicalTaskTopLefts(List<SecretaryObject> nodes) {
+    if (widget.controller.rootId != null ||
+        !widget.controller.canonicalTaskCentersActive) {
+      return null;
+    }
+    final centers = widget.controller.canonicalTaskCenters;
+    final placed = <String, Offset>{};
+    for (final node in nodes) {
+      if (node.kind != 'task') {
+        continue;
+      }
+      final center = centers[node.id];
+      if (center == null) {
+        return null;
+      }
+      placed[node.id] = taskLayoutCardTopLeft(center);
+    }
+    return placed;
   }
 
   Map<String, Offset> _peopleOverviewPositions(List<SecretaryObject> nodes) {
@@ -1217,6 +1246,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 widget.bookmarkController?.colorFor(objectId) != null,
           )
         : null;
+    if (hybrid != null &&
+        widget.controller.rootId == null &&
+        widget.controller.canonicalTaskCentersActive) {
+      for (final node in nodes) {
+        final topLeft = positions[node.id];
+        if (node.kind == 'task' && topLeft != null) {
+          hybrid.displayTopLeft[node.id] = node.isOngoingTask
+              ? hybridOngoingRect(topLeft).topLeft
+              : topLeft;
+        }
+      }
+    }
     _hybridWarning = hybrid?.warning;
     final projection = hybrid?.lod;
     final drawnNodes = projection == null
@@ -1289,7 +1330,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 ),
               ),
             Expanded(
-              child: _graphViewport(
+              child: Stack(
+                children: [
+                  _graphViewport(
                 context,
                 positions,
                 drawnNodes,
@@ -1303,6 +1346,28 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 focusNeighborIds,
                 projection,
                 hybrid,
+              ),
+                  if (widget.controller.taskLayoutWarning != null &&
+                      widget.controller.mode == GraphWorkspaceMode.tasks &&
+                      widget.controller.rootId == null)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      top: 12,
+                      child: IgnorePointer(
+                        child: Material(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Text(
+                            widget.controller.taskLayoutWarning!,
+                            key: const ValueKey('task-layout-warning'),
+                          ),
+                        ),
+                      ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],

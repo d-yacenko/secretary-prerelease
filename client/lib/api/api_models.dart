@@ -3642,6 +3642,169 @@ class AssignLabelResult {
   }
 }
 
+/// Explicit client layout algorithm. Not derived from the app version.
+const String kTaskLayoutAlgorithmVersion = 'task-map-v1';
+
+class TaskLayoutCenter {
+  TaskLayoutCenter({
+    required this.taskId,
+    required this.worldX,
+    required this.worldY,
+  });
+
+  final String taskId;
+  final double worldX;
+  final double worldY;
+
+  Map<String, dynamic> toJson() => {
+        'task_id': taskId,
+        'world_x': worldX,
+        'world_y': worldY,
+      };
+
+  static TaskLayoutCenter? tryParse(Map<String, dynamic> json) {
+    final taskId = json['task_id'];
+    final worldX = json['world_x'];
+    final worldY = json['world_y'];
+    if (taskId is! String || taskId.isEmpty) {
+      return null;
+    }
+    if (worldX is! num || worldY is! num) {
+      return null;
+    }
+    if (!worldX.isFinite || !worldY.isFinite) {
+      return null;
+    }
+    return TaskLayoutCenter(
+      taskId: taskId,
+      worldX: worldX.toDouble(),
+      worldY: worldY.toDouble(),
+    );
+  }
+}
+
+class TaskLayoutSnapshot {
+  TaskLayoutSnapshot({
+    required this.topologyRevision,
+    required this.snapshotRevision,
+    required this.algorithmVersion,
+    required this.usable,
+    required this.centers,
+  });
+
+  final int topologyRevision;
+  final int? snapshotRevision;
+  final String? algorithmVersion;
+  final bool usable;
+  final List<TaskLayoutCenter> centers;
+
+  bool get matchesCurrentAlgorithm =>
+      algorithmVersion == kTaskLayoutAlgorithmVersion;
+
+  static TaskLayoutSnapshot? tryParse(Map<String, dynamic> json) {
+    final topologyRevision = json['topology_revision'];
+    final usable = json['usable'];
+    final rawCenters = json['centers'];
+    if (topologyRevision is! int || usable is! bool || rawCenters is! List) {
+      return null;
+    }
+    final snapshotRevision = json['snapshot_revision'];
+    if (snapshotRevision != null && snapshotRevision is! int) {
+      return null;
+    }
+    final algorithmVersion = json['algorithm_version'];
+    if (algorithmVersion != null && algorithmVersion is! String) {
+      return null;
+    }
+    final centers = <TaskLayoutCenter>[];
+    final seen = <String>{};
+    for (final item in rawCenters) {
+      if (item is! Map) {
+        return null;
+      }
+      final center = TaskLayoutCenter.tryParse(Map<String, dynamic>.from(item));
+      if (center == null || !seen.add(center.taskId)) {
+        return null;
+      }
+      centers.add(center);
+    }
+    return TaskLayoutSnapshot(
+      topologyRevision: topologyRevision,
+      snapshotRevision: snapshotRevision,
+      algorithmVersion: algorithmVersion,
+      usable: usable,
+      centers: centers,
+    );
+  }
+}
+
+class TaskLayoutReplacement {
+  TaskLayoutReplacement({
+    required this.expectedTopologyRevision,
+    required this.algorithmVersion,
+    required this.centers,
+  });
+
+  final int expectedTopologyRevision;
+  final String algorithmVersion;
+  final List<TaskLayoutCenter> centers;
+
+  Map<String, dynamic> toJson() => {
+        'expected_topology_revision': expectedTopologyRevision,
+        'algorithm_version': algorithmVersion,
+        'centers': [for (final center in centers) center.toJson()],
+      };
+}
+
+class TaskLayoutTopology {
+  TaskLayoutTopology({
+    required this.topologyRevision,
+    required this.tasks,
+    required this.edges,
+  });
+
+  final int topologyRevision;
+  final List<SecretaryObject> tasks;
+  final List<SecretaryEdge> edges;
+
+  static TaskLayoutTopology? tryParse(Map<String, dynamic> json) {
+    final topologyRevision = json['topology_revision'];
+    final rawTasks = json['tasks'];
+    final rawEdges = json['edges'];
+    if (topologyRevision is! int || rawTasks is! List || rawEdges is! List) {
+      return null;
+    }
+    try {
+      final tasks = <SecretaryObject>[];
+      final seen = <String>{};
+      for (final item in rawTasks) {
+        if (item is! Map) {
+          return null;
+        }
+        final task = SecretaryObject.fromJson(Map<String, dynamic>.from(item));
+        if (task.kind != 'task' || !seen.add(task.id)) {
+          return null;
+        }
+        tasks.add(task);
+      }
+      final edges = <SecretaryEdge>[];
+      for (final item in rawEdges) {
+        if (item is! Map) {
+          return null;
+        }
+        edges.add(SecretaryEdge.fromJson(Map<String, dynamic>.from(item)));
+      }
+      return TaskLayoutTopology(
+        topologyRevision: topologyRevision,
+        tasks: tasks,
+        edges: edges,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 class RemoveLabelResult {
   RemoveLabelResult({
     required this.objectId,

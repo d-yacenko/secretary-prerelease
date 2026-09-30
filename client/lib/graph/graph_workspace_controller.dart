@@ -6,6 +6,7 @@ import '../api/secretary_api_client.dart';
 import '../auth/auth_controller.dart';
 import 'graph_layout.dart';
 import 'graph_map_edge_presentation.dart';
+import 'task_layout_world.dart';
 
 enum GraphWorkspaceLoadState { idle, loading, ready, error }
 
@@ -67,6 +68,9 @@ class GraphWorkspaceController extends ChangeNotifier {
   List<SecretaryEdge> _landscapeTaskEdges = const [];
   bool _landscapeTaskContextComplete = true;
   final Map<String, Offset> _positions = {};
+  final Map<String, Offset> _canonicalTaskCenters = {};
+  bool canonicalTaskCentersActive = false;
+  String? taskLayoutWarning;
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
 
@@ -88,6 +92,8 @@ class GraphWorkspaceController extends ChangeNotifier {
         .toList();
   }
   Map<String, Offset> get positions => Map.unmodifiable(_positions);
+  Map<String, Offset> get canonicalTaskCenters =>
+      Map.unmodifiable(_canonicalTaskCenters);
   Map<String, Offset> get visiblePositions {
     final visibleIds = visibleNodes.map((node) => node.id).toSet();
     return Map.fromEntries(
@@ -141,6 +147,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _nodes.clear();
     _edges.clear();
     _positions.clear();
+    _clearCanonicalTaskCenters();
     _people.clear();
     _seedIds = const [];
     _landscapeTasks = const [];
@@ -231,6 +238,9 @@ class GraphWorkspaceController extends ChangeNotifier {
         selectObjectId: null,
         fitAfterLayout: true,
       );
+      if (mode == GraphWorkspaceMode.tasks) {
+        await _resolveUnrootedTaskLayout();
+      }
       loadState = GraphWorkspaceLoadState.ready;
       errorMessage = 'Root object is no longer available in graph workspace';
     } on AuthenticationException {
@@ -271,6 +281,9 @@ class GraphWorkspaceController extends ChangeNotifier {
         selectObjectId: keptSelection,
         fitAfterLayout: true,
       );
+      if (mode == GraphWorkspaceMode.tasks) {
+        await _resolveUnrootedTaskLayout();
+      }
       loadState = GraphWorkspaceLoadState.ready;
     } on AuthenticationException {
       _authController.handleAuthenticationFailure();
@@ -904,6 +917,87 @@ class GraphWorkspaceController extends ChangeNotifier {
 
   bool _isTerminalForActiveOverview(String? status) {
     return isTerminalTaskStatusForReads(status);
+  }
+
+  void _clearCanonicalTaskCenters() {
+    _canonicalTaskCenters.clear();
+    canonicalTaskCentersActive = false;
+    taskLayoutWarning = null;
+  }
+
+  void _installCanonicalTaskCenters(TaskLayoutSnapshot snapshot) {
+    _canonicalTaskCenters
+      ..clear()
+      ..addEntries(
+        snapshot.centers.map(
+          (center) => MapEntry(center.taskId, Offset(center.worldX, center.worldY)),
+        ),
+      );
+    canonicalTaskCentersActive = true;
+    taskLayoutWarning = null;
+  }
+
+  void _failCanonicalTaskLayout() {
+    _canonicalTaskCenters.clear();
+    canonicalTaskCentersActive = false;
+    taskLayoutWarning = taskLayoutResolutionWarning;
+  }
+
+  /// Resolves persisted Task centers for the unrooted Tasks overview.
+  /// A stale PUT is retried once. The second failure keeps the temporary
+  /// window layout and does not persist it.
+  Future<void> _resolveUnrootedTaskLayout() async {
+    taskLayoutWarning = null;
+    var conflicts = 0;
+    try {
+      while (true) {
+        final current = await _apiClient.getTaskLayout();
+        if (current == null) {
+          _failCanonicalTaskLayout();
+          return;
+        }
+        if (current.usable && current.matchesCurrentAlgorithm) {
+          _installCanonicalTaskCenters(current);
+          return;
+        }
+        final topology = await _apiClient.getTaskLayoutTopology();
+        if (topology == null) {
+          _failCanonicalTaskLayout();
+          return;
+        }
+        final centers = taskLayoutCentersFromTopology(topology);
+        if (centers == null) {
+          _failCanonicalTaskLayout();
+          return;
+        }
+        try {
+          final saved = await _apiClient.putTaskLayout(
+            TaskLayoutReplacement(
+              expectedTopologyRevision: topology.topologyRevision,
+              algorithmVersion: kTaskLayoutAlgorithmVersion,
+              centers: centers,
+            ),
+          );
+          final taskIds = topology.tasks.map((task) => task.id);
+          if (saved == null || !taskLayoutSnapshotCovers(saved, taskIds)) {
+            _failCanonicalTaskLayout();
+            return;
+          }
+          _installCanonicalTaskCenters(saved);
+          return;
+        } on ConflictException {
+          conflicts += 1;
+          if (conflicts > 1) {
+            _failCanonicalTaskLayout();
+            return;
+          }
+        }
+      }
+    } on ApiException {
+      _failCanonicalTaskLayout();
+    } catch (_) {
+      _failCanonicalTaskLayout();
+    }
   }
 
   void _replaceWorkspaceState({

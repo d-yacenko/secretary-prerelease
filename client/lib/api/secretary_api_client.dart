@@ -739,6 +739,25 @@ class SecretaryApiClient {
     return GraphWorkspaceOut.fromJson(body);
   }
 
+  Future<TaskLayoutSnapshot?> getTaskLayout() async {
+    final body = await _request('GET', '/graph/task-layout');
+    return TaskLayoutSnapshot.tryParse(body);
+  }
+
+  Future<TaskLayoutSnapshot?> putTaskLayout(TaskLayoutReplacement replacement) async {
+    final body = await _request(
+      'PUT',
+      '/graph/task-layout',
+      jsonBody: replacement.toJson(),
+    );
+    return TaskLayoutSnapshot.tryParse(body);
+  }
+
+  Future<TaskLayoutTopology?> getTaskLayoutTopology() async {
+    final body = await _request('GET', '/graph/task-layout/topology');
+    return TaskLayoutTopology.tryParse(body);
+  }
+
   Future<SecretaryObject> createPerson({required String title}) async {
     final body = await _request(
       'POST',
@@ -1474,6 +1493,8 @@ class SecretaryApiClient {
         throw AuthenticationException(safeMessage);
       case 404:
         throw NotFoundException(safeMessage);
+      case 409:
+        throw ConflictException(safeMessage, code: detail.code);
       case 422:
         throw ValidationException(safeMessage, code: detail.code);
       case 413:

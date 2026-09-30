@@ -26,6 +26,10 @@ class NotFoundException extends ApiException {
   NotFoundException([super.message = 'Resource not found']);
 }
 
+class ConflictException extends ApiException {
+  ConflictException(super.message, {super.code});
+}
+
 class NetworkException extends ApiException {
   NetworkException([super.message = secretaryNetworkErrorMessage]);
 }
