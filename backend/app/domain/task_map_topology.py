@@ -49,6 +49,29 @@ def relation_affects_task_map(
     return True
 
 
+def confirmed_task_relation_joins_overview_component(
+    *,
+    edge_type: str,
+    state: str | None,
+    source_kind: str | None,
+    target_kind: str | None,
+) -> bool:
+    """Join overview pages only on confirmed canonical Task-map edges.
+
+    Proposed and rejected relations stay apart. Layout invalidation still uses
+    relation_affects_task_map, which treats a proposed non-part_of edge as
+    participation; overview membership does not.
+    """
+    if state != CONFIRMED_STATE:
+        return False
+    return relation_affects_task_map(
+        edge_type=edge_type,
+        state=state,
+        source_kind=source_kind,
+        target_kind=target_kind,
+    )
+
+
 def invalidate_existing_task_layout(session: Session, user_id: UUID) -> None:
     state = session.scalar(
         select(TaskLayoutState)

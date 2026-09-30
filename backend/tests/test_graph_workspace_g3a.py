@@ -129,7 +129,9 @@ def test_shared_flow_is_one_node_and_cross_window_edge_does_not_import(
     shared = _note(graph, "Shared")
     left_edge = _edge(graph, left, shared, "references")
     right_edge = _edge(graph, shared, right, "related_to")
-    bridge = _edge(graph, left, right, "depends_on")
+    # Actor role must not join overview components, so the tasks can still sit
+    # on different windows. A confirmed depends_on would keep them together.
+    bridge = _edge(graph, left, right, "requested_by")
     db_session.flush()
 
     service = GraphWorkspaceService(db_session, user_id)

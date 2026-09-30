@@ -12,6 +12,7 @@ from app.api.schemas import EdgeOut, ObjectOut
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
 from app.domain.task_lifecycle import TERMINAL_TASK_STATUSES_FOR_READS
+from app.domain.task_map_topology import confirmed_task_relation_joins_overview_component
 from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
@@ -174,18 +175,21 @@ class GraphWorkspaceService:
         )
 
     def _overview_constellations(self, emergency_ceiling: int) -> list[_Constellation]:
+        """One overview unit is a confirmed visible Task-map component.
+
+        Confirmed part_of and other visible Task relations join the component.
+        root_id is the overview-eligible member with the minimum seed key, so a
+        component with several part_of roots still has one stable representative.
+        """
         tasks = self._visible_tasks()
         if not tasks:
             return []
-        parent_of, children_of = self._confirmed_part_of_forest(set(tasks))
-        roots = [task_id for task_id in tasks if task_id not in parent_of]
         constellations: list[_Constellation] = []
-        for root_id in roots:
-            member_ids = self._descendant_ids(root_id, children_of)
+        for member_ids in self._confirmed_task_map_components(tasks):
             members = {task_id: tasks[task_id] for task_id in member_ids}
             if not any(self._task_is_overview_seed(task) for task in members.values()):
                 continue
-            flows = self._priority_flows_for_tasks(set(members))
+            flows = self._priority_flows_for_tasks(set(member_ids))
             members.update(flows)
             if len(members) > emergency_ceiling:
                 raise ConstellationTooLargeError
@@ -194,16 +198,62 @@ class GraphWorkspaceService:
                 for task in members.values()
                 if task.kind == "task" and self._task_is_overview_seed(task)
             ] or [task for task in members.values() if task.kind == "task"]
+            representative = min(ordering_members, key=self._task_seed_key)
             constellations.append(
                 _Constellation(
-                    root_id=root_id,
+                    root_id=representative.id,
                     members=members,
-                    sort_key=min(self._task_seed_key(task) for task in ordering_members),
+                    sort_key=self._task_seed_key(representative),
                     node_ids=frozenset(members),
                 )
             )
         constellations.sort(key=lambda item: (item.sort_key, str(item.root_id)))
         return constellations
+
+    def _confirmed_task_map_components(
+        self,
+        tasks: dict[UUID, Object],
+    ) -> list[set[UUID]]:
+        parent = {task_id: task_id for task_id in tasks}
+
+        def find(task_id: UUID) -> UUID:
+            while parent[task_id] != task_id:
+                parent[task_id] = parent[parent[task_id]]
+                task_id = parent[task_id]
+            return task_id
+
+        def union(left: UUID, right: UUID) -> None:
+            left_root = find(left)
+            right_root = find(right)
+            if left_root == right_root:
+                return
+            if str(left_root) <= str(right_root):
+                parent[right_root] = left_root
+            else:
+                parent[left_root] = right_root
+
+        task_ids = set(tasks)
+        edges = self._session.scalars(
+            select(Edge).where(
+                Edge.user_id == self._user_id,
+                Edge.state == CONFIRMED_STATE,
+                Edge.source_id.in_(task_ids),
+                Edge.target_id.in_(task_ids),
+            )
+        ).all()
+        for edge in edges:
+            if not confirmed_task_relation_joins_overview_component(
+                edge_type=edge.type,
+                state=edge.state,
+                source_kind=tasks[edge.source_id].kind,
+                target_kind=tasks[edge.target_id].kind,
+            ):
+                continue
+            union(edge.source_id, edge.target_id)
+        grouped: dict[UUID, set[UUID]] = {}
+        for task_id in tasks:
+            grouped.setdefault(find(task_id), set()).add(task_id)
+        return list(grouped.values())
 
     def _pack_constellation_windows(
         self,
