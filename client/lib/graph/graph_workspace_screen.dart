@@ -31,6 +31,7 @@ import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
 import 'relation_target_label.dart';
+import 'task_part_of_connect.dart';
 import 'graph_workspace_controller.dart';
 import 'task_layout_world.dart';
 import 'task_map_hierarchy.dart';
@@ -68,6 +69,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   final TransformationController _transform = TransformationController();
   PeopleLandscapeOverview? _healthyPeopleLandscape;
   final GlobalKey _graphViewportKey = GlobalKey();
+  final GlobalKey _graphCanvasKey = GlobalKey();
+  String? _partOfSourceId;
+  Offset? _partOfFrom;
+  Offset? _partOfTo;
+  String? _partOfHoverId;
+  var _partOfSubmitting = false;
+  Map<String, Rect> _taskHitRects = {};
   bool _worldFrameShared = false;
   Offset? _viewportGlobal;
   SharedWorldFrame? _sharedFrame;
@@ -1542,6 +1550,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         nodeSizes[node.id] = Size(node.width, node.height);
       }
     }
+    final taskHitRects = <String, Rect>{};
+    _taskHitRects = taskHitRects;
     return InteractiveViewer(
       constrained: false,
       transformationController: _transform,
@@ -1549,6 +1559,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       maxScale: kGraphMaxScale,
       boundaryMargin: const EdgeInsets.all(200),
       child: SizedBox(
+        key: _graphCanvasKey,
         width: canvasWidth,
         height: canvasHeight,
         child: Stack(
@@ -1599,41 +1610,63 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               final bookmarkColor = widget.bookmarkController?.colorFor(
                 node.id,
               );
-              return Positioned(
-                key: ValueKey('drawn-${node.id}'),
-                left: position.dx - bounds.left + canvasPad,
-                top: position.dy - bounds.top + canvasPad,
-                child: ongoingAnchor
-                    ? KeyedSubtree(
-                        key: Key('graph_node_${node.id}'),
-                        child: HybridOngoingTaskNode(
-                          object: node,
-                          selected: selected,
-                          focusDimmed: focusMode && !emphasized,
-                          bookmarkColor: bookmarkColor,
-                          onTap: () => widget.controller.selectObject(node.id),
-                        ),
-                      )
-                    : focusedFlow
-                    ? KeyedSubtree(
-                        key: Key('graph_node_${node.id}'),
-                        child: HybridFocusedFlowCard(
-                          object: node,
-                          selected: selected,
-                          focusDimmed: focusMode && !emphasized,
-                          bookmarkColor: bookmarkColor,
-                          onTap: () => widget.controller.selectObject(node.id),
-                        ),
-                      )
-                    : _GraphNodeCard(
+              final canvasOrigin = Offset(
+                position.dx - bounds.left + canvasPad,
+                position.dy - bounds.top + canvasPad,
+              );
+              final cardSize = _taskCardSize(
+                node,
+                ongoing: ongoingAnchor,
+                focusedFlow: focusedFlow,
+              );
+              if (widget.controller.mode == GraphWorkspaceMode.tasks &&
+                  node.kind == 'task') {
+                taskHitRects[node.id] = canvasOrigin & cardSize;
+              }
+              final card = ongoingAnchor
+                  ? KeyedSubtree(
+                      key: Key('graph_node_${node.id}'),
+                      child: HybridOngoingTaskNode(
                         object: node,
                         selected: selected,
                         focusDimmed: focusMode && !emphasized,
-                        compact: _compactPeopleOverview && node.kind == 'person',
-                        person: widget.controller.personFor(node.id),
                         bookmarkColor: bookmarkColor,
                         onTap: () => widget.controller.selectObject(node.id),
                       ),
+                    )
+                  : focusedFlow
+                  ? KeyedSubtree(
+                      key: Key('graph_node_${node.id}'),
+                      child: HybridFocusedFlowCard(
+                        object: node,
+                        selected: selected,
+                        focusDimmed: focusMode && !emphasized,
+                        bookmarkColor: bookmarkColor,
+                        onTap: () => widget.controller.selectObject(node.id),
+                      ),
+                    )
+                  : _GraphNodeCard(
+                      object: node,
+                      selected: selected,
+                      focusDimmed: focusMode && !emphasized,
+                      compact: _compactPeopleOverview && node.kind == 'person',
+                      person: widget.controller.personFor(node.id),
+                      bookmarkColor: bookmarkColor,
+                      onTap: () => widget.controller.selectObject(node.id),
+                    );
+              final partOfFrame =
+                  widget.controller.mode == GraphWorkspaceMode.tasks &&
+                  node.kind == 'task';
+              return Positioned(
+                key: ValueKey('drawn-${node.id}'),
+                left: canvasOrigin.dx - (partOfFrame ? kPartOfHandleRadius : 0),
+                top: canvasOrigin.dy - (partOfFrame ? kPartOfHandleRadius : 0),
+                child: _withPartOfHandles(
+                  node: node,
+                  selected: selected,
+                  cardSize: cardSize,
+                  card: card,
+                ),
               );
             }),
             if (projection != null && hybrid == null) ...[
@@ -1721,10 +1754,188 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   ),
                 ),
             ],
+            if (_partOfFrom != null && _partOfTo != null)
+              Positioned.fill(
+                child: PartOfDragPreview(
+                  key: const ValueKey('part-of-drag-preview'),
+                  from: _partOfFrom!,
+                  to: _partOfTo!,
+                ),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  Size _taskCardSize(
+    SecretaryObject node, {
+    required bool ongoing,
+    required bool focusedFlow,
+  }) {
+    if (ongoing) {
+      return const Size(kHybridOngoingSize, kHybridOngoingSize);
+    }
+    if (focusedFlow) {
+      return const Size(kHybridFocusedCardWidth, kHybridFocusedCardHeight);
+    }
+    if (node.kind == 'person' && _compactPeopleOverview) {
+      return const Size(
+        kPeopleLandscapeOverviewCardWidth,
+        kPeopleLandscapeOverviewCardHeight,
+      );
+    }
+    return const Size(kGraphNodeWidth, kGraphNodeHeight);
+  }
+
+  Widget _withPartOfHandles({
+    required SecretaryObject node,
+    required bool selected,
+    required Size cardSize,
+    required Widget card,
+  }) {
+    if (widget.controller.mode != GraphWorkspaceMode.tasks ||
+        node.kind != 'task') {
+      return card;
+    }
+    final dragging = _partOfSourceId != null;
+    return TaskPartOfFrame(
+      taskId: node.id,
+      cardSize: cardSize,
+      handlesVisible: selected || dragging,
+      highlighted: _partOfHoverId == node.id,
+      enabled: !_partOfSubmitting,
+      onDragStart: (handleGlobal, pointerGlobal) =>
+          _beginPartOfDrag(node.id, handleGlobal, pointerGlobal),
+      onDragUpdate: _updatePartOfDrag,
+      onDragEnd: _endPartOfDrag,
+      onDragCancel: _cancelPartOfDrag,
+      child: card,
+    );
+  }
+
+  Offset? _toCanvas(Offset global) {
+    final box =
+        _graphCanvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize || !box.attached) {
+      return null;
+    }
+    return box.globalToLocal(global);
+  }
+
+  String? _taskAt(Offset canvasPoint, {required String exclude}) {
+    String? best;
+    var bestDistance = double.infinity;
+    for (final entry in _taskHitRects.entries) {
+      if (entry.key == exclude) {
+        continue;
+      }
+      if (!entry.value.inflate(kPartOfHandleRadius).contains(canvasPoint)) {
+        continue;
+      }
+      final distance = (entry.value.center - canvasPoint).distance;
+      if (distance < bestDistance) {
+        best = entry.key;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  void _beginPartOfDrag(
+    String taskId,
+    Offset handleGlobal,
+    Offset pointerGlobal,
+  ) {
+    if (_partOfSubmitting) {
+      return;
+    }
+    final from = _toCanvas(handleGlobal);
+    final to = _toCanvas(pointerGlobal);
+    if (from == null || to == null) {
+      return;
+    }
+    setState(() {
+      _partOfSourceId = taskId;
+      _partOfFrom = from;
+      _partOfTo = to;
+      _partOfHoverId = _taskAt(to, exclude: taskId);
+    });
+  }
+
+  void _updatePartOfDrag(Offset pointerGlobal) {
+    if (_partOfSourceId == null || _partOfSubmitting) {
+      return;
+    }
+    final to = _toCanvas(pointerGlobal);
+    if (to == null) {
+      return;
+    }
+    setState(() {
+      _partOfTo = to;
+      _partOfHoverId = _taskAt(to, exclude: _partOfSourceId!);
+    });
+  }
+
+  void _endPartOfDrag() {
+    final sourceId = _partOfSourceId;
+    final targetId = _partOfHoverId;
+    _clearPartOfDrag();
+    if (sourceId == null ||
+        targetId == null ||
+        sourceId == targetId ||
+        _partOfSubmitting) {
+      return;
+    }
+    _commitPartOf(sourceId, targetId);
+  }
+
+  void _cancelPartOfDrag() {
+    _clearPartOfDrag();
+  }
+
+  void _clearPartOfDrag() {
+    if (_partOfSourceId == null && _partOfFrom == null) {
+      return;
+    }
+    setState(() {
+      _partOfSourceId = null;
+      _partOfFrom = null;
+      _partOfTo = null;
+      _partOfHoverId = null;
+    });
+  }
+
+  Future<void> _commitPartOf(String sourceId, String targetId) async {
+    if (_partOfSubmitting) {
+      return;
+    }
+    _partOfSubmitting = true;
+    try {
+      final response = await widget.apiClient.createRelation(
+        sourceId: sourceId,
+        targetId: targetId,
+        type: 'part_of',
+      );
+      if (!mounted) {
+        return;
+      }
+      await widget.controller.applyCreatedRelation(
+        sourceId: sourceId,
+        sourceKind: 'task',
+        target: widget.controller.nodeById(targetId),
+        edge: response.edge,
+      );
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      _partOfSubmitting = false;
+    }
   }
 
   Widget _focusLodMark({
