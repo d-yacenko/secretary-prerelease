@@ -973,3 +973,39 @@ class TaskRelationMutationResponse(BaseModel):
     edge: EdgeOut
     created: bool = False
     changed: bool = False
+
+
+class TaskLayoutCenterIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: UUID
+    world_x: float
+    world_y: float
+
+
+class TaskLayoutReplaceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_topology_revision: int
+    algorithm_version: str
+    centers: list[TaskLayoutCenterIn]
+
+
+class TaskLayoutCenterOut(BaseModel):
+    task_id: UUID
+    world_x: float
+    world_y: float
+
+
+class TaskLayoutOut(BaseModel):
+    topology_revision: int
+    snapshot_revision: int | None
+    algorithm_version: str | None
+    usable: bool
+    centers: list[TaskLayoutCenterOut]
+
+
+class TaskLayoutTopologyOut(BaseModel):
+    topology_revision: int
+    tasks: list[ObjectOut]
+    edges: list[EdgeOut]

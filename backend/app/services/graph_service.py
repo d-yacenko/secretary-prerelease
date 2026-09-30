@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import EdgeCreate, ObjectCreate, ObjectUpdate
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
+from app.domain.planned_execution import validate_planned_execution_interval
 from app.domain.task_completion import (
     TASK_COMPLETION_FINITE,
     completion_mode_for_storage,
@@ -14,8 +15,11 @@ from app.domain.task_completion import (
     reject_done_status_for_ongoing,
 )
 from app.domain.task_composition import validate_completion_mode_change, validate_part_of_edge
+from app.domain.task_map_topology import (
+    invalidate_existing_task_layout,
+    note_task_map_participation_change,
+)
 from app.domain.task_relations import PART_OF
-from app.domain.planned_execution import validate_planned_execution_interval
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.llm.embedding_service import EmbeddingService
@@ -124,6 +128,12 @@ class GraphService:
         self._session.add(obj)
         self._flush_object()
         self._maybe_refresh_embedding(obj, set(_SEARCHABLE_FIELDS))
+        if (
+            obj.kind == "task"
+            and obj.state != REJECTED_STATE
+            and not is_object_hidden_from_active_reads(obj)
+        ):
+            invalidate_existing_task_layout(self._session, self._user_id)
         return obj
 
     def get_object(self, object_id: UUID) -> Object:
@@ -154,11 +164,7 @@ class GraphService:
             obj.metadata_ = updates.pop("metadata")
         next_kind = updates.get("kind", obj.kind)
         next_status = updates.get("status", obj.status)
-        next_mode = (
-            updates["completion_mode"]
-            if "completion_mode" in updates
-            else obj.completion_mode
-        )
+        next_mode = updates.get("completion_mode", obj.completion_mode)
         try:
             if next_kind != "task":
                 if updates.get("completion_mode") is not None:
@@ -266,6 +272,15 @@ class GraphService:
         )
         self._session.add(edge)
         self._session.flush()
+        note_task_map_participation_change(
+            self._session,
+            self._user_id,
+            edge_type=edge.type,
+            previous_state=None,
+            new_state=edge.state,
+            source_kind=source.kind,
+            target_kind=target.kind,
+        )
         return edge
 
     def delete_edge(self, edge_id: UUID) -> None:
@@ -277,6 +292,17 @@ class GraphService:
         reserved = reserved_labeled_with_reason(edge.type)
         if reserved is not None:
             raise ValidationError(reserved)
+        source = self._get_object_row(edge.source_id)
+        target = self._get_object_row(edge.target_id)
+        note_task_map_participation_change(
+            self._session,
+            self._user_id,
+            edge_type=edge.type,
+            previous_state=edge.state,
+            new_state=None,
+            source_kind=None if source is None else source.kind,
+            target_kind=None if target is None else target.kind,
+        )
         self._session.delete(edge)
         self._session.flush()
 
@@ -305,8 +331,20 @@ class GraphService:
                 target,
                 ignore_edge_id=edge.id,
             )
+        source = self._get_object_row(edge.source_id)
+        target = self._get_object_row(edge.target_id)
+        previous_state = edge.state
         edge.state = state
         self._session.flush()
+        note_task_map_participation_change(
+            self._session,
+            self._user_id,
+            edge_type=edge.type,
+            previous_state=previous_state,
+            new_state=edge.state,
+            source_kind=None if source is None else source.kind,
+            target_kind=None if target is None else target.kind,
+        )
         return edge
 
     def get_neighbors(

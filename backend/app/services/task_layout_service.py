@@ -11,13 +11,19 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Object, TaskLayoutPosition, TaskLayoutState
+from app.db.models import Edge, Object, TaskLayoutPosition, TaskLayoutState
+from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
+from app.domain.task_map_topology import TASK_MAP_HIDDEN_RELATION_TYPES
+from app.domain.task_relations import PART_OF
 from app.services.errors import ConflictError, ValidationError
+from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
 
 _ALGORITHM_VERSION_LIMIT = 128
+TASK_LAYOUT_TOPOLOGY_TASK_CAP = 500
+TASK_LAYOUT_TOPOLOGY_EDGE_CAP = 2000
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,13 @@ class TaskLayoutView:
     algorithm_version: str | None
     usable: bool
     positions: tuple[TaskLayoutCenter, ...]
+
+
+@dataclass(frozen=True)
+class TaskLayoutTopology:
+    topology_revision: int
+    tasks: tuple[Object, ...]
+    edges: tuple[Edge, ...]
 
 
 class TaskLayoutService:
@@ -93,6 +106,41 @@ class TaskLayoutService:
         self.session.flush()
         return self._view(state)
 
+    def read_topology(self) -> TaskLayoutTopology:
+        state = self.session.get(TaskLayoutState, self.user_id)
+        revision = 1 if state is None else state.topology_revision
+        filters = _eligible_filters(self.user_id)
+        task_count = self.session.scalar(select(func.count()).select_from(Object).where(*filters))
+        if task_count is not None and task_count > TASK_LAYOUT_TOPOLOGY_TASK_CAP:
+            raise ValidationError("task layout topology exceeds the task cap")
+        tasks = tuple(
+            self.session.scalars(select(Object).where(*filters).order_by(Object.id)).all()
+        )
+        task_ids = [task.id for task in tasks]
+        if not task_ids:
+            return TaskLayoutTopology(topology_revision=revision, tasks=(), edges=())
+        edge_filters = (
+            Edge.user_id == self.user_id,
+            Edge.source_id.in_(task_ids),
+            Edge.target_id.in_(task_ids),
+            Edge.state != REJECTED_STATE,
+            Edge.type.notin_(tuple(TASK_MAP_HIDDEN_RELATION_TYPES)),
+            or_(Edge.type != PART_OF, Edge.state == CONFIRMED_STATE),
+        )
+        edge_count = self.session.scalar(
+            select(func.count()).select_from(Edge).where(*edge_filters)
+        )
+        if edge_count is not None and edge_count > TASK_LAYOUT_TOPOLOGY_EDGE_CAP:
+            raise ValidationError("task layout topology exceeds the edge cap")
+        edges = tuple(
+            self.session.scalars(select(Edge).where(*edge_filters).order_by(Edge.id)).all()
+        )
+        return TaskLayoutTopology(
+            topology_revision=revision,
+            tasks=tasks,
+            edges=edges,
+        )
+
     def _locked_state(self, *, create: bool) -> TaskLayoutState | None:
         state = self.session.scalar(
             select(TaskLayoutState)
@@ -120,9 +168,11 @@ class TaskLayoutService:
                 TaskLayoutCenter(task_id=row.task_id, world_x=row.world_x, world_y=row.world_y)
                 for row in rows
             )
+        covered = {position.task_id for position in positions}
         usable = (
             state.snapshot_revision is not None
             and state.snapshot_revision == state.topology_revision
+            and self._eligible_ids() <= covered
         )
         return TaskLayoutView(
             user_id=self.user_id,
@@ -147,10 +197,11 @@ class TaskLayoutService:
                     world_y=_finite_coordinate(position.world_y, "world_y"),
                 )
             )
-        if not centers:
-            return ()
-        rows = self.session.scalars(select(Object).where(Object.id.in_(seen))).all()
-        by_id = {row.id: row for row in rows}
+        if centers:
+            rows = self.session.scalars(select(Object).where(Object.id.in_(seen))).all()
+            by_id = {row.id: row for row in rows}
+        else:
+            by_id = {}
         for center in centers:
             obj = by_id.get(center.task_id)
             if obj is None:
@@ -159,7 +210,18 @@ class TaskLayoutService:
                 raise ValidationError("task layout id is owned by another user")
             if obj.kind != "task":
                 raise ValidationError("task layout id is not a task")
+            if obj.state == REJECTED_STATE or is_object_hidden_from_active_reads(obj):
+                raise ValidationError("task layout id is not a current task")
+        if seen != self._eligible_ids():
+            raise ValidationError("task layout snapshot must match the current task set")
         return tuple(centers)
+
+    def _eligible_ids(self) -> set[uuid.UUID]:
+        return set(
+            self.session.scalars(
+                select(Object.id).where(*_eligible_filters(self.user_id))
+            ).all()
+        )
 
     def _validated_version(self, algorithm_version: str) -> str:
         if not isinstance(algorithm_version, str) or not algorithm_version.strip():
@@ -167,6 +229,15 @@ class TaskLayoutService:
         if len(algorithm_version) > _ALGORITHM_VERSION_LIMIT:
             raise ValidationError("algorithm version is too long")
         return algorithm_version
+
+
+def _eligible_filters(user_id: uuid.UUID) -> tuple:
+    return (
+        Object.user_id == user_id,
+        Object.kind == "task",
+        Object.state != REJECTED_STATE,
+        object_is_active(),
+    )
 
 
 def _finite_coordinate(value: float, name: str) -> float:

@@ -17,6 +17,10 @@ from app.api.schemas import (
     OpenTargetOut,
     SearchFacetsOut,
     SearchFacetValueOut,
+    TaskLayoutCenterOut,
+    TaskLayoutOut,
+    TaskLayoutReplaceIn,
+    TaskLayoutTopologyOut,
 )
 from app.core.current_user import CurrentUserContext
 from app.llm.embedding_service import EmbeddingService
@@ -26,6 +30,7 @@ from app.services.object_deletion_service import ObjectDeletionService
 from app.services.open_target_service import OpenTargetService
 from app.services.search_facet_service import SearchFacetService
 from app.services.search_service import SearchService
+from app.services.task_layout_service import TaskLayoutCenter, TaskLayoutService
 
 router = APIRouter()
 
@@ -111,6 +116,71 @@ def delete_object(
         object_id=result.object.id,
         deleted_at=result.deleted_at,
         already_deleted=result.already_deleted,
+    )
+
+
+@router.get("/graph/task-layout", response_model=TaskLayoutOut)
+def get_task_layout(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TaskLayoutOut:
+    view = TaskLayoutService(session, current_user.user_id).read()
+    return _layout_out(view)
+
+
+@router.put("/graph/task-layout", response_model=TaskLayoutOut)
+def put_task_layout(
+    data: TaskLayoutReplaceIn,
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TaskLayoutOut:
+    service = TaskLayoutService(session, current_user.user_id)
+    try:
+        view = service.replace_snapshot(
+            expected_topology_revision=data.expected_topology_revision,
+            algorithm_version=data.algorithm_version,
+            positions=[
+                TaskLayoutCenter(item.task_id, item.world_x, item.world_y)
+                for item in data.centers
+            ],
+        )
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
+    return _layout_out(view)
+
+
+@router.get("/graph/task-layout/topology", response_model=TaskLayoutTopologyOut)
+def get_task_layout_topology(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> TaskLayoutTopologyOut:
+    try:
+        topology = TaskLayoutService(session, current_user.user_id).read_topology()
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
+    return TaskLayoutTopologyOut(
+        topology_revision=topology.topology_revision,
+        tasks=[ObjectOut.from_model(task) for task in topology.tasks],
+        edges=[EdgeOut.from_model(edge) for edge in topology.edges],
+    )
+
+
+def _layout_out(view) -> TaskLayoutOut:
+    return TaskLayoutOut(
+        topology_revision=view.topology_revision,
+        snapshot_revision=view.snapshot_revision,
+        algorithm_version=view.algorithm_version,
+        usable=view.usable,
+        centers=[
+            TaskLayoutCenterOut(task_id=center.task_id, world_x=center.world_x, world_y=center.world_y)
+            for center in view.positions
+        ],
     )
 
 

@@ -45,10 +45,10 @@ def test_users_receive_isolated_layout_state(db_session, nornickel_user_id) -> N
     ) == 1
 
 
-def test_snapshot_round_trip_keeps_exact_centers(db_session) -> None:
-    left = _task(db_session, "Left")
-    right = _task(db_session, "Right")
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+def test_snapshot_round_trip_keeps_exact_centers(db_session, owner) -> None:
+    left = _task(db_session, owner, "Left")
+    right = _task(db_session, owner, "Right")
+    service = TaskLayoutService(db_session, owner)
     stored = service.replace_snapshot(
         expected_topology_revision=1,
         algorithm_version="pl1-g1-test",
@@ -69,9 +69,9 @@ def test_snapshot_round_trip_keeps_exact_centers(db_session) -> None:
     )
 
 
-def test_stale_revision_writes_nothing(db_session) -> None:
-    task = _task(db_session, "Kept")
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+def test_stale_revision_writes_nothing(db_session, owner) -> None:
+    task = _task(db_session, owner, "Kept")
+    service = TaskLayoutService(db_session, owner)
     service.replace_snapshot(
         expected_topology_revision=1,
         algorithm_version="v1",
@@ -89,7 +89,7 @@ def test_stale_revision_writes_nothing(db_session) -> None:
     assert current.usable is True
     assert current.algorithm_version == "v1"
     assert current.positions == (TaskLayoutCenter(task.id, 1.0, 2.0),)
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 1
+    assert _position_count(db_session, owner) == 1
 
     empty_user = uuid.uuid4()
     db_session.add(User(id=empty_user, display_name="No layout yet"))
@@ -104,15 +104,15 @@ def test_stale_revision_writes_nothing(db_session) -> None:
     assert _position_count(db_session, empty_user) == 0
 
 
-def test_duplicate_foreign_and_non_task_ids_fail_closed(db_session, nornickel_user_id) -> None:
-    task = _task(db_session, "Owned")
-    note = GraphService(db_session, BOOTSTRAP_USER_ID).create_object(
+def test_duplicate_foreign_and_non_task_ids_fail_closed(db_session, owner, nornickel_user_id) -> None:
+    task = _task(db_session, owner, "Owned")
+    note = GraphService(db_session, owner).create_object(
         ObjectCreate(kind="note", title="Not a task", origin=USER_ORIGIN, state=CONFIRMED_STATE)
     )
     foreign = GraphService(db_session, nornickel_user_id).create_object(
         ObjectCreate(kind="task", title="Foreign", origin=USER_ORIGIN, state=CONFIRMED_STATE)
     )
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+    service = TaskLayoutService(db_session, owner)
 
     with pytest.raises(ValidationError, match="duplicate"):
         service.replace_snapshot(
@@ -142,13 +142,13 @@ def test_duplicate_foreign_and_non_task_ids_fail_closed(db_session, nornickel_us
             positions=[TaskLayoutCenter(uuid.uuid4(), 1.0, 1.0)],
         )
 
-    assert db_session.get(TaskLayoutState, BOOTSTRAP_USER_ID) is None
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 0
+    assert db_session.get(TaskLayoutState, owner) is None
+    assert _position_count(db_session, owner) == 0
 
 
-def test_non_finite_coordinates_fail_closed(db_session) -> None:
-    task = _task(db_session, "Finite")
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+def test_non_finite_coordinates_fail_closed(db_session, owner) -> None:
+    task = _task(db_session, owner, "Finite")
+    service = TaskLayoutService(db_session, owner)
     for coordinates in ((float("nan"), 1.0), (1.0, float("inf")), (float("-inf"), 0.0)):
         with pytest.raises(ValidationError, match="finite"):
             service.replace_snapshot(
@@ -156,25 +156,31 @@ def test_non_finite_coordinates_fail_closed(db_session) -> None:
                 algorithm_version="v",
                 positions=[TaskLayoutCenter(task.id, coordinates[0], coordinates[1])],
             )
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 0
+    assert _position_count(db_session, owner) == 0
 
 
-def test_invalidation_keeps_rows_and_the_next_snapshot_is_usable(db_session) -> None:
-    first = _task(db_session, "First")
-    second = _task(db_session, "Second")
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+def test_invalidation_keeps_rows_and_the_next_snapshot_is_usable(db_session, owner) -> None:
+    first = _task(db_session, owner, "First")
+    second = _task(db_session, owner, "Second")
+    service = TaskLayoutService(db_session, owner)
     service.replace_snapshot(
         expected_topology_revision=1,
         algorithm_version="v1",
-        positions=[TaskLayoutCenter(first.id, 8.0, 1.0)],
+        positions=[
+            TaskLayoutCenter(first.id, 8.0, 1.0),
+            TaskLayoutCenter(second.id, 20.0, 5.0),
+        ],
     )
     stale = service.invalidate_topology()
 
     assert stale.topology_revision == 2
     assert stale.snapshot_revision == 1
     assert stale.usable is False
-    assert stale.positions == (TaskLayoutCenter(first.id, 8.0, 1.0),)
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 1
+    assert stale.positions == _by_task_id(
+        TaskLayoutCenter(first.id, 8.0, 1.0),
+        TaskLayoutCenter(second.id, 20.0, 5.0),
+    )
+    assert _position_count(db_session, owner) == 2
 
     current = service.replace_snapshot(
         expected_topology_revision=2,
@@ -192,24 +198,24 @@ def test_invalidation_keeps_rows_and_the_next_snapshot_is_usable(db_session) -> 
         TaskLayoutCenter(first.id, 8.0, 1.0),
         TaskLayoutCenter(second.id, 20.0, 5.0),
     )
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 3
+    assert _position_count(db_session, owner) == 4
     assert db_session.scalar(
         select(func.count()).select_from(TaskLayoutPosition).where(
-            TaskLayoutPosition.user_id == BOOTSTRAP_USER_ID,
+            TaskLayoutPosition.user_id == owner,
             TaskLayoutPosition.snapshot_revision == 1,
             TaskLayoutPosition.task_id == first.id,
         )
     ) == 1
 
 
-def test_users_cannot_read_or_overwrite_each_other(db_session, nornickel_user_id) -> None:
-    owned = _task(db_session, "Bootstrap task")
+def test_users_cannot_read_or_overwrite_each_other(db_session, owner, nornickel_user_id) -> None:
+    owned = _task(db_session, owner, "Bootstrap task")
     foreign_task = GraphService(db_session, nornickel_user_id).create_object(
         ObjectCreate(kind="task", title="Other task", origin=USER_ORIGIN, state=CONFIRMED_STATE)
     )
-    owner = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+    owner_layout = TaskLayoutService(db_session, owner)
     other = TaskLayoutService(db_session, nornickel_user_id)
-    owner.replace_snapshot(
+    owner_layout.replace_snapshot(
         expected_topology_revision=1,
         algorithm_version="owner",
         positions=[TaskLayoutCenter(owned.id, 3.0, 4.0)],
@@ -220,7 +226,7 @@ def test_users_cannot_read_or_overwrite_each_other(db_session, nornickel_user_id
         positions=[TaskLayoutCenter(foreign_task.id, 30.0, 40.0)],
     )
 
-    assert owner.read().positions == (TaskLayoutCenter(owned.id, 3.0, 4.0),)
+    assert owner_layout.read().positions == (TaskLayoutCenter(owned.id, 3.0, 4.0),)
     assert other.read().positions == (TaskLayoutCenter(foreign_task.id, 30.0, 40.0),)
     with pytest.raises(ValidationError, match="another user"):
         other.replace_snapshot(
@@ -228,13 +234,13 @@ def test_users_cannot_read_or_overwrite_each_other(db_session, nornickel_user_id
             algorithm_version="steal",
             positions=[TaskLayoutCenter(owned.id, 0.0, 0.0)],
         )
-    assert owner.read().algorithm_version == "owner"
-    assert owner.read().positions == (TaskLayoutCenter(owned.id, 3.0, 4.0),)
+    assert owner_layout.read().algorithm_version == "owner"
+    assert owner_layout.read().positions == (TaskLayoutCenter(owned.id, 3.0, 4.0),)
 
 
-def test_deleting_a_task_or_user_removes_layout_rows(db_session) -> None:
-    task = _task(db_session, "Disposable")
-    service = TaskLayoutService(db_session, BOOTSTRAP_USER_ID)
+def test_deleting_a_task_or_user_removes_layout_rows(db_session, owner) -> None:
+    task = _task(db_session, owner, "Disposable")
+    service = TaskLayoutService(db_session, owner)
     service.replace_snapshot(
         expected_topology_revision=1,
         algorithm_version="v",
@@ -242,7 +248,7 @@ def test_deleting_a_task_or_user_removes_layout_rows(db_session) -> None:
     )
     db_session.delete(task)
     db_session.flush()
-    assert _position_count(db_session, BOOTSTRAP_USER_ID) == 0
+    assert _position_count(db_session, owner) == 0
 
     user_id = uuid.uuid4()
     db_session.add(User(id=user_id, display_name="Layout only"))
@@ -254,8 +260,16 @@ def test_deleting_a_task_or_user_removes_layout_rows(db_session) -> None:
     assert db_session.get(TaskLayoutState, user_id) is None
 
 
-def _task(db_session, title: str):
-    return GraphService(db_session, BOOTSTRAP_USER_ID).create_object(
+@pytest.fixture
+def owner(db_session) -> uuid.UUID:
+    user_id = uuid.uuid4()
+    db_session.add(User(id=user_id, display_name="Layout owner"))
+    db_session.flush()
+    return user_id
+
+
+def _task(db_session, user_id: uuid.UUID, title: str):
+    return GraphService(db_session, user_id).create_object(
         ObjectCreate(kind="task", title=title, origin=USER_ORIGIN, state=CONFIRMED_STATE)
     )
 

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import EdgeCreate
 from app.db.models import Edge, Object
 from app.domain.object_visibility import is_object_hidden_from_active_reads
+from app.domain.task_map_topology import note_task_map_participation_change
 from app.domain.task_relations import (
     DEPENDS_ON,
     REFERENCES,
@@ -130,7 +131,7 @@ class TaskRelationService:
             return active[0], False
         if state == CONFIRMED_STATE and active:
             for edge in active:
-                edge.state = REJECTED_STATE
+                self._reject_edge(edge)
             self._session.flush()
         edge = self._graph.create_edge(
             EdgeCreate(
@@ -153,9 +154,24 @@ class TaskRelationService:
             raise NotFoundError("edge", edge_id)
         if edge.state == REJECTED_STATE:
             return edge, False
-        edge.state = REJECTED_STATE
+        self._reject_edge(edge)
         self._session.flush()
         return edge, True
+
+    def _reject_edge(self, edge: Edge) -> None:
+        source = self._session.get(Object, edge.source_id)
+        target = self._session.get(Object, edge.target_id)
+        previous_state = edge.state
+        edge.state = REJECTED_STATE
+        note_task_map_participation_change(
+            self._session,
+            self._user_id,
+            edge_type=edge.type,
+            previous_state=previous_state,
+            new_state=edge.state,
+            source_kind=None if source is None else source.kind,
+            target_kind=None if target is None else target.kind,
+        )
 
     def ensure_active(self, object_id: UUID, *, kind: str) -> Object:
         return self._require_active(object_id, kind=kind)
