@@ -1,110 +1,121 @@
-# Current task — GUX1 graph high-frequency UI/UX polish
+# Current task — GFX-A Graph target disambiguation + immediate rename consistency
 
-Authorized base: `d0f672b9dd6c2c40f4cbeb7e0f98461db31ffd57`.
+Authorized base: `2a2a033747956413487e733035a01d458cdcb7f2`.
 Production/runtime remains `ffccca38440d2e4eb93e8513a6cb29b4d27b4010`, Alembic `0052 / 0052`.
-PL1 is human-accepted and closed. Do not reopen its geography/ontology in this slice.
+PL1 is human-accepted and closed. Preserve its canonical Task world, People overlay, shared camera, clusters, shelf, and shelf cue.
 
-This is the first small Graph polish round before the next major Secretary-agent audit. It targets high-frequency desktop use while the user creates and maintains many Tasks and People.
+This task **supersedes/pauses the previously authorized GUX1 polish task**. Do not implement the old toolbar/search/Person-creation/banner scope in this cycle.
 
-## 1. Clean up the Graph toolbar
+This is the first bounded fix slice from current real Graph usage. Do only the two items below, then return to HOLD and STOP.
 
-For normal desktop widths (the existing wide layout breakpoint is acceptable), make the top Graph toolbar read as one stable work surface rather than a developer/debug row.
+## 1. Disambiguate duplicate Task titles in relation-target search
 
-Requirements:
+Observed problem:
 
-- Keep the `Задачи / Люди` mode switch in a stable leading position.
-- Task search and People search should use the same practical width, target about **220 px** on wide layout. Do not leave the Task placeholder clipped to `Поиск по гр...`.
-- When a search query is non-empty and the field is not actively showing the progress indicator, expose a small clear action inside the field. Clearing removes current search chips/results without changing Graph mode/root/camera.
-- Replace the English fCoSE labels `Preserve / Relax` with user-facing Russian labels reflecting their actual behavior:
-  - `Плотно` for the default/50 edge-length mode;
-  - `Свободнее` for the 90 edge-length mode.
-- Add concise tooltips explaining that this changes spacing of movable neighboring/satellite presentation while fixed Task anchors stay fixed. Do not imply it changes canonical Task geography.
-- Keep `К обзору` and `Уместить граф` available and tooltiped.
-- Preserve responsive behavior: no overflow at the currently supported wide desktop size; narrow layouts may still wrap.
+When creating a relation from a Task, the existing target picker can return two Tasks with the same title (for example two different `Обучение` directions). Today both rows display the same title, so the user cannot tell which target is intended.
 
-Do not redesign the whole application chrome or left navigation.
+Required behavior:
 
-## 2. Make repeated Person creation cheap
+- Keep the canonical/stored Task `title` unchanged.
+- In the **Add relation** target search UI, detect result groups whose displayed Task titles are identical.
+- For duplicated Task titles, add UI-only structural context from the Task's immediate **confirmed/current `part_of` parent** when available.
+- Expected presentation example:
+  - `Обучение (Основная работа)`
+  - `Обучение (Академическая деятельность)`
+- Do not add the parent suffix to a title that is unique within the current result set.
+- The suffix is presentation only. It must not mutate the Task title, search query, relation payload, IDs, or ontology.
+- The selected relation target must remain the exact underlying Task ID represented by that row.
+- Never infer parent context from screen position, title strings, graph proximity, metadata heuristics, or another relation type.
+- Rejected/proposed `part_of` state must not be presented as an established parent.
+- If a duplicate result has no confirmed/current parent available, fail honestly in the UI (for example `(без родителя)`) rather than inventing context.
+- Do not introduce any new relation type.
 
-Current `_openAddPerson` always reroots to the newly created Person. That is inconvenient when adding many People from the unrooted People overview.
+Implementation boundary:
 
-Change only this path:
+- Prefer reusing existing Task/profile/`part_of` read data if the client can obtain it cleanly.
+- If the current `/search` payload cannot supply enough grounded parent context, a **minimal read-only API/client contract extension is authorized** for this purpose.
+- No schema or migration.
+- Do not broaden this into a search redesign or hierarchy feature.
+- Keep normal unique-title search behavior unchanged.
 
-- If the user invokes `Добавить человека` from **unrooted People overview**:
-  - create the Person through the existing API;
-  - stay in unrooted People overview;
-  - refresh the current People workspace so the new Person appears in the real unanchored shelf;
-  - preserve the current shared camera/zoom;
-  - do not automatically open the inspector;
-  - do not automatically select/re-root the new Person;
-  - show a small non-blocking confirmation such as `Добавлен: <title>`.
-- If the same action is invoked while already in a rooted Person view, keep the existing behavior of opening/rerooting to the newly created Person.
-- Existing dialog autofocus and Enter-to-submit behavior remain.
-- Repeated additions must not duplicate an already successful request if the dialog/result refresh is slow.
+## 2. Fix Task rename propagation in the current Graph
 
-Do not add heuristic Person/organization typing.
+Observed problem:
 
-## 3. Compact the Task-window banner
+A Task rename can report success but the Graph may continue showing the old title until much later/restart/reload. A successful title edit must be reflected immediately in the current Graph.
 
-The current long banner consumes a lot of vertical space in the Graph work surface.
+Required behavior:
 
-For the unrooted Tasks overview when semantic windows are active:
+- Reproduce/trace the actual edit path reachable from Graph Task details/management; do not fix only a synthetic controller path.
+- After the backend has successfully accepted a Task title change, the current Graph must show the new title immediately.
+- The old title must disappear from the current rendered node/presentation without waiting for background sync, app restart, next-day refresh, or an unrelated navigation cycle.
+- Cover both:
+  - unrooted Tasks overview;
+  - rooted Task Graph view, where applicable to the same edit flow.
+- Preserve:
+  - current Graph mode;
+  - root;
+  - selection when still valid;
+  - semantic-window index;
+  - current camera/zoom;
+  - canonical persisted Task center.
+- A title-only edit is **not** a topology change. Do not invalidate/repack canonical Task geography because of rename.
+- Do not add polling or arbitrary delays as the fix.
+- Do not change Task identity or create replacement objects.
+- If the stale title is caused by more than one local cache/view-model representation, reconcile the minimum necessary representations after a successful mutation.
 
-- shorten the message to one compact line conveying only the durable fact: the user is seeing one region of the graph and the directions/branches in that region are complete;
-- keep the existing area navigation controls;
-- do not hide the fact that the view is partial;
-- do not alter semantic-window membership or loading behavior.
+## Preserve accepted semantics
 
-The exact wording may be concise Russian UI copy, but avoid implementation terms.
-
-## Preserve accepted PL1 behavior
-
-Must remain unchanged:
-
-- persisted canonical Task centers;
-- shared Tasks/People world origin and camera parity;
-- Task semantic-window index restoration across mode switch;
-- Person anchoring/centroids;
-- same-anchor 6 px compact clusters;
-- 128x56 Person markers;
-- unanchored shelf + edge cue;
-- manual Fit semantics;
-- rooted Person inspector behavior except the explicit creation rule above.
+- `part_of` remains exactly child/source -> parent/target.
+- Forest invariants remain enforced by the existing backend/domain contract.
+- No new relation types.
+- No fuzzy or heuristic hierarchy inference.
+- No Graph geography/layout algorithm changes.
+- No People/PL1 behavior changes.
 
 ## Tests
 
-Add/update focused Flutter tests proving at least:
+Add/update focused tests proving at least:
 
-- wide Tasks toolbar search no longer uses the old 140 px width / clipped-placeholder behavior;
-- search clear removes query/results without changing mode/root;
-- `Плотно` and `Свободнее` select the existing preserve/relax enum values and have explanatory tooltips;
-- unrooted People add creates exactly once, remains unrooted, does not select/open inspector, refreshes People workspace, and leaves the transformation scale/camera unchanged;
-- a second consecutive add works without returning to overview manually;
-- rooted People add retains the existing reroot behavior;
-- compact partial-graph banner remains visible and area navigation still works;
-- Tasks<->People camera parity, task-layout world, People landscape/cluster/shelf cue, marker readability, graph smoke, and large-canvas tests remain green.
+1. Relation target search:
+   - two Task results named `Обучение` with different confirmed parents render as distinct labels using those parent titles;
+   - selecting either row creates the relation against the correct exact Task ID;
+   - a unique title is not decorated unnecessarily;
+   - rejected/proposed `part_of` is not shown as established parent context;
+   - duplicate result with no confirmed parent does not fabricate a parent.
 
-Run focused Graph/People/task-layout Flutter suites, smoke/large-canvas tests, `flutter analyze` for changed Dart files, and `git diff --check`.
+2. Rename consistency:
+   - rename from the real Graph edit/details path updates the visible Task node immediately in unrooted overview;
+   - rooted view updates immediately as well where that path is applicable;
+   - old title disappears;
+   - camera scale/translation, root/window, and canonical position remain unchanged by title-only mutation;
+   - no topology/layout invalidation is triggered solely by rename.
+
+3. Regression:
+   - existing relation creation including `part_of` remains green;
+   - Graph smoke/large-canvas and task-layout world tests remain green;
+   - PL1 People/world-camera tests remain green if touched/shared code could affect them.
+
+Run the focused Flutter suites for changed Graph code, any focused backend tests if the read contract changes, `flutter analyze` for changed Dart files, backend lint/test checks appropriate to changed Python files, and `git diff --check`.
 
 ## Explicitly out of scope
 
-- No backend/API/schema changes.
-- No production ref/deploy/client install.
-- No Graph geography/layout algorithm changes.
-- No new Task creation workflow.
-- No keyboard-shortcut system.
-- No combined Tasks+People mode.
-- No organization/person entity type.
-- No broad design-system rewrite.
-- Do not begin the Secretary-agent audit in this slice.
+- Drag-to-create relation handles/lines. That is the **next separate slice**, not authorized here.
+- Any new relation type.
+- Old GUX1 toolbar/search-width/fCoSE-label/Person-creation/banner polish.
+- Backend schema or Alembic changes.
+- Production deploy/ref move/client install.
+- Graph layout/geography redesign.
+- Combined Tasks+People mode.
+- Secretary Agent/Harness audit.
 
 ## Completion contract
 
 When complete:
 
-- record implementation SHA, changed files, exact checks, and any UX limitation in `PROJECT_STATE.md`;
-- replace this file with `# Current task — HOLD` and a concise GUX1 summary;
-- commit/push to `main`;
-- STOP.
+1. record implementation SHA, changed files, exact checks, and any remaining limitation in `PROJECT_STATE.md`;
+2. replace this file with `# Current task — HOLD` plus a concise GFX-A completion summary;
+3. commit and push to `main`;
+4. STOP.
 
-Do not deploy or start later work without a new authorization.
+Do not start drag-to-create `part_of` or any later work without a new Architect authorization.
