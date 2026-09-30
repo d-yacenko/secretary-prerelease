@@ -766,36 +766,225 @@ _LocalTree _measureLocalTree({
   );
 }
 
+const int _exactSiblingOrderLimit = 7;
+const int _siblingOrderPasses = 6;
+
+class _OrderChoice {
+  const _OrderChoice({
+    required this.slots,
+    required this.score,
+    required this.drift,
+    required this.spin,
+  });
+
+  final List<_ChildSlot> slots;
+  final double score;
+  final int drift;
+  final double spin;
+
+  bool improvesOn(_OrderChoice other) {
+    if (score < other.score - 1e-6) {
+      return true;
+    }
+    if ((score - other.score).abs() > 1e-6) {
+      return false;
+    }
+    if (drift != other.drift) {
+      return drift < other.drift;
+    }
+    return spin < other.spin;
+  }
+}
+
 List<_ChildSlot> _arrangeChildren({
   required String parentId,
   required double parentRadius,
   required List<_LocalTree> children,
   required List<SecretaryEdge> layoutEdges,
 }) {
-  final orders = [children, children.reversed.toList()];
-  const spins = <double>[0, math.pi / 2, math.pi, 3 * math.pi / 2];
-  List<_ChildSlot>? best;
-  var bestScore = double.infinity;
-  for (final order in orders) {
-    for (final spin in spins) {
-      final slots = _slotsFor(order, parentRadius, spin);
-      final tuned = _tuneRotations(
+  final baseline = _orientOrder(
+    parentId: parentId,
+    parentRadius: parentRadius,
+    order: children,
+    baseline: children,
+    baselineRing: double.infinity,
+    layoutEdges: layoutEdges,
+  );
+  if (children.length < 2 ||
+      !_frameHasSecondary(parentId, children, layoutEdges)) {
+    return baseline.slots;
+  }
+  final baselineRing = baseline.slots.first.distance;
+  _OrderChoice best = baseline;
+  void consider(List<_LocalTree> order) {
+    final choice = _orientOrder(
+      parentId: parentId,
+      parentRadius: parentRadius,
+      order: order,
+      baseline: children,
+      baselineRing: baselineRing,
+      layoutEdges: layoutEdges,
+    );
+    if (choice.improvesOn(best)) {
+      best = choice;
+    }
+  }
+
+  if (children.length <= _exactSiblingOrderLimit) {
+    final working = [...children];
+    _permute(working, 0, consider);
+    return best.slots;
+  }
+
+  var current = [...children];
+  consider(current);
+  for (var pass = 0; pass < _siblingOrderPasses; pass++) {
+    List<_LocalTree>? next;
+    _OrderChoice? nextChoice;
+    void offer(List<_LocalTree> order) {
+      final choice = _orientOrder(
+        parentId: parentId,
+        parentRadius: parentRadius,
+        order: order,
+        baseline: children,
+        baselineRing: baselineRing,
+        layoutEdges: layoutEdges,
+      );
+      if (nextChoice == null || choice.improvesOn(nextChoice!)) {
+        nextChoice = choice;
+        next = [...order];
+      }
+    }
+
+    for (var i = 0; i < current.length; i++) {
+      for (var j = i + 1; j < current.length; j++) {
+        final swapped = [...current];
+        final held = swapped[i];
+        swapped[i] = swapped[j];
+        swapped[j] = held;
+        offer(swapped);
+      }
+    }
+    for (var start = 0; start < current.length; start++) {
+      for (var length = 2; length < current.length; length++) {
+        offer(_reverseSegment(current, start, length));
+      }
+    }
+    if (next == null || nextChoice == null || !nextChoice!.improvesOn(best)) {
+      break;
+    }
+    current = next!;
+    best = nextChoice!;
+  }
+  return best.slots;
+}
+
+_OrderChoice _orientOrder({
+  required String parentId,
+  required double parentRadius,
+  required List<_LocalTree> order,
+  required List<_LocalTree> baseline,
+  required double baselineRing,
+  required List<SecretaryEdge> layoutEdges,
+}) {
+  final leafOnly = order.every((child) => child.relative.length < 2);
+  final spins = leafOnly
+      ? const <double>[0]
+      : const <double>[0, math.pi / 2, math.pi, 3 * math.pi / 2];
+  _OrderChoice? best;
+  for (final spin in spins) {
+    final slots = _tuneRotations(
+      parentId: parentId,
+      slots: _slotsFor(order, parentRadius, spin),
+      layoutEdges: layoutEdges,
+    );
+    final ring = slots.first.distance;
+    if (ring > baselineRing + 1) {
+      continue;
+    }
+    final choice = _OrderChoice(
+      slots: slots,
+      score: _secondaryDistance(
         parentId: parentId,
         slots: slots,
         layoutEdges: layoutEdges,
-      );
-      final score = _secondaryDistance(
-        parentId: parentId,
-        slots: tuned,
-        layoutEdges: layoutEdges,
-      );
-      if (score < bestScore - 1e-6) {
-        bestScore = score;
-        best = tuned;
-      }
+      ),
+      drift: _orderDrift(baseline, order),
+      spin: spin,
+    );
+    if (best == null || choice.improvesOn(best)) {
+      best = choice;
     }
   }
-  return best ?? _slotsFor(children, parentRadius, 0);
+  return best ??
+      _OrderChoice(
+        slots: _slotsFor(order, parentRadius, 0),
+        score: double.infinity,
+        drift: _orderDrift(baseline, order),
+        spin: 0,
+      );
+}
+
+bool _frameHasSecondary(
+  String parentId,
+  List<_LocalTree> children,
+  List<SecretaryEdge> layoutEdges,
+) {
+  final ids = <String>{parentId};
+  for (final child in children) {
+    ids.addAll(child.relative.keys);
+  }
+  for (final edge in layoutEdges) {
+    if (edge.state != 'confirmed' || edge.type == 'part_of') {
+      continue;
+    }
+    if (ids.contains(edge.sourceId) && ids.contains(edge.targetId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int _orderDrift(List<_LocalTree> baseline, List<_LocalTree> order) {
+  var drift = 0;
+  for (var index = 0; index < baseline.length; index++) {
+    if (baseline[index].id != order[index].id) {
+      drift += 1;
+    }
+  }
+  return drift;
+}
+
+void _permute(
+  List<_LocalTree> items,
+  int start,
+  void Function(List<_LocalTree> order) visit,
+) {
+  if (start >= items.length) {
+    visit(items);
+    return;
+  }
+  for (var index = start; index < items.length; index++) {
+    final held = items[start];
+    items[start] = items[index];
+    items[index] = held;
+    _permute(items, start + 1, visit);
+    items[index] = items[start];
+    items[start] = held;
+  }
+}
+
+List<_LocalTree> _reverseSegment(List<_LocalTree> order, int start, int length) {
+  final copy = [...order];
+  final count = copy.length;
+  for (var step = 0; step < length ~/ 2; step++) {
+    final left = (start + step) % count;
+    final right = (start + length - 1 - step) % count;
+    final held = copy[left];
+    copy[left] = copy[right];
+    copy[right] = held;
+  }
+  return copy;
 }
 
 List<_ChildSlot> _slotsFor(List<_LocalTree> children, double parentRadius, double spin) {

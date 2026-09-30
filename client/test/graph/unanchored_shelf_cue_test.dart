@@ -272,7 +272,7 @@ Future<GraphTestHarness> _pump(
         return jsonUtf8Response({
           'topology_revision': 1,
           'snapshot_revision': 1,
-          'algorithm_version': 'task-map-v2',
+          'algorithm_version': 'task-map-v2.1',
           'usable': true,
           'centers': [
             for (var index = 0; index < tasks.length; index++)
