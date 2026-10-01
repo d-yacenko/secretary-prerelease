@@ -276,6 +276,98 @@ void main() {
     expect(again.hairlines.single.arrowAtMark, line.arrowAtMark);
   });
 
+  test('collapsed pair keeps the representative style and one proposal cue', () {
+    final nodes = [
+      _object('task', 'Публикация'),
+      _object('file', 'Решение', kind: 'file'),
+    ];
+    final confirmedEdge = _edge('task', 'file', 'references', id: 'ref');
+    final proposedEdge = _edge(
+      'file',
+      'task',
+      'related_to',
+      id: 'rel',
+      state: 'proposed',
+    );
+    final confirmedOnly = _show(nodes: nodes, edges: [confirmedEdge]);
+    final duplicate = _show(nodes: nodes, edges: [confirmedEdge, proposedEdge]);
+    final line = duplicate.hairlines.single;
+    final baseline = confirmedOnly.hairlines.single;
+
+    expect(duplicate.hairlines, hasLength(1));
+    expect(line.proposed, isFalse);
+    expect(line.proposalCue, isTrue);
+    expect(line.directed, isTrue);
+    expect(line.dashed, isFalse);
+    expect(line.arrowAtMark, isTrue);
+    expect(line.start, baseline.start);
+    expect(line.end, baseline.end);
+    expect(duplicate.displayTopLeft['task'], confirmedOnly.displayTopLeft['task']);
+    expect(duplicate.displayTopLeft['file'], confirmedOnly.displayTopLeft['file']);
+
+    final selected = presentHybridFocus(
+      nodes: nodes,
+      edges: [confirmedEdge, proposedEdge],
+      positions: const {'task': Offset.zero, 'file': Offset(4000, 4000)},
+      selectedObjectId: 'task',
+      refiner: _IdentityRefiner(),
+    );
+    expect(line.proposalCue, isTrue);
+    expect(selected.displayTopLeft['task'], duplicate.displayTopLeft['task']);
+
+    final rejected = _show(
+      nodes: nodes,
+      edges: [
+        confirmedEdge,
+        _edge('file', 'task', 'related_to', id: 'rel', state: 'rejected'),
+      ],
+    );
+    expect(rejected.hairlines.single.proposalCue, isFalse);
+    expect(rejected.hairlines.single.proposed, isFalse);
+    expect(rejected.hairlines.single.directed, isTrue);
+    expect(rejected.hairlines.single.dashed, isFalse);
+    expect(rejected.hairlines.single.start, line.start);
+    expect(rejected.hairlines.single.end, line.end);
+    expect(rejected.displayTopLeft['task'], duplicate.displayTopLeft['task']);
+    expect(rejected.displayTopLeft['file'], duplicate.displayTopLeft['file']);
+
+    final single = _show(
+      nodes: nodes,
+      edges: [_edge('task', 'file', 'references', id: 'ref', state: 'proposed')],
+    );
+    expect(single.hairlines, hasLength(1));
+    expect(single.hairlines.single.proposed, isTrue);
+    expect(single.hairlines.single.proposalCue, isTrue);
+
+    final several = _show(
+      nodes: nodes,
+      edges: [
+        _edge('task', 'file', 'references', id: 'ref', state: 'proposed'),
+        _edge('file', 'task', 'related_to', id: 'rel', state: 'proposed'),
+        _edge('task', 'file', 'depends_on', id: 'dep', state: 'proposed'),
+      ],
+    );
+    expect(several.hairlines, hasLength(1));
+    expect(several.hairlines.single.proposalCue, isTrue);
+    expect(several.hairlines.single.proposed, isTrue);
+    expect(several.hairlines.single.directed, isTrue);
+    expect(several.hairlines.single.dashed, isFalse);
+
+    final hidden = _show(
+      nodes: nodes,
+      edges: [
+        confirmedEdge,
+        _edge('task', 'file', 'temporal_evidence', id: 'time', state: 'proposed'),
+        _edge('task', 'file', 'involves', id: 'actor', state: 'proposed'),
+        _edge('task', 'file', 'labeled_with', id: 'label', state: 'proposed'),
+      ],
+    );
+    expect(hidden.hairlines.single.proposalCue, isFalse);
+    expect(hidden.hairlines.single.proposed, isFalse);
+    expect(hidden.hairlines.single.start, baseline.start);
+    expect(hidden.displayTopLeft['file'], confirmedOnly.displayTopLeft['file']);
+  });
+
   test('compact depends_on arrow follows the canonical target', () {
     final towardFlow = _show(
       edges: [_edge('task', 'mail', 'depends_on')],

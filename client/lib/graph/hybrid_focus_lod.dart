@@ -68,6 +68,7 @@ class HybridHairline {
     this.directed = false,
     this.arrowAtMark = false,
     this.proposed = false,
+    this.proposalCue = false,
     this.dashed = false,
   });
 
@@ -82,8 +83,12 @@ class HybridHairline {
   /// When directed, the arrow sits on the Flow mark. Otherwise it sits on the Task.
   final bool arrowAtMark;
 
-  /// Review state. Does not change direction or dash.
+  /// Review state of the representative edge. Drives compact stroke and dash style.
   final bool proposed;
+
+  /// Any active Tasks-map proposed edge in this collapsed pair, including the
+  /// representative. Draws one hollow diamond and does not restyle a confirmed line.
+  final bool proposalCue;
 
   /// `depends_on` stays dashed when collapsed.
   final bool dashed;
@@ -492,11 +497,13 @@ class HybridHairlinePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final hairline in hairlines) {
-      final proposed = hairline.proposed;
+      final representativeProposed = hairline.proposed;
       final paint = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = proposed ? kProposedHairlineStroke : kHybridHairlineWidth
-        ..color = proposed
+        ..strokeWidth = representativeProposed
+            ? kProposedHairlineStroke
+            : kHybridHairlineWidth
+        ..color = representativeProposed
             ? (proposalColor ?? color).withValues(
                 alpha: proposedRelationOpacity(dimmed: dimmed),
               )
@@ -510,12 +517,18 @@ class HybridHairlinePainter extends CustomPainter {
       } else {
         canvas.drawLine(start, end, paint);
       }
-      if (proposed) {
+      if (representativeProposed || hairline.proposalCue) {
+        final cue = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = kProposedHairlineStroke
+          ..color = (proposalColor ?? color).withValues(
+            alpha: proposedRelationOpacity(dimmed: dimmed),
+          );
         paintRelationDiamond(
           canvas,
           relationSegmentMidpoint(start, end),
           kProposedHairlineDiamond,
-          paint,
+          cue,
         );
       }
       if (!hairline.directed) {
@@ -1414,6 +1427,13 @@ HybridHairline _withCanonicalArrow(
     directed: presentation.directed,
     arrowAtMark: presentation.directed && edge.targetId == line.markId,
     proposed: presentation.proposed,
+    proposalCue: graphMapPairHasProposedRelation(
+      edges: edges,
+      taskId: line.anchorTaskId,
+      flowId: line.markId,
+      sourceKind: byId[line.anchorTaskId]?.kind,
+      flowKind: byId[line.markId]?.kind,
+    ),
     dashed: presentation.dashed,
   );
 }

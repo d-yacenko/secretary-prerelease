@@ -291,6 +291,34 @@ SecretaryEdge? graphMapAnchorEdge({
   return matches.first;
 }
 
+/// Active proposed Tasks-map edge inside one collapsed Task↔Flow pair.
+bool graphMapPairHasProposedRelation({
+  required List<SecretaryEdge> edges,
+  required String taskId,
+  required String flowId,
+  String? sourceKind,
+  String? flowKind,
+}) {
+  for (final edge in edges) {
+    final pair =
+        (edge.sourceId == taskId && edge.targetId == flowId) ||
+        (edge.sourceId == flowId && edge.targetId == taskId);
+    if (!pair || edge.state != 'proposed') {
+      continue;
+    }
+    final edgeSourceKind = edge.sourceId == taskId ? sourceKind : flowKind;
+    final edgeTargetKind = edge.targetId == taskId ? sourceKind : flowKind;
+    if (presentGraphMapEdge(
+      edge: edge,
+      sourceKind: edgeSourceKind,
+      targetKind: edgeTargetKind,
+    ).visibleOnTasksMap) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int _anchorRank(String type) {
   switch (type) {
     case 'references':
