@@ -8,12 +8,11 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.assistant.tool_args import normalize_assistant_tool_arguments
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
-from app.core.config import settings
-from app.db.engine import engine
 from app.db.models import Object, User
 from app.llm.embedding_service import FakeEmbeddingService
 from app.llm.openai_assistant_provider import SYSTEM_INSTRUCTIONS
@@ -28,8 +27,8 @@ from evals.secretary_agent.models import EvalRun, ToolCallRecord
 from evals.secretary_agent.recording import RecordingToolRunner
 from evals.secretary_agent.safety import (
     EvalSafetyError,
-    assert_disposable_database,
     assert_dry_run_transports,
+    assert_eval_database,
 )
 
 REFERENCE_DATETIME = datetime.fromisoformat("2026-10-01T12:00:00+02:00")
@@ -73,13 +72,26 @@ def production_contract() -> tuple[str, list[dict]]:
     return SYSTEM_INSTRUCTIONS, ASSISTANT_TOOL_DEFINITIONS
 
 
-def run_scripted(scenario_id: str, provider: EvalProvider, config: EvalConfig, *, run_id: str) -> EvalRun:
+@dataclass(frozen=True)
+class EvalDatabase:
+    engine: Engine
+    disposable: bool
+
+
+def run_scripted(
+    scenario_id: str,
+    provider: EvalProvider,
+    config: EvalConfig,
+    *,
+    run_id: str,
+    database: EvalDatabase,
+) -> EvalRun:
     if scenario_id not in _DRY_RUNS:
         raise EvalSafetyError("AH2-MR1 scripted dry runs are only A2 and T1")
-    identity = assert_disposable_database(settings.postgres_host, settings.postgres_db)
+    assert_eval_database(database.engine, disposable=database.disposable)
     assert_dry_run_transports(())
     scenario = SCENARIOS[scenario_id]
-    connection = engine.connect()
+    connection = database.engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection)
     try:
@@ -119,7 +131,6 @@ def run_scripted(scenario_id: str, provider: EvalProvider, config: EvalConfig, *
         if transaction.is_active:
             transaction.rollback()
         connection.close()
-        del identity
 
 
 def _only_create_task(actions: list[dict]) -> bool:

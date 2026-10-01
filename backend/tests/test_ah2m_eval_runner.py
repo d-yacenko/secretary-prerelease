@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
 from app.assistant import session as assistant_session
 from app.connectors.google.gmail_transport import GmailTransport
@@ -17,15 +21,17 @@ from evals.secretary_agent.runner import (
     REFERENCE_DATETIME,
     REFERENCE_TIMEZONE,
     EvalConfig,
+    EvalDatabase,
     production_contract,
     run_scripted,
     _bound_local_tool,
 )
 from evals.secretary_agent.safety import (
     EvalSafetyError,
-    assert_disposable_database,
     assert_dry_run_transports,
+    assert_eval_database,
     assert_no_secrets,
+    build_safe_artifact_payload,
 )
 from evals.secretary_agent.scorer import score_run
 from evals.secretary_agent.catalog import SCENARIOS
@@ -60,6 +66,14 @@ def _config() -> EvalConfig:
     )
 
 
+def _database(url: str | None = None, *, disposable: bool = True) -> EvalDatabase:
+    return EvalDatabase(engine=create_engine(url or settings.database_url), disposable=disposable)
+
+
+def _close(database: EvalDatabase) -> None:
+    database.engine.dispose()
+
+
 def test_product_code_matches_production_release() -> None:
     root = Path(__file__).resolve().parents[2]
     diff = subprocess.check_output(
@@ -74,24 +88,67 @@ def test_product_code_matches_production_release() -> None:
     assert tools is ASSISTANT_TOOL_DEFINITIONS
 
 
-def test_database_guard_accepts_local_and_rejects_remote() -> None:
-    assert assert_disposable_database("localhost", "secretary")["local"] == "true"
-    with pytest.raises(EvalSafetyError):
-        assert_disposable_database("web-itx.duckdns.org", "secretary")
-    with pytest.raises(EvalSafetyError):
-        assert_disposable_database("", "secretary")
+def test_database_guard_accepts_explicit_local_engine() -> None:
+    database = _database()
+    try:
+        identity = assert_eval_database(database.engine, disposable=True)
+    finally:
+        _close(database)
+    assert set(identity) == {"host", "database", "disposable"}
+    assert identity["host"] in {"localhost", "127.0.0.1", "::1"}
+    assert identity["database"]
+    assert identity["disposable"] == "true"
+    assert all("://" not in value for value in identity.values())
 
 
-def test_database_guard_rejects_before_the_provider(monkeypatch) -> None:
+def test_remote_engine_is_rejected_before_connect() -> None:
+    database = _database("postgresql+psycopg://eval:secret@web-itx.duckdns.org/secretary")
+    try:
+        with patch.object(Engine, "connect", side_effect=AssertionError("connected")):
+            with pytest.raises(EvalSafetyError):
+                run_scripted(
+                    "A2",
+                    ScriptedProvider([]),
+                    _config(),
+                    run_id="remote",
+                    database=database,
+                )
+    finally:
+        _close(database)
+
+
+def test_local_engine_without_eval_classification_is_rejected() -> None:
+    database = _database(disposable=False)
+    try:
+        with patch.object(Engine, "connect", side_effect=AssertionError("connected")):
+            with pytest.raises(EvalSafetyError):
+                run_scripted(
+                    "A2",
+                    ScriptedProvider([]),
+                    _config(),
+                    run_id="unclassified",
+                    database=database,
+                )
+    finally:
+        _close(database)
+
+
+def test_settings_host_cannot_redirect_injected_engine(monkeypatch) -> None:
+    database = _database()
     monkeypatch.setattr(settings, "postgres_host", "web-itx.duckdns.org")
     provider = ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})])
+    try:
+        run = run_scripted("A2", provider, _config(), run_id="settings-ignored", database=database)
+    finally:
+        _close(database)
+    assert provider.seen["timezone"] == REFERENCE_TIMEZONE
+    assert run.final_facts == {"confirmed_task_count": 0}
 
-    def refuse(*args, **kwargs):
-        raise AssertionError("provider ran")
 
-    provider.run = refuse
-    with pytest.raises(EvalSafetyError):
-        run_scripted("A2", provider, _config(), run_id="remote")
+def test_runner_has_no_global_engine_fallback() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("evals/secretary_agent/runner.py").read_text()
+    assert "app.db.engine" not in source
+    assert "SessionLocal" not in source
 
 
 def test_injection_restores_after_success_and_failure(db_session) -> None:
@@ -111,19 +168,28 @@ def test_scripted_provider_does_not_construct_openai(monkeypatch) -> None:
 
     monkeypatch.setattr("openai.OpenAI", explode)
     provider = ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})])
-    run = run_scripted("A2", provider, _config(), run_id="a2-dry")
+    database = _database()
+    try:
+        run = run_scripted("A2", provider, _config(), run_id="a2-dry", database=database)
+    finally:
+        _close(database)
     assert provider.seen["timezone"] == REFERENCE_TIMEZONE
     assert provider.seen["reference_datetime"] == REFERENCE_DATETIME
     assert run.final_answer == "review"
 
 
 def test_a2_staged_only_is_incomplete_and_unchanged() -> None:
-    run = run_scripted(
-        "A2",
-        ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})]),
-        _config(),
-        run_id="a2-score",
-    )
+    database = _database()
+    try:
+        run = run_scripted(
+            "A2",
+            ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})]),
+            _config(),
+            run_id="a2-score",
+            database=database,
+        )
+    finally:
+        _close(database)
     assert run.final_facts == {"confirmed_task_count": 0}
     assert run.calls[0].approval_required is True
     assert run.calls[0].executed is False
@@ -134,23 +200,29 @@ def test_a2_staged_only_is_incomplete_and_unchanged() -> None:
         if item.dimension == "truthful_final_response":
             continue
         assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    _assert_safe_payload(run)
 
 
 def test_t1_approved_execution_creates_one_ongoing_task() -> None:
-    run = run_scripted(
-        "T1",
-        ScriptedProvider(
-            [
-                ("retrieve", {"query": "Публикации", "kind": "task"}),
-                (
-                    "create_task",
-                    {"title": "Публикации", "confidence": 0.8, "completion_mode": "ongoing"},
-                ),
-            ]
-        ),
-        _config(),
-        run_id="t1-score",
-    )
+    database = _database()
+    try:
+        run = run_scripted(
+            "T1",
+            ScriptedProvider(
+                [
+                    ("retrieve", {"query": "Публикации", "kind": "task"}),
+                    (
+                        "create_task",
+                        {"title": "Публикации", "confidence": 0.8, "completion_mode": "ongoing"},
+                    ),
+                ]
+            ),
+            _config(),
+            run_id="t1-score",
+            database=database,
+        )
+    finally:
+        _close(database)
     assert run.final_facts == {
         "task_count": 1,
         "title": "Публикации",
@@ -168,6 +240,7 @@ def test_t1_approved_execution_creates_one_ongoing_task() -> None:
         if item.dimension == "truthful_final_response":
             continue
         assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    _assert_safe_payload(run)
 
 
 def test_live_transport_is_rejected() -> None:
@@ -186,3 +259,54 @@ def test_sanitizer_rejects_secret_fields() -> None:
     with pytest.raises(EvalSafetyError):
         assert_no_secrets({"dsn": "postgresql://user:password@localhost/secretary"})
     assert_no_secrets(_config().public_dict())
+
+
+def test_safe_artifact_rejects_secrets_reasoning_and_production_identity() -> None:
+    run = _bare_run()
+    public = _config().public_dict()
+    for extra in (
+        {"OPENAI_API_KEY": "sk-test-secret"},
+        {"dsn": "postgresql://user:password@localhost/secretary"},
+        {"access_token": "oauth-access"},
+        {"refresh_token": "oauth-refresh"},
+        {"chain_of_thought": "hidden"},
+        {"reasoning_trace": "hidden"},
+        {"hidden_reasoning": "hidden"},
+        {"raw_response": {"id": "resp"}},
+        {"provider_request": {"input": "wire"}},
+        {"production_user_id": "user-1"},
+    ):
+        with pytest.raises(EvalSafetyError):
+            build_safe_artifact_payload(run, {**public, **extra})
+    with pytest.raises(EvalSafetyError):
+        build_safe_artifact_payload(
+            run,
+            public,
+            provider_output={"answer": "other", "chain_of_thought": "hidden"},
+        )
+
+
+def test_safe_artifact_keeps_only_final_answer() -> None:
+    run = _bare_run()
+    payload = build_safe_artifact_payload(
+        run,
+        _config().public_dict(),
+        provider_output={"answer": "other", "commentary": "not stored"},
+    )
+    assert payload["final_answer"] == "review"
+    encoded = json.dumps(payload)
+    assert "commentary" not in encoded
+    assert "other" not in encoded
+    assert json.loads(encoded) == payload
+
+
+def _bare_run():
+    from evals.secretary_agent.models import EvalRun
+
+    return EvalRun(scenario_id="A2", utterance="x", run_id="bare", final_answer="review", model="scripted")
+
+
+def _assert_safe_payload(run) -> None:
+    payload = build_safe_artifact_payload(run, _config().public_dict())
+    assert payload["final_answer"] == run.final_answer
+    assert json.loads(json.dumps(payload)) == payload
