@@ -78,10 +78,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   final List<String> _localContextAnchorIds = [];
 
   List<SecretaryObject> get nodes => _nodes.values.toList();
-  List<SecretaryObject> get visibleNodes =>
-      _nodes.values.where(_matchesDisplayFilters).toList();
-  bool get hasActiveDisplayFilters =>
-      searchKindFilter != null || searchProviderFilter != null;
+  List<SecretaryObject> get visibleNodes => _nodes.values.toList();
   SecretaryObject? nodeById(String id) => _nodes[id];
   List<SecretaryEdge> get edges => List.unmodifiable(_edges);
   List<SecretaryEdge> get visibleEdges {
@@ -922,25 +919,6 @@ class GraphWorkspaceController extends ChangeNotifier {
 
   void clearFitRequest() {
     shouldFitAfterLayout = false;
-  }
-
-  void applyDisplayFilters() {
-    final selected = selectedObject;
-    if (selected != null && !_matchesDisplayFilters(selected)) {
-      selectedObjectId = null;
-      selectedEdgeId = null;
-    }
-    notifyListeners();
-  }
-
-  bool _matchesDisplayFilters(SecretaryObject node) {
-    if (searchKindFilter != null && node.kind != searchKindFilter) {
-      return false;
-    }
-    if (searchProviderFilter != null && node.provider != searchProviderFilter) {
-      return false;
-    }
-    return true;
   }
 
   void _removeObjectFromWorkspace(String objectId) {

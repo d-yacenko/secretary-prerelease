@@ -702,7 +702,7 @@ void main() {
     await openGraph(tester, harness);
 
     await tester.enterText(find.byType(TextField), 'graph');
-    await tester.tap(find.bySemanticsLabel('Фильтр типа: Все типы'));
+    await tester.tap(find.bySemanticsLabel('Тип в поиске: Все типы'));
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing);
     await tester.tap(find.ancestor(
@@ -775,7 +775,7 @@ void main() {
     await openGraph(tester, harness);
 
     await tester.enterText(find.byType(TextField), 'mail');
-    await tester.tap(find.bySemanticsLabel('Фильтр источника: Все источники'));
+    await tester.tap(find.bySemanticsLabel('Источник в поиске: Все источники'));
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing);
     await tester.tap(find.ancestor(
@@ -787,7 +787,7 @@ void main() {
     expect(searchProvider, 'gmail');
   });
 
-  testWidgets('display kind filter hides non-matching loaded nodes', (tester) async {
+  testWidgets('search facets do not hide loaded canvas nodes', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -865,7 +865,7 @@ void main() {
     expect(find.text('Gmail mail'), findsOneWidget);
     expect(find.text('Yandex mail'), findsOneWidget);
 
-    await tester.tap(find.bySemanticsLabel('Фильтр типа: Все типы'));
+    await tester.tap(find.bySemanticsLabel('Тип в поиске: Все типы'));
     await tester.pumpAndSettle();
     await tester.tap(find.ancestor(
       of: find.text('Письмо'),
@@ -873,11 +873,11 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Local task'), findsNothing);
+    expect(find.text('Local task'), findsOneWidget);
     expect(find.text('Gmail mail'), findsOneWidget);
     expect(find.text('Yandex mail'), findsOneWidget);
 
-    await tester.tap(find.bySemanticsLabel('Фильтр источника: Все источники'));
+    await tester.tap(find.bySemanticsLabel('Источник в поиске: Все источники'));
     await tester.pumpAndSettle();
     await tester.tap(find.ancestor(
       of: find.text('Gmail'),
@@ -885,7 +885,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Yandex mail'), findsNothing);
+    expect(find.text('Local task'), findsOneWidget);
+    expect(find.text('Yandex mail'), findsOneWidget);
     expect(find.text('Gmail mail'), findsOneWidget);
   });
 

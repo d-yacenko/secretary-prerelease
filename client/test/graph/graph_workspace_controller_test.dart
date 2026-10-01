@@ -568,7 +568,7 @@ void main() {
     expect(controller.loadState, GraphWorkspaceLoadState.ready);
   });
 
-  test('display filters hide nodes and edges without reloading layout', () async {
+  test('search facets do not hide workspace nodes or edges', () async {
     final auth = _FakeAuth();
     final task = SecretaryObject(
       id: 'task-local',
@@ -631,21 +631,19 @@ void main() {
     final originalPositions = Map<String, Offset>.from(controller.positions);
 
     controller.searchKindFilter = 'email';
-    controller.applyDisplayFilters();
-    expect(controller.visibleNodes.map((n) => n.id).toList(),
-        ['email-gmail', 'email-yandex']);
-    expect(controller.visibleEdges, isEmpty);
+    expect(
+      controller.visibleNodes.map((node) => node.id).toSet(),
+      {'task-local', 'email-gmail', 'email-yandex'},
+    );
+    expect(controller.visibleEdges.map((edge) => edge.id), ['e-task-gmail']);
+    expect(controller.selectedObjectId, isNull);
 
     controller.searchProviderFilter = 'gmail';
-    controller.applyDisplayFilters();
-    expect(controller.visibleNodes.single.id, 'email-gmail');
+    expect(controller.visibleNodes.length, 3);
+    expect(controller.visibleEdges, isNotEmpty);
 
     controller.searchProviderFilter = null;
-    controller.applyDisplayFilters();
-    expect(controller.visibleNodes.length, 2);
-
     controller.searchKindFilter = null;
-    controller.applyDisplayFilters();
     expect(controller.visibleNodes.length, 3);
     expect(controller.positions['task-local'], originalPositions['task-local']);
     expect(controller.positions['email-gmail'], originalPositions['email-gmail']);

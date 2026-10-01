@@ -273,7 +273,7 @@ void main() {
     await controller.loadOverview();
     final kept = Map<String, Offset>.from(controller.canonicalTaskCenters);
     controller.searchKindFilter = 'task';
-    controller.applyDisplayFilters();
+    expect(controller.visibleNodes.map((node) => node.id), contains('task-a'));
     expect(controller.canonicalTaskCenters, kept);
 
     await controller.loadOverviewWindow(0);

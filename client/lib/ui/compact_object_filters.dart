@@ -20,6 +20,8 @@ class CompactObjectFilters extends StatelessWidget {
     required this.onKindChanged,
     required this.onProviderChanged,
     required this.onSortChanged,
+    this.kindScopeLabel,
+    this.providerScopeLabel,
     this.labels = const [],
     this.selectedLabelId,
     this.onLabelChanged,
@@ -33,6 +35,8 @@ class CompactObjectFilters extends StatelessWidget {
   final ValueChanged<String?> onKindChanged;
   final ValueChanged<String?> onProviderChanged;
   final ValueChanged<String> onSortChanged;
+  final String? kindScopeLabel;
+  final String? providerScopeLabel;
   final List<LabelItem> labels;
   final String? selectedLabelId;
   final ValueChanged<String?>? onLabelChanged;
@@ -45,11 +49,13 @@ class CompactObjectFilters extends StatelessWidget {
         _KindFilterButton(
           facets: facets,
           selectedKind: selectedKind,
+          scopeLabel: kindScopeLabel,
           onChanged: onKindChanged,
         ),
         _ProviderFilterButton(
           facets: facets,
           selectedProvider: selectedProvider,
+          scopeLabel: providerScopeLabel,
           onChanged: onProviderChanged,
         ),
         if (showSort)
@@ -72,11 +78,13 @@ class _KindFilterButton extends StatelessWidget {
   const _KindFilterButton({
     required this.facets,
     required this.selectedKind,
+    required this.scopeLabel,
     required this.onChanged,
   });
 
   final SearchFacetsOut? facets;
   final String? selectedKind;
+  final String? scopeLabel;
   final ValueChanged<String?> onChanged;
 
   @override
@@ -84,16 +92,20 @@ class _KindFilterButton extends StatelessWidget {
     final label = selectedKind == null
         ? 'Все типы'
         : objectKindLabel(selectedKind!);
+    final semanticsLabel = scopeLabel == null
+        ? 'Фильтр типа: $label'
+        : '$scopeLabel: $label';
+    final tooltip = scopeLabel == null ? label : semanticsLabel;
     final icon = selectedKind == null
         ? Icons.category_outlined
         : iconForObjectKind(selectedKind!);
 
     if (!_isDesktopFilterContext(context)) {
       return Semantics(
-        label: 'Фильтр типа: $label',
+        label: semanticsLabel,
         button: true,
         child: Tooltip(
-          message: label,
+          message: tooltip,
           child: IconButton(
             icon: Icon(icon),
             style: IconButton.styleFrom(
@@ -110,10 +122,10 @@ class _KindFilterButton extends StatelessWidget {
     return MenuAnchor(
       builder: (context, controller, child) {
         return Semantics(
-          label: 'Фильтр типа: $label',
+          label: semanticsLabel,
           button: true,
           child: Tooltip(
-            message: label,
+            message: tooltip,
             child: IconButton(
               icon: Icon(icon),
               style: IconButton.styleFrom(
@@ -201,11 +213,13 @@ class _ProviderFilterButton extends StatelessWidget {
   const _ProviderFilterButton({
     required this.facets,
     required this.selectedProvider,
+    required this.scopeLabel,
     required this.onChanged,
   });
 
   final SearchFacetsOut? facets;
   final String? selectedProvider;
+  final String? scopeLabel;
   final ValueChanged<String?> onChanged;
 
   @override
@@ -213,13 +227,17 @@ class _ProviderFilterButton extends StatelessWidget {
     final label = selectedProvider == null
         ? 'Все источники'
         : providerLabel(selectedProvider);
+    final semanticsLabel = scopeLabel == null
+        ? 'Фильтр источника: $label'
+        : '$scopeLabel: $label';
+    final tooltip = scopeLabel == null ? label : semanticsLabel;
 
     if (!_isDesktopFilterContext(context)) {
       return Semantics(
-        label: 'Фильтр источника: $label',
+        label: semanticsLabel,
         button: true,
         child: Tooltip(
-          message: label,
+          message: tooltip,
           child: IconButton(
             icon: selectedProvider == null
                 ? const Icon(Icons.storage_outlined)
@@ -238,10 +256,10 @@ class _ProviderFilterButton extends StatelessWidget {
     return MenuAnchor(
       builder: (context, controller, child) {
         return Semantics(
-          label: 'Фильтр источника: $label',
+          label: semanticsLabel,
           button: true,
           child: Tooltip(
-            message: label,
+            message: tooltip,
             child: IconButton(
               icon: selectedProvider == null
                   ? const Icon(Icons.storage_outlined)

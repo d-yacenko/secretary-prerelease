@@ -722,14 +722,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               selectedProvider: widget.controller.searchProviderFilter,
               selectedSort: 'relevance',
               showSort: false,
+              kindScopeLabel: 'Тип в поиске',
+              providerScopeLabel: 'Источник в поиске',
               onKindChanged: (value) {
                 widget.controller.searchKindFilter = value;
-                widget.controller.applyDisplayFilters();
                 _runSearch(_searchController.text);
               },
               onProviderChanged: (value) {
                 widget.controller.searchProviderFilter = value;
-                widget.controller.applyDisplayFilters();
                 _runSearch(_searchController.text);
               },
               onSortChanged: (_) {},
@@ -1263,26 +1263,6 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final positions = _drawnPositions(nodes: nodes, edges: edges);
     if (widget.controller.mode == GraphWorkspaceMode.people && nodes.isEmpty) {
       return const Center(child: Text('Добавьте человека, чтобы начать.'));
-    }
-    if (widget.controller.hasActiveDisplayFilters && nodes.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Нет объектов по выбранным фильтрам'),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () {
-                widget.controller.searchKindFilter = null;
-                widget.controller.searchProviderFilter = null;
-                widget.controller.applyDisplayFilters();
-                _runSearch(_searchController.text);
-              },
-              child: const Text('Сбросить фильтры'),
-            ),
-          ],
-        ),
-      );
     }
     _hybridWarning = null;
     final hybrid = widget.controller.mode == GraphWorkspaceMode.tasks
