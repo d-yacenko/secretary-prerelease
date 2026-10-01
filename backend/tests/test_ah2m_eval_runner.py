@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -22,6 +23,7 @@ from evals.secretary_agent.fixtures import REGISTRY_IDS
 from evals.secretary_agent.scripted import ScriptedProvider
 from evals.secretary_agent.models import DimensionStatus, OverallStatus
 from evals.secretary_agent.runner import (
+    _approve_internal,
     REFERENCE_DATETIME,
     REFERENCE_TIMEZONE,
     EvalConfig,
@@ -288,7 +290,23 @@ _SYMBOL_KEYS = {
 
 
 def test_fixture_registry_is_the_authorized_set() -> None:
-    assert REGISTRY_IDS == ("P1", "T2", "T3", "R3", "S1", "N1", "A2", "T1")
+    assert REGISTRY_IDS == (
+        "P1",
+        "T1",
+        "T2",
+        "T3",
+        "F1",
+        "M1",
+        "M2",
+        "R1",
+        "R2",
+        "R3",
+        "A1",
+        "A2",
+        "S1",
+        "N1",
+    )
+    assert "F2" not in REGISTRY_IDS
 
 
 @pytest.mark.parametrize("scenario_id", ["P1", "T2", "T3", "R3", "S1", "N1"])
@@ -357,6 +375,142 @@ def test_sequential_dry_runs_do_not_leak() -> None:
     finally:
         _close(database)
     assert leaked == 0
+
+
+def test_unallowlisted_staged_tool_is_not_executed() -> None:
+    with pytest.raises(EvalSafetyError, match="allowlist"):
+        _approve_internal(
+            SCENARIOS["F1"],
+            object(),
+            uuid4(),
+            [{"tool_name": "send_email", "arguments": {}}],
+            None,
+        )
+    with pytest.raises(EvalSafetyError, match="allowlist"):
+        _approve_internal(
+            SCENARIOS["M1"],
+            object(),
+            uuid4(),
+            [{"tool_name": "create_calendar_event", "arguments": {}}],
+            None,
+        )
+
+
+@pytest.mark.parametrize("scenario_id", ["F1", "M1", "M2", "R1", "R2", "A1"])
+def test_internal_mutation_fixture_scores_and_serializes(scenario_id: str) -> None:
+    database = _database()
+    provider = ScriptedProvider()
+    try:
+        run = run_scripted(scenario_id, provider, _config(), run_id=scenario_id.lower(), database=database)
+    finally:
+        _close(database)
+    report = score_run(SCENARIOS[scenario_id], run)
+    assert report.overall == OverallStatus.INCOMPLETE, report.dimensions
+    assert report.dimension("truthful_final_response").status == DimensionStatus.MANUAL_REVIEW
+    for item in report.dimensions:
+        if item.dimension == "truthful_final_response":
+            continue
+        assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    _assert_safe_payload(run)
+    if scenario_id == "F1":
+        assert provider.commits == 2
+        assert [tool_round[0][0] for tool_round in provider.rounds] == ["retrieve", "update_task"]
+        assert run.final_facts == {"pdf_is_task": False, "evidence_relation": "references"}
+    if scenario_id == "M1":
+        assert run.final_facts == {"scheduled_activity_count": 1, "task_count": 0}
+        assert {call.tool_name for call in run.calls}.isdisjoint({"create_task", "create_calendar_event"})
+    if scenario_id == "M2":
+        assert provider.commits == 2
+        assert run.final_facts == {"has_planned_interval": True, "has_due_at": True, "task_count": 1}
+    if scenario_id == "R1":
+        executed = next(call for call in run.calls if call.tool_name == "link_objects" and call.executed)
+        assert executed.arguments["source_id"] == run.symbols["child_task_id"]
+        assert executed.arguments["target_id"] == run.symbols["parent_task_id"]
+        assert executed.arguments["relation_type"] == "part_of"
+        assert run.final_facts == {"relation_type": "part_of"}
+    if scenario_id == "R2":
+        assert [name for name, _arguments in provider.rounds[0]] == ["resolve_person", "retrieve"]
+        executed = next(call for call in run.calls if call.tool_name == "update_task" and call.executed)
+        assert executed.arguments["waiting_on_person_ids"] == [run.symbols["person_id"]]
+        assert run.final_facts == {"actor_role": "waiting_on"}
+    if scenario_id == "A1":
+        executed = next(call for call in run.calls if call.tool_name == "set_task_status" and call.executed)
+        assert executed.effect.get("changed") is False
+        assert run.final_facts == {"status": "open", "changed": False}
+
+
+class _HiddenUntilCommit:
+    def __init__(self, follow: str) -> None:
+        self.follow = follow
+        self.blocked = None
+
+    def bind_rounds(self, rounds) -> None:
+        self.rounds = rounds
+
+    def run(self, message, history, ui_context, reference_datetime, timezone, tool_runner, identity_facts=None, *, system_instructions=None, tool_definitions=None):
+        if self.follow == "F1":
+            tool_runner(*self.rounds[0][0])
+            self.blocked = tool_runner(*self.rounds[1][0])
+            tool_runner.commit_model_visible_outputs()
+            tool_runner(*self.rounds[1][0])
+        else:
+            resolved = tool_runner("resolve_person", {"query": "Марина"})
+            tool_runner("retrieve", {"query": "Черновик", "kind": "task"})
+            person_id = resolved.output["person_id"]
+            task_id = self.rounds[1][0][1]["object_id"]
+            self.blocked = tool_runner(
+                "update_task",
+                {"object_id": task_id, "waiting_on_person_ids": [person_id]},
+            )
+            tool_runner.commit_model_visible_outputs()
+            tool_runner(
+                "update_task",
+                {"object_id": task_id, "waiting_on_person_ids": [person_id]},
+            )
+        return type("Result", (), {"answer": "review"})()
+
+
+def test_f1_task_id_is_hidden_until_the_read_round_commits() -> None:
+    provider = _HiddenUntilCommit("F1")
+    database = _database()
+    try:
+        run_scripted("F1", provider, _config(), run_id="f1-boundary", database=database)
+    finally:
+        _close(database)
+    assert provider.blocked.success is False
+    assert "not exposed" in provider.blocked.error
+
+
+def test_r2_person_id_is_hidden_until_the_read_round_commits() -> None:
+    provider = _HiddenUntilCommit("R2")
+    database = _database()
+    try:
+        run = run_scripted("R2", provider, _config(), run_id="r2-boundary", database=database)
+    finally:
+        _close(database)
+    assert provider.blocked.success is False
+    assert "not exposed" in provider.blocked.error
+    assert run.final_facts == {"actor_role": "waiting_on"}
+
+
+def test_mutation_rollback_does_not_leak_objects_or_edges() -> None:
+    database = _database()
+    try:
+        before = _persistent_counts(database)
+        run_scripted("M1", ScriptedProvider(), _config(), run_id="iso-m1", database=database)
+        run_scripted("F1", ScriptedProvider(), _config(), run_id="iso-f1", database=database)
+        after = _persistent_counts(database)
+    finally:
+        _close(database)
+    assert before == after
+
+
+def _persistent_counts(database: EvalDatabase) -> tuple[int, int, int]:
+    with database.engine.connect() as connection:
+        users = connection.execute(text("select count(*) from users")).scalar()
+        objects = connection.execute(text("select count(*) from objects")).scalar()
+        edges = connection.execute(text("select count(*) from edges")).scalar()
+    return int(users or 0), int(objects or 0), int(edges or 0)
 
 
 class ProductionShapeProvider:

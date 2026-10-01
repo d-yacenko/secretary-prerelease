@@ -128,10 +128,7 @@ def run_scripted(
                 system_instructions=SYSTEM_INSTRUCTIONS,
                 tool_definitions=ASSISTANT_TOOL_DEFINITIONS,
             )
-            if scenario.approval == "staged_then_executed" and _only_create_task(budget.staged_actions):
-                plan = ActionPlanService(session, user.id).create_plan(budget.staged_actions)
-                approved = ActionPlanService(session, user.id).approve(plan.id)
-                _append_executed(recorder, approved.result or {}, budget.staged_actions)
+            _approve_internal(scenario, session, user.id, budget.staged_actions, recorder)
             session.expire_all()
             facts = prepared.final_facts(session)
         return EvalRun(
@@ -151,9 +148,31 @@ def run_scripted(
         connection.close()
 
 
-def _only_create_task(actions: list[dict]) -> bool:
-    names = [str(action.get("tool_name")) for action in actions]
-    return names == ["create_task"]
+_INTERNAL_APPROVAL_TOOLS = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "link_objects",
+        "create_scheduled_activity",
+        "set_task_status",
+    }
+)
+_EXECUTE_MODES = frozenset({"staged_then_executed", "staged_then_executed_if_present"})
+
+
+def _approve_internal(scenario, session: Session, user_id: UUID, actions: list[dict], recorder: RecordingToolRunner) -> None:
+    if scenario.approval not in _EXECUTE_MODES:
+        return
+    if scenario.approval == "staged_then_executed_if_present" and not actions:
+        return
+    if len(actions) != 1:
+        raise EvalSafetyError("eval approval executes exactly one staged action")
+    tool_name = str(actions[0].get("tool_name"))
+    if tool_name not in _INTERNAL_APPROVAL_TOOLS:
+        raise EvalSafetyError("staged tool is outside the eval approval allowlist")
+    plan = ActionPlanService(session, user_id).create_plan(actions)
+    approved = ActionPlanService(session, user_id).approve(plan.id)
+    _append_executed(recorder, approved.result or {}, actions)
 
 
 def _append_executed(recorder: RecordingToolRunner, result: dict, staged: list[dict]) -> None:
