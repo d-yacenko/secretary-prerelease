@@ -27,7 +27,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Create task | SUPPORTED | `create_task` | Agent-proposed until an approved plan confirms. Optional `completion_mode` `finite` or `ongoing`; omit means finite |
 | Edit task fields (title, body, due, completion_mode) | SUPPORTED | `update_task` | Does not change lifecycle status. Omitted `completion_mode` is unchanged |
 | Add task evidence | SUPPORTED | `update_task(evidence_object_ids=…)` | **Additive only** — attaches `references`; never removes |
-| Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Assistant and the shared domain contract write additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, and `depends_on`. MCP schema accepts the same five parameters. MCP execution stays fail-closed: `INTERNAL_WRITE` requires approval, and MCP has no trusted approval transport |
+| Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Assistant and the shared domain contract write additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, and `depends_on`. MCP schema accepts the same five parameters. MCP execution stays fail-closed: `INTERNAL_WRITE` and `ANNOTATE` both require approval, and MCP has no trusted approval transport |
 | Task composition `part_of` | SUPPORTED | `link_objects` | Child/source → parent/target. Not a field on `create_task` |
 | `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done` |
 | Planned start/end | PARTIAL | Human editor; read on Task Profile | Tools cannot set it |
@@ -37,6 +37,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Remove relation | SUPPORTED | `remove_relation(edge_id)` | Sets `state=rejected`; no physical delete |
 | Labels | SUPPORTED | `list_labels`, `assign_label`, `remove_label`, `create_label`, `rename_label`, `delete_label` | `labeled_with` is not created through `link_objects` |
 | Person identity feedback and route memory | SUPPORTED | `confirm_person_identity`, `reject_person_identity`, `retract_person_identity_feedback`, `record_person_route_choice` | Assistant only |
+| Inbox review frontier | SUPPORTED | `list_inbox_since_review_marker`, `set_inbox_review_marker`, `clear_inbox_review_marker` | Global Secretary marker. Annotate tools run immediately in the Assistant and do not write provider read-state. MCP lists the tools and does not commit them |
 | One-shot or recurring reminder | SUPPORTED | `create_scheduled_activity`, `create_recurring_scheduled_activity`, `cancel_scheduled_activity` | Internal notification, not a Task and not a provider calendar write |
 | Send email | SUPPORTED | `send_email` | Approval required before the provider write |
 | Send chat message | SUPPORTED | `send_message` | Mattermost, Telegram, and Teams share this tool. Approval required |
@@ -54,7 +55,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Capability | Status | Notes |
 |------------|--------|-------|
 | Notification dismiss / read mutation | INTENTIONALLY DEFERRED | Inbox review marker is separate and is implemented |
-| Confirm / reject a proposed edge from the model | PARTIAL | Human Graph UI confirms or rejects. `remove_relation` rejects. There is no model tool that confirms an edge |
+| Confirm / reject a proposed edge from the model | PARTIAL | Human Graph UI confirms or rejects an existing proposal. A new model write is confirmed by the approval card. `remove_relation` rejects. There is no model tool that confirms an already proposed edge |
 | Cloud / local file mutations | INTENTIONALLY DEFERRED | Beyond explicit intake |
 | Manager / organization membership edges | NOT CANONICAL | People workspace rejects `member_of`, `role_at`, `manager_of`, and similar types |
 
@@ -70,3 +71,4 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 - `success=true` ≠ `changed=true`.
 - Finalization uses deterministic execution-effect facts (`created`, `changed`, `removed`, `no_op`, `failed`).
 - Unsupported mutation rule: never approximate with a different mutating tool.
+- Assistant, MCP, and proactive exposure for the same tools is one registry. Proactive reads are only `retrieve`, `query_objects`, `get_object`, `get_task_profile`, `get_context`, `list_neighbors`, and `list_notifications`. The current flag table is in `docs/ontology_harness_parity_audit.md`.
