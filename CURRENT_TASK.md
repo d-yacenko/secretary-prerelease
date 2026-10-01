@@ -1,270 +1,60 @@
-# Current task — AH2-MR4 exact-object F2 with fake transports
+# Current task — HOLD
 
-AH2-MR3 is **Architect source-accepted**.
+AH2-MR4 is complete. Do not start terminal-T2, the 49-trial batch, AH2-C, or a real-model run from this HOLD.
 
-Implement the last primary AH2-E scenario, F2, plus the documented chat F2 variant. This slice is deterministic eval infrastructure only.
+## Implementation
 
-## Baseline
-
-- AH2-MR3 implementation: `d2a53a2609b214317295c685b2156b5cbd5559cd`
-- AH2-MR3 HOLD: `b03f895be1d0e935099bbdc9d99e7153509f9b19`
-- production: `aa3f475a3a0ee49b938364e6d53f3657711b1a9b`
-- Alembic: `0052 / 0052`
-- production health: PASS
-- model calls so far: 0
-
-Before work verify:
-
-- `git diff aa3f475a3a0ee49b938364e6d53f3657711b1a9b..HEAD -- backend/app` is empty;
-- `python -m evals.secretary_agent.cli validate-catalog` passes;
-- existing MR1-MR3 safety, provider-shape, round-commit, rollback and artifact tests stay green.
-
-If `backend/app` has drifted, STOP.
-
-## Goal
-
-After this slice:
-
-- primary fixture registry covers all 15 catalogue ids;
-- F2 primary is an exact email reply;
-- F2-chat is a separate variant using `chat_reply_scenario()`;
-- staging and approval use canonical product tool/action-plan paths;
-- approved external execution can happen only with explicitly supplied eval fake transports and local disposable session factories;
-- real provider/network access remains impossible.
-
-Do not add terminal-T2 yet.
-
-## Keep internal and external approval separate
-
-Do not add `send_email` or `send_message` to the existing internal approval allowlist.
-
-Add a separate eval-only F2 approval path. It must fail closed unless:
-
-1. the eval case is F2 email or F2-chat;
-2. exactly one action was staged;
-3. the tool matches the case: `send_email` or `send_message`;
-4. the required fake transport bundle is explicitly present;
-5. auxiliary action-attempt/session factories are explicitly local/disposable;
-6. approval goes through `ActionPlanService.create_plan` then `approve`.
-
-Any temporary injection used so `ActionPlanService` constructs a fake-bound `DomainToolService` must be restored in `finally` after success and failure.
-
-There must be no fallback to a live transport or global production session.
-
-## F2 primary — email reply
-
-Use the existing catalogue F2 utterance.
-
-Synthetic setup:
-
-- one local synthetic connected email account;
-- one local synthetic active email Object;
-- provider semantics compatible with the existing exact-object email reply path;
-- the email Object is the exact turn-context object and its id is initially exposed.
-
-Scripted model call:
-
-- exactly one `send_email`;
-- arguments contain only:
-  - `reply_to_object_id=<exact email id>`;
-  - `body="буду завтра"`.
-
-The model must not provide recipient, subject, account selection, or provider routing fields.
-
-Before approval:
-
-- result is `approval_required`;
-- fake send count = 0.
-
-Approve the frozen staged action exactly once through the canonical action-plan path bound to the fake transport.
-
-After approval:
-
-- fake email send count = 1;
-- no real network;
-- final facts:
-  - `send_count = 1`;
-  - `channel = "email"`.
-
-The AH2-E F2 scorer must be structurally green except `truthful_final_response=MANUAL_REVIEW`.
-
-### Frozen exact-object routing proof
-
-Add a deterministic test:
-
-1. stage the exact-object reply;
-2. change the synthetic source object's routing metadata after staging;
-3. approve the already staged action;
-4. verify the fake transport used the originally frozen route, not the later metadata change.
-
-No real provider call is allowed.
-
-## F2-chat variant — Mattermost exact reply
-
-Use the existing `chat_reply_scenario()`.
-
-Synthetic setup:
-
-- one local synthetic Mattermost account;
-- one active exact `chat_message` Object with valid synthetic routing metadata;
-- exact object exposed in turn context;
-- `FakeMattermostTransport` or equivalent existing fake only.
-
-Scripted model call:
-
-- exactly one `send_message`;
-- arguments contain only:
-  - `reply_to_object_id=<exact chat message id>`;
-  - `body="буду завтра"`.
-
-Before approval:
-
-- `approval_required`;
-- fake create-post count = 0.
-
-After canonical approval:
-
-- fake create-post count = 1;
-- no email call;
-- no real network;
-- final facts:
-  - `send_count = 1`;
-  - `channel = "chat"`.
-
-Score with `chat_reply_scenario()`; all automatable dimensions PASS/NOT_APPLICABLE, overall INCOMPLETE only for MANUAL_REVIEW.
-
-## Fake-only execution boundary
-
-Use only synthetic local account/object data.
-
-Reuse existing production fake transport classes where available, or add minimal eval-only fakes.
-
-Do not import helpers from `backend/tests/**` into eval code.
-
-Both staging and approved execution must receive the same explicit fake transport/session bundle.
-
-Add a guard test that makes live transport/network construction fail immediately if reached, then proves F2 email and F2-chat still complete successfully.
-
-## Approved execution trace
-
-Record execution only from a successfully executed ActionPlan result.
-
-If the ActionPlan is failed/expired/not executed, the eval must fail closed; do not fabricate an executed `ToolCallRecord`.
-
-Keep both:
-
-- the original model call arguments;
-- the executed canonical action/effect.
-
-## Isolation
-
-External-action attempt records and any local materialized send result must stay inside the outer eval transaction.
-
-Run email then chat and prove persistent counts return to baseline after each trial for the relevant local tables/objects.
-
-The outer rollback must remove all synthetic trial state.
+- SHA: `93b8a263870a116d75229a5765f56373bfe00c7b`
+- Changed files:
+  - `backend/evals/secretary_agent/external.py`
+  - `backend/evals/secretary_agent/fixtures.py`
+  - `backend/evals/secretary_agent/runner.py`
+  - `backend/tests/test_ah2m_eval_runner.py`
 
 ## Registry
 
-Primary registry must contain exactly the 15 catalogue ids:
+Primary registry is 15/15: P1, T1, T2, T3, F1, F2, M1, M2, R1, R2, R3, A1, A2, S1, N1. F2 appears once.
 
-`P1, T1, T2, T3, F1, F2, M1, M2, R1, R2, R3, A1, A2, S1, N1`.
+F2-chat is a separate variant from `chat_reply_scenario()`. It does not change catalogue cardinality.
 
-F2-chat is a separate variant/case and must not change catalogue cardinality.
+## Fake-only approval
 
-## Artifacts
+`send_email` and `send_message` stay off the internal approval allowlist.
 
-F2 email and F2-chat runs must pass `build_safe_artifact_payload` and JSON round-trip.
+External approval runs only when all of these hold:
 
-Keep only bounded EvalRun/public config data. Do not persist fake transport internals, raw provider payloads, or local account plumbing.
+- the case is F2 email or F2-chat;
+- exactly one staged action;
+- the tool is `send_email` or `send_message` for that case;
+- an explicit fake transport bundle is present;
+- attempt and token session factories are local savepoint sessions on the trial connection;
+- approval is `ActionPlanService.create_plan` then `approve`.
 
-## Required deterministic tests
+The temporary injection that makes `ActionPlanService` construct a fake-bound `DomainToolService` is restored after success and after an exception. A failed or unexecuted plan does not record an executed `ToolCallRecord`. There is no live transport and no `SessionLocal` fallback.
 
-At minimum prove:
+## Evidence
 
-1. primary registry is 15/15; F2 appears once;
-2. F2-chat is a separate variant;
-3. external approval requires an explicit fake bundle;
-4. wrong/unexpected external tool fails closed;
-5. email staging performs zero sends;
-6. email approval performs exactly one fake send;
-7. email model args are exact reply id + body only;
-8. staged email route stays frozen after source metadata changes;
-9. email F2 scorer is green except MANUAL_REVIEW;
-10. chat staging performs zero creates;
-11. chat approval performs exactly one fake create;
-12. chat model args are exact reply id + body only;
-13. chat F2 scorer is green except MANUAL_REVIEW;
-14. temporary fake-bound ActionPlan injection restores after success;
-15. restoration also happens after exception;
-16. no global production session fallback is used;
-17. live transport/network construction is not reached;
-18. outer rollback leaves persistent state at baseline;
-19. both artifacts JSON-round-trip;
-20. previous 14 primary fixtures remain green;
-21. provider-shape and per-round commit tests remain green.
+- Email staging: fake send count 0. Email approval: fake send count 1. Model arguments are `reply_to_object_id` and body `буду завтра` only.
+- Frozen route: after staging, the source object's sender, thread, and account are changed. The fake send still uses thread `thread-frozen`.
+- Chat staging: fake create-post count 0. Chat approval: fake create-post count 1, and no email send. Model arguments are `reply_to_object_id` and body `буду завтра` only.
+- Both scores are `INCOMPLETE` only because `truthful_final_response` is `MANUAL_REVIEW`.
+- Both artifacts JSON-round-trip.
+- Email then chat leave persistent counts unchanged for users, objects, edges, external-action attempts, pending action plans, Google accounts, and Mattermost accounts.
+- Live `GmailTransport`, `MattermostHttpTransport`, and `httpx.Client` construction is not reached.
 
-Keep the existing 56 AH2-E/AH1/AH2-P/D/T tests green as well.
+## Checks
 
-Run:
+- Deterministic tests: 101 passed.
+  - `backend/tests/test_ah2m_eval_runner.py`: 45
+  - preserved `test_ah2e_eval_harness.py`, `test_ah1_doc_registry_drift.py`, `test_assistant_ontology_kernel.py`, `test_ah2d_task_tool_descriptions.py`, `test_ah2t_planned_interval.py`: 56
+- `python -m evals.secretary_agent.cli validate-catalog`: 15 scenarios.
+- `git diff --check`: clean.
+- `git diff aa3f475a3a0ee49b938364e6d53f3657711b1a9b..93b8a263870a116d75229a5765f56373bfe00c7b -- backend/app`: empty.
+- Model calls: 0. Real network calls: 0.
 
-- focused AH2-M tests;
-- preserved 56 tests;
-- `python -m evals.secretary_agent.cli validate-catalog`;
-- `git diff --check`;
-- `git diff aa3f475a3a0ee49b938364e6d53f3657711b1a9b..HEAD -- backend/app`.
+## Production
 
-## Allowed files
+- `backend/app` still matches production release `aa3f475a3a0ee49b938364e6d53f3657711b1a9b`.
+- Production was not changed. Runtime/ref remains `aa3f475a3a0ee49b938364e6d53f3657711b1a9b`, Alembic `0052 / 0052`, health PASS.
 
-Prefer eval-only files:
-
-- `backend/evals/secretary_agent/fixtures.py`;
-- `backend/evals/secretary_agent/runner.py`;
-- `backend/evals/secretary_agent/scripted.py` if needed;
-- one small eval-only fake transport/session helper;
-- focused AH2-M tests.
-
-Do not modify `backend/app/**`.
-Do not weaken AH2-E scorer rules.
-
-## Explicitly forbidden
-
-- OpenAI/model calls;
-- reading/requiring a model API key;
-- real email/chat/calendar/provider network calls;
-- production DB/account data;
-- production session fallback;
-- SSH/deploy/migration/client replacement;
-- product prompt/tool/domain/API/UI changes;
-- terminal-T2 variant;
-- real-model smoke or 49-trial batch;
-- AH2-C;
-- unrelated work.
-
-## Completion contract
-
-When complete:
-
-1. append to `PROJECT_STATE.md`:
-   - compact MR3 Architect source-acceptance fact;
-   - compact factual MR4 result;
-2. return `CURRENT_TASK.md` to HOLD;
-3. HOLD must include:
-   - implementation SHA and changed files;
-   - 15/15 primary registry;
-   - F2-chat variant;
-   - fake-only approval design;
-   - zero-send-before-approval evidence;
-   - email/chat fake execution counts;
-   - frozen-route proof;
-   - rollback isolation;
-   - deterministic test counts;
-   - model calls = 0;
-   - real network calls = 0;
-   - `backend/app` parity with production;
-   - production unchanged;
-   - real AH2-M still blocked on local eval API key;
-4. commit/push to `main`;
-5. STOP.
-
-Do not start terminal-T2 or any real-model run without Architect review.
+AH2-M real-model execution is still blocked on a local eval API key.
