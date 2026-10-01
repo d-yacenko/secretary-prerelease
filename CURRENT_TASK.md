@@ -1,3 +1,20 @@
+# EXECUTOR BOOTSTRAP GUARD — READ BEFORE ANY OTHER STEP
+
+This task **supersedes** the old GR1 source HOLD `70792fc7e11d69f1053a864a2fce8bf4931fb799`.
+
+Before reading or executing the rest of this file:
+
+1. run the normal bootstrap/fetch for the canonical repository;
+2. require local `HEAD == origin/main`;
+3. require `origin/main` contains this GR1-R1 authorization;
+4. require `origin/production == 1b6943ba4f7cc49df1465791d812d45db6d26b52` before rollout.
+
+If local HEAD is still `70792fc7...`, `0719e9bf...`, or any commit that does not contain this authorization, **DO NOT execute the old GR1 source task and DO NOT repeat the old “GR1 готов на main” report.** Update/fast-forward `main` first.
+
+If the canonical checkout cannot be fast-forwarded cleanly to current `origin/main`, STOP and report that bootstrap blocker only.
+
+A valid completion report for this task must contain production rollout evidence such as `DEPLOYMENT=PASS` or a concrete rollout blocker. A source-only GR1 report is not completion of GR1-R1.
+
 # Current task — GR1-R1 schema-neutral production rollout for human gate
 
 Human explicitly authorized this rollout on 2026-10-01.
