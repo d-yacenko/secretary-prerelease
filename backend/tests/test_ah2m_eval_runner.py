@@ -23,6 +23,7 @@ from evals.secretary_agent.fixtures import REGISTRY_IDS
 from evals.secretary_agent.scripted import ScriptedProvider
 from evals.secretary_agent.models import DimensionStatus, OverallStatus
 from evals.secretary_agent.runner import (
+    _approve_external,
     _approve_internal,
     REFERENCE_DATETIME,
     REFERENCE_TIMEZONE,
@@ -40,7 +41,14 @@ from evals.secretary_agent.safety import (
     build_safe_artifact_payload,
 )
 from evals.secretary_agent.scorer import score_run
-from evals.secretary_agent.catalog import SCENARIOS
+from app.db.models import Object
+from app.db.session import SessionLocal
+from app.services.action_plan_service import ActionPlanService
+from app.services.domain_tool_service import DomainToolService
+from app.services.email_external_action_service import EmailExternalActionService
+from evals.secretary_agent.catalog import SCENARIOS, chat_reply_scenario
+from evals.secretary_agent.external import ExternalBundle, FakeGmailTransport
+from evals.secretary_agent.recording import RecordingToolRunner
 from evals.secretary_agent.validate import validate_catalog
 
 _RELEASE = "aa3f475a3a0ee49b938364e6d53f3657711b1a9b"
@@ -296,6 +304,7 @@ def test_fixture_registry_is_the_authorized_set() -> None:
         "T2",
         "T3",
         "F1",
+        "F2",
         "M1",
         "M2",
         "R1",
@@ -306,7 +315,8 @@ def test_fixture_registry_is_the_authorized_set() -> None:
         "S1",
         "N1",
     )
-    assert "F2" not in REGISTRY_IDS
+    assert REGISTRY_IDS.count("F2") == 1
+    assert "F2-chat" not in REGISTRY_IDS
 
 
 @pytest.mark.parametrize("scenario_id", ["P1", "T2", "T3", "R3", "S1", "N1"])
@@ -503,6 +513,226 @@ def test_mutation_rollback_does_not_leak_objects_or_edges() -> None:
     finally:
         _close(database)
     assert before == after
+
+
+def test_external_approval_requires_a_fake_bundle() -> None:
+    with pytest.raises(EvalSafetyError, match="fake bundle"):
+        _approve_external(SCENARIOS["F2"], object(), uuid4(), [{"tool_name": "send_email"}], None, None)
+
+
+def test_external_approval_rejects_the_wrong_tool() -> None:
+    bundle = ExternalBundle(kind="email", gmail=FakeGmailTransport())
+    with pytest.raises(EvalSafetyError, match="does not match"):
+        _approve_external(
+            SCENARIOS["F2"],
+            object(),
+            uuid4(),
+            [{"tool_name": "send_message", "arguments": {}}],
+            None,
+            bundle,
+        )
+    with pytest.raises(EvalSafetyError, match="allowlist"):
+        _approve_internal(
+            SCENARIOS["F2"],
+            object(),
+            uuid4(),
+            [{"tool_name": "send_message", "arguments": {}}],
+            None,
+        )
+
+
+def test_failed_external_plan_does_not_fabricate_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _View:
+        id = uuid4()
+        status = "failed"
+        result = {"actions": [{"tool_name": "send_email", "output": {"changed": True}, "effect": "sent"}]}
+
+    monkeypatch.setattr(ActionPlanService, "create_plan", lambda self, actions: _View())
+    monkeypatch.setattr(ActionPlanService, "approve", lambda self, plan_id: _View())
+    recorder = RecordingToolRunner(lambda tool_name, arguments: None)
+    with pytest.raises(EvalSafetyError, match="not executed"):
+        _approve_external(
+            SCENARIOS["F2"],
+            object(),
+            uuid4(),
+            [{"tool_name": "send_email", "arguments": {"reply_to_object_id": "x", "body": "буду завтра"}}],
+            recorder,
+            ExternalBundle(kind="email", gmail=FakeGmailTransport()),
+        )
+    assert recorder.calls == []
+
+
+def test_f2_email_stages_then_sends_once_on_the_frozen_route() -> None:
+    original_init = DomainToolService.__init__
+    original_token = EmailExternalActionService._valid_access_token
+    probe: dict = {}
+
+    def before(session) -> None:
+        assert probe["bundle"].gmail.send_calls == []
+        email = session.query(Object).filter(Object.kind == "email").one()
+        email.metadata_ = {
+            **email.metadata_,
+            "sender": "attacker@example.com",
+            "thread_id": "other-thread",
+            "source_account_email": "other@gmail.com",
+        }
+        session.flush()
+
+    database = _database()
+    try:
+        run = run_scripted(
+            "F2",
+            ScriptedProvider(),
+            _config(),
+            run_id="f2",
+            database=database,
+            probe=probe,
+            before_approve=before,
+        )
+    finally:
+        _close(database)
+    assert DomainToolService.__init__ is original_init
+    assert EmailExternalActionService._valid_access_token is original_token
+    report = score_run(SCENARIOS["F2"], run)
+    assert report.overall == OverallStatus.INCOMPLETE
+    for item in report.dimensions:
+        if item.dimension == "truthful_final_response":
+            assert item.status == DimensionStatus.MANUAL_REVIEW
+        else:
+            assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    staged = next(call for call in run.calls if call.approval_required)
+    assert staged.arguments == {"reply_to_object_id": run.symbols["email_id"], "body": "буду завтра"}
+    assert len(probe["bundle"].gmail.send_calls) == 1
+    assert probe["bundle"].gmail.send_calls[0]["thread_id"] == "thread-frozen"
+    assert run.final_facts == {"send_count": 1, "channel": "email"}
+    assert all(factory is not SessionLocal for factory in probe["bundle"].session_factories)
+    assert probe["bundle"].session_factories
+    _assert_safe_payload(run)
+
+
+def test_f2_chat_stages_then_creates_one_post() -> None:
+    probe: dict = {}
+
+    def before(session) -> None:
+        del session
+        assert probe["bundle"].mattermost.create_post_calls == []
+        assert probe["bundle"].gmail is None
+
+    database = _database()
+    try:
+        run = run_scripted(
+            "F2",
+            ScriptedProvider(),
+            _config(),
+            run_id="f2-chat",
+            database=database,
+            variant="f2-chat",
+            probe=probe,
+            before_approve=before,
+        )
+    finally:
+        _close(database)
+    report = score_run(chat_reply_scenario(), run)
+    assert report.overall == OverallStatus.INCOMPLETE
+    for item in report.dimensions:
+        if item.dimension == "truthful_final_response":
+            assert item.status == DimensionStatus.MANUAL_REVIEW
+        else:
+            assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    staged = next(call for call in run.calls if call.approval_required)
+    assert staged.arguments == {"reply_to_object_id": run.symbols["message_id"], "body": "буду завтра"}
+    assert staged.tool_name == "send_message"
+    assert len(probe["bundle"].mattermost.create_post_calls) == 1
+    assert run.final_facts == {"send_count": 1, "channel": "chat"}
+    _assert_safe_payload(run)
+
+
+def test_fake_tool_injection_restores_after_exception() -> None:
+    original_init = DomainToolService.__init__
+    original_token = EmailExternalActionService._valid_access_token
+
+    def before(session) -> None:
+        del session
+        raise RuntimeError("stop before approval")
+
+    database = _database()
+    try:
+        with pytest.raises(RuntimeError, match="stop before approval"):
+            run_scripted(
+                "F2",
+                ScriptedProvider(),
+                _config(),
+                run_id="f2-boom",
+                database=database,
+                before_approve=before,
+            )
+    finally:
+        _close(database)
+    assert DomainToolService.__init__ is original_init
+    assert EmailExternalActionService._valid_access_token is original_token
+
+
+def test_f2_does_not_construct_live_transports(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*args, **kwargs):
+        raise AssertionError("live transport constructed")
+
+    monkeypatch.setattr(GmailTransport, "__init__", _boom)
+    monkeypatch.setattr(
+        "app.connectors.mattermost.transport.MattermostHttpTransport.__init__",
+        _boom,
+    )
+    monkeypatch.setattr("httpx.Client.__init__", _boom)
+    database = _database()
+    try:
+        email = run_scripted("F2", ScriptedProvider(), _config(), run_id="f2-live", database=database)
+        chat = run_scripted(
+            "F2",
+            ScriptedProvider(),
+            _config(),
+            run_id="f2-chat-live",
+            database=database,
+            variant="f2-chat",
+        )
+    finally:
+        _close(database)
+    assert email.final_facts["send_count"] == 1
+    assert chat.final_facts["send_count"] == 1
+
+
+def test_external_rollback_returns_persistent_counts() -> None:
+    database = _database()
+    try:
+        before = _external_counts(database)
+        run_scripted("F2", ScriptedProvider(), _config(), run_id="iso-email", database=database)
+        run_scripted(
+            "F2",
+            ScriptedProvider(),
+            _config(),
+            run_id="iso-chat",
+            database=database,
+            variant="f2-chat",
+        )
+        after = _external_counts(database)
+    finally:
+        _close(database)
+    assert before == after
+
+
+def _external_counts(database: EvalDatabase) -> tuple[int, ...]:
+    tables = (
+        "users",
+        "objects",
+        "edges",
+        "external_action_attempts",
+        "pending_action_plans",
+        "google_accounts",
+        "mattermost_accounts",
+    )
+    with database.engine.connect() as connection:
+        return tuple(
+            int(connection.execute(text(f"select count(*) from {name}")).scalar() or 0)
+            for name in tables
+        )
 
 
 def _persistent_counts(database: EvalDatabase) -> tuple[int, int, int]:

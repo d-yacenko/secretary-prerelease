@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 from uuid import UUID
 
@@ -12,7 +13,15 @@ from sqlalchemy.orm import Session
 from app.api.schemas import ObjectCreate
 from app.db.models import Edge, Object
 from app.domain.person_identity import normalize_email
+from app.connectors.google.constants import GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE
+from app.connectors.google.credentials import GoogleAccountStore
+from app.connectors.google.encryption import CredentialEncryption
+from app.connectors.mattermost.credentials import MattermostAccountStore
+from app.connectors.mattermost.normalize import build_external_id, normalize_server_url
+from app.core.config import settings
 from app.services.graph_service import GraphService
+from evals.secretary_agent.external import CHAT_SERVER, ExternalBundle, FakeGmailTransport
+from app.connectors.mattermost.transport import FakeMattermostTransport
 from app.services.person_identity_service import PersonIdentityService
 from app.services.provenance import CONFIRMED_STATE, USER_ORIGIN
 from app.services.relation_service import RelationService
@@ -23,6 +32,7 @@ REGISTRY_IDS = (
     "T2",
     "T3",
     "F1",
+    "F2",
     "M1",
     "M2",
     "R1",
@@ -47,6 +57,7 @@ class PreparedFixture:
     reference_edge_ids: tuple[str, ...] = ()
     stored_body: str = ""
     person_ids: tuple[str, ...] = field(default_factory=tuple)
+    external: ExternalBundle | None = None
 
 
 def prepare_fixture(scenario_id: str, session: Session, user_id: UUID) -> PreparedFixture:
@@ -528,12 +539,119 @@ def _confirmed_tasks(session: Session, user_id: UUID, title: str) -> int:
     )
 
 
+def _f2(session: Session, user_id: UUID) -> PreparedFixture:
+    gmail = FakeGmailTransport()
+    _google_account(session, user_id, "owner@gmail.com")
+    email = _object(
+        session,
+        user_id,
+        kind="email",
+        title="Hello",
+        body="body",
+        provider="gmail",
+        external_id=f"gmail-{user_id}",
+        metadata={
+            "sender": "sender@example.com",
+            "recipients": ["owner@gmail.com"],
+            "subject": "Hello",
+            "source_account_email": "owner@gmail.com",
+            "thread_id": "thread-frozen",
+            "headers": {"message-id": "<m@example.com>", "references": "<old@example.com>"},
+        },
+    )
+    email_id = str(email.id)
+
+    def facts(current: Session) -> dict[str, Any]:
+        del current
+        count = len(gmail.send_calls)
+        return {"send_count": count, "channel": "email" if count == 1 else None}
+
+    return PreparedFixture(
+        scenario_id="F2",
+        ui_context=f"email {email.id}",
+        symbols={"email_id": email_id},
+        initial_object_ids=(email.id,),
+        rounds=((("send_email", {"reply_to_object_id": email_id, "body": "буду завтра"}),),),
+        final_facts=facts,
+        external=ExternalBundle(kind="email", gmail=gmail),
+    )
+
+
+def _f2_chat(session: Session, user_id: UUID) -> PreparedFixture:
+    mattermost = FakeMattermostTransport()
+    server = normalize_server_url(CHAT_SERVER)
+    account = MattermostAccountStore(
+        session,
+        MattermostAccountStore.build_encryption(settings.secretary_credential_key),
+    ).upsert_account(
+        user_id=user_id,
+        normalized_server_url=server,
+        remote_user_id="user-1",
+        username="alice",
+        access_token="mm-token",
+        display_name="Alice",
+        email="alice@example.com",
+    )
+    post_id = "post-1"
+    message = _object(
+        session,
+        user_id,
+        kind="chat_message",
+        title="Сообщение",
+        body="body",
+        provider="mattermost",
+        external_id=build_external_id(server, post_id),
+        metadata={
+            "account_id": str(account.id),
+            "server_url": server,
+            "channel_id": "channel-1",
+            "post_id": post_id,
+            "root_id": post_id,
+            "channel_type": "O",
+            "channel_name": "town-square",
+            "channel_display_name": "Town Square",
+        },
+    )
+    message_id = str(message.id)
+
+    def facts(current: Session) -> dict[str, Any]:
+        del current
+        count = len(mattermost.create_post_calls)
+        return {"send_count": count, "channel": "chat" if count == 1 else None}
+
+    return PreparedFixture(
+        scenario_id="F2",
+        ui_context=f"chat {message.id}",
+        symbols={"message_id": message_id},
+        initial_object_ids=(message.id,),
+        rounds=((("send_message", {"reply_to_object_id": message_id, "body": "буду завтра"}),),),
+        final_facts=facts,
+        external=ExternalBundle(kind="chat", mattermost=mattermost),
+    )
+
+
+def _google_account(session: Session, user_id: UUID, email: str) -> None:
+    GoogleAccountStore(
+        session,
+        CredentialEncryption(settings.secretary_credential_key),
+    ).upsert_tokens(
+        user_id=user_id,
+        email=email,
+        scopes=[GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE],
+        access_token="access-token",
+        refresh_token="refresh-token",
+        token_expiry=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+
 _BUILDERS = {
     "P1": _p1,
     "T1": _t1,
     "T2": _t2,
     "T3": _t3,
     "F1": _f1,
+    "F2": _f2,
+    "F2-chat": _f2_chat,
     "M1": _m1,
     "M2": _m2,
     "R1": _r1,

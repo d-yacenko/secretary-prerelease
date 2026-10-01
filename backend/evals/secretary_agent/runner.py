@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -21,7 +23,8 @@ from app.tools.execution_context import ExecutionContext
 from app.tools.gateway import ToolExecutionGateway
 from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS
 from app.tools.results import ToolExecutionStatus
-from evals.secretary_agent.catalog import SCENARIOS
+from evals.secretary_agent.catalog import SCENARIOS, chat_reply_scenario
+from evals.secretary_agent.external import ExternalBundle, external_settings, inject_fake_tools
 from evals.secretary_agent.fixtures import REGISTRY_IDS, prepare_fixture
 from evals.secretary_agent.models import EvalRun, ToolCallRecord
 from evals.secretary_agent.recording import RecordingToolRunner
@@ -97,12 +100,20 @@ def run_scripted(
     *,
     run_id: str,
     database: EvalDatabase,
+    variant: str | None = None,
+    probe: dict | None = None,
+    before_approve: Callable[[Session], None] | None = None,
 ) -> EvalRun:
     if scenario_id not in _DRY_RUNS:
         raise EvalSafetyError("scripted dry runs are limited to the fixture registry")
+    if variant not in {None, "f2-chat"}:
+        raise EvalSafetyError("unknown eval variant")
+    if variant == "f2-chat" and scenario_id != "F2":
+        raise EvalSafetyError("f2-chat variant is only valid for F2")
     assert_eval_database(database.engine, disposable=database.disposable)
     assert_dry_run_transports(())
-    scenario = SCENARIOS[scenario_id]
+    scenario = chat_reply_scenario() if variant == "f2-chat" else SCENARIOS[scenario_id]
+    fixture_id = "F2-chat" if variant == "f2-chat" else scenario_id
     connection = database.engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection)
@@ -110,27 +121,49 @@ def run_scripted(
         user = User(id=uuid4(), display_name=f"ah2mr1-{scenario_id}-{uuid4().hex[:8]}")
         session.add(user)
         session.flush()
-        prepared = prepare_fixture(scenario_id, session, user.id)
-        with _bound_local_tool(session):
-            budget = PerTurnToolBudget(initial_seen_object_ids=prepared.initial_object_ids)
-            recorder = RecordingToolRunner(BoundAssistantToolRunner(budget, user.id))
-            bind_rounds = getattr(provider, "bind_rounds", None)
-            if bind_rounds is not None:
-                bind_rounds(prepared.rounds)
-            result = provider.run(
-                message=scenario.utterance,
-                history=[],
-                ui_context=prepared.ui_context,
-                reference_datetime=config.reference_datetime,
-                timezone=config.timezone,
-                tool_runner=recorder,
-                identity_facts=None,
-                system_instructions=SYSTEM_INSTRUCTIONS,
-                tool_definitions=ASSISTANT_TOOL_DEFINITIONS,
+        settings_cm = external_settings() if scenario_id == "F2" else nullcontext()
+        with settings_cm:
+            prepared = prepare_fixture(fixture_id, session, user.id)
+            injection = (
+                inject_fake_tools(prepared.external, connection)
+                if prepared.external is not None
+                else nullcontext()
             )
-            _approve_internal(scenario, session, user.id, budget.staged_actions, recorder)
-            session.expire_all()
-            facts = prepared.final_facts(session)
+            with injection:
+                with _bound_local_tool(session):
+                    budget = PerTurnToolBudget(initial_seen_object_ids=prepared.initial_object_ids)
+                    recorder = RecordingToolRunner(BoundAssistantToolRunner(budget, user.id))
+                    bind_rounds = getattr(provider, "bind_rounds", None)
+                    if bind_rounds is not None:
+                        bind_rounds(prepared.rounds)
+                    result = provider.run(
+                        message=scenario.utterance,
+                        history=[],
+                        ui_context=prepared.ui_context,
+                        reference_datetime=config.reference_datetime,
+                        timezone=config.timezone,
+                        tool_runner=recorder,
+                        identity_facts=None,
+                        system_instructions=SYSTEM_INSTRUCTIONS,
+                        tool_definitions=ASSISTANT_TOOL_DEFINITIONS,
+                    )
+                    if probe is not None:
+                        probe["bundle"] = prepared.external
+                    if before_approve is not None:
+                        before_approve(session)
+                    if prepared.external is not None:
+                        _approve_external(
+                            scenario,
+                            session,
+                            user.id,
+                            budget.staged_actions,
+                            recorder,
+                            prepared.external,
+                        )
+                    else:
+                        _approve_internal(scenario, session, user.id, budget.staged_actions, recorder)
+                    session.expire_all()
+                    facts = prepared.final_facts(session)
         return EvalRun(
             scenario_id=scenario.id,
             utterance=scenario.utterance,
@@ -175,10 +208,49 @@ def _approve_internal(scenario, session: Session, user_id: UUID, actions: list[d
     _append_executed(recorder, approved.result or {}, actions)
 
 
-def _append_executed(recorder: RecordingToolRunner, result: dict, staged: list[dict]) -> None:
+_EXTERNAL_TOOLS = {"email": "send_email", "chat": "send_message"}
+
+
+def _approve_external(
+    scenario,
+    session: Session,
+    user_id: UUID,
+    actions: list[dict],
+    recorder: RecordingToolRunner,
+    bundle: ExternalBundle | None,
+) -> None:
+    if scenario.id != "F2" or bundle is None or bundle.kind not in _EXTERNAL_TOOLS:
+        raise EvalSafetyError("external approval requires an explicit fake bundle")
+    if scenario.approval not in _EXECUTE_MODES:
+        return
+    if len(actions) != 1:
+        raise EvalSafetyError("eval approval executes exactly one staged action")
+    tool_name = str(actions[0].get("tool_name"))
+    if tool_name != _EXTERNAL_TOOLS[bundle.kind]:
+        raise EvalSafetyError("staged tool does not match the external eval case")
+    plan = ActionPlanService(session, user_id).create_plan(actions)
+    approved = ActionPlanService(session, user_id).approve(plan.id)
+    if approved.status != "executed" or not approved.result:
+        raise EvalSafetyError("action plan was not executed")
+    _append_executed(recorder, approved.result, actions, model_arguments=True)
+
+
+def _append_executed(
+    recorder: RecordingToolRunner,
+    result: dict,
+    staged: list[dict],
+    *,
+    model_arguments: bool = False,
+) -> None:
     arguments = {
         str(action.get("tool_name")): _jsonable(action.get("arguments") or {}) for action in staged
     }
+    if model_arguments:
+        arguments = {
+            call.tool_name: dict(call.arguments)
+            for call in recorder.calls
+            if call.approval_required and not call.executed
+        }
     for action in result.get("actions", []):
         tool_name = str(action.get("tool_name"))
         output = action.get("output") if isinstance(action.get("output"), dict) else {}
