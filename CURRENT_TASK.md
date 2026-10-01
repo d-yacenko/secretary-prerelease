@@ -1,4 +1,4 @@
-# Current task — GR1 relation repairability + off-context clarity
+# Current task — GR1 relation repairability + attached-endpoint visibility
 
 Authorized base: `a8925c21449c68cdd0708012529513612f4b4190`.
 
@@ -29,15 +29,24 @@ However the domain already has the intended removal semantics in `relation_remov
 
 The Graph UI and direct relation API therefore lag behind the existing domain correction model.
 
-### “Relation exists but object is not on the map”
+### “Relation exists but object is not on the map” — corrected diagnosis
 
-`_DirectRelationInventory` intentionally calls `GET /objects/{object_id}/neighbors` to load direct active neighbors even when they are not present in `controller.nodes`.
+`_DirectRelationInventory` calls `GET /objects/{object_id}/neighbors` and can therefore know about active direct neighbors absent from `controller.nodes`.
 
-Backend `GraphService.get_neighbors` filters neighbors to active readable objects and omits rejected/deleted endpoints.
+The live `Program_DYSC.pdf` case is not merely an inspector-labeling problem. The backend semantic overview currently builds each Task constellation from:
+- all Tasks in the confirmed visible Task component;
+- `_priority_flows_for_tasks()`.
 
-Therefore an off-canvas neighbor returned by this API is not a deleted object. It is an active endpoint outside the current Graph workspace/window/evidence admission context.
+But `_priority_task_flow_buckets()` currently requires `Edge.state == confirmed`.
 
-The UI currently only appends a small `не на карте` subtitle and row-tap silently reroots to it. This cue is too weak.
+Therefore an active **agent-proposed Task↔Flow/object relation is categorically omitted from unrooted semantic overview membership**, even though:
+- the relation is active/non-rejected;
+- the endpoint itself is active/readable;
+- the inspector can see it through `/neighbors`.
+
+This explains why `Program_DYSC.pdf` is absent from both overview pages rather than merely sitting in another area.
+
+That is the defect. A normal direct visible relation must not exist only in the inspector while its non-Task endpoint is systematically absent from the canvas.
 
 ## Goal
 
@@ -108,33 +117,69 @@ Regression fixture matching the user case:
 
 No automatic reverse action is required.
 
-## B. Explicit off-context relation cue
+## B. Attached relation endpoints must be visible by default
 
-For a direct relation whose neighbor is returned by `/neighbors` but is absent from `controller.nodes`:
+### Product invariant
 
-- replace the vague `не на карте` wording with a clear status such as `вне текущего контекста`;
-- add an explicit compact action with tooltip/text semantics `Показать на карте`;
-- activating it reroots/opens the neighbor using the existing Graph navigation path;
-- keep row-tap navigation if desired, but the explicit action must exist;
-- do not claim the object is deleted or broken.
+For an admitted Task in Tasks overview, every active readable non-Task endpoint attached through a normal visible semantic Task relation must be admitted to the same overview constellation when the relation is active.
 
-This applies equally to Task and Flow/evidence endpoints.
+At minimum this applies to Task↔non-Task edges with:
+- type `references`, `related_to`, or `depends_on`;
+- origin `user` or `agent`;
+- state `confirmed` **or `proposed`;
+- active/readable non-Task endpoint.
 
-The action must coexist with proposal controls. A proposed off-context relation may therefore show:
-- status “вне текущего контекста”;
-- “Показать на карте”;
-- Confirm;
-- Reject.
+Rejected edges do not admit endpoints.
 
-Keep the inspector compact and avoid horizontal overflow at the current narrow side-panel width.
+This is presentation/read completeness only:
+- a proposed edge must NOT join two Task semantic components;
+- a proposed edge must NOT influence canonical Task centers;
+- `part_of` structural semantics are unchanged;
+- Person/actor-role, label, temporal, source/system structural relations are not broadened by this rule.
 
-### Active/deleted semantics
+The concrete `Program_DYSC.pdf` behavior must become:
+- selected/visible publication Task is in area 1;
+- the active PDF endpoint is directly connected by an agent-proposed visible relation;
+- the PDF node is therefore present on the same canvas automatically;
+- the proposed edge/diamond is visible without opening the inspector first.
 
-Do not add a speculative “deleted endpoint” state in this slice.
+No extra “Показать на карте” click is required for this normal case.
 
-The current `neighbors` endpoint already filters hidden/deleted/rejected neighbor objects. If an endpoint is returned there, treat it as active.
+### Backend overview admission
 
-If a race causes reroot to fail after inventory load, use existing fail-closed navigation/error behavior; do not invent stale object content.
+Generalize the existing Task↔Flow priority admission so both confirmed and proposed user/agent visible semantic evidence endpoints are carried with their Task component.
+
+Requirements:
+- preserve deterministic ordering;
+- confirmed-before-proposed ordering is preferred when a deterministic state tie-break is needed, but **all** eligible endpoints under the emergency ceiling must be admitted;
+- the soft window target may be exceeded to keep a Task semantic component together with its attached visible endpoints, exactly as SW2-A already keeps a component whole;
+- shared non-Task endpoints may appear in more than one semantic window when they are genuinely linked to Tasks in different components; they must not glue those Task components together;
+- if the complete component plus attached endpoints exceeds the existing emergency ceiling, preserve the explicit fail-closed error. Do not silently hide proposed endpoints.
+
+Do not change the `task-map-v2.2` algorithm/version: non-Task endpoints do not participate in canonical Task center persistence.
+
+### Rooted workspace
+
+A rooted Task workspace should likewise not systematically hide an active direct proposed non-Task endpoint merely because it is proposed.
+
+Preserve existing bounded rooted behavior and `truncated` semantics, but give active direct visible relations priority over unrelated ordinary neighbors.
+
+Do not turn a bounded rooted workspace into unbounded graph closure.
+
+### Remaining off-context cases are exceptional fallback
+
+There can still be legitimate cases where `/neighbors` knows an endpoint absent from the current canvas, for example:
+- a Task endpoint belongs to another semantic Task component/window and a proposed Task↔Task edge must not merge the components;
+- a bounded rooted workspace is genuinely truncated;
+- a race occurs between inventory and workspace reads.
+
+For those exceptional rows:
+- use explicit wording such as `вне текущей области` or `не показано в текущем контексте`;
+- row-tap may continue to reroot/navigate;
+- an explicit compact `Показать` action is acceptable as fallback;
+- do not make this fallback the normal path for direct proposed Task↔Flow/object relations.
+
+Do not claim the endpoint is deleted: `GraphService.get_neighbors` already filters hidden/deleted/rejected neighbor objects.
 
 ## C. Relation inventory correctness after mutation
 
@@ -150,12 +195,14 @@ Preserve current SW2-A semantic-window behavior.
 
 ## Required backend tests
 
-Update/add focused tests proving:
+Update/add focused tests proving relation removal plus endpoint visibility.
+
+### Relation repair
 
 1. `agent + proposed` confirm and reject remain unchanged.
 2. `agent + confirmed + removable type` accepts `decision=reject` and returns `state=rejected`.
 3. Cover at least `related_to`, one directed secondary type (`references` or `depends_on`), and `part_of`.
-4. Confirmed agent `decision=confirm` remains rejected as invalid.
+4. Confirmed agent `decision=confirm` remains invalid.
 5. Already rejected agent edge cannot transition.
 6. User/source/system edges cannot use this agent decision correction path.
 7. Protected edge type cannot be removed through this path.
@@ -163,7 +210,20 @@ Update/add focused tests proving:
 9. For a Task↔Task confirmed edge participating in Task-map topology, confirmed -> rejected increments/invalidates topology revision exactly once.
 10. For a non-Task-map edge, no spurious Task-layout invalidation.
 
-Keep existing physical `DELETE /relations/{edge_id}` user-origin behavior unchanged in this slice.
+Keep existing physical `DELETE /relations/{edge_id}` user-origin behavior unchanged.
+
+### Attached endpoint visibility
+
+11. Unrooted overview fixture: one visible Task + one active PDF/file/email-like non-Task endpoint connected by `agent + proposed + references`. Prove both nodes and the proposed edge are returned in the same semantic window.
+12. Repeat for `related_to` and `depends_on`.
+13. Confirmed user/agent Task↔non-Task behavior remains visible.
+14. Rejected relation does not admit the endpoint.
+15. Source/system or hidden relation types are not accidentally broadened by this change.
+16. A proposed Task↔non-Task endpoint does not join two Task semantic components or affect Task-component membership.
+17. Shared proposed Flow/non-Task endpoint linked to Tasks in different confirmed Task components does not glue those components; duplication across windows is allowed/expected.
+18. Soft target does not split a Task component from its eligible proposed non-Task endpoints.
+19. Complete component + attached endpoints beyond the emergency ceiling still fails closed rather than silently dropping proposed endpoints.
+20. Rooted Task workspace prioritizes a directly proposed visible non-Task endpoint over unrelated ordinary neighbors under a tight bounded fixture and reports truncation honestly if further context is omitted.
 
 ## Required client tests
 
@@ -181,7 +241,7 @@ Add a Task↔Task topology case proving the controller takes the authoritative t
 
 ### User relation removal
 
-Preserve the existing user-origin delete behavior and regression:
+Preserve the existing user-origin delete behavior:
 - user-confirmed edge still uses `DELETE /relations/{edge_id}`;
 - objects are not deleted.
 
@@ -191,25 +251,32 @@ Prove:
 - source/system relation has no generic remove control;
 - protected relation has no newly introduced agent remove control.
 
-### Off-context active endpoint
+### Proposed attached endpoint — primary user regression
 
-Extend `graph_direct_relation_inventory_test.dart`:
-
-Fixture:
-- selected Task is on canvas;
-- active neighbor is returned by `/objects/{id}/neighbors` but absent from workspace nodes;
-- use a proposed agent relation to match the user’s `Program_DYSC.pdf` case.
+Fixture matching `Program_DYSC.pdf`:
+- selected publication Task is present in the overview workspace;
+- active non-Task endpoint `Program_DYSC.pdf` is connected by an agent-proposed `references` relation;
+- backend workspace response contains both endpoint and edge.
 
 Prove:
-- relation row is present with the real endpoint title;
-- status says `вне текущего контекста` (or approved equivalent);
-- explicit `Показать на карте` control is visible;
-- proposal Confirm/Reject controls are still visible;
-- no panel overflow at 1280x800 test viewport;
-- activating “Показать на карте” calls/reloads the rooted workspace for that endpoint;
-- once rooted and endpoint is present, the off-context cue disappears.
+- PDF node is visible on the graph canvas without opening the inspector;
+- proposed diamond/edge is visible;
+- inspector row still shows real endpoint title and proposal controls;
+- no `вне текущего контекста` cue is shown for this normal case;
+- Confirm/Reject remain usable;
+- no side-panel overflow.
 
-Keep the existing failed-inventory retry behavior green.
+### Exceptional off-context fallback
+
+Keep/adjust `graph_direct_relation_inventory_test.dart` with a deliberately exceptional fixture (for example another Task component omitted from the current semantic window or an explicitly truncated rooted workspace).
+
+Prove:
+- inspector still lists the active neighbor;
+- wording clearly says it is outside/not shown in the current context;
+- explicit navigation action or row-tap can reroot to it;
+- this fallback is not used for the normal proposed Task↔non-Task case above.
+
+Keep the failed-inventory retry behavior green.
 
 ## Preserve existing accepted behavior
 
