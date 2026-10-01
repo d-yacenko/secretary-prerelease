@@ -68,7 +68,27 @@ For an anchor with at least 3 eligible free leaf neighbors:
 
 For 1-2 eligible neighbors, a simpler local placement is fine; do not make those cases worse.
 
-### 3. Orientation, not collapse
+### 3. All confirmed visible secondary types share the same geometric objective
+
+The halo is relation-type neutral for geometry.
+
+A confirmed visible Task↔Task edge of any normal secondary type — at minimum `related_to`, `depends_on`, or `references` — contributes to the same local compactness objective. The relation type still controls semantics and line presentation (undirected/light/dashed/directed), but it must not cause a worse placement merely because it is not `related_to`.
+
+For direct anchor↔leaf spokes:
+
+- keep spoke lengths approximately at the smallest safe local halo radius;
+- mixed relation types around the same anchor should participate in the same balanced 360-degree halo;
+- do not put `depends_on` or `references` leaves into a separate tail.
+
+For secondary edges among halo leaves or between a halo leaf and another nearby module:
+
+- use those lengths as a weak ordering/orientation objective;
+- where possible, place mutually linked leaves near each other on the circle;
+- minimize avoidable total confirmed-secondary edge length subject to structural locality, non-overlap, and broad angular spread.
+
+This is the same principle already accepted for the short dashed «Трудоустройство в МФТИ» ↔ «Преподавание Java в МФТИ» relation, generalized to the halo.
+
+### 4. Orientation, not collapse
 
 Confirmed secondary relations may choose halo rotation/order to shorten avoidable secondary edges, but:
 
@@ -79,7 +99,7 @@ Confirmed secondary relations may choose halo rotation/order to shorten avoidabl
 
 Use a bounded discrete optimization. No global continuous optimizer.
 
-### 4. Collision with existing structural geometry
+### 5. Collision with existing structural geometry
 
 A secondary halo may sit around an anchor that is already inside a structural `part_of` tree.
 
@@ -93,7 +113,7 @@ The halo must:
 
 Do not move the whole structural subtree merely to fit secondary leaves unless the existing final component-packing stage already does so.
 
-### 5. Generic free graphs remain supported
+### 6. Generic free graphs remain supported
 
 Free Tasks that do not form an eligible star must continue through a deterministic generic path.
 
@@ -119,13 +139,15 @@ No backend/schema/Alembic change is required.
 
 ## Required regression fixtures
 
-### A. Six-petal confirmed related_to star — primary human case
+### A. Six-petal mixed confirmed secondary star — primary human case
 
 Fixture:
 - one anchor Task already placed as part of a structural tree;
 - six free Task leaves;
-- each leaf has one confirmed `related_to` edge to the anchor;
+- attach the six leaves to the anchor with a deterministic mix of confirmed `related_to`, `depends_on`, and `references` edges;
 - no other secondary edges.
+
+Also keep a focused all-`related_to` variant if useful for reproducing the exact human Publications topology.
 
 Prove:
 - all six leaves remain local to the anchor;
@@ -167,11 +189,15 @@ A free Task linked to two already placed Tasks must not be silently assigned as 
 
 Prove deterministic fallback or explicitly presentation-only choice, with no ontology mutation and no `part_of` fabrication.
 
-### F. Secondary edge orientation
+### F. Secondary edge orientation and spoke lengths
 
 Within a six-leaf halo, add confirmed secondary edges among leaves or from a leaf to another nearby module.
 
-Prove bounded order/rotation can shorten avoidable total secondary distance while preserving broad angular spread and local radius.
+Prove:
+- direct anchor↔leaf spokes of mixed `related_to` / `depends_on` / `references` types remain at comparable compact local radii;
+- bounded order/rotation can shorten avoidable total secondary distance;
+- a leaf↔leaf confirmed secondary edge becomes shorter when a circular reordering can make its endpoints nearer;
+- broad angular spread and local radius are preserved.
 
 ### G. Version replacement
 
