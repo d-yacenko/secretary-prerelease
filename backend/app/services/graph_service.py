@@ -347,6 +347,24 @@ class GraphService:
         )
         return edge
 
+    def reject_confirmed_agent_relation(self, edge: Edge) -> Edge:
+        """Reject one removable confirmed agent relation without a general transition."""
+        source = self._get_object_row(edge.source_id)
+        target = self._get_object_row(edge.target_id)
+        previous_state = edge.state
+        edge.state = REJECTED_STATE
+        self._session.flush()
+        note_task_map_participation_change(
+            self._session,
+            self._user_id,
+            edge_type=edge.type,
+            previous_state=previous_state,
+            new_state=edge.state,
+            source_kind=None if source is None else source.kind,
+            target_kind=None if target is None else target.kind,
+        )
+        return edge
+
     def get_neighbors(
         self,
         object_id: UUID,

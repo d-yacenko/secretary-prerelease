@@ -117,7 +117,7 @@ void main() {
 
     harness.graph.selectObject('task-parent');
     await tester.pumpAndSettle();
-    expect(find.textContaining('не на карте'), findsOneWidget);
+    expect(find.textContaining('вне текущей области'), findsOneWidget);
 
     final callsBeforeRefine = workspaceCalls.length;
     await tester.tap(find.text('Relax'));

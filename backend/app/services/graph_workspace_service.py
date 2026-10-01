@@ -17,7 +17,7 @@ from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
-from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
+from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, PROPOSED_STATE, REJECTED_STATE, USER_ORIGIN
 
 DEFAULT_SEED_LIMIT = 12
 MAX_SEED_LIMIT = 24
@@ -122,6 +122,12 @@ class GraphWorkspaceService:
                 edge_map = {}
 
         ordinary_cap = max(node_limit, len(node_map))
+        if root.kind == "task" and len(node_map) < node_limit:
+            truncated = truncated or self._admit_priority_task_flow(
+                node_map,
+                edge_map,
+                node_limit,
+            )
         truncated = truncated or self._admit_ordinary_neighbors(
             center_ids=[root_id],
             node_map=node_map,
@@ -532,11 +538,11 @@ class GraphWorkspaceService:
         edge_map: dict[UUID, Edge],
         node_limit: int,
     ) -> bool:
-        """Admit confirmed user/agent Task-Flow evidence before ordinary neighbors.
+        """Admit confirmed and proposed user/agent Task evidence before ordinary neighbors.
 
-        One new Flow endpoint per admitted Task per pass, in Task id order.
-        Each Task's edges are taken by created_at, then id. node_limit still
-        caps the workspace. neighbor_limit does not apply here.
+        One new endpoint per admitted Task per pass, in Task id order.
+        Confirmed edges come before proposed edges. node_limit still caps the
+        workspace. neighbor_limit does not apply here.
         """
         task_ids = sorted(obj.id for obj in node_map.values() if obj.kind == "task")
         if not task_ids:
@@ -593,7 +599,7 @@ class GraphWorkspaceService:
             )
             .where(
                 Edge.user_id == self._user_id,
-                Edge.state == CONFIRMED_STATE,
+                Edge.state.in_((CONFIRMED_STATE, PROPOSED_STATE)),
                 Edge.origin.in_(PRIORITY_TASK_FLOW_ORIGINS),
                 Edge.type.in_(PRIORITY_TASK_FLOW_TYPES),
                 flow.user_id == self._user_id,
@@ -602,7 +608,11 @@ class GraphWorkspaceService:
                 telegram_mtproto_active_object_predicate(flow),
                 object_is_active(flow),
             )
-            .order_by(Edge.created_at.asc(), Edge.id.asc())
+            .order_by(
+                case((Edge.state == CONFIRMED_STATE, 0), else_=1),
+                Edge.created_at.asc(),
+                Edge.id.asc(),
+            )
         ).all()
         buckets: dict[UUID, list[tuple[Edge, Object]]] = {}
         for edge, flow_object in rows:

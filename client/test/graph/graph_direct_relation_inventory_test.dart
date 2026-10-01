@@ -99,7 +99,7 @@ void main() {
     expect(find.byKey(const ValueKey('graph-relation-edge-on-canvas')), findsOneWidget);
     expect(find.byKey(const ValueKey('graph-relation-edge-hidden')), findsOneWidget);
     expect(find.byKey(const ValueKey('graph-off-canvas-edge-hidden')), findsOneWidget);
-    expect(find.textContaining('не на карте'), findsOneWidget);
+    expect(find.textContaining('вне текущей области'), findsOneWidget);
 
     await _tapVisibleTop(tester, find.byKey(const ValueKey('graph-relation-edge-hidden')));
     await tester.pumpAndSettle();

@@ -255,7 +255,7 @@ def test_relation_decision_user_confirmed_rejected(db_session, relation_client):
     assert response.status_code == 422
 
 
-def test_relation_decision_already_confirmed_cannot_transition(db_session, relation_client):
+def test_relation_decision_confirmed_agent_confirm_stays_invalid(db_session, relation_client):
     graph = GraphService(db_session, BOOTSTRAP_USER_ID)
     source = _object(graph, "Source")
     target = _object(graph, "Target")
@@ -272,7 +272,7 @@ def test_relation_decision_already_confirmed_cannot_transition(db_session, relat
     db_session.flush()
     response = relation_client.post(
         f"/relations/{edge.id}/decision",
-        json={"decision": "reject"},
+        json={"decision": "confirm"},
     )
     assert response.status_code == 422
 

@@ -156,7 +156,7 @@ def test_shared_flow_uses_one_slot_and_keeps_both_edges(db_session, fake_embeddi
     assert len(result.nodes) == 3
 
 
-def test_rejected_source_and_proposed_do_not_take_priority_slots(
+def test_rejected_and_source_do_not_take_priority_slots(
     db_session, fake_embedding_service
 ):
     user_id = _user(db_session)
@@ -179,7 +179,9 @@ def test_rejected_source_and_proposed_do_not_take_priority_slots(
         neighbor_limit=12,
         node_limit=2,
     )
-    assert _titles(result) == {"Task", "Confirmed flow"}
+    assert _titles(result) == {"Task", "Confirmed flow", "Proposed flow"}
+    assert "Rejected flow" not in _titles(result)
+    assert "Source flow" not in _titles(result)
     assert result.truncated is False
 
     ordinary = GraphWorkspaceService(db_session, user_id).get_workspace(

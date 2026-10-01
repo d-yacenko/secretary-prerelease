@@ -31,6 +31,7 @@ import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
 import 'relation_target_label.dart';
+import 'relation_removal.dart';
 import 'task_part_of_connect.dart';
 import 'graph_workspace_controller.dart';
 import 'task_layout_world.dart';
@@ -2561,7 +2562,64 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         onPressed: () => _removeRelation(context, edge),
       );
     }
+    if (agentConfirmedRelationIsRemovable(
+      origin: edge.origin,
+      state: edge.state,
+      type: edge.type,
+    )) {
+      return IconButton(
+        tooltip: 'Удалить связь',
+        icon: const Icon(Icons.link_off_outlined),
+        onPressed: () => _rejectConfirmedAgentRelation(context, edge),
+      );
+    }
     return null;
+  }
+
+  Future<void> _rejectConfirmedAgentRelation(BuildContext context, SecretaryEdge edge) async {
+    final sourceTitle = widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId;
+    final targetTitle = widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Удалить связь?'),
+        content: Text(
+          '$sourceTitle —${relationTypeLabel(edge.type)}→ $targetTitle',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      final response = await widget.apiClient.decideRelation(
+        edgeId: edge.id,
+        decision: 'reject',
+      );
+      final sourceKind = widget.controller.nodeById(edge.sourceId)?.kind;
+      final targetKind = widget.controller.nodeById(edge.targetId)?.kind;
+      await widget.controller.applyRelationDecision(
+        previous: edge,
+        updated: response.edge,
+        sourceKind: sourceKind,
+        targetKind: targetKind,
+      );
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
   }
 
   Future<void> _decideRelation(
@@ -4508,12 +4566,24 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
               ),
               key: ValueKey('graph-relation-audit-${row.edge.id}'),
             ),
-            subtitle: Text(
-              row.onMap
-                  ? '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)}'
-                  : '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)} · не на карте',
-              key: row.onMap ? null : ValueKey('graph-off-canvas-${row.edge.id}'),
-            ),
+            subtitle: row.onMap
+                ? Text(
+                    '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)}',
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${originLabel(row.edge.origin)} · ${provenanceStateLabel(row.edge.state)} · вне текущей области',
+                        key: ValueKey('graph-off-canvas-${row.edge.id}'),
+                      ),
+                      TextButton(
+                        key: ValueKey('graph-show-off-canvas-${row.edge.id}'),
+                        onPressed: () => widget.controller.reRoot(row.otherId),
+                        child: const Text('Показать'),
+                      ),
+                    ],
+                  ),
             trailing: widget.trailingBuilder(row.edge),
           ),
         if (_error != null)
