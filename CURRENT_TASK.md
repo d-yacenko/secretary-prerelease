@@ -1,13 +1,48 @@
 # Current task — HOLD
 
-AH2-E deterministic Secretary agent eval harness is implemented. No model was called. AH2-M was not started. AH2-P, AH2-D, and AH2-T were not deployed.
+AH2-E deterministic Secretary agent eval harness is SOURCE-ACCEPTED.
 
-- Implementation: `b30f739ee5c8e6bf8cf264f63c9f4e5e73b15f06`
-- Harness: `cd backend && python -m evals.secretary_agent.cli score <run.json>` and `python -m evals.secretary_agent.cli validate-catalog`
-- Scenario count: 15 (`P1 T1 T2 T3 F1 F2 M1 M2 R1 R2 R3 A1 A2 S1 N1`)
-- Positive: one golden structural run per scenario. Automatable dimensions pass or are not applicable. Every golden is overall `INCOMPLETE` because the user-visible answer stays `MANUAL_REVIEW`.
-- Negative: table-driven failures for finite T1, duplicate open T2, F1 create or `related_to`, M1 `create_task`, M2 due-only or one planned boundary, reversed or `depends_on` R1, R2 `related_to`, R3 invented edge or remove without `list_neighbors`, A1 `changed=true`, A2 pending treated as executed, S1 mutation, P1 send before resolution, and N1 mutation on a bare name. A done T2 may create, and a chat F2 uses `send_message`.
-- Tests: 38 harness tests and the four preserved contract modules, 56 passed together.
-- Production was not deployed and remains `0719e9bf5af75a8065a9916d8e27c0247a3921ec`, Alembic `0052 / 0052`.
+Accepted implementation:
+- AH2-E implementation: `b30f739ee5c8e6bf8cf264f63c9f4e5e73b15f06`
+- Executor HOLD: `ea2c2a90202aa1357b5b19e283a4fe932c2e7aef`
 
-Do not start AH2-M. Do not deploy AH2-P, AH2-D, or AH2-T.
+Architect review confirmed:
+
+- eval code is isolated under `backend/evals/secretary_agent`;
+- no `backend/app` production runtime code changed in AH2-E;
+- no model was called;
+- run records contain ordered tool/approval/effect/final-state facts and no hidden reasoning;
+- `RecordingToolRunner` forwards tool calls and model-visible-output commits without changing delegate behavior;
+- scenario ids use symbolic fixture references rather than hardcoded UUIDs;
+- deterministic scoring covers tool choice/order, relation semantics, actor fields, planned interval, mutation bounds, approval, exact edge identity, no-op effects, provenance ids, and final-state facts;
+- free-form final answer remains `MANUAL_REVIEW`; deterministic goldens are therefore correctly `INCOMPLETE`, not passed;
+- all 15 documented scenarios are executable;
+- negative fixtures cover the required semantic failure classes;
+- docs/catalog/tool/relation/actor vocabulary drift is checked;
+- 56 focused tests passed;
+- AH1 `BEHAVIOR_UNVERIFIED` verdicts remain unresolved until AH2-M.
+
+Current production:
+- source: `0719e9bf5af75a8065a9916d8e27c0247a3921ec`
+- Alembic: `0052 / 0052`
+
+Not yet deployed:
+- AH2-P prompt routing: `3c463014d38433523f7196a9682b2b7324d94b15`
+- AH2-D Task tool descriptions: `cb941776d318bbddf50d536a785cee3ab7e1822e`
+- AH2-T planned interval write parity: `aa3f475a3a0ee49b938364e6d53f3657711b1a9b`
+
+AH2-E itself is eval-only and does not need to affect production behavior.
+
+## Next gate
+
+Await explicit human authorization for **one schema-neutral production rollout** of the reviewed AH2-P + AH2-D + AH2-T stack before AH2-M real-model evaluation.
+
+No Alembic migration is expected. The existing canonical production deployment harness must be used. Rollout must verify health and preserve the existing production DB/container/volume/environment invariants.
+
+Do NOT deploy until the user explicitly authorizes the production rollout.
+
+Do NOT start AH2-M before that rollout is authorized and completed.
+
+Do NOT start AH2-C, SW2-B, GUX1, relation-editor work, or unrelated cleanup.
+
+STOP.
