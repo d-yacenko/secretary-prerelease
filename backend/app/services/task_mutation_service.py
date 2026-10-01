@@ -1,7 +1,7 @@
 """Canonical task field/status/delete mutations for tools and direct REST."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session
 from app.api.schemas import ObjectUpdate
 from app.db.models import Object
 from app.domain.object_visibility import is_object_tombstoned
+from app.domain.planned_execution import (
+    PLANNED_INTERVAL_BOTH_OR_NEITHER,
+    validate_planned_execution_interval,
+)
 from app.domain.task_lifecycle import (
     SET_TASK_STATUS_VALUES,
     TASK_STATUS_DELETED,
@@ -79,6 +83,14 @@ class TaskMutationService:
             and update_data["completion_mode"] != obj.completion_mode
         ):
             effective["completion_mode"] = update_data["completion_mode"]
+        if "planned_start_at" in update_data:
+            start = update_data["planned_start_at"]
+            end = update_data["planned_end_at"]
+            if not _same_moment(start, obj.planned_start_at) or not _same_moment(
+                end, obj.planned_end_at
+            ):
+                effective["planned_start_at"] = start
+                effective["planned_end_at"] = end
         return effective
 
     def patch_task_fields(
@@ -89,6 +101,8 @@ class TaskMutationService:
         body: str | None = None,
         due_at: datetime | None = None,
         completion_mode: str | None = None,
+        planned_start_at: datetime | None = None,
+        planned_end_at: datetime | None = None,
         fields_set: set[str],
     ) -> TaskPatchResult:
         obj = self.load_task_for_mutation(task_id)
@@ -105,6 +119,21 @@ class TaskMutationService:
             update_data["due_at"] = normalize_tool_datetime(due_at)
         if "completion_mode" in fields_set:
             update_data["completion_mode"] = completion_mode
+        start_set = "planned_start_at" in fields_set
+        end_set = "planned_end_at" in fields_set
+        if start_set != end_set:
+            raise ValidationError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
+        if start_set and end_set:
+            start = normalize_tool_datetime(planned_start_at)
+            end = normalize_tool_datetime(planned_end_at)
+            if (start is None) != (end is None):
+                raise ValidationError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
+            try:
+                validate_planned_execution_interval("task", start, end)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+            update_data["planned_start_at"] = start
+            update_data["planned_end_at"] = end
 
         if not update_data:
             raise ValidationError("at least one editable field must be supplied")
@@ -165,3 +194,9 @@ class TaskMutationService:
             previous_status=previous_status,
             new_status=TASK_STATUS_DELETED,
         )
+
+
+def _same_moment(left: datetime | None, right: datetime | None) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    return left.astimezone(UTC) == right.astimezone(UTC)

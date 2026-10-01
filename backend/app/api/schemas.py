@@ -4,7 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domain.planned_execution import validate_planned_execution_interval
+from app.domain.planned_execution import (
+    PLANNED_INTERVAL_BOTH_OR_NEITHER,
+    validate_planned_execution_interval,
+)
 from app.domain.task_completion import TASK_COMPLETION_MODES
 from app.services.provenance import (
     Origin,
@@ -520,6 +523,8 @@ class TaskPatchRequest(BaseModel):
     body: str | None = None
     due_at: datetime | None = None
     completion_mode: str | None = None
+    planned_start_at: datetime | None = None
+    planned_end_at: datetime | None = None
 
     @model_validator(mode="after")
     def require_at_least_one_field(self) -> Self:
@@ -531,6 +536,16 @@ class TaskPatchRequest(BaseModel):
             self.completion_mode not in TASK_COMPLETION_MODES
         ):
             raise ValueError("completion_mode must be finite or ongoing")
+        start_set = "planned_start_at" in self.model_fields_set
+        end_set = "planned_end_at" in self.model_fields_set
+        if start_set != end_set or (
+            start_set and (self.planned_start_at is None) != (self.planned_end_at is None)
+        ):
+            raise ValueError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
+        if start_set and self.planned_start_at is not None:
+            validate_planned_execution_interval(
+                "task", self.planned_start_at, self.planned_end_at
+            )
         return self
 
 

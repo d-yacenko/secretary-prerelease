@@ -7,12 +7,32 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.api.schemas import ContextItem, EdgeOut, NotificationOut, ObjectOut, TaskProfileOut
 from app.domain.generic_relations import GenericRelationType
+from app.domain.planned_execution import (
+    PLANNED_INTERVAL_BOTH_OR_NEITHER,
+    validate_planned_execution_interval,
+)
 from app.domain.task_completion import TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING
 from app.domain.task_relations import MAX_TASK_ACTOR_IDS, MAX_TASK_DEPENDENCY_IDS
 
 MAX_CONTEXT_CHARS = 12000
 DEFAULT_CONTEXT_CHARS = 8000
 MAX_TASK_EVIDENCE_IDS = 8
+
+
+def reject_unpaired_planned_interval(model: BaseModel) -> None:
+    start_set = "planned_start_at" in model.model_fields_set
+    end_set = "planned_end_at" in model.model_fields_set
+    if start_set != end_set:
+        raise ValueError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
+    if not start_set:
+        return
+    start = model.planned_start_at
+    end = model.planned_end_at
+    if (start is None) != (end is None):
+        raise ValueError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
+    if start is None:
+        return
+    validate_planned_execution_interval("task", start, end)
 
 
 class ToolError(Exception):
@@ -164,11 +184,14 @@ class CreateTaskInput(BaseModel):
     involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
     completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
+    planned_start_at: datetime | None = None
+    planned_end_at: datetime | None = None
 
     @model_validator(mode="after")
     def reject_null_completion_mode(self) -> Self:
         if "completion_mode" in self.model_fields_set and self.completion_mode is None:
             raise ValueError("completion_mode must be finite or ongoing")
+        reject_unpaired_planned_interval(self)
         return self
 
 
@@ -188,6 +211,8 @@ class UpdateTaskInput(BaseModel):
     involved_person_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_ACTOR_IDS)
     depends_on_task_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TASK_DEPENDENCY_IDS)
     completion_mode: Literal[TASK_COMPLETION_FINITE, TASK_COMPLETION_ONGOING] | None = None
+    planned_start_at: datetime | None = None
+    planned_end_at: datetime | None = None
 
     @model_validator(mode="after")
     def reject_invalid_title(self) -> Self:
@@ -195,6 +220,7 @@ class UpdateTaskInput(BaseModel):
             raise ValueError("title must be a non-empty string when provided")
         if "completion_mode" in self.model_fields_set and self.completion_mode is None:
             raise ValueError("completion_mode must be finite or ongoing")
+        reject_unpaired_planned_interval(self)
         return self
 
 

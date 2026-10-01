@@ -14,6 +14,8 @@ _CREATE_PROPERTIES = {
     "involved_person_ids",
     "depends_on_task_ids",
     "completion_mode",
+    "planned_start_at",
+    "planned_end_at",
 }
 _UPDATE_PROPERTIES = {
     "object_id",
@@ -27,6 +29,8 @@ _UPDATE_PROPERTIES = {
     "involved_person_ids",
     "depends_on_task_ids",
     "completion_mode",
+    "planned_start_at",
+    "planned_end_at",
 }
 _DESCRIBED_FIELDS = (
     "requested_by_person_id",
@@ -64,7 +68,7 @@ def test_get_task_profile_description_names_returned_semantics() -> None:
         "ignores proposed relations",
     ):
         assert marker in text
-    assert "does not write the planned interval" in text
+    assert "create_task and update_task can write that interval" in text
 
 
 def test_create_and_update_field_descriptions_share_canonical_meanings() -> None:

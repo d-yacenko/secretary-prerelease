@@ -30,7 +30,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 | Actor roles and dependencies | SUPPORTED | `create_task` / `update_task` id lists | Assistant and the shared domain contract write additive `requested_by`, `delegated_to`, `waiting_on`, `involves`, and `depends_on`. MCP schema accepts the same five parameters. MCP execution stays fail-closed: `INTERNAL_WRITE` and `ANNOTATE` both require approval, and MCP has no trusted approval transport |
 | Task composition `part_of` | SUPPORTED | `link_objects` | Child/source → parent/target. Not a field on `create_task` |
 | `completion_mode` finite/ongoing | SUPPORTED | `create_task` / `update_task`; read via `get_object` / `get_task_profile` | Explicit enum only. Ongoing cannot be `done` |
-| Planned start/end | PARTIAL | Human editor; read on Task Profile | Tools cannot set it |
+| Planned start/end | SUPPORTED | `create_task` / `update_task`; read via `get_task_profile` | One pair. Both omitted leaves it unchanged. Both null on update clears it. End must be after start. Not `due_at`, a reminder, or calendar busy time |
 | Task lifecycle status | SUPPORTED | `set_task_status` | open / in_progress / done / cancelled / archived |
 | Soft-delete task | SUPPORTED | `delete_task` | Tombstone; graph history preserved |
 | Add relation | SUPPORTED | `link_objects` | `relation_type` is exactly `related_to`, `references`, `depends_on`, or `part_of`. Actor roles stay on typed Task fields. `labeled_with` and `contains` are not generic writes |
@@ -63,7 +63,7 @@ Status legend: **SUPPORTED** | **PARTIAL** | **INTENTIONALLY DEFERRED** | **MISS
 
 - `kind=event` is a provider calendar Flow object. `create_calendar_event` writes one after approval.
 - `kind=scheduled_activity` is an internal reminder. Create, recur, list via `query_objects`, and cancel are implemented. It is not a Task and it does not write the provider calendar.
-- Task `due_at` is editable by `update_task`. Task `planned_start_at` / `planned_end_at` are visible on Task Profile and editable in the human editor, not by tools.
+- Task `due_at` is editable by `update_task`. Task `planned_start_at` / `planned_end_at` are one planned execution interval, writable by `create_task` / `update_task` and visible on Task Profile. The human editor still writes the same columns.
 - `get_today` is the current local date-time for the user.
 
 ## Assistant execution truthfulness (PHASE 28D-B-R1)

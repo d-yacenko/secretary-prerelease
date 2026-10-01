@@ -108,6 +108,18 @@ A chat fixture uses `send_message` and forbids `send_email`.
 - Final state: one `scheduled_activity`. No Task.
 - Failure modes: a Task titled like the reminder; a provider calendar event.
 
+### M2 — Planned work interval is not a deadline or a reminder
+
+- Utterance: «Запланируй работу над черновиком со вторника 10:00 до 12:00. Срок — пятница».
+- State: one open Task «Черновик» with no planned interval and no due date.
+- Expected sequence: `update_task` with `planned_start_at` and `planned_end_at` together, and `due_at` for Friday.
+- Allowed mutations: that interval and that deadline on the existing Task.
+- Forbidden mutations: `create_scheduled_activity`, `create_calendar_event`, a second Task, one boundary without the other.
+- Clarification: none when the Task and both boundaries are clear.
+- Approval: card before the interval or deadline is confirmed.
+- Final state: the same Task has both planned boundaries, end after start, and `due_at` on Friday. No reminder and no calendar event.
+- Failure modes: storing the work window as `due_at` only; creating a reminder instead of the interval; writing only `planned_start_at`.
+
 ## Relations
 
 ### R1 — Composition

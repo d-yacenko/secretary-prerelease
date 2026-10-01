@@ -47,6 +47,17 @@ _INVOLVED_PERSON_IDS_DESCRIPTION = (
     "Do not use this when a stronger role is known. "
     "Omitting an id does not remove an existing role."
 )
+_PLANNED_INTERVAL_CREATE_DESCRIPTION = (
+    "One boundary of the planned execution interval. "
+    "Supply planned_start_at and planned_end_at together. End must be after start. "
+    "This is intended work time, not due_at, a reminder, or calendar busy time."
+)
+_PLANNED_INTERVAL_UPDATE_DESCRIPTION = (
+    "One boundary of the planned execution interval. "
+    "Supply planned_start_at and planned_end_at together. "
+    "A non-null pair replaces the interval. Both null clear it. "
+    "Omitting both leaves it unchanged. This is distinct from due_at."
+)
 _DEPENDS_ON_TASK_IDS_DESCRIPTION = (
     "Prerequisite Tasks this Task depends on. "
     "The current Task is the source; each id is a target prerequisite. Additive. "
@@ -179,8 +190,8 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "Direction/Activity. Returns the confirmed parent_task for part_of "
             "composition when one exists. Returns actor roles requested_by, "
             "delegated_to, waiting_on, and involves. Returns depends_on prerequisites "
-            "and dependent Tasks. Returns planned_start_at and planned_end_at as "
-            "readable fields; this tool does not write the planned interval. "
+            "and dependent Tasks. Returns planned_start_at and planned_end_at. "
+            "create_task and update_task can write that interval; this read does not. "
             "Returns evidence. operational.operational_state is the derived read-only "
             "actionability (terminal, blocked, waiting, delegated, scheduled_later, "
             "actionable). It is deterministic and ignores proposed relations. "
@@ -554,7 +565,8 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "completion_mode finite is a completable Task; ongoing is a continuing "
             "Direction/Activity and cannot be marked done. Omit completion_mode when "
             "the user has not expressed the distinction. Do not infer ongoing from a "
-            "due date or long duration."
+            "due date or long duration. Optional planned_start_at and planned_end_at "
+            "are one planned execution interval and must be supplied together."
         ),
         "parameters": {
             "type": "object",
@@ -601,6 +613,14 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                     "type": "string",
                     "enum": ["finite", "ongoing"],
                 },
+                "planned_start_at": {
+                    "type": "string",
+                    "description": _PLANNED_INTERVAL_CREATE_DESCRIPTION,
+                },
+                "planned_end_at": {
+                    "type": "string",
+                    "description": _PLANNED_INTERVAL_CREATE_DESCRIPTION,
+                },
             },
             "required": ["title", "confidence"],
             "additionalProperties": False,
@@ -620,7 +640,9 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "completion_mode finite is a completable Task; ongoing is a continuing "
             "Direction/Activity and cannot be marked done. Omit completion_mode when "
             "the user has not expressed the distinction. Do not infer ongoing from a "
-            "due date or long duration."
+            "due date or long duration. Optional planned_start_at and planned_end_at "
+            "must be supplied together: a non-null pair replaces the planned execution "
+            "interval, both null clear it, and omitting both leaves it unchanged."
         ),
         "parameters": {
             "type": "object",
@@ -666,6 +688,14 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "completion_mode": {
                     "type": "string",
                     "enum": ["finite", "ongoing"],
+                },
+                "planned_start_at": {
+                    "type": ["string", "null"],
+                    "description": _PLANNED_INTERVAL_UPDATE_DESCRIPTION,
+                },
+                "planned_end_at": {
+                    "type": ["string", "null"],
+                    "description": _PLANNED_INTERVAL_UPDATE_DESCRIPTION,
                 },
             },
             "required": ["object_id"],

@@ -92,6 +92,12 @@ def patch_task(
             completion_mode=(
                 data.completion_mode if "completion_mode" in data.model_fields_set else None
             ),
+            planned_start_at=(
+                data.planned_start_at if "planned_start_at" in data.model_fields_set else None
+            ),
+            planned_end_at=(
+                data.planned_end_at if "planned_end_at" in data.model_fields_set else None
+            ),
             fields_set=set(data.model_fields_set),
         )
     except NotFoundError as exc:

@@ -1010,6 +1010,8 @@ class DomainToolService:
         if self._has_relation_input(input):
             self._prevalidate_explicit_relations(input, task_id=None)
         due_at = normalize_tool_datetime(input.due_at)
+        planned_start_at = normalize_tool_datetime(input.planned_start_at)
+        planned_end_at = normalize_tool_datetime(input.planned_end_at)
         try:
             obj = self._write_graph.create_object(
                 ObjectCreate(
@@ -1022,6 +1024,8 @@ class DomainToolService:
                     due_at=due_at,
                     confidence=input.confidence,
                     completion_mode=input.completion_mode,
+                    planned_start_at=planned_start_at,
+                    planned_end_at=planned_end_at,
                 )
             )
         except ValidationError as exc:
@@ -1165,7 +1169,14 @@ class DomainToolService:
             self._prevalidate_explicit_relations(input, task_id=input.object_id)
 
         fields_set = input.model_fields_set
-        field_fields = {"title", "body", "due_at", "completion_mode"}
+        field_fields = {
+            "title",
+            "body",
+            "due_at",
+            "completion_mode",
+            "planned_start_at",
+            "planned_end_at",
+        }
         has_field_updates = any(field in fields_set for field in field_fields)
 
         updated = obj
@@ -1178,6 +1189,10 @@ class DomainToolService:
                     body=input.body if "body" in fields_set else None,
                     due_at=input.due_at if "due_at" in fields_set else None,
                     completion_mode=input.completion_mode if "completion_mode" in fields_set else None,
+                    planned_start_at=(
+                        input.planned_start_at if "planned_start_at" in fields_set else None
+                    ),
+                    planned_end_at=input.planned_end_at if "planned_end_at" in fields_set else None,
                     fields_set=fields_set,
                 )
             except (NotFoundError, ValidationError) as exc:

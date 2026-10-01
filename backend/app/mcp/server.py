@@ -218,6 +218,20 @@ def create_mcp_server() -> MCPServer:
             max_length=MAX_TASK_DEPENDENCY_IDS,
         ),
         completion_mode: Literal["finite", "ongoing"] = Field(default_factory=_omitted),
+        planned_start_at: datetime = Field(
+            default_factory=_omitted,
+            description=(
+                "Start of the planned execution interval. Supply with planned_end_at. "
+                "Intended work time, not due_at, a reminder, or calendar busy time."
+            ),
+        ),
+        planned_end_at: datetime = Field(
+            default_factory=_omitted,
+            description=(
+                "End of the planned execution interval. Must be after planned_start_at. "
+                "Supply both boundaries together."
+            ),
+        ),
     ) -> CreateTaskOutput:
         """Create an agent-proposed task with required confidence."""
         arguments = {
@@ -234,6 +248,8 @@ def create_mcp_server() -> MCPServer:
         _put_if_present(arguments, "depends_on_task_ids", depends_on_task_ids)
         if completion_mode is not _OMITTED:
             arguments["completion_mode"] = completion_mode
+        _put_if_present(arguments, "planned_start_at", planned_start_at)
+        _put_if_present(arguments, "planned_end_at", planned_end_at)
         return _run_tool("create_task", "create_task", arguments)
 
     @mcp.tool()
@@ -261,6 +277,21 @@ def create_mcp_server() -> MCPServer:
             max_length=MAX_TASK_DEPENDENCY_IDS,
         ),
         completion_mode: Literal["finite", "ongoing"] = Field(default_factory=_omitted),
+        planned_start_at: datetime | None = Field(
+            default_factory=_omitted,
+            description=(
+                "Start of the planned execution interval. Supply with planned_end_at. "
+                "A non-null pair replaces the interval. Both null clear it. "
+                "Omitting both leaves it unchanged. Distinct from due_at."
+            ),
+        ),
+        planned_end_at: datetime | None = Field(
+            default_factory=_omitted,
+            description=(
+                "End of the planned execution interval. Must be after planned_start_at "
+                "when both are non-null. Supply both boundaries together."
+            ),
+        ),
     ) -> UpdateTaskOutput:
         """Update task fields or attach evidence without changing lifecycle status."""
         arguments: dict = {"object_id": object_id}
@@ -279,6 +310,8 @@ def create_mcp_server() -> MCPServer:
         _put_if_present(arguments, "depends_on_task_ids", depends_on_task_ids)
         if completion_mode is not _OMITTED:
             arguments["completion_mode"] = completion_mode
+        _put_if_present(arguments, "planned_start_at", planned_start_at)
+        _put_if_present(arguments, "planned_end_at", planned_end_at)
         return _run_tool("update_task", "update_task", arguments)
 
     @mcp.tool()

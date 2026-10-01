@@ -26,7 +26,7 @@ These statements were true of an older snapshot and are false on the audited SHA
 | Person is who, not an organization chart | Resolve before communication. No organization tool | Person tools and identity feedback. No `member_of` / `manager_of` writer | People workspace rejects those types | `ALIGNED` |
 | Task is the commitment. Ongoing is a Direction, not a new kind | `completion_mode` text | `create_task` / `update_task`; domain rejects ongoing marked done | Editor control `task_completion_mode`; profile shows «Направление» | `ALIGNED` |
 | Flow is evidence, not automatic workload | Emails, events, files, and notes are not tasks by themselves | `references` via evidence ids or `link_objects` | Graph evidence is a relation, not a second Task | `ALIGNED` |
-| Time is when, with separate primitives | `get_today`, Task `due_at`, reminders, calendar event | Distinct tools below | Editor due and planned interval; calendar is Flow | `ALIGNED` for the split. Planned interval write is a model gap |
+| Time is when, with separate primitives | `get_today`, Task `due_at`, reminders, calendar event | Distinct tools below | Editor due and planned interval; calendar is Flow | `ALIGNED` for the split. Planned-interval write is in the contract; model use is `BEHAVIOR_UNVERIFIED` |
 | Relations are stored facts | Prompt forbids inference | Writers require ids from this turn | Graph dialog writes only the four generic types plus actor fields and labels | `ALIGNED` |
 
 ## Exposure
@@ -93,7 +93,7 @@ Canonical state is the Task row plus relation edges. Provenance for a new agent 
 | Exact identity / read | Open the Task | `get_object` | Object row, including `completion_mode` | read | `ALIGNED` |
 | Semantic discovery | Graph / Search | `retrieve` (Assistant). MCP uses `search_objects` | same objects | read | `INTENTIONALLY_ASYMMETRIC` |
 | Structured query | Filters | `query_objects` | same | read | `ALIGNED` |
-| Profile | Task Profile | `get_task_profile` | lifecycle `status` plus derived `operational_state` | read. Ignores proposed relations for operational state | `ALIGNED` on the payload. Description omits parent, `completion_mode`, and planned interval |
+| Profile | Task Profile | `get_task_profile` | lifecycle `status` plus derived `operational_state` | read. Ignores proposed relations for operational state | `ALIGNED` on the payload. Description names parent, `completion_mode`, and the planned interval |
 | Create | Editor | `create_task` | `kind=task`, `status=open` | propose, confirm on approved plan | `INTENTIONALLY_ASYMMETRIC` |
 | Finite vs ongoing | Editor `task_completion_mode` | `completion_mode` enum | column; ongoing cannot become `done`; `part_of` matrix stays in the domain | write | `ALIGNED` |
 | Title / body / due | Editor | `update_task` | columns | approval, then write. Status is untouched | `ALIGNED` |
@@ -107,7 +107,7 @@ Canonical state is the Task row plus relation edges. Provenance for a new agent 
 | Remove / reject edge | «Удалить связь». User origin is physical DELETE. Agent origin is reject-in-place | `remove_relation(edge_id)` sets `state=rejected` | removable user/agent types only | model path does not physically delete | `INTENTIONALLY_ASYMMETRIC` |
 | Confirm an existing proposal | Graph confirm | no confirm tool. A new write confirms through the approval card | `POST /relations/{id}/decision` exists for the human path | model cannot confirm an already proposed edge | `INTENTIONALLY_ASYMMETRIC` |
 | Labels | Label UI | label tools. `assign_label` / `remove_label` are `ANNOTATE` and run immediately | `labeled_with` | vocabulary changes require approval | `ALIGNED` |
-| Planned start / end | Editor writes `planned_start_at` / `planned_end_at` | read on `get_task_profile` only | columns | no tool field | `MODEL_GAP` |
+| Planned start / end | Editor writes `planned_start_at` / `planned_end_at` | `create_task` / `update_task` write the pair together. Profile reads it | columns. Both boundaries or neither. End after start | approval. Omit leaves the interval unchanged. Both null on update clears it | `ALIGNED` as a contract. `BEHAVIOR_UNVERIFIED` |
 | Duplicate avoidance | Human sees existing Tasks | prompt: `retrieve` before `create_task`; do not create when a likely non-terminal equivalent exists | no deterministic duplicate service | instruction only | `BEHAVIOR_UNVERIFIED` |
 | Operational vs lifecycle | Profile shows both | tool description separates `status` and `operational_state` | derived, proposed edges ignored | read | `ALIGNED` |
 
@@ -148,7 +148,7 @@ Telegram `edit_message`, `delete_message`, and `mark_message_read` are Assistant
 |---|---|---|---|---|---|
 | Current local date/time | Clock | `get_today` | user-local now | read | `ALIGNED` |
 | Task due | Editor | `due_at` | Task column | write | `ALIGNED` |
-| Planned interval | Editor | profile read only | Task columns | no tool write | `MODEL_GAP` |
+| Planned interval | Editor | `create_task` / `update_task` | Task columns | pair write. Not `due_at`, a reminder, or calendar busy time | `ALIGNED` as a contract. `BEHAVIOR_UNVERIFIED` |
 | Calendar Flow | Calendar objects | `query_objects` / `create_calendar_event` | `kind=event` after approval | external write | `ALIGNED` |
 | One-shot reminder | Reminder, not a Task | `create_scheduled_activity` | `kind=scheduled_activity` | internal notification only | `ALIGNED` |
 | Recurring reminder | Recurrence | `create_recurring_scheduled_activity` | schedule until `cancel_scheduled_activity` | internal | `ALIGNED` |
@@ -189,7 +189,7 @@ Weak routing hints, not missing tools:
 | Actor-role choice | System prompt never names `requested_by`, `delegated_to`, `waiting_on`, or `involves`. Field schemas have no per-role text. Update text only says the lists are additive | `BEHAVIOR_UNVERIFIED` |
 | `part_of` | Tool text is exact. System prompt does not name composition or child → parent | `BEHAVIOR_UNVERIFIED` |
 | Removing `depends_on`, `part_of`, or actor edges | Prompt removal sentence names evidence and `related_to` only. Update-tool text is broader | `BEHAVIOR_UNVERIFIED` |
-| Profile fields | `get_task_profile` description omits `completion_mode`, parent, and planned interval that the payload returns | `BEHAVIOR_UNVERIFIED` |
+| Profile fields | `get_task_profile` names `completion_mode`, parent, and the planned interval. Model use of that text is not scored | `BEHAVIOR_UNVERIFIED` |
 | Duplicate Task | Prompt procedure only | `BEHAVIOR_UNVERIFIED` |
 | No-op narration and prompt injection | Finalization and untrusted-data rules exist | `BEHAVIOR_UNVERIFIED` |
 
@@ -203,7 +203,7 @@ Do not start these inside AH1.
 
 1. **AH2-P — prompt routing sentences.** Evidence: `SYSTEM_INSTRUCTIONS` omits actor-role names, `part_of`, and removal of those edges, while the tool texts already define them. User-facing consequence: the model can pick `related_to` or a new Task for «жду ответ» or «входит в». Smallest surface: `SYSTEM_INSTRUCTIONS` only. No schema, migration, or UI. Production effect requires a backend deploy and a human gate. Behavior stays unverified until AH2-M.
 2. **AH2-D — tool descriptions for profile and actor fields.** Evidence: `get_task_profile` description and actor JSON fields. User-facing consequence: a read can return the parent or Direction and the model can ignore it. Smallest surface: description strings in `backend/app/tools/assistant_contracts.py`. No domain change. Deploy and human gate to affect production. No migration.
-3. **AH2-T — planned interval write.** Evidence: human editor sends `planned_start_at` / `planned_end_at` (`client/lib/tasks/task_management_actions.dart`); `CreateTaskInput` / `UpdateTaskInput` have no such fields. User-facing consequence: the model cannot schedule the interval the editor can. Smallest surface: optional fields on those inputs, the existing Task update service, and the tool text. Columns already exist. Deploy, no new migration if the column check holds, human gate.
+3. **AH2-T — planned interval write.** The static `MODEL_GAP` is closed: `create_task` and `update_task` write `planned_start_at` / `planned_end_at` as one pair through `TaskMutationService.patch_task_fields` and `PATCH /tasks/{id}`. Columns already existed, so no migration was added. Model behavior remains `BEHAVIOR_UNVERIFIED` until AH2-M. Production rollout is still pending.
 4. **AH2-E — executable eval harness.** Evidence: the scenario catalogue. User-facing consequence: none until a model is scored. Smallest surface: a harness that checks tool traces and final-state fixtures without a live LLM. No deploy.
 5. **AH2-M — real-model eval.** Evidence: every `BEHAVIOR_UNVERIFIED` row. User-facing consequence: unknown until scored. Smallest surface: one authorized provider run of the catalogue, then targeted prompt or tool fixes. Separate authorization. No schema change by itself.
 6. **AH2-C — model confirm of an existing proposal.** Not next. Evidence: human Graph confirms; the model can reject and can confirm only its own new plan. User-facing consequence: the model cannot accept an older proposal. Smallest surface, if a later eval shows it matters: one decision tool on the existing relation decision endpoint. Backend, deploy, human gate. No relation editor and no new type.
