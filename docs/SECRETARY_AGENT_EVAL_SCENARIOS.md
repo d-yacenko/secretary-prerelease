@@ -1,8 +1,8 @@
 # Secretary agent eval scenarios
 
-Specification for a later harness. AH1 does not execute these scenarios and does not call a model.
+AH2-E scores a recorded tool trace against this catalogue. It does not call a model. Each heading id below is the same id in `backend/evals/secretary_agent`. Passing these checks shows that a supplied trace matches the structural fixture. It is not evidence that a model chooses that trace, and it does not retire any AH1 `BEHAVIOR_UNVERIFIED` verdict.
 
-Each scenario is scored independently. A dimension is `pass`, `fail`, or `not_applicable`. There is no numeric weight. The scenario fails if any of these fail: semantic correctness, approval correctness, final-state correctness, truthful final response. Tool-choice, minimality, and provenance are recorded and fail the scenario when the expected sequence says they are required.
+Each scenario is scored independently. A dimension is `PASS`, `FAIL`, `NOT_APPLICABLE`, or `MANUAL_REVIEW`. There is no numeric weight. Any required `FAIL` fails the scenario (`FAIL`). Any required `MANUAL_REVIEW` leaves the scenario `INCOMPLETE` and is not a pass. `NOT_APPLICABLE` does not fail the scenario and does not count as review. Tool-choice, minimality, and provenance fail the scenario when the expected sequence says they are required. Free-form answer truthfulness stays `MANUAL_REVIEW` unless a later slice adds an explicit structured contradiction.
 
 Dimensions:
 
@@ -211,3 +211,17 @@ A chat fixture uses `send_message` and forbids `send_email`.
 - Approval: no card.
 - Final state: unchanged.
 - Failure modes: an invented plan; a create or link.
+
+## Harness usage
+
+From `backend/`:
+
+```
+python -m evals.secretary_agent.cli score <run.json>
+python -m evals.secretary_agent.cli score <run.json> --json
+python -m evals.secretary_agent.cli validate-catalog
+```
+
+`validate-catalog` checks that these fifteen heading ids (`P1 T1 T2 T3 F1 F2 M1 M2 R1 R2 R3 A1 A2 S1 N1`) are the executable catalogue, that each heading's section matches the executable category, and that every named tool, generic relation, and actor role exists in the current registry. A run uses symbolic ids (`task_id`, `person_id`, `pdf_id`, `child_task_id`, `parent_task_id`, `edge_id`); the scenario definitions do not contain UUIDs. The scorer prints the scenario id, overall `PASS` / `FAIL` / `INCOMPLETE`, and one row per dimension. Catalogue goldens are `INCOMPLETE` because the user-visible answer remains `MANUAL_REVIEW`.
+
+Two extra scorers reuse existing ids and are not extra headings. A T2 fixture whose existing Task is already `done` may `create_task` after `retrieve`. An F2 fixture whose source is chat requires `send_message` and forbids `send_email`. The command reads a local JSON artifact only. It does not call a model, open a network connection, or write the product database.
