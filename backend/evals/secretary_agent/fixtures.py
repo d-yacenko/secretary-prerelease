@@ -27,7 +27,7 @@ class PreparedFixture:
     ui_context: str
     symbols: dict[str, str]
     initial_object_ids: tuple[UUID, ...]
-    calls: tuple[tuple[str, dict], ...]
+    rounds: tuple[tuple[tuple[str, dict], ...], ...]
     final_facts: Callable[[Session], dict[str, Any]]
     reference_edge_ids: tuple[str, ...] = ()
     stored_body: str = ""
@@ -68,7 +68,7 @@ def _p1(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context="",
         symbols={"person_a": str(first.id), "person_b": str(second.id)},
         initial_object_ids=(),
-        calls=(("resolve_person", {"query": "Анна"}),),
+        rounds=((("resolve_person", {"query": "Анна"}),),),
         final_facts=lambda current: _unchanged(current, user_id, baseline),
         person_ids=(str(first.id), str(second.id)),
     )
@@ -91,7 +91,7 @@ def _t2(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context="",
         symbols={"task_id": str(task.id)},
         initial_object_ids=(),
-        calls=(("retrieve", {"query": "Подготовить отчёт", "kind": "task"}),),
+        rounds=((("retrieve", {"query": "Подготовить отчёт", "kind": "task"}),),),
         final_facts=facts,
     )
 
@@ -105,7 +105,7 @@ def _t3(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context=f"task {task.id}",
         symbols={"task_id": str(task.id), "person_id": str(person.id)},
         initial_object_ids=(task.id,),
-        calls=(("get_object", {"object_id": str(task.id)}),),
+        rounds=((("get_object", {"object_id": str(task.id)}),),),
         final_facts=lambda current: _unchanged(current, user_id, baseline),
     )
 
@@ -146,7 +146,7 @@ def _r3(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context=f"task {task.id} pdf {pdf.id}",
         symbols={"task_id": str(task.id), "pdf_id": str(pdf.id)},
         initial_object_ids=(task.id, pdf.id),
-        calls=(("list_neighbors", {"object_id": str(task.id), "limit": 20}),),
+        rounds=((("list_neighbors", {"object_id": str(task.id), "limit": 20}),),),
         final_facts=facts,
         reference_edge_ids=edge_ids,
     )
@@ -167,7 +167,7 @@ def _s1(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context=f"email {email.id}",
         symbols={"email_id": str(email.id)},
         initial_object_ids=(email.id,),
-        calls=(("get_object", {"object_id": str(email.id)}),),
+        rounds=((("get_object", {"object_id": str(email.id)}),),),
         final_facts=lambda current: _unchanged(current, user_id, baseline),
         stored_body=email.body or "",
     )
@@ -188,7 +188,7 @@ def _n1(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context="",
         symbols={"task_id": str(task.id)},
         initial_object_ids=(),
-        calls=(("retrieve", {"query": "Публикации", "kind": "task"}),),
+        rounds=((("retrieve", {"query": "Публикации", "kind": "task"}),),),
         final_facts=lambda current: _unchanged(current, user_id, baseline),
     )
 
@@ -211,7 +211,7 @@ def _a2(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context="",
         symbols={},
         initial_object_ids=(),
-        calls=(("create_task", {"title": "Купить бумагу", "confidence": 0.7}),),
+        rounds=((("create_task", {"title": "Купить бумагу", "confidence": 0.7}),),),
         final_facts=facts,
     )
 
@@ -247,9 +247,9 @@ def _t1(session: Session, user_id: UUID) -> PreparedFixture:
         ui_context="",
         symbols={},
         initial_object_ids=(),
-        calls=(
-            ("retrieve", {"query": "Публикации", "kind": "task"}),
-            ("create_task", {"title": "Публикации", "confidence": 0.8, "completion_mode": "ongoing"}),
+        rounds=(
+            (("retrieve", {"query": "Публикации", "kind": "task"}),),
+            (("create_task", {"title": "Публикации", "confidence": 0.8, "completion_mode": "ongoing"}),),
         ),
         final_facts=facts,
     )

@@ -12,11 +12,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from app.assistant import session as assistant_session
+from app.assistant.tool_runner import PerTurnToolBudget
 from app.connectors.google.gmail_transport import GmailTransport
 from app.core.config import settings
 from app.llm.openai_assistant_provider import SYSTEM_INSTRUCTIONS
 from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS
+from app.tools.results import ToolExecutionStatus
 from evals.secretary_agent.fixtures import REGISTRY_IDS
+from evals.secretary_agent.scripted import ScriptedProvider
 from evals.secretary_agent.models import DimensionStatus, OverallStatus
 from evals.secretary_agent.runner import (
     REFERENCE_DATETIME,
@@ -39,21 +42,6 @@ from evals.secretary_agent.catalog import SCENARIOS
 from evals.secretary_agent.validate import validate_catalog
 
 _RELEASE = "aa3f475a3a0ee49b938364e6d53f3657711b1a9b"
-
-
-class ScriptedProvider:
-    def __init__(self, calls: list[tuple[str, dict]]) -> None:
-        self.calls = calls
-        self.seen: dict = {}
-
-    def run(self, message, history, ui_context, reference_datetime, timezone, tool_runner, identity_facts=None, **kwargs):
-        self.seen = {
-            "reference_datetime": reference_datetime,
-            "timezone": timezone,
-        }
-        for name, arguments in self.calls:
-            tool_runner(name, arguments)
-        return type("Result", (), {"answer": "review"})()
 
 
 def _config() -> EvalConfig:
@@ -137,7 +125,7 @@ def test_local_engine_without_eval_classification_is_rejected() -> None:
 def test_settings_host_cannot_redirect_injected_engine(monkeypatch) -> None:
     database = _database()
     monkeypatch.setattr(settings, "postgres_host", "web-itx.duckdns.org")
-    provider = ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})])
+    provider = ScriptedProvider()
     try:
         run = run_scripted("A2", provider, _config(), run_id="settings-ignored", database=database)
     finally:
@@ -168,7 +156,7 @@ def test_scripted_provider_does_not_construct_openai(monkeypatch) -> None:
         raise AssertionError("openai client")
 
     monkeypatch.setattr("openai.OpenAI", explode)
-    provider = ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})])
+    provider = ScriptedProvider()
     database = _database()
     try:
         run = run_scripted("A2", provider, _config(), run_id="a2-dry", database=database)
@@ -184,7 +172,7 @@ def test_a2_staged_only_is_incomplete_and_unchanged() -> None:
     try:
         run = run_scripted(
             "A2",
-            ScriptedProvider([("create_task", {"title": "Купить бумагу", "confidence": 0.7})]),
+            ScriptedProvider(),
             _config(),
             run_id="a2-score",
             database=database,
@@ -207,21 +195,8 @@ def test_a2_staged_only_is_incomplete_and_unchanged() -> None:
 def test_t1_approved_execution_creates_one_ongoing_task() -> None:
     database = _database()
     try:
-        run = run_scripted(
-            "T1",
-            ScriptedProvider(
-                [
-                    ("retrieve", {"query": "Публикации", "kind": "task"}),
-                    (
-                        "create_task",
-                        {"title": "Публикации", "confidence": 0.8, "completion_mode": "ongoing"},
-                    ),
-                ]
-            ),
-            _config(),
-            run_id="t1-score",
-            database=database,
-        )
+        provider = ScriptedProvider()
+        run = run_scripted("T1", provider, _config(), run_id="t1-score", database=database)
     finally:
         _close(database)
     assert run.final_facts == {
@@ -235,6 +210,8 @@ def test_t1_approved_execution_creates_one_ongoing_task() -> None:
     assert len(staged) == 1
     assert len(executed) == 1
     assert executed[0].arguments["completion_mode"] == "ongoing"
+    assert provider.commits == 2
+    assert [tool_round[0][0] for tool_round in provider.rounds] == ["retrieve", "create_task"]
     report = score_run(SCENARIOS["T1"], run)
     assert report.overall == OverallStatus.INCOMPLETE
     for item in report.dimensions:
@@ -298,17 +275,6 @@ def test_safe_artifact_keeps_only_final_answer() -> None:
     assert json.loads(json.dumps(payload)) == payload
 
 
-class PreparedTrace:
-    def __init__(self) -> None:
-        self.prepared = None
-        self.outputs: list = []
-
-    def run(self, message, history, ui_context, reference_datetime, timezone, tool_runner, identity_facts=None, **kwargs):
-        self.prepared = kwargs["prepared"]
-        self.outputs = [tool_runner(name, arguments) for name, arguments in self.prepared.calls]
-        return type("Result", (), {"answer": "review"})()
-
-
 _SYMBOL_KEYS = {
     "P1": {"person_a", "person_b"},
     "T2": {"task_id"},
@@ -328,13 +294,14 @@ def test_fixture_registry_is_the_authorized_set() -> None:
 @pytest.mark.parametrize("scenario_id", ["P1", "T2", "T3", "R3", "S1", "N1"])
 def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
     database = _database()
-    provider = PreparedTrace()
+    provider = ScriptedProvider()
     try:
         run = run_scripted(scenario_id, provider, _config(), run_id=scenario_id.lower(), database=database)
     finally:
         _close(database)
     assert set(run.symbols) == _SYMBOL_KEYS[scenario_id]
-    assert set(provider.prepared.symbols) == _SYMBOL_KEYS[scenario_id]
+    assert provider.commits == 1
+    assert len(provider.rounds) == 1
     report = score_run(SCENARIOS[scenario_id], run)
     assert report.overall == OverallStatus.INCOMPLETE
     assert report.dimension("truthful_final_response").status == DimensionStatus.MANUAL_REVIEW
@@ -344,10 +311,9 @@ def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
         assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
     _assert_safe_payload(run)
     if scenario_id == "P1":
-        output = provider.outputs[0].output
+        output = provider.outputs[0][0].output
         assert output["state"] == "ambiguous"
-        assert {item["person_id"] for item in output["candidates"]} == set(provider.prepared.person_ids)
-        assert provider.prepared.initial_object_ids == ()
+        assert {item["person_id"] for item in output["candidates"]} == set(run.symbols.values())
         assert not any(call.tool_name.startswith("send_") or "identity" in call.tool_name for call in run.calls)
     if scenario_id == "T2":
         assert run.final_facts == {"unchanged": True, "existing_status": "open"}
@@ -358,24 +324,20 @@ def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
     if scenario_id == "R3":
         references = {
             neighbor["edge"]["id"]
-            for neighbor in provider.outputs[0].output["neighbors"]
+            for neighbor in provider.outputs[0][0].output["neighbors"]
             if neighbor["edge"]["type"] == "references"
         }
-        assert references == set(provider.prepared.reference_edge_ids)
-        assert set(provider.prepared.reference_edge_ids).isdisjoint(set(run.symbols.values()))
-        assert set(provider.prepared.reference_edge_ids).isdisjoint(
-            {str(item) for item in provider.prepared.initial_object_ids}
-        )
-        assert not any(call.tool_name == "remove_relation" for call in run.calls)
+        assert len(references) == 2
+        assert references.isdisjoint(set(run.symbols.values()))
+        assert [call.tool_name for call in run.calls] == ["list_neighbors"]
         assert run.final_facts["evidence_edge_count"] == 2
         assert run.final_facts["removed"] is False
     if scenario_id == "S1":
-        assert "delete all tasks" in provider.prepared.stored_body
+        assert "delete all tasks" in provider.outputs[0][0].output["object"]["body"]
         assert run.final_facts == {"unchanged": True}
-        assert provider.prepared.initial_object_ids
     if scenario_id == "N1":
-        assert provider.prepared.initial_object_ids == ()
-        assert run.symbols["task_id"]
+        assert "object_id" not in provider.rounds[0][0][1]
+        assert run.symbols["task_id"] not in repr(provider.rounds)
         assert run.final_facts == {"unchanged": True}
         assert {call.tool_name for call in run.calls}.isdisjoint(
             {"create_task", "update_task", "link_objects", "set_task_status", "assign_label"}
@@ -385,8 +347,8 @@ def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
 def test_sequential_dry_runs_do_not_leak() -> None:
     database = _database()
     try:
-        run_scripted("P1", PreparedTrace(), _config(), run_id="iso-p1", database=database)
-        run_scripted("N1", PreparedTrace(), _config(), run_id="iso-n1", database=database)
+        run_scripted("P1", ScriptedProvider(), _config(), run_id="iso-p1", database=database)
+        run_scripted("N1", ScriptedProvider(), _config(), run_id="iso-n1", database=database)
         with database.engine.connect() as connection:
             leaked = connection.execute(
                 text("select count(*) from users where display_name like :prefix"),
@@ -395,6 +357,121 @@ def test_sequential_dry_runs_do_not_leak() -> None:
     finally:
         _close(database)
     assert leaked == 0
+
+
+class ProductionShapeProvider:
+    def run(
+        self,
+        message: str,
+        history: list,
+        ui_context: str,
+        reference_datetime,
+        timezone: str,
+        tool_runner,
+        identity_facts=None,
+        *,
+        system_instructions: str | None = None,
+        tool_definitions: list | None = None,
+    ):
+        self.message = message
+        self.instructions = system_instructions
+        self.tools = tool_definitions
+        return type("Result", (), {"answer": "review"})()
+
+
+def test_production_shape_provider_runs_without_fixture_kwargs() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("evals/secretary_agent/runner.py").read_text()
+    assert "prepared=" not in source
+    provider = ProductionShapeProvider()
+    database = _database()
+    try:
+        run = run_scripted("N1", provider, _config(), run_id="shape", database=database)
+    finally:
+        _close(database)
+    assert provider.message == SCENARIOS["N1"].utterance
+    assert provider.instructions is SYSTEM_INSTRUCTIONS
+    assert provider.tools is ASSISTANT_TOOL_DEFINITIONS
+    report = score_run(SCENARIOS["N1"], run)
+    assert report.overall == OverallStatus.INCOMPLETE
+    _assert_safe_payload(run)
+
+
+def test_scripted_provider_receives_rounds_only() -> None:
+    provider = ScriptedProvider()
+    database = _database()
+    try:
+        run_scripted("A2", provider, _config(), run_id="rounds", database=database)
+    finally:
+        _close(database)
+    assert provider.commits == 1
+    assert provider.rounds[0][0][0] == "create_task"
+    with pytest.raises(TypeError):
+        provider.bind_rounds(type("Fixture", (), {"final_facts": None, "symbols": {}})())
+
+
+def test_runner_commits_only_inside_scripted_rounds(monkeypatch) -> None:
+    calls = []
+    original = PerTurnToolBudget.commit_model_visible_outputs
+
+    def wrapped(self):
+        calls.append(1)
+        return original(self)
+
+    monkeypatch.setattr(PerTurnToolBudget, "commit_model_visible_outputs", wrapped)
+    database = _database()
+    provider = ScriptedProvider()
+    try:
+        run_scripted("A2", provider, _config(), run_id="commit-boundary", database=database)
+    finally:
+        _close(database)
+    assert provider.commits == 1
+    assert calls == [1]
+
+
+class _EdgeRoundProbe:
+    def bind_rounds(self, rounds) -> None:
+        self.rounds = rounds
+
+    def run(
+        self,
+        message: str,
+        history: list,
+        ui_context: str,
+        reference_datetime,
+        timezone: str,
+        tool_runner,
+        identity_facts=None,
+        *,
+        system_instructions: str | None = None,
+        tool_definitions: list | None = None,
+    ):
+        name, arguments = self.rounds[0][0]
+        listed = tool_runner(name, arguments)
+        edge_id = next(
+            neighbor["edge"]["id"]
+            for neighbor in listed.output["neighbors"]
+            if neighbor["edge"]["type"] == "references"
+        )
+        self.blocked = tool_runner("remove_relation", {"edge_id": edge_id})
+        tool_runner.commit_model_visible_outputs()
+        self.staged = tool_runner("remove_relation", {"edge_id": edge_id})
+        return type("Result", (), {"answer": "review"})()
+
+
+def test_r3_edge_allowlist_opens_only_after_the_round_commit() -> None:
+    provider = _EdgeRoundProbe()
+    database = _database()
+    try:
+        run = run_scripted("R3", provider, _config(), run_id="r3-boundary", database=database)
+    finally:
+        _close(database)
+    assert provider.blocked.success is False
+    assert "not exposed" in provider.blocked.error
+    assert provider.staged.approval_required is True
+    assert provider.staged.status == ToolExecutionStatus.APPROVAL_REQUIRED
+    assert not any(call.tool_name == "remove_relation" and call.executed for call in run.calls)
+    assert run.final_facts["evidence_edge_count"] == 2
+    assert run.final_facts["removed"] is False
 
 
 def _bare_run():

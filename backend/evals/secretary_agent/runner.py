@@ -38,7 +38,19 @@ _DRY_RUNS = frozenset(REGISTRY_IDS)
 
 
 class EvalProvider(Protocol):
-    def run(self, message: str, history: list, ui_context: str, reference_datetime: datetime, timezone: str, tool_runner, identity_facts=None, **kwargs): ...
+    def run(
+        self,
+        message: str,
+        history: list,
+        ui_context: str,
+        reference_datetime: datetime,
+        timezone: str,
+        tool_runner,
+        identity_facts=None,
+        *,
+        system_instructions: str | None = None,
+        tool_definitions: list | None = None,
+    ): ...
 
 
 @dataclass(frozen=True)
@@ -102,6 +114,9 @@ def run_scripted(
         with _bound_local_tool(session):
             budget = PerTurnToolBudget(initial_seen_object_ids=prepared.initial_object_ids)
             recorder = RecordingToolRunner(BoundAssistantToolRunner(budget, user.id))
+            bind_rounds = getattr(provider, "bind_rounds", None)
+            if bind_rounds is not None:
+                bind_rounds(prepared.rounds)
             result = provider.run(
                 message=scenario.utterance,
                 history=[],
@@ -110,9 +125,9 @@ def run_scripted(
                 timezone=config.timezone,
                 tool_runner=recorder,
                 identity_facts=None,
-                prepared=prepared,
+                system_instructions=SYSTEM_INSTRUCTIONS,
+                tool_definitions=ASSISTANT_TOOL_DEFINITIONS,
             )
-            recorder.commit_model_visible_outputs()
             if scenario.approval == "staged_then_executed" and _only_create_task(budget.staged_actions):
                 plan = ActionPlanService(session, user.id).create_plan(budget.staged_actions)
                 approved = ActionPlanService(session, user.id).approve(plan.id)
