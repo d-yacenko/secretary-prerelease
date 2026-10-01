@@ -22,6 +22,38 @@ _PERSON_IDENTITY_PARAMETERS = {
     "additionalProperties": False,
 }
 
+_EVIDENCE_OBJECT_IDS_DESCRIPTION = (
+    "Flow or evidence objects attached with references. Additive. "
+    "This does not create a Task. Omitting an id never removes an existing link."
+)
+_REQUESTED_BY_PERSON_ID_DESCRIPTION = (
+    "The Person who explicitly requested or asked for the Task. "
+    "A typed Task-to-Person actor role. Use only when that role is stated or known. "
+    "Not a generic association."
+)
+_DELEGATED_TO_PERSON_IDS_DESCRIPTION = (
+    "Persons the work is delegated or assigned to. "
+    "A typed Task-to-Person actor role. Additive. "
+    "Not waiting_on and not involves. Omitting an id does not remove an existing role."
+)
+_WAITING_ON_PERSON_IDS_DESCRIPTION = (
+    "Persons whose response or action the Task is waiting for. "
+    "A typed Task-to-Person actor role. Additive. "
+    "Not a substitute for delegated_to. Omitting an id does not remove an existing role."
+)
+_INVOLVED_PERSON_IDS_DESCRIPTION = (
+    "Persons involved when no stronger requested, delegated, or waiting role is intended. "
+    "A typed Task-to-Person actor role. Additive. "
+    "Do not use this when a stronger role is known. "
+    "Omitting an id does not remove an existing role."
+)
+_DEPENDS_ON_TASK_IDS_DESCRIPTION = (
+    "Prerequisite Tasks this Task depends on. "
+    "The current Task is the source; each id is a target prerequisite. Additive. "
+    "This is dependency, not part_of composition. "
+    "Omitting an id does not remove an existing dependency."
+)
+
 ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
     "retrieve": {
         "type": "function",
@@ -141,11 +173,18 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         "type": "function",
         "name": "get_task_profile",
         "description": (
-            "Read one Task profile. status is the lifecycle. "
-            "operational.operational_state is the derived read-only actionability "
-            "(terminal, blocked, waiting, delegated, scheduled_later, actionable). "
-            "It is deterministic and ignores proposed relations. "
-            "overdue may coexist with blocked, waiting, or delegated. Does not mutate."
+            "Read one Task profile. Does not mutate. "
+            "status is the lifecycle and is not the derived operational state. "
+            "completion_mode finite is a completable Task; ongoing is a continuing "
+            "Direction/Activity. Returns the confirmed parent_task for part_of "
+            "composition when one exists. Returns actor roles requested_by, "
+            "delegated_to, waiting_on, and involves. Returns depends_on prerequisites "
+            "and dependent Tasks. Returns planned_start_at and planned_end_at as "
+            "readable fields; this tool does not write the planned interval. "
+            "Returns evidence. operational.operational_state is the derived read-only "
+            "actionability (terminal, blocked, waiting, delegated, scheduled_later, "
+            "actionable). It is deterministic and ignores proposed relations. "
+            "overdue may coexist with blocked, waiting, or delegated."
         ),
         "parameters": {
             "type": "object",
@@ -526,27 +565,35 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "due_at": {"type": "string"},
                 "evidence_object_ids": {
                     "type": "array",
+                    "description": _EVIDENCE_OBJECT_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
-                "requested_by_person_id": {"type": "string"},
+                "requested_by_person_id": {
+                    "type": "string",
+                    "description": _REQUESTED_BY_PERSON_ID_DESCRIPTION,
+                },
                 "delegated_to_person_ids": {
                     "type": "array",
+                    "description": _DELEGATED_TO_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "waiting_on_person_ids": {
                     "type": "array",
+                    "description": _WAITING_ON_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "involved_person_ids": {
                     "type": "array",
+                    "description": _INVOLVED_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "depends_on_task_ids": {
                     "type": "array",
+                    "description": _DEPENDS_ON_TASK_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
@@ -584,27 +631,35 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
                 "due_at": {"type": ["string", "null"]},
                 "evidence_object_ids": {
                     "type": "array",
+                    "description": _EVIDENCE_OBJECT_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
-                "requested_by_person_id": {"type": "string"},
+                "requested_by_person_id": {
+                    "type": "string",
+                    "description": _REQUESTED_BY_PERSON_ID_DESCRIPTION,
+                },
                 "delegated_to_person_ids": {
                     "type": "array",
+                    "description": _DELEGATED_TO_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "waiting_on_person_ids": {
                     "type": "array",
+                    "description": _WAITING_ON_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "involved_person_ids": {
                     "type": "array",
+                    "description": _INVOLVED_PERSON_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
                 "depends_on_task_ids": {
                     "type": "array",
+                    "description": _DEPENDS_ON_TASK_IDS_DESCRIPTION,
                     "items": {"type": "string"},
                     "maxItems": 8,
                 },
