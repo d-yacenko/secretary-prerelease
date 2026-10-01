@@ -330,6 +330,13 @@ _DraftComponent _draftVisualComponent({
     taskById: taskById,
   );
   final freeIds = memberIds.where((id) => !centers.containsKey(id)).toSet();
+  _placeSecondaryStarHalos(
+    freeIds: freeIds,
+    layoutEdges: layoutEdges,
+    baselinePositions: baselinePositions,
+    centers: centers,
+    taskById: taskById,
+  );
   _placeFreeTasks(
     freeIds: freeIds,
     layoutEdges: layoutEdges,
@@ -379,6 +386,299 @@ void _separateStructuralTrees({
         centers[id] = centers[id]! + away * (28 + step * 6);
       }
     }
+  }
+}
+
+const List<double> _haloRadiusGrowth = [0, 40, 80, 120, 160];
+const int _haloSpinSteps = 24;
+
+void _placeSecondaryStarHalos({
+  required Set<String> freeIds,
+  required List<SecretaryEdge> layoutEdges,
+  required Map<String, Offset> baselinePositions,
+  required Map<String, Offset> centers,
+  required Map<String, SecretaryObject> taskById,
+}) {
+  if (freeIds.isEmpty) {
+    return;
+  }
+  final neighbors = <String, Set<String>>{};
+  for (final edge in layoutEdges) {
+    neighbors.putIfAbsent(edge.sourceId, () => <String>{}).add(edge.targetId);
+    neighbors.putIfAbsent(edge.targetId, () => <String>{}).add(edge.sourceId);
+  }
+  final placed = centers.keys.toSet();
+  final groups = <String, List<String>>{};
+  for (final id in freeIds.toList()..sort()) {
+    final anchors = [
+      for (final other in neighbors[id] ?? const <String>{})
+        if (placed.contains(other)) other,
+    ]..sort();
+    if (anchors.length != 1) {
+      continue;
+    }
+    groups.putIfAbsent(anchors.single, () => <String>[]).add(id);
+  }
+  for (final anchorId in groups.keys.toList()..sort()) {
+    final leaves = groups[anchorId]!;
+    if (leaves.length < 3) {
+      continue;
+    }
+    if (_tryPlaceHalo(
+      anchorId: anchorId,
+      leaves: leaves,
+      layoutEdges: layoutEdges,
+      baselinePositions: baselinePositions,
+      centers: centers,
+      taskById: taskById,
+    )) {
+      freeIds.removeAll(leaves);
+    }
+  }
+}
+
+bool _tryPlaceHalo({
+  required String anchorId,
+  required List<String> leaves,
+  required List<SecretaryEdge> layoutEdges,
+  required Map<String, Offset> baselinePositions,
+  required Map<String, Offset> centers,
+  required Map<String, SecretaryObject> taskById,
+}) {
+  final anchor = centers[anchorId];
+  if (anchor == null) {
+    return false;
+  }
+  final baselineCenter = _baselineCenter(baselinePositions[anchorId]) ?? anchor;
+  final baseline = [...leaves]..sort(
+    (a, b) => _siblingOrder(
+      a,
+      b,
+      parentCenter: baselineCenter,
+      baselinePositions: baselinePositions,
+    ),
+  );
+  final baseRadius = _haloBaseRadius(anchorId, baseline, taskById);
+  final working = [...baseline];
+  _HaloChoice? best;
+  for (final growth in _haloRadiusGrowth) {
+    final radius = baseRadius + growth;
+    void consider(List<String> order) {
+      for (var step = 0; step < _haloSpinSteps; step++) {
+        final spin = step * math.pi * 2 / _haloSpinSteps;
+        final placed = _haloCenters(
+          anchor: anchor,
+          order: order,
+          radius: radius,
+          spin: spin,
+        );
+        if (!_haloFits(placed, centers, taskById)) {
+          continue;
+        }
+        final choice = _HaloChoice(
+          order: order,
+          spin: spin,
+          radius: radius,
+          score: _haloSecondaryScore(placed, centers, layoutEdges),
+          drift: _haloDrift(baseline, order),
+        );
+        if (best == null || choice.improvesOn(best!)) {
+          best = choice;
+        }
+      }
+    }
+
+    if (baseline.length <= _exactSiblingOrderLimit) {
+      _permuteIds(working, 0, consider);
+    } else {
+      consider(baseline);
+      var pool = [...baseline];
+      for (var pass = 0; pass < _siblingOrderPasses; pass++) {
+        var improved = false;
+        for (var index = 0; index < pool.length; index++) {
+          for (var other = index + 1; other < pool.length; other++) {
+            final swapped = [...pool];
+            final held = swapped[index];
+            swapped[index] = swapped[other];
+            swapped[other] = held;
+            consider(swapped);
+          }
+          if (best != null && !_sameOrder(best!.order, pool)) {
+            pool = [...best!.order];
+            improved = true;
+          }
+        }
+        if (!improved) {
+          break;
+        }
+      }
+    }
+    if (best != null) {
+      centers.addAll(
+        _haloCenters(
+          anchor: anchor,
+          order: best!.order,
+          radius: best!.radius,
+          spin: best!.spin,
+        ),
+      );
+      return true;
+    }
+  }
+  return false;
+}
+
+Map<String, Offset> _haloCenters({
+  required Offset anchor,
+  required List<String> order,
+  required double radius,
+  required double spin,
+}) {
+  final step = math.pi * 2 / order.length;
+  return {
+    for (var index = 0; index < order.length; index++)
+      order[index]:
+          anchor +
+          Offset(
+            math.cos(-math.pi + step / 2 + spin + index * step),
+            math.sin(-math.pi + step / 2 + spin + index * step),
+          ) *
+              radius,
+  };
+}
+
+double _haloBaseRadius(
+  String anchorId,
+  List<String> leaves,
+  Map<String, SecretaryObject> taskById,
+) {
+  final parent = taskCircumradius(taskById[anchorId]!);
+  var ring = 0.0;
+  for (final id in leaves) {
+    ring = math.max(
+      ring,
+      parent + kTaskMapHierarchyGap + taskCircumradius(taskById[id]!),
+    );
+  }
+  if (leaves.length > 1) {
+    final step = math.pi * 2 / leaves.length;
+    final sine = math.sin(step / 2);
+    for (var index = 0; index < leaves.length; index++) {
+      final next = (index + 1) % leaves.length;
+      final separation =
+          taskCircumradius(taskById[leaves[index]]!) +
+          kTaskMapHierarchyGap +
+          taskCircumradius(taskById[leaves[next]]!);
+      if (sine < 1e-4) {
+        ring = math.max(ring, separation);
+      } else {
+        ring = math.max(ring, separation / (2 * sine));
+      }
+    }
+  }
+  return ring;
+}
+
+bool _haloFits(
+  Map<String, Offset> proposed,
+  Map<String, Offset> centers,
+  Map<String, SecretaryObject> taskById,
+) {
+  final scratch = Map<String, Offset>.of(centers);
+  final ids = proposed.keys.toList()..sort();
+  for (final id in ids) {
+    if (_overlappingCenter(id, proposed[id]!, scratch, taskById) != null) {
+      return false;
+    }
+    scratch[id] = proposed[id]!;
+  }
+  return true;
+}
+
+double _haloSecondaryScore(
+  Map<String, Offset> proposed,
+  Map<String, Offset> centers,
+  List<SecretaryEdge> layoutEdges,
+) {
+  final frame = <String, Offset>{...centers, ...proposed};
+  final halo = proposed.keys.toSet();
+  var score = 0.0;
+  for (final edge in layoutEdges) {
+    if (!halo.contains(edge.sourceId) && !halo.contains(edge.targetId)) {
+      continue;
+    }
+    final left = frame[edge.sourceId];
+    final right = frame[edge.targetId];
+    if (left == null || right == null) {
+      continue;
+    }
+    score += (left - right).distance;
+  }
+  return score;
+}
+
+int _haloDrift(List<String> baseline, List<String> order) {
+  final indexOf = {for (var index = 0; index < baseline.length; index++) baseline[index]: index};
+  var drift = 0;
+  for (var index = 0; index < order.length; index++) {
+    drift += (indexOf[order[index]]! - index).abs();
+  }
+  return drift;
+}
+
+void _permuteIds(List<String> items, int start, void Function(List<String> order) visit) {
+  if (start >= items.length) {
+    visit([...items]);
+    return;
+  }
+  for (var index = start; index < items.length; index++) {
+    final held = items[start];
+    items[start] = items[index];
+    items[index] = held;
+    _permuteIds(items, start + 1, visit);
+    items[index] = items[start];
+    items[start] = held;
+  }
+}
+
+bool _sameOrder(List<String> left, List<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+class _HaloChoice {
+  const _HaloChoice({
+    required this.order,
+    required this.spin,
+    required this.radius,
+    required this.score,
+    required this.drift,
+  });
+
+  final List<String> order;
+  final double spin;
+  final double radius;
+  final double score;
+  final int drift;
+
+  bool improvesOn(_HaloChoice other) {
+    if ((radius - other.radius).abs() > 0.5) {
+      return radius < other.radius;
+    }
+    if ((score - other.score).abs() > 0.5) {
+      return score < other.score;
+    }
+    if (drift != other.drift) {
+      return drift < other.drift;
+    }
+    return spin < other.spin;
   }
 }
 
