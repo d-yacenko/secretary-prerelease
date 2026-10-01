@@ -73,17 +73,10 @@ def assert_eval_database(engine: Any, *, disposable: bool) -> dict[str, str]:
     return {"host": host, "database": database, "disposable": "true"}
 
 
-def build_safe_artifact_payload(
-    run: EvalRun,
-    public_config: dict[str, Any],
-    *,
-    provider_output: Any = None,
-) -> dict[str, Any]:
+def build_safe_artifact_payload(run: EvalRun, public_config: dict[str, Any]) -> dict[str, Any]:
     if set(public_config) - _PUBLIC_CONFIG_KEYS:
         raise EvalSafetyError("artifact config is outside the public allowlist")
     _reject_mapping(public_config)
-    if provider_output is not None:
-        _reject_mapping(_provider_fields(provider_output))
     payload = {
         "scenario_id": run.scenario_id,
         "utterance": run.utterance,
@@ -109,15 +102,6 @@ def assert_dry_run_transports(transports: tuple[object, ...]) -> None:
 def assert_no_secrets(payload: Any) -> None:
     if _secret_paths(payload) or _SECRET_VALUE.search(repr(payload)) or _CREDENTIAL_DSN.search(repr(payload)):
         raise EvalSafetyError("artifact contains secret fields")
-
-
-def _provider_fields(output: Any) -> dict[str, Any]:
-    if isinstance(output, dict):
-        return output
-    fields = getattr(output, "__dict__", None)
-    if isinstance(fields, dict):
-        return dict(fields)
-    raise EvalSafetyError("provider output is not an artifact field")
 
 
 def _reject_mapping(payload: Any) -> None:

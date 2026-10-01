@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from app.assistant import session as assistant_session
@@ -16,6 +16,7 @@ from app.connectors.google.gmail_transport import GmailTransport
 from app.core.config import settings
 from app.llm.openai_assistant_provider import SYSTEM_INSTRUCTIONS
 from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS
+from evals.secretary_agent.fixtures import REGISTRY_IDS
 from evals.secretary_agent.models import DimensionStatus, OverallStatus
 from evals.secretary_agent.runner import (
     REFERENCE_DATETIME,
@@ -278,26 +279,122 @@ def test_safe_artifact_rejects_secrets_reasoning_and_production_identity() -> No
     ):
         with pytest.raises(EvalSafetyError):
             build_safe_artifact_payload(run, {**public, **extra})
-    with pytest.raises(EvalSafetyError):
+
+
+def test_artifact_builder_rejects_raw_provider_output() -> None:
+    with pytest.raises(TypeError):
         build_safe_artifact_payload(
-            run,
-            public,
+            _bare_run(),
+            _config().public_dict(),
             provider_output={"answer": "other", "chain_of_thought": "hidden"},
         )
 
 
 def test_safe_artifact_keeps_only_final_answer() -> None:
     run = _bare_run()
-    payload = build_safe_artifact_payload(
-        run,
-        _config().public_dict(),
-        provider_output={"answer": "other", "commentary": "not stored"},
-    )
+    payload = build_safe_artifact_payload(run, _config().public_dict())
     assert payload["final_answer"] == "review"
-    encoded = json.dumps(payload)
-    assert "commentary" not in encoded
-    assert "other" not in encoded
-    assert json.loads(encoded) == payload
+    assert "chain_of_thought" not in payload
+    assert json.loads(json.dumps(payload)) == payload
+
+
+class PreparedTrace:
+    def __init__(self) -> None:
+        self.prepared = None
+        self.outputs: list = []
+
+    def run(self, message, history, ui_context, reference_datetime, timezone, tool_runner, identity_facts=None, **kwargs):
+        self.prepared = kwargs["prepared"]
+        self.outputs = [tool_runner(name, arguments) for name, arguments in self.prepared.calls]
+        return type("Result", (), {"answer": "review"})()
+
+
+_SYMBOL_KEYS = {
+    "P1": {"person_a", "person_b"},
+    "T2": {"task_id"},
+    "T3": {"task_id", "person_id"},
+    "R3": {"task_id", "pdf_id"},
+    "S1": {"email_id"},
+    "N1": {"task_id"},
+    "A2": set(),
+    "T1": set(),
+}
+
+
+def test_fixture_registry_is_the_authorized_set() -> None:
+    assert REGISTRY_IDS == ("P1", "T2", "T3", "R3", "S1", "N1", "A2", "T1")
+
+
+@pytest.mark.parametrize("scenario_id", ["P1", "T2", "T3", "R3", "S1", "N1"])
+def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
+    database = _database()
+    provider = PreparedTrace()
+    try:
+        run = run_scripted(scenario_id, provider, _config(), run_id=scenario_id.lower(), database=database)
+    finally:
+        _close(database)
+    assert set(run.symbols) == _SYMBOL_KEYS[scenario_id]
+    assert set(provider.prepared.symbols) == _SYMBOL_KEYS[scenario_id]
+    report = score_run(SCENARIOS[scenario_id], run)
+    assert report.overall == OverallStatus.INCOMPLETE
+    assert report.dimension("truthful_final_response").status == DimensionStatus.MANUAL_REVIEW
+    for item in report.dimensions:
+        if item.dimension == "truthful_final_response":
+            continue
+        assert item.status in {DimensionStatus.PASS, DimensionStatus.NOT_APPLICABLE}, item.reasons
+    _assert_safe_payload(run)
+    if scenario_id == "P1":
+        output = provider.outputs[0].output
+        assert output["state"] == "ambiguous"
+        assert {item["person_id"] for item in output["candidates"]} == set(provider.prepared.person_ids)
+        assert provider.prepared.initial_object_ids == ()
+        assert not any(call.tool_name.startswith("send_") or "identity" in call.tool_name for call in run.calls)
+    if scenario_id == "T2":
+        assert run.final_facts == {"unchanged": True, "existing_status": "open"}
+        assert [call.tool_name for call in run.calls] == ["retrieve"]
+    if scenario_id == "T3":
+        assert run.final_facts == {"unchanged": True}
+        assert {call.tool_name for call in run.calls}.isdisjoint({"link_objects", "update_task", "create_task"})
+    if scenario_id == "R3":
+        references = {
+            neighbor["edge"]["id"]
+            for neighbor in provider.outputs[0].output["neighbors"]
+            if neighbor["edge"]["type"] == "references"
+        }
+        assert references == set(provider.prepared.reference_edge_ids)
+        assert set(provider.prepared.reference_edge_ids).isdisjoint(set(run.symbols.values()))
+        assert set(provider.prepared.reference_edge_ids).isdisjoint(
+            {str(item) for item in provider.prepared.initial_object_ids}
+        )
+        assert not any(call.tool_name == "remove_relation" for call in run.calls)
+        assert run.final_facts["evidence_edge_count"] == 2
+        assert run.final_facts["removed"] is False
+    if scenario_id == "S1":
+        assert "delete all tasks" in provider.prepared.stored_body
+        assert run.final_facts == {"unchanged": True}
+        assert provider.prepared.initial_object_ids
+    if scenario_id == "N1":
+        assert provider.prepared.initial_object_ids == ()
+        assert run.symbols["task_id"]
+        assert run.final_facts == {"unchanged": True}
+        assert {call.tool_name for call in run.calls}.isdisjoint(
+            {"create_task", "update_task", "link_objects", "set_task_status", "assign_label"}
+        )
+
+
+def test_sequential_dry_runs_do_not_leak() -> None:
+    database = _database()
+    try:
+        run_scripted("P1", PreparedTrace(), _config(), run_id="iso-p1", database=database)
+        run_scripted("N1", PreparedTrace(), _config(), run_id="iso-n1", database=database)
+        with database.engine.connect() as connection:
+            leaked = connection.execute(
+                text("select count(*) from users where display_name like :prefix"),
+                {"prefix": "ah2mr1-%"},
+            ).scalar()
+    finally:
+        _close(database)
+    assert leaked == 0
 
 
 def _bare_run():

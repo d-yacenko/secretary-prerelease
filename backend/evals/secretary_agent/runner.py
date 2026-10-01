@@ -7,13 +7,12 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.assistant.tool_args import normalize_assistant_tool_arguments
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
-from app.db.models import Object, User
+from app.db.models import User
 from app.llm.embedding_service import FakeEmbeddingService
 from app.llm.openai_assistant_provider import SYSTEM_INSTRUCTIONS
 from app.services.action_plan_service import ActionPlanService
@@ -22,7 +21,8 @@ from app.tools.execution_context import ExecutionContext
 from app.tools.gateway import ToolExecutionGateway
 from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS
 from app.tools.results import ToolExecutionStatus
-from evals.secretary_agent.catalog import SCENARIOS, Scenario
+from evals.secretary_agent.catalog import SCENARIOS
+from evals.secretary_agent.fixtures import REGISTRY_IDS, prepare_fixture
 from evals.secretary_agent.models import EvalRun, ToolCallRecord
 from evals.secretary_agent.recording import RecordingToolRunner
 from evals.secretary_agent.safety import (
@@ -34,7 +34,7 @@ from evals.secretary_agent.safety import (
 REFERENCE_DATETIME = datetime.fromisoformat("2026-10-01T12:00:00+02:00")
 REFERENCE_TIMEZONE = "Europe/Amsterdam"
 _GATEWAY = ToolExecutionGateway()
-_DRY_RUNS = frozenset({"A2", "T1"})
+_DRY_RUNS = frozenset(REGISTRY_IDS)
 
 
 class EvalProvider(Protocol):
@@ -87,7 +87,7 @@ def run_scripted(
     database: EvalDatabase,
 ) -> EvalRun:
     if scenario_id not in _DRY_RUNS:
-        raise EvalSafetyError("AH2-MR1 scripted dry runs are only A2 and T1")
+        raise EvalSafetyError("scripted dry runs are limited to the fixture registry")
     assert_eval_database(database.engine, disposable=database.disposable)
     assert_dry_run_transports(())
     scenario = SCENARIOS[scenario_id]
@@ -98,17 +98,19 @@ def run_scripted(
         user = User(id=uuid4(), display_name=f"ah2mr1-{scenario_id}-{uuid4().hex[:8]}")
         session.add(user)
         session.flush()
+        prepared = prepare_fixture(scenario_id, session, user.id)
         with _bound_local_tool(session):
-            budget = PerTurnToolBudget()
+            budget = PerTurnToolBudget(initial_seen_object_ids=prepared.initial_object_ids)
             recorder = RecordingToolRunner(BoundAssistantToolRunner(budget, user.id))
             result = provider.run(
                 message=scenario.utterance,
                 history=[],
-                ui_context="",
+                ui_context=prepared.ui_context,
                 reference_datetime=config.reference_datetime,
                 timezone=config.timezone,
                 tool_runner=recorder,
                 identity_facts=None,
+                prepared=prepared,
             )
             recorder.commit_model_visible_outputs()
             if scenario.approval == "staged_then_executed" and _only_create_task(budget.staged_actions):
@@ -116,12 +118,13 @@ def run_scripted(
                 approved = ActionPlanService(session, user.id).approve(plan.id)
                 _append_executed(recorder, approved.result or {}, budget.staged_actions)
             session.expire_all()
-            facts = _facts(session, scenario, user.id)
+            facts = prepared.final_facts(session)
         return EvalRun(
             scenario_id=scenario.id,
             utterance=scenario.utterance,
             run_id=run_id,
             calls=list(recorder.calls),
+            symbols=dict(prepared.symbols),
             final_facts=facts,
             final_answer=str(getattr(result, "answer", "") or ""),
             model=config.model,
@@ -161,41 +164,6 @@ def _append_executed(recorder: RecordingToolRunner, result: dict, staged: list[d
                 effect=effect,
             )
         )
-
-
-def _facts(session: Session, scenario: Scenario, user_id: UUID) -> dict[str, Any]:
-    if scenario.id == "A2":
-        return {"confirmed_task_count": _count(session, user_id, "Купить бумагу")}
-    task = session.scalar(
-        select(Object).where(
-            Object.user_id == user_id,
-            Object.kind == "task",
-            Object.title == "Публикации",
-            Object.deleted_at.is_(None),
-        )
-    )
-    count = _count(session, user_id, "Публикации")
-    return {
-        "task_count": count,
-        "title": None if task is None else task.title,
-        "status": None if task is None else task.status,
-        "completion_mode": None if task is None else task.completion_mode,
-    }
-
-
-def _count(session: Session, user_id: UUID, title: str) -> int:
-    return int(
-        session.scalar(
-            select(func.count()).select_from(Object).where(
-                Object.user_id == user_id,
-                Object.kind == "task",
-                Object.title == title,
-                Object.deleted_at.is_(None),
-                Object.state == "confirmed",
-            )
-        )
-        or 0
-    )
 
 
 class _LocalTool:
