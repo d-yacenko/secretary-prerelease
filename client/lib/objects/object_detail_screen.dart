@@ -166,11 +166,11 @@ class _ObjectDetailScreenState extends State<ObjectDetailScreen> {
     if (object == null) {
       return;
     }
-    widget.captureController.attachObjectContext(object);
     openCapture(
       context,
       captureController: widget.captureController,
       authController: widget.authController,
+      contextObject: object,
     );
   }
 

@@ -250,9 +250,32 @@ class CaptureController extends ChangeNotifier {
     }
   }
 
+  void beginFreshTaskCapture() {
+    _replaceSession(CaptureDraft.empty);
+  }
+
+  void beginTaskCaptureWithContext(SecretaryObject object) {
+    _replaceSession(
+      CaptureDraft(
+        contextObjectIds: [object.id],
+        contextRefs: [
+          CaptureContextRef(
+            id: object.id,
+            title: object.title,
+            kind: object.kind,
+          ),
+        ],
+      ),
+    );
+  }
+
   void resetSession() {
+    beginFreshTaskCapture();
+  }
+
+  void _replaceSession(CaptureDraft draft) {
     _voice.reset();
-    _draft = CaptureDraft.empty;
+    _draft = draft;
     submitState = CaptureSubmitState.idle;
     errorMessage = null;
     lastTaskResult = null;

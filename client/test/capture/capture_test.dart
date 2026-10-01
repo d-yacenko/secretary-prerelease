@@ -16,6 +16,7 @@ import 'package:personal_secretary/auth/token_store.dart';
 import 'package:personal_secretary/capture/capture_controller.dart';
 import 'package:personal_secretary/capture/capture_draft.dart';
 import 'package:personal_secretary/capture/capture_screen.dart';
+import 'package:personal_secretary/navigation/secretary_navigation.dart';
 import 'package:personal_secretary/objects/object_detail_screen.dart';
 import 'package:personal_secretary/voice/voice_transcription_controller.dart';
 
@@ -270,7 +271,7 @@ void main() {
     });
 
     testWidgets(
-      'manual context from object detail preserves text and sends context ids',
+      'object detail contextual capture starts fresh and sends that context',
       (tester) async {
         Map<String, dynamic>? captureBody;
         final mock = MockClient((request) async {
@@ -371,7 +372,10 @@ void main() {
         expect(find.text('Контекст: Course plan'), findsOneWidget);
         expect(capture.draft.contextObjectIds, ['email-1']);
         expect(capture.draft.contextRefs.length, 1);
-        expect(capture.draft.text, '  keep exact  ');
+        expect(capture.draft.text, isEmpty);
+        expect(capture.draft.title, isNull);
+        expect(capture.draft.dependsOnIds, isEmpty);
+        capture.setText('  keep exact  ');
 
         capture.attachObjectContext(
           SecretaryObject.fromJson({
@@ -667,4 +671,243 @@ void main() {
     expect(body!['completion_mode'], 'ongoing');
     expect(controller.draft.completionMode, 'finite');
   });
+
+  test('fresh capture request drops abandoned context', () async {
+    final controller = buildController(MockClient((request) async {
+      return http.Response(jsonEncode(createdBody()), 201);
+    }));
+    final due = DateTime.utc(2026, 10, 2, 9);
+    controller.beginTaskCaptureWithContext(_object('ctx-a', 'Рубрика'));
+    controller.setText('abandoned');
+    controller.setTitle('Старое');
+    controller.setCompletionMode('ongoing');
+    controller.setDueAt(due);
+    controller.setPlannedInterval(due, due.add(const Duration(hours: 1)));
+    controller.attachContext(
+      CaptureContextRef(id: 'extra', title: 'Extra', kind: 'file'),
+    );
+    controller.beginFreshTaskCapture();
+    controller.setText('Новая задача');
+    controller.setTitle('TestTask');
+    final request = controller.draft.toRequest().toJson();
+    expect(request['context_object_ids'], isEmpty);
+    expect(request['depends_on_ids'], isEmpty);
+    expect(request['text'], 'Новая задача');
+    expect(request['title'], 'TestTask');
+    expect(request['completion_mode'], 'finite');
+    expect(request['due_at'], isNull);
+    expect(request['planned_start_at'], isNull);
+    expect(request['planned_end_at'], isNull);
+    expect(controller.submitState, CaptureSubmitState.idle);
+  });
+
+  test('new contextual session replaces the previous object', () {
+    final controller = buildController(
+      MockClient((request) async => http.Response('{}', 404)),
+    );
+    controller.beginTaskCaptureWithContext(_object('ctx-a', 'Рубрика A'));
+    controller.setText('черновик A');
+    controller.beginTaskCaptureWithContext(_object('ctx-b', 'Рубрика B'));
+    expect(controller.draft.contextObjectIds, ['ctx-b']);
+    expect(controller.draft.contextRefs.map((ref) => ref.title), ['Рубрика B']);
+    expect(controller.draft.text, isEmpty);
+    expect(controller.draft.toRequest().toJson()['context_object_ids'], ['ctx-b']);
+  });
+
+  test('same capture session keeps temporal fields while context stays attached', () {
+    final controller = buildController(
+      MockClient((request) async => http.Response('{}', 404)),
+    );
+    final due = DateTime.utc(2026, 10, 9, 18);
+    final start = DateTime.utc(2026, 10, 6, 10);
+    final end = DateTime.utc(2026, 10, 6, 12);
+    controller.beginTaskCaptureWithContext(_object('ctx-a', 'Рубрика'));
+    controller.setText('в этой сессии');
+    controller.setCompletionMode('ongoing');
+    controller.setDueAt(due);
+    controller.setPlannedInterval(start, end);
+    controller.attachContext(
+      CaptureContextRef(id: 'file-1', title: 'Файл', kind: 'file'),
+    );
+    expect(controller.draft.contextObjectIds, ['ctx-a', 'file-1']);
+    expect(controller.draft.completionMode, 'ongoing');
+    expect(controller.draft.dueAt, due);
+    expect(controller.draft.plannedStartAt, start);
+    expect(controller.draft.plannedEndAt, end);
+    expect(controller.draft.text, 'в этой сессии');
+  });
+
+  testWidgets(
+    'abandoned object context does not enter the next global capture',
+    (tester) async {
+      final mock = MockClient((request) async {
+        final path = request.url.path;
+        for (final item in const [
+          ('email-a', 'Rubric A'),
+          ('email-b', 'Rubric B'),
+        ]) {
+          if (path == '/objects/${item.$1}') {
+            return http.Response(
+              jsonEncode(_objectJson(item.$1, item.$2)),
+              200,
+            );
+          }
+          if (path == '/objects/${item.$1}/neighbors') {
+            return http.Response(
+              jsonEncode({'object_id': item.$1, 'neighbors': []}),
+              200,
+            );
+          }
+          if (path == '/objects/${item.$1}/context') {
+            return http.Response(
+              jsonEncode({
+                'object': _objectJson(item.$1, item.$2),
+                'edges': [],
+                'neighbors': [],
+              }),
+              200,
+            );
+          }
+        }
+        return http.Response('{}', 404);
+      });
+      final apiClient = SecretaryApiClient(httpClient: mock);
+      apiClient.configure(baseUrl: baseUrl, token: token);
+      final auth = AuthController(
+        apiClient: apiClient,
+        tokenStore: FakeTokenStore(),
+        serverUrlStore: FakeServerUrlStore(),
+      );
+      final capture = CaptureController(apiClient: apiClient, authController: auth);
+      capture.mergeDraft(
+        CaptureDraft(
+          text: 'старый текст',
+          title: 'Старый заголовок',
+          contextObjectIds: const ['stale'],
+          contextRefs: const [
+            CaptureContextRef(id: 'stale', title: 'Старое', kind: 'note'),
+          ],
+          dependsOnIds: const ['dep-stale'],
+          completionMode: 'ongoing',
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Column(
+                children: [
+                  TextButton(
+                    onPressed: () => openCapture(
+                      context,
+                      captureController: capture,
+                      authController: auth,
+                    ),
+                    child: const Text('Новая задача'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (context) => ObjectDetailScreen(
+                          objectId: 'email-a',
+                          apiClient: apiClient,
+                          authController: auth,
+                          captureController: capture,
+                        ),
+                      ),
+                    ),
+                    child: const Text('Открыть A'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (context) => ObjectDetailScreen(
+                          objectId: 'email-b',
+                          apiClient: apiClient,
+                          authController: auth,
+                          captureController: capture,
+                        ),
+                      ),
+                    ),
+                    child: const Text('Открыть B'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Открыть A'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Использовать как контекст задачи'));
+      await tester.pumpAndSettle();
+      expect(find.text('Контекст: Rubric A'), findsOneWidget);
+      expect(capture.draft.contextObjectIds, ['email-a']);
+      expect(capture.draft.dependsOnIds, isEmpty);
+      expect(capture.draft.text, isEmpty);
+      expect(capture.draft.completionMode, 'finite');
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(capture.draft.contextObjectIds, isEmpty);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Новая задача'));
+      await tester.pumpAndSettle();
+      expect(find.text('Создание задачи'), findsOneWidget);
+      expect(find.textContaining('Контекст:'), findsNothing);
+      expect(capture.draft.contextObjectIds, isEmpty);
+      expect(capture.draft.dependsOnIds, isEmpty);
+      expect(capture.draft.text, isEmpty);
+      capture.setText('Несвязанная задача');
+      expect(
+        capture.draft.toRequest().toJson()['context_object_ids'],
+        isEmpty,
+      );
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Открыть B'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Использовать как контекст задачи'));
+      await tester.pumpAndSettle();
+      expect(find.text('Контекст: Rubric B'), findsOneWidget);
+      expect(find.text('Контекст: Rubric A'), findsNothing);
+      expect(capture.draft.contextObjectIds, ['email-b']);
+      final due = DateTime.utc(2026, 10, 9, 18);
+      capture.setDueAt(due);
+      capture.setCompletionMode('ongoing');
+      expect(capture.draft.contextObjectIds, ['email-b']);
+      expect(capture.draft.dueAt, due);
+      expect(capture.draft.completionMode, 'ongoing');
+    },
+  );
+}
+
+SecretaryObject _object(String id, String title) {
+  return SecretaryObject.fromJson(_objectJson(id, title));
+}
+
+Map<String, dynamic> _objectJson(String id, String title) {
+  return {
+    'id': id,
+    'kind': 'email',
+    'title': title,
+    'body': null,
+    'provider': 'gmail',
+    'external_id': null,
+    'canonical_uri': null,
+    'status': null,
+    'start_at': null,
+    'due_at': null,
+    'metadata': {},
+    'origin': 'source',
+    'state': 'observed',
+    'confidence': null,
+    'created_at': '2026-08-28T08:00:00Z',
+    'updated_at': '2026-08-28T08:00:00Z',
+  };
 }

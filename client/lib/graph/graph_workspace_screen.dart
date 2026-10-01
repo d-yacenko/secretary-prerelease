@@ -2038,11 +2038,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               message: 'Использовать как контекст',
               child: OutlinedButton.icon(
                 onPressed: () {
-                  widget.captureController.attachObjectContext(object);
                   openCapture(
                     context,
                     captureController: widget.captureController,
                     authController: widget.authController,
+                    contextObject: object,
                   );
                 },
                 icon: const Icon(Icons.add_task_outlined, size: 18),

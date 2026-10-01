@@ -142,7 +142,13 @@ Future<void> openCapture(
   BuildContext context, {
   required CaptureController captureController,
   AuthController? authController,
+  SecretaryObject? contextObject,
 }) async {
+  if (contextObject == null) {
+    captureController.beginFreshTaskCapture();
+  } else {
+    captureController.beginTaskCaptureWithContext(contextObject);
+  }
   await Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
       builder: (context) => CaptureScreen(
@@ -151,4 +157,5 @@ Future<void> openCapture(
       ),
     ),
   );
+  captureController.beginFreshTaskCapture();
 }
