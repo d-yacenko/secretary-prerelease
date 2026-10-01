@@ -21,8 +21,14 @@ String relationTargetLabel({
   return '${object.title} ($parent)';
 }
 
-/// True when [object] is a Task whose title occurs more than once among Tasks
-/// in [results]. Non-tasks never count as duplicates.
+/// Display key for duplicate detection. Stored titles are not rewritten.
+String relationTargetDisplayKey(String title) {
+  return title.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+}
+
+/// True when [object] is a Task whose display title matches another Task
+/// in [results]. Comparison ignores case and repeated whitespace.
+/// Non-tasks never count as duplicates.
 bool taskTitleIsDuplicated(
   SecretaryObject object,
   List<SecretaryObject> results,
@@ -30,9 +36,10 @@ bool taskTitleIsDuplicated(
   if (object.kind != 'task') {
     return false;
   }
+  final key = relationTargetDisplayKey(object.title);
   var copies = 0;
   for (final item in results) {
-    if (item.kind == 'task' && item.title == object.title) {
+    if (item.kind == 'task' && relationTargetDisplayKey(item.title) == key) {
       copies += 1;
       if (copies > 1) {
         return true;

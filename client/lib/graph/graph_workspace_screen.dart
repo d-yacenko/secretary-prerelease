@@ -31,6 +31,7 @@ import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
 import 'relation_target_label.dart';
+import 'relation_target_row.dart';
 import 'relation_removal.dart';
 import 'task_part_of_connect.dart';
 import 'graph_workspace_controller.dart';
@@ -2330,6 +2331,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                         if (!context.mounted) {
                           return;
                         }
+                        final bookmarks = widget.bookmarkController;
+                        if (bookmarks != null && filtered.isNotEmpty) {
+                          await bookmarks.reconcileVisible(
+                            filtered.map((item) => item.id),
+                          );
+                        }
+                        if (!context.mounted) {
+                          return;
+                        }
                         setState(() {
                           options = filtered;
                           confirmedParentTitles = parents;
@@ -2345,18 +2355,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           itemCount: options.length,
                           itemBuilder: (context, index) {
                             final item = options[index];
-                            return ListTile(
-                              key: ValueKey('relation-target-${item.id}'),
-                              title: Text(
-                                relationTargetLabel(
-                                  object: item,
-                                  results: options,
-                                  confirmedParentTitleByTaskId:
-                                      confirmedParentTitles,
-                                ),
-                              ),
-                              subtitle: Text(objectKindLabel(item.kind)),
+                            return RelationTargetRow(
+                              object: item,
+                              results: options,
+                              confirmedParentTitleByTaskId:
+                                  confirmedParentTitles,
                               selected: target?.id == item.id,
+                              bookmarkColor: widget.bookmarkController?.colorFor(
+                                item.id,
+                              ),
                               onTap: () => setState(() => target = item),
                             );
                           },

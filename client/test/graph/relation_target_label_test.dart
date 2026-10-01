@@ -81,6 +81,63 @@ void main() {
       );
     }
   });
+
+  test('visually equivalent task titles share a parent suffix', () {
+    final teaching = _task('teaching', 'Создание курсов');
+    final spaced = _task('spaced', 'создание   курсов');
+    final padded = _task('padded', '  Создание   курсов ');
+    final other = _task('other', 'Другая задача');
+    final results = [teaching, spaced, padded, other];
+    final stored = results.map((item) => item.title).toList();
+
+    expect(
+      relationTargetLabel(
+        object: teaching,
+        results: results,
+        confirmedParentTitleByTaskId: {'teaching': 'Направление А'},
+      ),
+      'Создание курсов (Направление А)',
+    );
+    expect(
+      relationTargetLabel(
+        object: spaced,
+        results: results,
+        confirmedParentTitleByTaskId: {'spaced': 'Направление Б'},
+      ),
+      'создание   курсов (Направление Б)',
+    );
+    expect(
+      relationTargetLabel(
+        object: padded,
+        results: results,
+        confirmedParentTitleByTaskId: {'padded': null},
+      ),
+      '  Создание   курсов  (без родителя)',
+    );
+    expect(
+      relationTargetLabel(
+        object: other,
+        results: results,
+        confirmedParentTitleByTaskId: {'other': 'Скрытый родитель'},
+      ),
+      'Другая задача',
+    );
+    expect(results.map((item) => item.id).toSet(), {
+      'teaching',
+      'spaced',
+      'padded',
+      'other',
+    });
+    expect(results.map((item) => item.title).toList(), stored);
+    expect(
+      confirmedPartOfParentTitle(_parent('Направление А', 'proposed')),
+      isNull,
+    );
+    expect(
+      confirmedPartOfParentTitle(_parent('Направление А', 'rejected')),
+      isNull,
+    );
+  });
 }
 
 SecretaryObject _task(String id, String title, {String kind = 'task'}) {
