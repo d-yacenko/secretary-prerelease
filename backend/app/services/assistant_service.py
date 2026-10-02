@@ -292,6 +292,8 @@ class AssistantService:
         references = self._serialize_references(candidate_ids)
         affected_objects = self._serialize_affected(affected_ids)
         pending_action_plan = self._persist_staged_action_plan(tool_budget.staged_actions)
+        if pending_action_plan is not None:
+            answer = ""
         return AssistantMessageResult(
             answer=answer,
             references=references,

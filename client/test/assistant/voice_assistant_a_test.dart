@@ -818,6 +818,58 @@ void main() {
   );
 
   test(
+    'internal pending plan speaks only the on-screen confirmation fallback',
+    () async {
+      final speechTexts = <String>[];
+      final mock = MockClient((request) async {
+        if (request.url.path == '/assistant/transcribe') {
+          return jsonResponse({'text': 'Поставь статус open'});
+        }
+        if (request.url.path == '/assistant/message') {
+          return jsonResponse({
+            'answer': 'Статус изменён на open.',
+            'references': [],
+            'affected_objects': [],
+            'pending_action_plan': {
+              'id': 'plan-status',
+              'status': 'pending',
+              'expires_at': '2026-09-13T12:00:00Z',
+              'actions': [
+                {
+                  'tool_name': 'set_task_status',
+                  'arguments': {
+                    'object_id': '11111111-1111-1111-1111-111111111111',
+                    'status': 'open',
+                  },
+                },
+              ],
+            },
+          });
+        }
+        if (request.url.path == '/assistant/speech') {
+          final body =
+              jsonDecode(utf8.decode(request.bodyBytes))
+                  as Map<String, dynamic>;
+          speechTexts.add(body['text'] as String);
+          return speechOk();
+        }
+        return http.Response('{}', 404);
+      });
+      final apiClient = SecretaryApiClient(httpClient: mock);
+      apiClient.configure(baseUrl: baseUrl, token: token);
+      final assistant = buildAssistant(
+        apiClient: apiClient,
+        auth: buildAuth(apiClient),
+      );
+      await runHandsFreeUtterance(assistant);
+      expect(assistant.hasPendingActionPlan, isTrue);
+      expect(speechTexts, [voiceUnsupportedPlanSpeech]);
+      expect(speechTexts.join('\n'), isNot(contains('Статус изменён')));
+      assistant.dispose();
+    },
+  );
+
+  test(
     'executed plan resume answer is spoken; reject speech is accurate',
     () async {
       final speechTexts = <String>[];

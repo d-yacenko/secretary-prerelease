@@ -348,6 +348,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                 final message = controller.messages[index];
                 final isUser = message.role == 'user';
                 final actionPlan = message.actionPlan;
+                final showProse = isUser || message.content.trim().isNotEmpty;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Column(
@@ -356,39 +357,40 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         ? CrossAxisAlignment.end
                         : CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isUser
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: isUser
-                            ? Text(message.content)
-                            : AssistantMessageBody(
-                                content: message.content,
-                                openableObjectIds: {
-                                  for (final ref in message.references)
-                                    ref.objectId,
-                                },
-                                onOpenObject: (objectId) => openObjectDetail(
-                                  context,
-                                  objectId: objectId,
-                                  apiClient: widget.apiClient,
-                                  authController: widget.authController,
-                                  captureController: widget.captureController,
-                                  assistantController: widget.controller,
-                                  onAskSecretary: (object) {
-                                    widget.controller.setObjectContext(object);
+                      if (showProse)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isUser
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: isUser
+                              ? Text(message.content)
+                              : AssistantMessageBody(
+                                  content: message.content,
+                                  openableObjectIds: {
+                                    for (final ref in message.references)
+                                      ref.objectId,
                                   },
-                                  bookmarkController: widget.bookmarkController,
+                                  onOpenObject: (objectId) => openObjectDetail(
+                                    context,
+                                    objectId: objectId,
+                                    apiClient: widget.apiClient,
+                                    authController: widget.authController,
+                                    captureController: widget.captureController,
+                                    assistantController: widget.controller,
+                                    onAskSecretary: (object) {
+                                      widget.controller.setObjectContext(object);
+                                    },
+                                    bookmarkController: widget.bookmarkController,
+                                  ),
                                 ),
-                              ),
-                      ),
-                      if (!isUser)
+                        ),
+                      if (showProse && !isUser)
                         Align(
                           alignment: Alignment.centerLeft,
                           child: IconButton(

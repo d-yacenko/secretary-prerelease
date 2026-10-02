@@ -1283,11 +1283,7 @@ class AssistantController extends ChangeNotifier {
         return;
       }
       _voiceApprovalArmed = false;
-      final answer = _messages.last.content;
-      final spoken = answer.trim().isEmpty
-          ? voiceUnsupportedPlanSpeech
-          : '$answer\n$voiceUnsupportedPlanSpeech';
-      await _speakDeterministic(spoken);
+      await _speakDeterministic(voiceUnsupportedPlanSpeech);
       return;
     }
     await _speakDeterministic(_messages.last.content);
