@@ -95,6 +95,7 @@ class AssistantAffectedObject:
 class AssistantPendingAction:
     tool_name: str
     arguments: dict
+    presentation: dict | None = None
 
 
 @dataclass
@@ -379,6 +380,9 @@ class AssistantService:
                     AssistantPendingAction(
                         tool_name=action["tool_name"],
                         arguments=action["arguments"],
+                        presentation=action.get("presentation")
+                        if isinstance(action.get("presentation"), dict)
+                        else None,
                     )
                     for action in plan.actions
                 ],

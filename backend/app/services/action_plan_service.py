@@ -17,6 +17,7 @@ from app.assistant.action_plan_constants import (
     PENDING_ACTION_PLAN_STATUS_REJECTED,
     PENDING_ACTION_PLAN_TTL_SECONDS,
 )
+from app.assistant.approval_presentation import attach_approval_presentations
 from app.assistant.session import execute_approved_actions_with_tools
 from app.db.models import PendingActionPlan
 from app.services.domain_tool_service import DomainToolService
@@ -49,12 +50,14 @@ class ActionPlanService:
 
     def create_plan(self, actions: list[dict[str, Any]]) -> PendingActionPlanView:
         validate_action_plan_actions(actions)
+        stored_actions = [dict(action) for action in actions]
+        attach_approval_presentations(self._session, self._user_id, stored_actions)
 
         now = datetime.now(UTC)
         plan = PendingActionPlan(
             user_id=self._user_id,
             status=PENDING_ACTION_PLAN_STATUS_PENDING,
-            actions=actions,
+            actions=stored_actions,
             expires_at=now + timedelta(seconds=PENDING_ACTION_PLAN_TTL_SECONDS),
         )
         self._session.add(plan)
@@ -232,13 +235,17 @@ def _public_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
+    public: list[dict[str, Any]] = []
+    for action in actions:
+        item = {
             "tool_name": action["tool_name"],
             "arguments": _public_arguments(action["arguments"]),
         }
-        for action in actions
-    ]
+        presentation = action.get("presentation")
+        if isinstance(presentation, dict):
+            item["presentation"] = presentation
+        public.append(item)
+    return public
 
 
 def _safe_failure_message(exc: Exception) -> str:

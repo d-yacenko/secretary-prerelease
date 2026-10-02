@@ -131,6 +131,7 @@ class AssistantAffectedObjectOut(BaseModel):
 class PendingActionOut(BaseModel):
     tool_name: str
     arguments: dict
+    presentation: dict | None = None
 
 
 class PendingActionPlanOut(BaseModel):
@@ -851,7 +852,11 @@ def _pending_plan_out(plan) -> PendingActionPlanOut | None:
         status=plan.status,
         expires_at=plan.expires_at.isoformat(),
         actions=[
-            PendingActionOut(tool_name=action.tool_name, arguments=action.arguments)
+            PendingActionOut(
+                tool_name=action.tool_name,
+                arguments=action.arguments,
+                presentation=action.presentation,
+            )
             for action in plan.actions
         ],
     )

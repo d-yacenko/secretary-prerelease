@@ -207,6 +207,85 @@ void main() {
     expect(find.text('Create task: Review the letter'), findsOneWidget);
   });
 
+  testWidgets('internal approval card renders the frozen semantic snapshot', (
+    tester,
+  ) async {
+    final mock = MockClient((request) async {
+      if (request.url.path == '/assistant/message') {
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'answer': 'Нужно подтверждение.',
+            'references': [],
+            'affected_objects': [],
+            'pending_action_plan': {
+              'id': 'plan-semantic',
+              'status': 'pending',
+              'expires_at': '2026-08-30T12:00:00Z',
+              'actions': [
+                {
+                  'tool_name': 'link_objects',
+                  'arguments': {
+                    'source_id': '11111111-1111-1111-1111-111111111111',
+                    'target_id': '22222222-2222-2222-2222-222222222222',
+                    'type': 'part_of',
+                  },
+                  'presentation': {
+                    'operation': 'link_objects',
+                    'relation_type': 'part_of',
+                    'entities': [
+                      {'role': 'source', 'title': 'Бизнес', 'kind': 'task'},
+                      {
+                        'role': 'target',
+                        'title': 'Экспериментальная рубрика октября',
+                        'kind': 'task',
+                      },
+                    ],
+                    'fields': [],
+                  },
+                },
+              ],
+            },
+          })),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      return http.Response('{}', 404);
+    });
+
+    final apiClient = testSecretaryApiClient(mock);
+    apiClient.configure(baseUrl: baseUrl, token: token);
+    final auth = AuthController(
+      apiClient: apiClient,
+      tokenStore: FakeTokenStore(),
+      serverUrlStore: FakeServerUrlStore(),
+    );
+    auth.status = AuthStatus.authenticated;
+    final capture = CaptureController(
+      apiClient: apiClient,
+      authController: auth,
+    );
+    final assistant = AssistantController(
+      apiClient: apiClient,
+      authController: auth,
+      voiceRecorder: FakeVoiceRecorder(),
+      voiceTempFiles: VoiceTempFiles(),
+    );
+
+    await pumpAssistant(tester, assistant, auth, capture, apiClient);
+    await assistant.sendMessage('Свяжи');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Добавить в направление: Бизнес -> Экспериментальная рубрика октября',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Link objects'), findsNothing);
+    expect(find.textContaining('11111111'), findsNothing);
+  });
+
   testWidgets('normal Send disabled while plan pending', (tester) async {
     final mock = MockClient((request) async {
       if (request.url.path == '/assistant/message') {

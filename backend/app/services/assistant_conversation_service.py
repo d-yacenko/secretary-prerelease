@@ -380,6 +380,9 @@ class AssistantConversationService:
                 AssistantPendingAction(
                     tool_name=str(action.get("tool_name")),
                     arguments=dict(action.get("arguments") or {}),
+                    presentation=action.get("presentation")
+                    if isinstance(action.get("presentation"), dict)
+                    else None,
                 )
                 for action in plan.actions
                 if isinstance(action, dict)

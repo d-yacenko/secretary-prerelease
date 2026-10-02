@@ -1958,20 +1958,40 @@ class AssistantMessageResponse {
   }
 }
 
+class _PresentationEntity {
+  const _PresentationEntity(this.role, this.title);
+
+  final String role;
+  final String title;
+}
+
 class PendingAction {
-  PendingAction({required this.toolName, required this.arguments});
+  PendingAction({
+    required this.toolName,
+    required this.arguments,
+    this.presentation,
+  });
 
   final String toolName;
   final Map<String, dynamic> arguments;
+  final Map<String, dynamic>? presentation;
 
   factory PendingAction.fromJson(Map<String, dynamic> json) {
+    final rawPresentation = json['presentation'];
     return PendingAction(
       toolName: json['tool_name'] as String,
       arguments: Map<String, dynamic>.from(json['arguments'] as Map),
+      presentation: rawPresentation is Map
+          ? Map<String, dynamic>.from(rawPresentation)
+          : null,
     );
   }
 
   String get displayLabel {
+    final semantic = _semanticLabel();
+    if (semantic != null) {
+      return semantic;
+    }
     final objectId = _frozenObjectId(arguments);
     switch (toolName) {
       case 'create_task':
@@ -2042,6 +2062,178 @@ class PendingAction {
       return null;
     }
     return '${blocks.join('\n\n')}\nОтправить?';
+  }
+
+  String? _semanticLabel() {
+    final snapshot = presentation;
+    if (snapshot == null) {
+      return null;
+    }
+    final operation = snapshot['operation'];
+    if (operation is! String || operation.isEmpty) {
+      return null;
+    }
+    final entities = _presentationEntities(snapshot);
+    final fields = _presentationFields(snapshot);
+    final relation = snapshot['relation_type'];
+    final relationType = relation is String ? relation : null;
+    switch (operation) {
+      case 'create_task':
+      case 'create_direction':
+        final title = fields['title'];
+        if (title == null || title.isEmpty) {
+          return null;
+        }
+        final headline = operation == 'create_direction'
+            ? 'Создать направление: $title'
+            : 'Создать задачу: $title';
+        return _joinLines(headline, _temporalFieldLines(fields));
+      case 'update_task':
+        final target = _entityTitle(entities, 'target');
+        if (target == null) {
+          return null;
+        }
+        final lines = <String>['Изменить задачу: $target', ..._temporalFieldLines(fields)];
+        final mode = fields['completion_mode'];
+        if (mode != null && mode.isNotEmpty) {
+          lines.add('Режим: $mode');
+        }
+        for (final entity in entities.where((item) => item.role == 'waiting_on')) {
+          if (entity.title.isNotEmpty) {
+            lines.add('Ожидает: ${entity.title}');
+          }
+        }
+        for (final entity in entities.where((item) => item.role == 'evidence')) {
+          if (entity.title.isNotEmpty) {
+            lines.add('Основание: ${entity.title}');
+          }
+        }
+        return lines.join('\n');
+      case 'set_task_status':
+        final target = _entityTitle(entities, 'target');
+        final proposed = fields['status'];
+        if (target == null || proposed == null || proposed.isEmpty) {
+          return null;
+        }
+        final current = fields['current_status'] ?? '';
+        return '$target: $current -> $proposed';
+      case 'delete_task':
+        final target = _entityTitle(entities, 'target');
+        if (target == null) {
+          return null;
+        }
+        return 'Удалить задачу: $target';
+      case 'link_objects':
+        final source = _entityTitle(entities, 'source');
+        final target = _entityTitle(entities, 'target');
+        if (source == null || target == null || relationType == null) {
+          return null;
+        }
+        if (relationType == 'part_of') {
+          return 'Добавить в направление: $source -> $target';
+        }
+        return 'Связать ($relationType): $source -> $target';
+      case 'remove_relation':
+        final source = _entityTitle(entities, 'source');
+        final target = _entityTitle(entities, 'target');
+        if (source == null || target == null || relationType == null) {
+          return null;
+        }
+        if (relationType == 'references') {
+          return 'Удалить основание: $source -> $target';
+        }
+        return 'Удалить связь ($relationType): $source -> $target';
+      case 'create_scheduled_activity':
+        final title = fields['title'];
+        final runAt = fields['run_at'];
+        if (title == null || title.isEmpty || runAt == null || runAt.isEmpty) {
+          return null;
+        }
+        final lines = <String>['Напоминание: $title', 'Когда: $runAt'];
+        final priority = fields['priority'];
+        if (priority != null && priority.isNotEmpty) {
+          lines.add('Приоритет: $priority');
+        }
+        return lines.join('\n');
+      default:
+        return null;
+    }
+  }
+
+  static String _joinLines(String headline, List<String> extra) {
+    if (extra.isEmpty) {
+      return headline;
+    }
+    return '$headline\n${extra.join('\n')}';
+  }
+
+  static List<String> _temporalFieldLines(Map<String, String?> fields) {
+    const labels = {
+      'due_at': 'Срок',
+      'planned_start_at': 'Начало',
+      'planned_end_at': 'Конец',
+    };
+    final lines = <String>[];
+    for (final entry in labels.entries) {
+      if (!fields.containsKey(entry.key)) {
+        continue;
+      }
+      final value = fields[entry.key];
+      lines.add(
+        value == null || value.isEmpty
+            ? '${entry.value}: очистить'
+            : '${entry.value}: $value',
+      );
+    }
+    return lines;
+  }
+
+  static String? _entityTitle(List<_PresentationEntity> entities, String role) {
+    for (final entity in entities) {
+      if (entity.role == role && entity.title.isNotEmpty) {
+        return entity.title;
+      }
+    }
+    return null;
+  }
+
+  static List<_PresentationEntity> _presentationEntities(Map<String, dynamic> snapshot) {
+    final raw = snapshot['entities'];
+    if (raw is! List) {
+      return const [];
+    }
+    final entities = <_PresentationEntity>[];
+    for (final item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final role = item['role'];
+      final title = item['title'];
+      if (role is String && title is String) {
+        entities.add(_PresentationEntity(role, title));
+      }
+    }
+    return entities;
+  }
+
+  static Map<String, String?> _presentationFields(Map<String, dynamic> snapshot) {
+    final raw = snapshot['fields'];
+    if (raw is! List) {
+      return const {};
+    }
+    final fields = <String, String?>{};
+    for (final item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final name = item['name'];
+      if (name is! String) {
+        continue;
+      }
+      final value = item['value'];
+      fields[name] = value?.toString();
+    }
+    return fields;
   }
 
   static String? _frozenObjectId(Map<String, dynamic> arguments) {
