@@ -33,6 +33,7 @@ from app.assistant.inbox_review_intent import inbox_review_purpose_for_utterance
 from app.assistant.inbox_review_progress import InboxReviewReceipt
 from app.assistant.reference_ids import cap_reference_candidate_ids, dedupe_preserve_order
 from app.assistant.session import run_assistant_tool
+from app.assistant.temporal_finalization import temporal_display_section
 from app.assistant.tool_runner import BoundAssistantToolRunner, PerTurnToolBudget
 from app.assistant.turn_telemetry import AssistantTurnTelemetry
 from app.core.assistant_openai_config import (
@@ -627,7 +628,12 @@ def _build_action_plan_finalization_context(
     initiating_user_text: str | None = None,
 ) -> str:
     sample_section = _language_sample_section(initiating_user_text)
-    reserved = len(sample_section) + (1 if sample_section else 0)
+    temporal_section = temporal_display_section(plan.actions, plan.result)
+    reserved = 0
+    if sample_section:
+        reserved += len(sample_section) + 1
+    if temporal_section:
+        reserved += len(temporal_section) + 1
     limit = MAX_ACTION_PLAN_FINALIZATION_CONTEXT_CHARS - reserved
     sections: list[str] = []
 
@@ -679,6 +685,10 @@ def _build_action_plan_finalization_context(
         )
         if frozen_section:
             sections.append(frozen_section)
+
+    if temporal_section:
+        insert_at = 1 if sections and sections[0].startswith("Execution effects") else 0
+        sections.insert(insert_at, temporal_section)
 
     body = "\n".join(sections).strip()
     if not sample_section:
