@@ -1,90 +1,198 @@
-# Current task — HOLD
+# Current task — ACTIVE
 
-AH2-PER1 is **ARCHITECT SOURCE-ACCEPTED** and waiting for manual real-product behavior acceptance. Do not start another Executor slice from this HOLD.
+## AH2-ROLL1 — schema-neutral backend rollout of accepted remediation
 
-## AH2-PER1 — conservative Russian name-variant candidate suggestion
+User explicitly authorized this production operation on 2026-10-02.
 
-- Implementation: `ece2bdfd8a3b80e8ab5fc438372408429253e7ac`
-- Executor HOLD: `6efcb6b914a9526bd679211aa8690950e3c2a613`
-- Source acceptance: 2026-10-02
-- Production remains `aa3f475a3a0ee49b938364e6d53f3657711b1a9b`
-- Alembic remains `0052 / 0052`
-- Health remains PASS
+Authorization scope is exactly:
 
-## Architect source acceptance
+- roll out the accepted backend from the current accepted main snapshot;
+- no Alembic migration;
+- no database recreation;
+- no client build/install;
+- no mobile/desktop/web client rollout;
+- no real model/provider behavior test by Executor.
 
-Accepted invariants:
+After a successful backend rollout, return to HOLD for the human AH2-PER1 behavior gate.
 
-- `Оля/Оли/Ольги Володько` can produce `Ольга Володько` only as a `name_variant` suggestion;
-- variant-only output is `state=ambiguous`, `person_id=null`, even with one candidate;
-- exact identifier/title/name matching runs before the variant fallback;
-- surname must match exactly and the only added family is the explicit Olga family;
-- there is no fuzzy edit-distance, embedding, transliteration, phonetic, prefix, or surname-morphology matching;
-- the variant lookup is read-only and does not create/merge People or write identity/evidence/alias state;
-- `requested_by_person_id`, `delegated_to_person_ids`, `waiting_on_person_ids`, and `involved_person_ids` now require a Person resolved with `state=resolved` in the current Assistant turn;
-- ambiguous candidate ids remain readable but cannot authorize actor-role mutation;
-- `depends_on_task_ids` keeps the existing seen-Task rule;
-- exact `Ольга Володько` still permits the canonical R2 `waiting_on` staging path;
-- SEM1/STG1 behavior remains unchanged.
+## Exact authorized release
 
-## Known stale test debt
+```
+RELEASE_SHA=943281190b386bbe22c4631709635883c950b459
+ROLLBACK_SHA=aa3f475a3a0ee49b938364e6d53f3657711b1a9b
+EXPECTED_ALEMBIC=0052
+```
 
-`backend/tests/test_person_assistant.py::test_owned_source_identity_is_conflict_not_confirmable` remains red, but source history shows this is pre-existing stale expectation rather than an AH2-PER1 regression.
+Facts verified by Architect before authorization:
 
-Relevant provenance:
+- `origin/production = aa3f475a3a0ee49b938364e6d53f3657711b1a9b`;
+- `RELEASE_SHA` is 58 commits ahead of `ROLLBACK_SHA` and not behind;
+- there are no changed files under `backend/alembic/` in that transition;
+- the accepted release contains FIN1, FIN2, AP1, STG1, SEM1 and PER1 backend remediation;
+- AH2-PER1 is ARCHITECT SOURCE-ACCEPTED;
+- current production Alembic is `0052` and health is PASS.
 
-- `93dd1e923dfd8df2860db390bf81cf8a0cc80802` — "Ground occupied-identity merge suggestions only in explicit evidence." It intentionally stopped display-name proposals / weak evidence from surfacing an occupied identity unless grounded by stronger evidence.
-- `backend/tests/test_person_assistant.py` was not updated by that semantic change; its recent history predates `93dd1e9...`.
-- current failing fixture has only the display-name-shaped source and an identity owned by another Person, so the current `_grounded_duplicate` contract intentionally returns no candidate.
+The task-authorization commit on `main` is operational ledger only and is intentionally newer than `RELEASE_SHA`. Do not substitute a newer SHA as the production release.
 
-Do not weaken the grounded-duplicate safety rule to make this stale test pass.
+## Mandatory bootstrap
 
-This stale test should be cleaned up in a later test-hygiene slice, after the manual PER1 behavior gate.
+Follow `docs/executor_bootstrap.md` and `docs/deploy.md`.
 
-## Deterministic evidence
+Use only the canonical repository:
 
-Executor reported:
+`https://github.com/d-yacenko/secretary-prerelease.git`
 
-- `test_ah2_per1_name_variants.py`: 13 passed
-- `test_task_relations.py`: 9 passed
-- `test_ah2_sem1_relation_boundary.py`: 4 passed
-- `test_ah2_stg1_staging_truth.py`: 7 passed
-- `test_ah2d_task_tool_descriptions.py`: 3 passed
-- P1/R2 filtered eval: 3 passed
-- `test_person_assistant.py`: 35 passed, 1 stale failure described above
-- `git diff --check`: clean
-- model calls: 0
-- real network calls: 0
-- schema/deploy/production: unchanged
+For runtime work:
 
-## Manual real-product gate
+- use only `ops/production/target.json`;
+- use the committed pinned SSH host key;
+- use the pre-existing Executor/workstation SSH credential integration;
+- do not create/copy/request credentials;
+- do not probe alternate hosts, paths, origins or environment files.
 
-Executor does not perform this gate.
+Before changing `production`, prove a read-only SSH no-op to the canonical pinned target succeeds as defined by the bootstrap runbook.
 
-Use an existing Task context and send exactly:
+If bootstrap or SSH readiness fails, STOP with one sanitized blocker. Do not move the `production` branch.
 
-`Жду ответ от Оли Володько по черновику`
+## Preflight — no production mutation yet
 
-Expected first-turn behavior:
+From a clean canonical local `main` checkout:
 
-- no approval card;
-- no Task mutation;
-- no `waiting_on` relation yet;
-- Secretary names `Ольга Володько` as a candidate;
-- Secretary asks whether that is the intended Person;
-- it does not claim that `Оли` and `Ольга` are already the same identity.
+1. fetch `origin/main` and `origin/production`;
+2. verify local `main` equals `origin/main`;
+3. verify `origin/production` is exactly `ROLLBACK_SHA`;
+4. verify both exact SHAs resolve;
+5. verify `ROLLBACK_SHA` is an ancestor of `RELEASE_SHA`;
+6. verify there is no diff between rollback and release in:
+   - `backend/alembic/versions/`
+   - `backend/alembic/env.py`
+   - `backend/alembic.ini`
+   - `backend/alembic/script.py.mako`;
+7. run the relevant deployment-harness tests if they are available without real production mutation.
 
-Do **not** continue to the confirmation turn until the first-turn behavior is reviewed.
+Any mismatch: STOP. Do not repair or bypass it.
 
-After first-turn manual evidence is accepted, the Architect will give the next single test step.
+## Production ref promotion
 
-## HOLD
+Only after bootstrap and all preflight checks pass:
 
-Do not start:
+Fast-forward `origin/production` from exactly `ROLLBACK_SHA` to exactly `RELEASE_SHA`.
 
-- Scheduled Activity Today/Week/mobile integration;
-- stale-eval/test-hygiene maintenance;
-- production rollout;
-- another remediation slice.
+Use a normal fast-forward push. Do not force-push the forward promotion.
 
-Wait for Architect authorization after manual AH2-PER1 behavior acceptance.
+Immediately verify:
+
+`origin/production == RELEASE_SHA`.
+
+Do not push `main` itself to production and do not select any SHA other than `RELEASE_SHA`.
+
+## Mandatory deployment entrypoint
+
+Run the committed normal schema-neutral harness only:
+
+```bash
+python3 ops/production/deploy.py \
+  --release-sha 943281190b386bbe22c4631709635883c950b459 \
+  --rollback-sha aa3f475a3a0ee49b938364e6d53f3657711b1a9b \
+  --expected-alembic 0052
+```
+
+Direct ad-hoc SSH deployment commands and direct production Compose commands are forbidden.
+
+The harness is expected to:
+
+- build only `api` and `worker`;
+- recreate only `api` and `worker`;
+- keep `db` container unchanged;
+- keep DB volume unchanged;
+- keep `.env` unchanged;
+- keep Alembic exactly `0052`;
+- verify health;
+- auto-attempt application rollback to `ROLLBACK_SHA` if a post-recreate invariant fails.
+
+No migration command is authorized.
+
+## Success gate
+
+Treat rollout as successful only if the harness reports all of the following:
+
+- `RELEASE_HEAD=943281190b386bbe22c4631709635883c950b459`
+- `HEALTH=PASS`
+- `ALEMBIC=0052`
+- `DB_CONTAINER_UNCHANGED=true`
+- `DB_VOLUME_UNCHANGED=true`
+- `ENV_FILE_UNCHANGED=true`
+- `API_RECREATED=true`
+- `WORKER_RECREATED=true`
+- `DEPLOYMENT=PASS`
+
+Then verify `origin/production` still equals `RELEASE_SHA`.
+
+Do not call OpenAI or any external messaging/provider action as a smoke test.
+
+## Failure handling and production-ref coherence
+
+Do not perform ad-hoc repair.
+
+If the production ref was promoted but the deployment does not succeed:
+
+### Safe ref restoration is authorized only when runtime rollback is proven
+
+You may restore `production` back to `ROLLBACK_SHA` only if one of these is explicitly proven:
+
+- deployment was blocked before application recreation and the production runtime remained/restored at `ROLLBACK_SHA`; or
+- the harness reports `ROLLBACK=PASS`.
+
+In that case, restore the branch only with an exact lease requiring the current remote production ref to still equal `RELEASE_SHA`, then verify it equals `ROLLBACK_SHA`.
+
+This backward ref move is authorized solely to make the Git production ref match the proven rolled-back runtime.
+
+If runtime state is uncertain, automatic rollback fails, the remote ref changed unexpectedly, or any invariant cannot be proven:
+
+- do not force a ref;
+- do not repair;
+- STOP and report a sanitized blocker for Architect review.
+
+## Explicit non-goals
+
+Do not:
+
+- run Alembic upgrade/downgrade;
+- modify schema;
+- recreate or restart `db`;
+- alter DB volume;
+- change `.env`;
+- rotate credentials;
+- install/rebuild the Flutter client for the user;
+- deploy a web/mobile/desktop client;
+- change product code;
+- clean up stale M1 or Person tests;
+- run real-model AH2-M evaluation;
+- perform the manual PER1 prompt on behalf of the user;
+- start Scheduled Activity work or another remediation slice.
+
+## Completion protocol
+
+On successful rollout:
+
+1. append a compact factual AH2-ROLL1 result to `PROJECT_STATE.md`, including:
+   - release and rollback SHAs;
+   - production-ref promotion;
+   - exact harness result markers;
+   - health and Alembic result;
+   - DB/container/env preservation;
+   - no migration/client/model/provider statement;
+2. record AH2-PER1 Architect source acceptance if not already present in the ledger;
+3. return `CURRENT_TASK.md` to HOLD for the manual AH2-PER1 behavior gate;
+4. set the HOLD text to state that production backend now runs `RELEASE_SHA`, Alembic remains `0052`, and the next action belongs to the human tester;
+5. commit + push the ledger update to `main`;
+6. STOP.
+
+On failure/blocker:
+
+- record only sanitized facts;
+- return `CURRENT_TASK.md` to HOLD with the exact safe state that is known;
+- commit/push ledger only if doing so does not misstate production;
+- STOP.
+
+Do not start any further code or deployment work from HOLD.
