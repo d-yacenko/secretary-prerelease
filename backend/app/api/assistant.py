@@ -815,7 +815,10 @@ def resume_action_plan(
         user_timezone=runtime.effective.timezone,
     )
     try:
-        result = assistant.finalize_executed_plan(plan)
+        result = assistant.finalize_executed_plan(
+            plan,
+            initiating_user_text=conversations.initiating_user_language_sample(plan_id),
+        )
     except OpenAIDailyBudgetExhaustedError as exc:
         raise _openai_daily_budget_http_error(current_user.user_id, exc) from exc
     except AssistantProviderError as exc:

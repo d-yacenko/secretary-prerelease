@@ -14,7 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.assistant.action_plan_constants import PENDING_ACTION_PLAN_STATUS_PENDING
-from app.assistant.constants import MAX_ASSISTANT_HISTORY_MESSAGES
+from app.assistant.constants import (
+    MAX_ASSISTANT_HISTORY_MESSAGES,
+    MAX_FINALIZATION_LANGUAGE_SAMPLE_CHARS,
+)
 from app.assistant.inbox_review_progress import InboxReviewReceipt
 from app.db.models import AssistantConversation, AssistantMessage, PendingActionPlan
 from app.llm.assistant_models import AssistantHistoryMessage
@@ -276,6 +279,33 @@ class AssistantConversationService:
             user_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
         )
+
+    def initiating_user_language_sample(self, plan_id: UUID) -> str | None:
+        anchor = self._session.scalar(
+            select(AssistantMessage).where(
+                AssistantMessage.user_id == self._user_id,
+                AssistantMessage.role == "assistant",
+                AssistantMessage.pending_action_plan_id == plan_id,
+            )
+        )
+        if anchor is None or anchor.client_turn_id is None:
+            return None
+        user_message = self._session.scalar(
+            select(AssistantMessage).where(
+                AssistantMessage.user_id == self._user_id,
+                AssistantMessage.conversation_id == anchor.conversation_id,
+                AssistantMessage.role == "user",
+                AssistantMessage.client_turn_id == anchor.client_turn_id,
+            )
+        )
+        if user_message is None:
+            return None
+        text = user_message.content.strip()
+        if not text:
+            return None
+        if len(text) <= MAX_FINALIZATION_LANGUAGE_SAMPLE_CHARS:
+            return text
+        return text[:MAX_FINALIZATION_LANGUAGE_SAMPLE_CHARS]
 
     def stored_resume(self, plan_id: UUID) -> AssistantResumeResult | None:
         message = self._resume_message(plan_id)
