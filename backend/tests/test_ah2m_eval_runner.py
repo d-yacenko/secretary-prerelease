@@ -502,7 +502,7 @@ def test_r2_person_id_is_hidden_until_the_read_round_commits() -> None:
     finally:
         _close(database)
     assert provider.blocked.success is False
-    assert "not exposed" in provider.blocked.error
+    assert "not resolved" in provider.blocked.error
     assert run.final_facts == {"actor_role": "waiting_on"}
 
 

@@ -437,20 +437,40 @@ class PerTurnToolBudget:
     def _validate_task_relation_allowlist(
         self, tool_name: str, arguments: dict
     ) -> ToolExecutionResult | None:
-        raw_ids = []
+        person_ids = []
         single = arguments.get("requested_by_person_id")
         if single:
-            raw_ids.append(single)
+            person_ids.append(single)
         for field in (
             "delegated_to_person_ids",
             "waiting_on_person_ids",
             "involved_person_ids",
-            "depends_on_task_ids",
         ):
             values = arguments.get(field) or []
             if isinstance(values, list):
-                raw_ids.extend(values)
-        for raw_id in raw_ids:
+                person_ids.extend(values)
+        task_ids = []
+        depends = arguments.get("depends_on_task_ids") or []
+        if isinstance(depends, list):
+            task_ids.extend(depends)
+        for raw_id in person_ids:
+            try:
+                parsed = UUID(str(raw_id))
+            except (ValueError, TypeError):
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="invalid task relation object id",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            if parsed not in self._resolved_person_ids:
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="person was not resolved in this Assistant turn",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+        for raw_id in task_ids:
             try:
                 parsed = UUID(str(raw_id))
             except (ValueError, TypeError):

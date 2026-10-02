@@ -27,6 +27,7 @@ from app.domain.person_assistant import (
     feedback_identity_key,
     parse_feedback_identity,
 )
+from app.domain.person_candidate_names import name_variant_match
 from app.domain.person_candidate_score import USER_CONFIRMED, USER_REJECTED, USER_ROUTE_CHOICE
 from app.domain.person_enrichment import provider_category
 from app.domain.person_identity import (
@@ -91,7 +92,12 @@ class PersonAssistantService:
         if alias_ids:
             return self._finish(alias_ids, ("alias",), None)
         matches = self._evidence.propose_candidates(None, text)
-        return self._finish([match.person_id for match in matches], ("name_similarity",), None)
+        if matches:
+            return self._finish([match.person_id for match in matches], ("name_similarity",), None)
+        variant_ids = self._variant_people(text)
+        if variant_ids:
+            return self._finish(variant_ids, ("name_variant",), None, suggestion_only=True)
+        return self._finish([], ("name_similarity",), None)
 
     def find_communications(
         self,
@@ -365,6 +371,8 @@ class PersonAssistantService:
         person_ids: list[UUID],
         reasons: tuple[str, ...],
         identity: NormalizedPersonIdentity | None,
+        *,
+        suggestion_only: bool = False,
     ) -> ResolvePersonOutput:
         unique = list(dict.fromkeys(person_ids))
         people = [person for person_id in unique if (person := self._active_person(person_id)) is not None]
@@ -374,7 +382,10 @@ class PersonAssistantService:
         visible = ordered[:MAX_PERSON_CANDIDATES]
         candidates = [self._candidate(person, reasons, identity, ranked) for person in visible]
         conflict = "identity_conflict" in reasons or "multiple_user_confirmations" in reasons
-        if len(candidates) == 1 and not conflict:
+        if suggestion_only:
+            state = AMBIGUOUS if candidates else NONE
+            chosen = None
+        elif len(candidates) == 1 and not conflict:
             state = RESOLVED
             chosen = candidates[0].person_id
         elif candidates:
@@ -807,6 +818,17 @@ class PersonAssistantService:
             if isinstance(display, str) and display.casefold() == folded and row.person_object_id not in found:
                 found.append(row.person_object_id)
         return found
+
+    def _variant_people(self, query: str) -> list[UUID]:
+        people = self._session.scalars(
+            select(Object).where(
+                Object.user_id == self._user_id,
+                Object.kind == PERSON_KIND,
+                Object.state != REJECTED_STATE,
+                object_is_active(),
+            )
+        )
+        return [person.id for person in people if name_variant_match(query, person.title)]
 
     def _confirmation_people(self, identity: NormalizedPersonIdentity) -> list[UUID]:
         rows = self._session.scalars(

@@ -481,14 +481,23 @@ def test_profile_read_feeds_same_turn_relation_allowlist(
         },
     )
     assert blocked.success is False
-    assert "not exposed" in (blocked.error or "")
+    assert "not resolved" in (blocked.error or "")
     budget.commit_model_visible_outputs()
-    allowed = budget.run(
+    actor_still_blocked = budget.run(
         BOOTSTRAP_USER_ID,
         "update_task",
         {
             "object_id": str(task.id),
             "waiting_on_person_ids": [str(person.id)],
+        },
+    )
+    assert actor_still_blocked.success is False
+    assert "not resolved" in (actor_still_blocked.error or "")
+    allowed = budget.run(
+        BOOTSTRAP_USER_ID,
+        "update_task",
+        {
+            "object_id": str(task.id),
             "depends_on_task_ids": [str(dependency.id)],
         },
     )
@@ -509,7 +518,7 @@ def test_profile_read_feeds_same_turn_relation_allowlist(
         },
     )
     assert invented.success is False
-    assert "not exposed" in (invented.error or "")
+    assert "not resolved" in (invented.error or "")
 
 
 def test_invalid_relation_target_writes_nothing(db_session, fake_embedding_service) -> None:

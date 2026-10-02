@@ -29,18 +29,21 @@ _EVIDENCE_OBJECT_IDS_DESCRIPTION = (
 _REQUESTED_BY_PERSON_ID_DESCRIPTION = (
     "The Person who explicitly requested or asked for the Task. "
     "A typed Task-to-Person actor role. Use only when that exact role is intended. "
-    "Not a generic association and not a fallback for an unsupported relationship."
+    "Not a generic association and not a fallback for an unsupported relationship. "
+    "Requires a Person from resolve_person state=resolved in this turn."
 )
 _DELEGATED_TO_PERSON_IDS_DESCRIPTION = (
     "Persons the work is explicitly delegated or assigned to. "
     "A typed Task-to-Person actor role. Additive. Use only when that exact role is intended. "
     "Not waiting_on, not involves, and not a fallback for an unsupported relationship. "
+    "Requires a Person from resolve_person state=resolved in this turn. "
     "Omitting an id does not remove an existing role."
 )
 _WAITING_ON_PERSON_IDS_DESCRIPTION = (
     "Persons whose response or action the Task is explicitly waiting for. "
     "A typed Task-to-Person actor role. Additive. Use only when that exact role is intended. "
     "Not a substitute for delegated_to and not a fallback for an unsupported relationship. "
+    "Requires a Person from resolve_person state=resolved in this turn. "
     "Omitting an id does not remove an existing role."
 )
 _INVOLVED_PERSON_IDS_DESCRIPTION = (
@@ -49,6 +52,7 @@ _INVOLVED_PERSON_IDS_DESCRIPTION = (
     "A typed Task-to-Person actor role. Additive. "
     "Do not use this when a stronger role is known. "
     "Not a fallback for an unsupported relationship. "
+    "Requires a Person from resolve_person state=resolved in this turn. "
     "Omitting an id does not remove an existing role."
 )
 _PLANNED_INTERVAL_CREATE_DESCRIPTION = (
@@ -387,7 +391,11 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "«что мы обсуждали с VOA?». "
             "Call this before broad retrieve when the user refers to a person. "
             "state=resolved means one Person. state=ambiguous means ask which "
-            "candidate; do not pick a winner. state=none means no Person candidate. "
+            "candidate; do not pick a winner. A single candidate with reason "
+            "name_variant is still ambiguous and suggestion-only: tell the user the "
+            "canonical title and ask for confirmation, then call resolve_person again "
+            "with that title. Do not mutate from that candidate. "
+            "state=none means no Person candidate. "
             "Do not create or merge People. Do not treat two names as the same Person. "
             "Salience only orders candidates."
         ),
