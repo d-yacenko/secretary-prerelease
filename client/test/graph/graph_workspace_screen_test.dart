@@ -1,17 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:personal_secretary/api/api_models.dart';
-import 'package:personal_secretary/api/secretary_api_client.dart';
-import 'package:personal_secretary/auth/auth_controller.dart';
-import 'package:personal_secretary/auth/server_url_store.dart';
-import 'package:personal_secretary/auth/token_store.dart';
-import 'package:personal_secretary/assistant/fake_voice_recorder.dart';
-import 'package:personal_secretary/assistant/voice_temp_files.dart';
 import 'package:personal_secretary/graph/fcose_graph_refiner.dart';
 import 'package:personal_secretary/graph/graph_layout.dart';
 import 'package:personal_secretary/graph/graph_workspace_controller.dart';
@@ -202,7 +194,6 @@ void main() {
 
     final viewerBox = tester.renderObject<RenderBox>(find.byType(InteractiveViewer));
     final viewportWidth = viewerBox.size.width;
-    final viewportHeight = viewerBox.size.height;
     expect(viewportWidth, greaterThan(0));
 
     final canvasFinder = find.descendant(
@@ -282,7 +273,7 @@ void main() {
             200,
           );
         }
-        if (request.url.path == '/objects/task-a') {
+        if (request.method == 'GET' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode(graphObjectJson(id: 'task-a', title: 'Task A')),
             200,
@@ -381,7 +372,7 @@ void main() {
               : [graphObjectJson(id: 'task-b', title: 'Task B')];
           return http.Response(jsonEncode(graphWorkspaceJson(nodes: nodes)), 200);
         }
-        if (request.url.path == '/objects/task-a') {
+        if (request.method == 'GET' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode(graphObjectJson(id: 'task-a', title: 'Task A')),
             200,
@@ -403,11 +394,12 @@ void main() {
             200,
           );
         }
-        if (request.method == 'DELETE' && request.url.path == '/tasks/task-a') {
+        if (request.method == 'DELETE' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode({
-              'object': graphObjectJson(id: 'task-a', title: 'Task A', status: 'deleted'),
-              'new_status': 'deleted',
+              'object_id': 'task-a',
+              'deleted_at': '2026-08-28T12:00:00Z',
+              'already_deleted': false,
             }),
             200,
           );
@@ -424,7 +416,7 @@ void main() {
     await tester.tap(find.text('Подробнее'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Удалить'));
+    await tester.tap(find.byKey(const Key('object_detail_delete')));
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
@@ -433,8 +425,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
-    await tester.pageBack();
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -493,7 +483,7 @@ void main() {
               : [graphObjectJson(id: 'task-b', title: 'Task B')];
           return http.Response(jsonEncode(graphWorkspaceJson(nodes: nodes)), 200);
         }
-        if (request.url.path == '/objects/task-a') {
+        if (request.method == 'GET' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode(graphObjectJson(id: 'task-a', title: 'Task A')),
             200,
@@ -515,11 +505,12 @@ void main() {
             200,
           );
         }
-        if (request.method == 'DELETE' && request.url.path == '/tasks/task-a') {
+        if (request.method == 'DELETE' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode({
-              'object': graphObjectJson(id: 'task-a', title: 'Task A', status: 'deleted'),
-              'new_status': 'deleted',
+              'object_id': 'task-a',
+              'deleted_at': '2026-08-28T12:00:00Z',
+              'already_deleted': false,
             }),
             200,
           );
@@ -539,7 +530,7 @@ void main() {
     await tester.tap(find.text('Подробнее'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Удалить'));
+    await tester.tap(find.byKey(const Key('object_detail_delete')));
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
@@ -548,8 +539,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
-    await tester.pageBack();
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -596,7 +585,7 @@ void main() {
             200,
           );
         }
-        if (request.url.path == '/objects/task-a') {
+        if (request.method == 'GET' && request.url.path == '/objects/task-a') {
           return http.Response(
             jsonEncode(graphObjectJson(id: 'task-a', title: 'Task A')),
             200,
@@ -632,7 +621,7 @@ void main() {
 
     final graphCallsBeforeAsk = graphCalls;
 
-    await tester.tap(find.text('Спросить секретаря'));
+    await tester.tap(find.byTooltip('Спросить секретаря').hitTestable());
     await tester.pumpAndSettle();
 
     expect(find.text('Секретарь'), findsWidgets);
