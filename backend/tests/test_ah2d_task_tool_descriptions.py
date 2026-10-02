@@ -85,8 +85,8 @@ def test_create_and_update_field_descriptions_share_canonical_meanings() -> None
         assert "related_to" not in create_text
     for role, marker in (
         ("requested_by_person_id", "explicitly requested"),
-        ("delegated_to_person_ids", "delegated or assigned"),
-        ("waiting_on_person_ids", "waiting for"),
+        ("delegated_to_person_ids", "explicitly delegated or assigned"),
+        ("waiting_on_person_ids", "explicitly waiting for"),
         ("involved_person_ids", "no stronger requested, delegated, or waiting role"),
     ):
         text = create["properties"][role]["description"]

@@ -348,7 +348,10 @@ def test_readonly_fixture_scores_and_serializes(scenario_id: str) -> None:
         assert [call.tool_name for call in run.calls] == ["retrieve"]
     if scenario_id == "T3":
         assert run.final_facts == {"unchanged": True}
-        assert {call.tool_name for call in run.calls}.isdisjoint({"link_objects", "update_task", "create_task"})
+        assert {call.tool_name for call in run.calls}.isdisjoint(
+            {"link_objects", "update_task", "create_task", "set_task_status"}
+        )
+        assert not any(call.approval_required for call in run.calls)
     if scenario_id == "R3":
         references = {
             neighbor["edge"]["id"]

@@ -28,23 +28,27 @@ _EVIDENCE_OBJECT_IDS_DESCRIPTION = (
 )
 _REQUESTED_BY_PERSON_ID_DESCRIPTION = (
     "The Person who explicitly requested or asked for the Task. "
-    "A typed Task-to-Person actor role. Use only when that role is stated or known. "
-    "Not a generic association."
+    "A typed Task-to-Person actor role. Use only when that exact role is intended. "
+    "Not a generic association and not a fallback for an unsupported relationship."
 )
 _DELEGATED_TO_PERSON_IDS_DESCRIPTION = (
-    "Persons the work is delegated or assigned to. "
-    "A typed Task-to-Person actor role. Additive. "
-    "Not waiting_on and not involves. Omitting an id does not remove an existing role."
+    "Persons the work is explicitly delegated or assigned to. "
+    "A typed Task-to-Person actor role. Additive. Use only when that exact role is intended. "
+    "Not waiting_on, not involves, and not a fallback for an unsupported relationship. "
+    "Omitting an id does not remove an existing role."
 )
 _WAITING_ON_PERSON_IDS_DESCRIPTION = (
-    "Persons whose response or action the Task is waiting for. "
-    "A typed Task-to-Person actor role. Additive. "
-    "Not a substitute for delegated_to. Omitting an id does not remove an existing role."
+    "Persons whose response or action the Task is explicitly waiting for. "
+    "A typed Task-to-Person actor role. Additive. Use only when that exact role is intended. "
+    "Not a substitute for delegated_to and not a fallback for an unsupported relationship. "
+    "Omitting an id does not remove an existing role."
 )
 _INVOLVED_PERSON_IDS_DESCRIPTION = (
-    "Persons involved when no stronger requested, delegated, or waiting role is intended. "
+    "Persons involved when that weaker role is explicitly intended and no stronger "
+    "requested, delegated, or waiting role is intended. "
     "A typed Task-to-Person actor role. Additive. "
     "Do not use this when a stronger role is known. "
+    "Not a fallback for an unsupported relationship. "
     "Omitting an id does not remove an existing role."
 )
 _PLANNED_INTERVAL_CREATE_DESCRIPTION = (
@@ -749,6 +753,9 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
             "depends_on means the source/dependent depends on the target/prerequisite. "
             "part_of means the source child Task belongs to the target parent Task: "
             "composition, not dependency; one active or proposed parent; do not infer. "
+            "The generic relation list is closed. "
+            "related_to is not a catch-all substitute for an unsupported typed or "
+            "user-requested relation. "
             "Actor roles use the typed Task fields. Labels use assign_label. "
             "Do not invent unsupported relation names."
         ),
