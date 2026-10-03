@@ -10,7 +10,6 @@ AH2-CLI1 human client regression is **ARCHITECT ACCEPTED**. AP1, STG1, and UX-CA
 - Backend health: PASS
 - Flutter: 3.47.5
 - Dart: 3.13.4
-- No backend deploy or migration occurred during AH2-CLI1
 
 ## AH2-CLI1 human acceptance
 
@@ -29,8 +28,7 @@ Acceptance facts:
 
 - raw UUID is no longer the primary approval label;
 - Task title is human-readable;
-- waiting-on Person is human-readable;
-- internal mutation approval uses the AP1 semantic presentation snapshot.
+- waiting-on Person is human-readable.
 
 ### STG1 pre-approval truth — PASS
 
@@ -46,7 +44,7 @@ Human sequence:
 
 1. opened an existing object;
 2. started contextual Task capture;
-3. entered recognizable abandoned draft text `CTX abandoned draft`;
+3. entered `CTX abandoned draft`;
 4. closed the contextual capture without submitting;
 5. opened global `+ Задача`.
 
@@ -71,7 +69,7 @@ Human-accepted on the current production/backend+client combination:
 - AH2-PER1 conservative Person name-variant flow;
 - AH2-CTX1 selected-Task waiting-on routing.
 
-Source-accepted and already deployed:
+Source-accepted and deployed:
 
 - AH2-FIN1 post-approval language continuity;
 - AH2-FIN2 deterministic temporal display facts;
@@ -81,7 +79,7 @@ No new remediation or product slice is authorized by this HOLD.
 
 ## Next product direction — not yet authorized
 
-The largest remaining product backlog item from the AH2 manual acceptance is first-class Scheduled Activity product integration:
+The largest remaining product backlog item from AH2 manual acceptance is first-class Scheduled Activity product integration:
 
 - Today/Week visibility;
 - distinct Scheduled Activity presentation;
@@ -89,14 +87,12 @@ The largest remaining product backlog item from the AH2 manual acceptance is fir
 - tap-through;
 - recurrence semantics without duplicate rendering.
 
-This is broader than the completed remediation chain and should begin only as a fresh Architect-authorized product slice.
-
 Other residual backlog remains separate:
 
 - selected context readability/polish;
 - T1 final terminology polish;
 - original P1 exact-two-Anna and R3 ambiguity edge cases remain manual-unverified;
-- stale deterministic test debt should be cleaned separately, without weakening safety.
+- stale deterministic test debt should be cleaned separately without weakening safety.
 
 ## HOLD
 
