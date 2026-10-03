@@ -21,7 +21,6 @@ from app.personal_relevance.models import (
     PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT,
     PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON,
 )
-from app.proactive.instructions import PROACTIVE_SYSTEM_INSTRUCTIONS
 from app.services.graph_service import GraphService
 from app.services.person_identity_service import PersonIdentityService
 from app.services.person_role_service import PersonRoleService
@@ -50,8 +49,8 @@ from tests.test_workflow_intelligence_proactive_personalization_e_c import (
 MM_SERVER = "https://chat.example.com"
 
 
-def test_evidence_version_is_two() -> None:
-    assert PERSONAL_RELEVANCE_EVIDENCE_VERSION == 2
+def test_evidence_version_is_three() -> None:
+    assert PERSONAL_RELEVANCE_EVIDENCE_VERSION == 3
 
 
 def test_exact_email_sender_role_appears_without_raw_address(db_session) -> None:
@@ -383,7 +382,7 @@ def test_roles_load_once_for_many_objects(db_session) -> None:
     assert all(item.known_people[0].person_id == person.id for item in snapshot.objects)
 
 
-def test_proactive_seed_does_not_expose_known_people(db_session) -> None:
+def test_proactive_seed_exposes_bounded_known_people_without_internals(db_session) -> None:
     user_id = _user(db_session)
     person = _people(db_session, user_id).create_person("Скрытый носитель")
     _people(db_session, user_id).attach(person.id, normalize_email("boss@example.com"))
@@ -391,16 +390,18 @@ def test_proactive_seed_does_not_expose_known_people(db_session) -> None:
     email = _email(db_session, user_id, {"sender": "boss@example.com", "recipients": []})
     snapshot = _service(db_session).build_snapshot(user_id, [email.id])
     payload = seed_context_from_evidence([email], snapshot)
-    dumped = json.dumps(payload)
-    assert payload["evidence_version"] == 2
-    assert "known_people" not in dumped
-    assert "директор-rel1b" not in dumped
-    assert "контекст-rel1b" not in dumped
-    assert "Скрытый носитель" not in dumped
+    dumped = json.dumps(payload["seed_objects"][0]["known_people"])
+    assert payload["evidence_version"] == 3
     seed = payload["seed_objects"][0]
+    assert seed["known_people"][0]["display_name"] == "Скрытый носитель"
+    assert seed["known_people"][0]["roles"] == [
+        {"role": "директор-rel1b", "context": "контекст-rel1b"}
+    ]
+    assert "role_term_id" not in dumped
+    assert "canonical_value" not in dumped
+    assert "provenance" not in dumped
     assert "user_participation_roles" in seed
     assert "assigned_labels" in seed
-    assert "known_people" not in PROACTIVE_SYSTEM_INSTRUCTIONS
 
 
 def test_role_change_discards_pending_notify(db_session, monkeypatch) -> None:

@@ -19,7 +19,7 @@ from app.domain.task_map_topology import (
     invalidate_existing_task_layout,
     note_task_map_participation_change,
 )
-from app.domain.task_relations import PART_OF
+from app.domain.task_relations import PART_OF, TASK_ACTOR_ROLES
 from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.llm.embedding_service import EmbeddingService
@@ -40,6 +40,7 @@ from app.services.provenance import (
     validate_origin,
     validate_state,
 )
+from app.services.user_serialization_gate import lock_user_serialization_row
 
 _SEARCHABLE_FIELDS = frozenset({"kind", "title", "body", "metadata"})
 
@@ -259,6 +260,7 @@ class GraphService:
             raise NotFoundError("object", data.target_id)
         if data.type == PART_OF and data.state != REJECTED_STATE:
             validate_part_of_edge(self._session, self._user_id, source, target)
+        self._lock_user_for_actor_edge(data.type)
 
         edge = Edge(
             user_id=self._user_id,
@@ -292,6 +294,7 @@ class GraphService:
         reserved = reserved_labeled_with_reason(edge.type)
         if reserved is not None:
             raise ValidationError(reserved)
+        self._lock_user_for_actor_edge(edge.type)
         source = self._get_object_row(edge.source_id)
         target = self._get_object_row(edge.target_id)
         note_task_map_participation_change(
@@ -333,6 +336,7 @@ class GraphService:
             )
         source = self._get_object_row(edge.source_id)
         target = self._get_object_row(edge.target_id)
+        self._lock_user_for_actor_edge(edge.type)
         previous_state = edge.state
         edge.state = state
         self._session.flush()
@@ -349,6 +353,7 @@ class GraphService:
 
     def reject_confirmed_agent_relation(self, edge: Edge) -> Edge:
         """Reject one removable confirmed agent relation without a general transition."""
+        self._lock_user_for_actor_edge(edge.type)
         source = self._get_object_row(edge.source_id)
         target = self._get_object_row(edge.target_id)
         previous_state = edge.state
@@ -364,6 +369,13 @@ class GraphService:
             target_kind=None if target is None else target.kind,
         )
         return edge
+
+    def _lock_user_for_actor_edge(self, edge_type: str) -> None:
+        if edge_type not in TASK_ACTOR_ROLES:
+            return
+        row = lock_user_serialization_row(self._session, self._user_id)
+        if row is None:
+            raise NotFoundError("user", self._user_id)
 
     def get_neighbors(
         self,

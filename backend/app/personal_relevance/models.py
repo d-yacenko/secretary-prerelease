@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-PERSONAL_RELEVANCE_EVIDENCE_VERSION = 2
+PERSONAL_RELEVANCE_EVIDENCE_VERSION = 3
 PERSONAL_RELEVANCE_MAX_OBJECTS = 20
 PERSONAL_RELEVANCE_MAX_LABELS_PER_OBJECT = 8
 PERSONAL_RELEVANCE_MAX_TITLE_CHARS = 500
@@ -20,6 +20,10 @@ PERSONAL_RELEVANCE_MAX_IDENTITY_JSON_CHARS = 4000
 PERSONAL_RELEVANCE_MAX_PARTICIPATION_ROLES = 8
 PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT = 8
 PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON = 8
+PERSONAL_RELEVANCE_MAX_RELATED_TASKS_PER_OBJECT = 8
+PROACTIVE_MAX_KNOWN_PEOPLE_PER_SEED_OBJECT = 4
+PROACTIVE_MAX_ROLES_PER_KNOWN_PERSON = 4
+PROACTIVE_MAX_RELATED_TASKS_PER_SEED_OBJECT = 4
 KNOWN_PERSON_SOURCE_ROLES = (
     "sender",
     "recipient",
@@ -156,6 +160,39 @@ class KnownPersonEvidence:
 
 
 @dataclass(frozen=True)
+class RelatedTaskActorEvidence:
+    person_id: UUID
+    actor_role: str
+
+    def to_payload(self) -> dict:
+        return {"person_id": str(self.person_id), "actor_role": self.actor_role}
+
+
+@dataclass(frozen=True)
+class RelatedActiveTaskEvidence:
+    task_id: UUID
+    title: str
+    status: str | None
+    start_at: datetime | None
+    due_at: datetime | None
+    planned_start_at: datetime | None
+    planned_end_at: datetime | None
+    actor_links: tuple[RelatedTaskActorEvidence, ...]
+
+    def to_payload(self) -> dict:
+        return {
+            "task_id": str(self.task_id),
+            "title": self.title,
+            "status": self.status,
+            "start_at": _iso(self.start_at),
+            "due_at": _iso(self.due_at),
+            "planned_start_at": _iso(self.planned_start_at),
+            "planned_end_at": _iso(self.planned_end_at),
+            "actor_links": [item.to_payload() for item in self.actor_links],
+        }
+
+
+@dataclass(frozen=True)
 class ObjectPersonalRelevanceEvidence:
     object_id: UUID
     kind: str
@@ -174,6 +211,8 @@ class ObjectPersonalRelevanceEvidence:
     participation_truncated: bool = False
     known_people: tuple[KnownPersonEvidence, ...] = ()
     known_people_truncated: bool = False
+    related_tasks: tuple[RelatedActiveTaskEvidence, ...] = ()
+    related_tasks_truncated: bool = False
 
     def to_payload(self) -> dict:
         return {
@@ -194,6 +233,8 @@ class ObjectPersonalRelevanceEvidence:
             "labels_truncated": self.labels_truncated,
             "known_people": [item.to_payload() for item in self.known_people],
             "known_people_truncated": self.known_people_truncated,
+            "related_tasks": [item.to_payload() for item in self.related_tasks],
+            "related_tasks_truncated": self.related_tasks_truncated,
         }
 
 

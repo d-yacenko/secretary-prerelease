@@ -52,6 +52,10 @@ from app.personal_relevance.models import (
     object_evidence_canonical_payload,
     user_context_canonical_payload,
 )
+from app.personal_relevance.related_tasks import (
+    load_related_task_index,
+    related_tasks_for_people,
+)
 from app.services.label_service import label_description
 from app.services.person_identity_service import PERSON_KIND
 from app.services.person_role_service import PersonRoleService
@@ -129,12 +133,24 @@ class PersonalRelevanceEvidenceService:
         owned = self._load_owned_objects(user_id, bounded_ids)
         labels_by_object = self._load_assigned_labels(user_id, [obj.id for obj in owned])
         people_by_object = self._load_known_people(user_id, owned)
+        related_index = load_related_task_index(
+            self._session,
+            user_id,
+            [
+                person.person_id
+                for people, _truncated in people_by_object.values()
+                for person in people
+            ],
+        )
 
         object_records: list[ObjectPersonalRelevanceEvidence] = []
         signatures: dict[str, str] = {}
         for obj in owned:
             labels, labels_truncated = labels_by_object.get(obj.id, ((), False))
             known_people, known_people_truncated = people_by_object.get(obj.id, ((), False))
+            related_tasks, related_tasks_truncated = related_tasks_for_people(
+                related_index, [person.person_id for person in known_people]
+            )
             participation = current_user_participation(obj, identity)
             title = obj.title or ""
             record = ObjectPersonalRelevanceEvidence(
@@ -155,6 +171,8 @@ class PersonalRelevanceEvidenceService:
                 participation_truncated=participation.truncated,
                 known_people=known_people,
                 known_people_truncated=known_people_truncated,
+                related_tasks=related_tasks,
+                related_tasks_truncated=related_tasks_truncated,
             )
             object_records.append(record)
             signatures[str(obj.id)] = object_evidence_signature(record, user_context_signature)
@@ -710,6 +728,7 @@ def acquire_personal_relevance_authority(
     user_id: UUID,
     seed_ids: Sequence[UUID],
     known_person_ids: Sequence[UUID] = (),
+    related_task_ids: Sequence[UUID] = (),
 ) -> UserSettings | None:
     """Lock E-B signature inputs. Order matches auto-label: User, settings, semantic, identity, then objects.
 
@@ -738,6 +757,7 @@ def acquire_personal_relevance_authority(
             .execution_options(populate_existing=True)
         )
     _lock_known_people(session, user_id, known_person_ids)
+    _lock_related_tasks(session, user_id, related_task_ids)
     return settings
 
 
@@ -751,6 +771,20 @@ def _lock_known_people(
                 Object.id == person_id,
                 Object.user_id == user_id,
                 Object.kind == PERSON_KIND,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+
+def _lock_related_tasks(session: Session, user_id: UUID, task_ids: Sequence[UUID]) -> None:
+    for task_id in sorted(set(task_ids), key=lambda item: item.bytes):
+        session.scalar(
+            select(Object)
+            .where(
+                Object.id == task_id,
+                Object.user_id == user_id,
+                Object.kind == "task",
             )
             .with_for_update()
             .execution_options(populate_existing=True)

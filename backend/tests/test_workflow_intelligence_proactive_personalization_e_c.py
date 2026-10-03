@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.ai_audit.constants import EVENT_TRACE_STARTED
-from app.api.schemas import ObjectCreate, ObjectUpdate
+from app.api.schemas import EdgeCreate, ObjectCreate, ObjectUpdate
 from app.db.engine import engine
 from app.db.models import (
     AITrace,
@@ -60,6 +60,7 @@ from app.services.proactive_review_service import (
     personal_relevance_evidence_is_stale,
     snapshot_covers_seed_ids,
 )
+from app.services.task_relation_service import TaskRelationService
 from app.services.user_identity_context_service import UserIdentityProfileService
 from app.services.user_serialization_gate import lock_user_serialization_row
 from app.tools.registry import PROACTIVE_TOOL_DEFINITIONS
@@ -1016,3 +1017,152 @@ def test_consolidation_undo_after_authority_blocks_until_notification(monkeypatc
             notes = _user_notes(session, user_id)
             assert len(notes) == 1
             assert notes[0].source_object_id == source_id
+
+
+def _confirmed_task(session: Session, user_id, title: str) -> Object:
+    return GraphService(session, user_id).create_object(
+        ObjectCreate(
+            kind="task",
+            title=title,
+            origin="user",
+            state="confirmed",
+            status="open",
+        )
+    )
+
+
+def test_task_actor_write_before_authority_discards_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            task_id = _confirmed_task(session, user_id, "Active work").id
+            session.commit()
+
+        def after_llm() -> None:
+            with Session(engine) as other:
+                TaskRelationService(other, user_id).add_actor(
+                    task_id, person_id, "requested_by"
+                )
+                other.commit()
+
+        _run_isolated_review(monkeypatch, user_id, source_id, after_llm=after_llm)
+        with Session(engine) as session:
+            assert _user_notes(session, user_id) == []
+
+
+def test_task_actor_write_after_authority_blocks_until_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            task_id = _confirmed_task(session, user_id, "Active work").id
+            TaskRelationService(session, user_id).add_actor(task_id, person_id, "requested_by")
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    TaskRelationService(other, user_id).add_actor(task_id, person_id, "involves")
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def test_low_level_actor_edge_after_authority_blocks_on_user_gate(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            task_id = _confirmed_task(session, user_id, "Active work").id
+            TaskRelationService(session, user_id).add_actor(task_id, person_id, "requested_by")
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    GraphService(other, user_id).create_edge(
+                        EdgeCreate(
+                            source_id=task_id,
+                            target_id=person_id,
+                            type="waiting_on",
+                            origin="user",
+                            state="confirmed",
+                        )
+                    )
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def test_related_task_field_write_after_authority_blocks_on_task_row(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            task_id = _confirmed_task(session, user_id, "Active work").id
+            TaskRelationService(session, user_id).add_actor(task_id, person_id, "delegated_to")
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    GraphService(other, user_id).update_object(
+                        task_id,
+                        ObjectUpdate(title="Blocked title", status="in_progress"),
+                    )
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            task = session.get(Object, task_id)
+            assert task is not None
+            assert task.title == "Active work"
+            assert task.status == "open"
+
+
+def test_unrelated_task_update_is_not_locked_by_another_related_task(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            related_id = _confirmed_task(session, user_id, "Related").id
+            unrelated = _confirmed_task(session, user_id, "Unrelated")
+            unrelated_id = unrelated.id
+            TaskRelationService(session, user_id).add_actor(related_id, person_id, "involves")
+            session.execute(
+                Object.__table__.update()
+                .where(Object.id == unrelated_id)
+                .values(updated_at=datetime.now(UTC) - timedelta(days=40))
+            )
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                GraphService(other, user_id).update_object(
+                    unrelated_id, ObjectUpdate(title="Changed unrelated")
+                )
+                other.commit()
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+            unrelated = session.get(Object, unrelated_id)
+            assert unrelated is not None
+            assert unrelated.title == "Changed unrelated"

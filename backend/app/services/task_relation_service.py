@@ -25,6 +25,7 @@ from app.domain.task_relations import (
 from app.services.errors import NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
+from app.services.user_serialization_gate import lock_user_serialization_row
 
 
 class TaskRelationService:
@@ -32,6 +33,11 @@ class TaskRelationService:
         self._session = session
         self._user_id = user_id
         self._graph = GraphService(session, user_id)
+
+    def _lock_user(self) -> None:
+        row = lock_user_serialization_row(self._session, self._user_id)
+        if row is None:
+            raise NotFoundError("user", self._user_id)
 
     def add_actor(
         self,
@@ -45,11 +51,13 @@ class TaskRelationService:
     ) -> tuple[Edge, bool]:
         if role not in TASK_ACTOR_ROLES:
             raise ValidationError("task actor role is unknown")
+        self._lock_user()
         task = self._require_active(task_id, kind="task")
         person = self._require_active(person_id, kind="person")
         return self._add_edge(task.id, person.id, role, origin=origin, state=state, confidence=confidence)
 
     def remove_actor(self, task_id: UUID, edge_id: UUID) -> tuple[Edge, bool]:
+        self._lock_user()
         return self._reject(task_id, edge_id, TASK_ACTOR_ROLES)
 
     def add_dependency(

@@ -31,6 +31,10 @@ from app.notifications.constants import (
 )
 from app.personal_relevance.models import (
     PERSONAL_RELEVANCE_EVIDENCE_VERSION,
+    PROACTIVE_MAX_KNOWN_PEOPLE_PER_SEED_OBJECT,
+    PROACTIVE_MAX_RELATED_TASKS_PER_SEED_OBJECT,
+    PROACTIVE_MAX_ROLES_PER_KNOWN_PERSON,
+    ObjectPersonalRelevanceEvidence,
     PersonalRelevanceEvidenceSnapshot,
 )
 from app.proactive.constants import (
@@ -155,6 +159,10 @@ def seed_context_from_evidence(
                 "participation_truncated": payload["participation_truncated"],
                 "assigned_labels": payload["assigned_labels"],
                 "labels_truncated": payload["labels_truncated"],
+                "known_people": _project_known_people(evidence),
+                "known_people_truncated": _known_people_projection_truncated(evidence),
+                "related_tasks": _project_related_tasks(evidence),
+                "related_tasks_truncated": _related_tasks_projection_truncated(evidence),
                 "object_evidence_signature": snapshot.object_evidence_signatures[str(obj.id)],
             }
         )
@@ -165,6 +173,65 @@ def seed_context_from_evidence(
         "truncated_objects": snapshot.truncated_objects,
         "seed_objects": seed_payload,
     }
+
+
+def _project_known_people(evidence: ObjectPersonalRelevanceEvidence) -> list[dict]:
+    projected = []
+    for person in evidence.known_people[:PROACTIVE_MAX_KNOWN_PEOPLE_PER_SEED_OBJECT]:
+        roles = person.roles[:PROACTIVE_MAX_ROLES_PER_KNOWN_PERSON]
+        projected.append(
+            {
+                "person_id": str(person.person_id),
+                "display_name": person.display_name,
+                "source_roles": list(person.source_roles),
+                "roles": [{"role": item.role, "context": item.context} for item in roles],
+                "roles_truncated": person.roles_truncated
+                or len(person.roles) > PROACTIVE_MAX_ROLES_PER_KNOWN_PERSON,
+            }
+        )
+    return projected
+
+
+def _known_people_projection_truncated(evidence: ObjectPersonalRelevanceEvidence) -> bool:
+    return evidence.known_people_truncated or (
+        len(evidence.known_people) > PROACTIVE_MAX_KNOWN_PEOPLE_PER_SEED_OBJECT
+    )
+
+
+def _project_related_tasks(evidence: ObjectPersonalRelevanceEvidence) -> list[dict]:
+    grounded = {person.person_id for person in evidence.known_people}
+    projected = []
+    for task in evidence.related_tasks[:PROACTIVE_MAX_RELATED_TASKS_PER_SEED_OBJECT]:
+        projected.append(
+            {
+                "task_id": str(task.task_id),
+                "title": task.title,
+                "status": task.status,
+                "start_at": _iso_or_none(task.start_at),
+                "due_at": _iso_or_none(task.due_at),
+                "planned_start_at": _iso_or_none(task.planned_start_at),
+                "planned_end_at": _iso_or_none(task.planned_end_at),
+                "actor_links": [
+                    {"person_id": str(link.person_id), "actor_role": link.actor_role}
+                    for link in task.actor_links
+                    if link.person_id in grounded
+                ],
+            }
+        )
+    return projected
+
+
+def _related_tasks_projection_truncated(evidence: ObjectPersonalRelevanceEvidence) -> bool:
+    return evidence.related_tasks_truncated or (
+        len(evidence.related_tasks) > PROACTIVE_MAX_RELATED_TASKS_PER_SEED_OBJECT
+    )
+
+
+def _iso_or_none(value: datetime | None) -> str | None:
+    parsed = parse_aware_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.isoformat()
 
 
 def create_proactive_provider(effective: EffectiveUserSettings) -> OpenAIAssistantProvider:
@@ -508,6 +575,11 @@ class ProactiveReviewService:
                             person.person_id
                             for record in snapshot.objects
                             for person in record.known_people
+                        ],
+                        [
+                            task.task_id
+                            for record in snapshot.objects
+                            for task in record.related_tasks
                         ],
                     )
                     authority_held = True
