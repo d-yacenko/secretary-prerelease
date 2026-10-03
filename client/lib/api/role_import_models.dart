@@ -211,12 +211,18 @@ class RoleImportGroundedPreview {
   RoleImportGroundedPreview({
     required this.sourceObjectId,
     required this.sourceRevision,
+    required this.sourceKind,
+    required this.sourceTruncated,
+    required this.itemsTruncated,
     required this.groundingRevision,
     required this.items,
   });
 
   final String sourceObjectId;
   final String sourceRevision;
+  final String sourceKind;
+  final bool sourceTruncated;
+  final bool itemsTruncated;
   final String groundingRevision;
   final List<RoleImportGroundedItem> items;
 
@@ -224,6 +230,9 @@ class RoleImportGroundedPreview {
     return RoleImportGroundedPreview(
       sourceObjectId: json['source_object_id'] as String,
       sourceRevision: json['source_revision'] as String,
+      sourceKind: json['source_kind'] as String,
+      sourceTruncated: json['source_truncated'] as bool,
+      itemsTruncated: json['items_truncated'] as bool,
       groundingRevision: json['grounding_revision'] as String,
       items: _maps(json['items']).map(RoleImportGroundedItem.fromJson).toList(),
     );

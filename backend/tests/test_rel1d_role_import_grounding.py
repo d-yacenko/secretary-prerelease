@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError as ModelValidationError
 from sqlalchemy import func, select
 
 from app.core.config import settings
@@ -39,7 +40,10 @@ from app.services.person_role_import_grounding_service import (
     _exact_terms,
     _suggestion_texts,
 )
-from app.services.person_role_import_source_service import PersonRoleImportSourceService
+from app.services.person_role_import_source_service import (
+    ROLE_IMPORT_MAX_SOURCE_TEXT_CHARS,
+    PersonRoleImportSourceService,
+)
 from app.services.person_role_service import PersonRoleService
 from app.services.provenance import REJECTED_STATE
 from app.users.bootstrap import BOOTSTRAP_USER_ID
@@ -94,6 +98,7 @@ def test_request_rejects_injected_ids(auth_client, monkeypatch, tmp_path) -> Non
         json={
             "source_object_id": "00000000-0000-0000-0000-000000000001",
             "source_revision": "abc",
+            "items_truncated": False,
             "person_id": "00000000-0000-0000-0000-000000000002",
             "role_term_id": "00000000-0000-0000-0000-000000000003",
             "assignment_id": "00000000-0000-0000-0000-000000000004",
@@ -360,6 +365,34 @@ def test_cross_user_and_hidden_sources_fail_closed(db_session, tmp_path, nornick
         _ground(db_session, tmp_path, hidden.id, "abc", [_row(_NAME, _ROLE)])
 
 
+def test_items_truncated_is_required_and_changes_grounding_revision(db_session, tmp_path) -> None:
+    obj, revision = _image(db_session, tmp_path)
+    payload = {
+        "source_object_id": obj.id,
+        "source_revision": revision,
+        "items": [_row(_NAME, _ROLE)],
+    }
+    with pytest.raises(ModelValidationError):
+        RoleImportGroundRequest.model_validate(payload)
+    rows = [_row(f"REL1DB Строка {index}", _ROLE) for index in range(32)]
+    complete = _ground(db_session, tmp_path, obj.id, revision, rows, items_truncated=False)
+    truncated = _ground(db_session, tmp_path, obj.id, revision, rows, items_truncated=True)
+    assert len(complete.items) == 32
+    assert len(truncated.items) == 32
+    assert complete.items_truncated is False
+    assert truncated.items_truncated is True
+    assert complete.grounding_revision != truncated.grounding_revision
+    assert complete.source_kind == "image"
+    assert complete.source_truncated is False
+    long_text = "я" * (ROLE_IMPORT_MAX_SOURCE_TEXT_CHARS + 1)
+    text = _text_object(db_session, long_text)
+    text_revision = _sources(db_session, tmp_path).load(text.id).source_revision
+    derived = _ground(db_session, tmp_path, text.id, text_revision, [_row(_NAME, _ROLE)])
+    assert derived.source_kind == "text"
+    assert derived.source_truncated is True
+    assert derived.items_truncated is False
+
+
 def test_zero_rows_skip_promotion_scan(db_session, tmp_path, monkeypatch) -> None:
     calls = {"promotion": 0}
     original = PersonPromotionService.eligible_direct_contacts
@@ -371,7 +404,12 @@ def test_zero_rows_skip_promotion_scan(db_session, tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(PersonPromotionService, "eligible_direct_contacts", _eligible)
     obj, revision = _image(db_session, tmp_path)
     proposal = _service(db_session, tmp_path).ground(
-        RoleImportGroundRequest(source_object_id=obj.id, source_revision=revision, items=[])
+        RoleImportGroundRequest(
+            source_object_id=obj.id,
+            source_revision=revision,
+            items_truncated=False,
+            items=[],
+        )
     )
     assert proposal.items == []
     assert calls["promotion"] == 0
@@ -386,6 +424,7 @@ def test_http_source_conflict_detail(auth_client, db_session, tmp_path, monkeypa
         json={
             "source_object_id": str(obj.id),
             "source_revision": "stale",
+            "items_truncated": False,
             "items": [_row(_NAME, _ROLE)],
         },
     )
@@ -393,11 +432,20 @@ def test_http_source_conflict_detail(auth_client, db_session, tmp_path, monkeypa
     assert response.json()["detail"] == "role_import_source_changed"
 
 
-def _ground(db_session, tmp_path: Path, object_id, revision: str, items: list[dict]):
+def _ground(
+    db_session,
+    tmp_path: Path,
+    object_id,
+    revision: str,
+    items: list[dict],
+    *,
+    items_truncated: bool = False,
+):
     return _service(db_session, tmp_path).ground(
         RoleImportGroundRequest(
             source_object_id=object_id,
             source_revision=revision,
+            items_truncated=items_truncated,
             items=[RoleImportGroundInputItem.model_validate(item) for item in items],
         )
     )

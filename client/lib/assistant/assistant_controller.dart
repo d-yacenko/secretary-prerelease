@@ -492,6 +492,7 @@ class AssistantController extends ChangeNotifier {
     if (source == null ||
         preview == null ||
         preview.items.isEmpty ||
+        roleImportStale ||
         roleImportLoading ||
         roleGroundingLoading) {
       return;

@@ -360,6 +360,8 @@ void main() {
           _proposal(
             sourceId: sourceId,
             revision: extractCalls == 1 ? 'rev-1' : 'rev-2',
+            itemsTruncated: extractCalls == 1,
+            sourceTruncated: extractCalls == 1,
             items: [_item(name: 'Анна', role: 'директор')],
           ),
         );
@@ -368,7 +370,7 @@ void main() {
         groundCalls += 1;
         groundBody = jsonDecode(request.body) as Map<String, dynamic>;
         if (groundCalls == 1) {
-          return _json(_grounded());
+          return _json(_grounded(sourceTruncated: true, itemsTruncated: true));
         }
         if (groundCalls == 2) {
           return http.Response(
@@ -413,6 +415,10 @@ void main() {
     expect(groundCalls, 1);
     expect(groundBody?['source_object_id'], 'source-a');
     expect(groundBody?['source_revision'], 'rev-1');
+    expect(groundBody?['items_truncated'], true);
+    expect(assistant.roleGrounding?.sourceKind, 'image');
+    expect(assistant.roleGrounding?.sourceTruncated, true);
+    expect(assistant.roleGrounding?.itemsTruncated, true);
     expect(groundBody?['items'], [
       _item(name: 'Анна', role: 'директор'),
     ]);
@@ -437,14 +443,19 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
     expect(find.text('Источник изменился — извлеките роли заново'), findsOneWidget);
+    expect(find.byKey(const Key('ground_roles_button')), findsNothing);
     expect(find.text('Person: Ольга Володько'), findsNothing);
     expect(find.text('Анна'), findsOneWidget);
+    expect(find.text('Ничего не сохранено'), findsOneWidget);
+    await assistant.groundRoles();
+    expect(groundCalls, 2);
 
     await tester.tap(find.byKey(const Key('extract_roles_button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
     expect(assistant.roleGrounding, isNull);
     expect(find.text('Источник изменился — извлеките роли заново'), findsNothing);
+    expect(find.byKey(const Key('ground_roles_button')), findsOneWidget);
     expect(find.text('Person: Ольга Володько'), findsNothing);
 
     await tester.tap(find.byKey(const Key('ground_roles_button')));
@@ -549,13 +560,17 @@ Map<String, dynamic> _proposal({
   };
 }
 
-Map<String, dynamic> _grounded({String personTitle = 'Ольга Володько'}) {
+Map<String, dynamic> _grounded({
+  String personTitle = 'Ольга Володько',
+  bool sourceTruncated = false,
+  bool itemsTruncated = false,
+}) {
   return {
     'source_object_id': 'source-a',
     'source_revision': 'rev-1',
     'source_kind': 'image',
-    'source_truncated': false,
-    'items_truncated': false,
+    'source_truncated': sourceTruncated,
+    'items_truncated': itemsTruncated,
     'grounding_revision': 'ground-1',
     'items': [
       {

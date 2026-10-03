@@ -90,7 +90,7 @@ class RoleImportPreviewPanel extends StatelessWidget {
                   if (item.sourceLocator != null) Text(item.sourceLocator!),
                 ],
               ),
-            if (preview!.items.isNotEmpty && onGround != null)
+            if (preview!.items.isNotEmpty && onGround != null && !sourceStale)
               TextButton(
                 key: const Key('ground_roles_button'),
                 onPressed: loading || groundingLoading ? null : onGround,

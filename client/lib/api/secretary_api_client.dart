@@ -1443,6 +1443,7 @@ class SecretaryApiClient {
       jsonBody: {
         'source_object_id': preview.sourceObjectId,
         'source_revision': preview.sourceRevision,
+        'items_truncated': preview.itemsTruncated,
         'items': preview.items.map((item) => item.toJson()).toList(),
       },
     );

@@ -51,6 +51,7 @@ class RoleImportGroundRequest(BaseModel):
 
     source_object_id: UUID
     source_revision: str = Field(min_length=1)
+    items_truncated: bool
     items: list[RoleImportGroundInputItem] = Field(max_length=MAX_GROUND_ITEMS)
 
 
@@ -163,7 +164,7 @@ class PersonRoleImportGroundingService:
             source_revision=source.source_revision,
             source_kind=source.source_kind,  # type: ignore[arg-type]
             source_truncated=source.source_truncated,
-            items_truncated=False,
+            items_truncated=request.items_truncated,
             grounding_revision="",
             items=items,
         )
