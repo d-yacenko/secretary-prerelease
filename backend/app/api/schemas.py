@@ -45,9 +45,7 @@ class ObjectCreate(BaseModel):
         validate_state(state, "object")
         validate_confidence(self.confidence, "object")
         validate_agent_proposal(self.origin, state, self.confidence, "object")
-        validate_planned_execution_interval(
-            self.kind, self.planned_start_at, self.planned_end_at
-        )
+        validate_planned_execution_interval(self.kind, self.planned_start_at, self.planned_end_at)
         return self
 
 
@@ -89,9 +87,7 @@ class ObjectUpdate(BaseModel):
         end_set = "planned_end_at" in self.model_fields_set
         if start_set and end_set:
             kind = self.kind if "kind" in self.model_fields_set else "task"
-            validate_planned_execution_interval(
-                kind, self.planned_start_at, self.planned_end_at
-            )
+            validate_planned_execution_interval(kind, self.planned_start_at, self.planned_end_at)
         return self
 
 
@@ -543,9 +539,7 @@ class TaskPatchRequest(BaseModel):
         ):
             raise ValueError(PLANNED_INTERVAL_BOTH_OR_NEITHER)
         if start_set and self.planned_start_at is not None:
-            validate_planned_execution_interval(
-                "task", self.planned_start_at, self.planned_end_at
-            )
+            validate_planned_execution_interval("task", self.planned_start_at, self.planned_end_at)
         return self
 
 
@@ -669,6 +663,31 @@ class PersonSalienceSummaryOut(BaseModel):
     claims_object_importance: bool
 
 
+class PersonRoleAssignmentOut(BaseModel):
+    id: UUID
+    role_term_id: UUID
+    role_display_text: str
+    context: str | None = None
+    origin: str
+    state: str
+
+
+class PersonRoleTermOut(BaseModel):
+    id: UUID
+    display_text: str
+
+
+class PersonRoleTermSearchOut(BaseModel):
+    terms: list[PersonRoleTermOut] = Field(default_factory=list)
+
+
+class PersonRoleAssignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    context: str | None = None
+
+
 class PersonPresentation(BaseModel):
     person_id: UUID
     title: str
@@ -677,6 +696,7 @@ class PersonPresentation(BaseModel):
     routes: list[PersonRoutePresentation]
     identity_conflict: bool
     open_task_count: int
+    role_assignments: list[PersonRoleAssignmentOut] = Field(default_factory=list)
     landscape_task_ids: list[UUID] = Field(default_factory=list)
     landscape_task_ids_complete: bool = True
     recent_communication_count: int
@@ -907,9 +927,7 @@ def task_operational_out(projection: Any) -> TaskOperationalOut:
         planned_start_at=projection.planned_start_at,
         planned_end_at=projection.planned_end_at,
         blocking_dependencies=[
-            TaskOperationalDependencyOut(
-                task_id=item.task_id, title=item.title, status=item.status
-            )
+            TaskOperationalDependencyOut(task_id=item.task_id, title=item.title, status=item.status)
             for item in projection.blocking_dependencies
         ],
         waiting_on=[

@@ -19,6 +19,10 @@ from app.api.schemas import (
     PersonPromotionCandidateOut,
     PersonPromotionRequest,
     PersonPromotionSuppressionOut,
+    PersonRoleAssignmentOut,
+    PersonRoleAssignRequest,
+    PersonRoleTermOut,
+    PersonRoleTermSearchOut,
 )
 from app.core.current_user import CurrentUserContext
 from app.services.errors import (
@@ -39,6 +43,11 @@ from app.services.graph_workspace_service import (
 from app.services.person_consolidation_service import PersonConsolidationService
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
+from app.services.person_role_service import (
+    SEARCH_DEFAULT_LIMIT,
+    SEARCH_MAX_LIMIT,
+    PersonRoleService,
+)
 
 router = APIRouter()
 
@@ -165,7 +174,8 @@ def get_people_workspace(
         ],
         promotion_candidates_truncated=result.promotion_candidates_truncated,
         promotion_suppressions=[
-            PersonPromotionSuppressionOut.model_validate(item) for item in result.promotion_suppressions
+            PersonPromotionSuppressionOut.model_validate(item)
+            for item in result.promotion_suppressions
         ],
         landscape_tasks=[ObjectOut.from_model(task) for task in result.landscape_tasks],
         landscape_task_edges=[EdgeOut.from_model(edge) for edge in result.landscape_task_edges],
@@ -179,11 +189,17 @@ def preview_person_merge(
     service: PersonConsolidationService = Depends(_merge_service),
 ) -> PersonMergePreviewOut:
     try:
-        return PersonMergePreviewOut.model_validate(service.preview(body.survivor_id, body.duplicate_id))
+        return PersonMergePreviewOut.model_validate(
+            service.preview(body.survivor_id, body.duplicate_id)
+        )
     except NotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
 
 
 @router.post("/graph/people/merges", response_model=PersonMergeResultOut)
@@ -192,11 +208,17 @@ def apply_person_merge(
     service: PersonConsolidationService = Depends(_merge_service),
 ) -> PersonMergeResultOut:
     try:
-        return PersonMergeResultOut.model_validate(service.apply(body.survivor_id, body.duplicate_id))
+        return PersonMergeResultOut.model_validate(
+            service.apply(body.survivor_id, body.duplicate_id)
+        )
     except NotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
 
@@ -207,11 +229,17 @@ def undo_person_merge(
     service: PersonConsolidationService = Depends(_merge_service),
 ) -> PersonMergeResultOut:
     try:
-        return PersonMergeResultOut.model_validate(service.undo(body.survivor_id, body.duplicate_id))
+        return PersonMergeResultOut.model_validate(
+            service.undo(body.survivor_id, body.duplicate_id)
+        )
     except NotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
 
@@ -235,7 +263,9 @@ def apply_person_promotion(
             detail=f"{exc.resource} not found",
         ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
 
@@ -261,7 +291,9 @@ def correct_person_identity(
             detail=f"{exc.resource} not found",
         ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     return {
         "person_id": str(row.person_id),
         "evidence_id": str(row.evidence_id),
@@ -284,7 +316,9 @@ def bind_person_email(
             detail=f"{exc.resource} not found",
         ) from exc
     except ValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.message) from exc
     return {
@@ -293,3 +327,77 @@ def bind_person_email(
         "evidence_type": row.evidence_type,
         "state": row.state,
     }
+
+
+def _role_service(
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> PersonRoleService:
+    return PersonRoleService(session, current_user.user_id)
+
+
+def _role_display(service: PersonRoleService, role_term_id: UUID) -> str:
+    from app.db.models import PersonRoleTerm
+
+    term = service._session.get(PersonRoleTerm, role_term_id)
+    return term.display_text if term is not None else ""
+
+
+def _role_out(row, display: str) -> PersonRoleAssignmentOut:
+    return PersonRoleAssignmentOut(
+        id=row.id,
+        role_term_id=row.role_term_id,
+        role_display_text=display,
+        context=row.context_text,
+        origin=row.origin,
+        state=row.state,
+    )
+
+
+@router.get("/graph/person-role-terms", response_model=PersonRoleTermSearchOut)
+def search_person_role_terms(
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=SEARCH_DEFAULT_LIMIT, ge=1, le=SEARCH_MAX_LIMIT),
+    service: PersonRoleService = Depends(_role_service),
+) -> PersonRoleTermSearchOut:
+    terms = service.search(q, limit)
+    return PersonRoleTermSearchOut(
+        terms=[PersonRoleTermOut(id=term.id, display_text=term.display_text) for term in terms]
+    )
+
+
+@router.post("/graph/people/{person_id}/roles", response_model=PersonRoleAssignmentOut)
+def assign_person_role(
+    person_id: UUID,
+    body: PersonRoleAssignRequest,
+    service: PersonRoleService = Depends(_role_service),
+) -> PersonRoleAssignmentOut:
+    try:
+        row = service.assign(person_id, body.role, body.context)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
+    return _role_out(row, _role_display(service, row.role_term_id))
+
+
+@router.delete(
+    "/graph/people/{person_id}/roles/{assignment_id}",
+    response_model=PersonRoleAssignmentOut,
+)
+def retract_person_role(
+    person_id: UUID,
+    assignment_id: UUID,
+    service: PersonRoleService = Depends(_role_service),
+) -> PersonRoleAssignmentOut:
+    try:
+        row = service.retract(person_id, assignment_id)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
+    return _role_out(row, _role_display(service, row.role_term_id))

@@ -1627,3 +1627,106 @@ class TaskLayoutPosition(Base):
         ),
         Index("ix_task_layout_positions_user_snapshot", "user_id", "snapshot_revision"),
     )
+
+
+class PersonRoleTerm(Base):
+    __tablename__ = "person_role_terms"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    display_text: Mapped[str] = mapped_column(sa.String(120), nullable=False)
+    normalized_key: Mapped[str] = mapped_column(sa.String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "normalized_key", name="uq_person_role_terms_user_key"),
+        Index("ix_person_role_terms_user_id", "user_id"),
+        sa.CheckConstraint(
+            "char_length(display_text) BETWEEN 1 AND 120",
+            name="ck_person_role_terms_display_text",
+        ),
+        sa.CheckConstraint(
+            "char_length(normalized_key) BETWEEN 1 AND 120",
+            name="ck_person_role_terms_normalized_key",
+        ),
+    )
+
+
+class PersonRoleAssignment(Base):
+    __tablename__ = "person_role_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    person_object_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("objects.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    role_term_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("person_role_terms.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    context_text: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
+    context_key: Mapped[str] = mapped_column(sa.String(200), nullable=False, server_default="")
+    origin: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    state: Mapped[str] = mapped_column(sa.String(16), nullable=False)
+    provenance_kind: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    provenance_key: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    source_object_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("objects.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "uq_person_role_assignments_active",
+            "user_id",
+            "person_object_id",
+            "role_term_id",
+            "context_key",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+        ),
+        Index(
+            "ix_person_role_assignments_person",
+            "user_id",
+            "person_object_id",
+            "state",
+        ),
+        sa.CheckConstraint(
+            "state IN ('active', 'retracted')",
+            name="ck_person_role_assignments_state",
+        ),
+        sa.CheckConstraint(
+            "(state = 'retracted' AND retracted_at IS NOT NULL) "
+            "OR (state = 'active' AND retracted_at IS NULL)",
+            name="ck_person_role_assignments_retracted_at",
+        ),
+    )

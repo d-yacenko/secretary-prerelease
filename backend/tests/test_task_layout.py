@@ -20,10 +20,13 @@ from app.users.bootstrap import BOOTSTRAP_USER_ID
 
 def test_migration_0052_is_single_head() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_heads() == ["0052"]
+    assert script.get_heads() == ["0053"]
     revision = script.get_revision("0052")
     assert revision is not None
     assert revision.down_revision == "0051"
+    head = script.get_revision("0053")
+    assert head is not None
+    assert head.down_revision == "0052"
 
 
 def test_users_receive_isolated_layout_state(db_session, nornickel_user_id) -> None:

@@ -27,6 +27,7 @@ import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'people_landscape.dart';
+import 'person_roles_section.dart';
 import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
 import 'people_overview.dart';
@@ -2806,6 +2807,12 @@ class _PersonDetailSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        PersonRolesSection(
+          person: person,
+          apiClient: apiClient,
+          onChanged: onChanged,
+        ),
+        const SizedBox(height: 12),
         const _DetailSectionHeader(title: 'Участие в задачах'),
         Align(
           alignment: Alignment.centerLeft,
@@ -3523,12 +3530,28 @@ class _GraphNodeCard extends StatelessWidget {
         ),
         const SizedBox(width: 6),
         Expanded(
-          child: Text(
-            object.title,
-            key: Key('person-compact-title-${object.id}'),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: titleStyle,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                object.title,
+                key: Key('person-compact-title-${object.id}'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: titleStyle,
+              ),
+              if (personRoleCardSummary(current?.roleAssignments ?? const []) case final summary?)
+                Text(
+                  summary,
+                  key: Key('person-role-summary-${object.id}'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -3598,6 +3621,14 @@ class _GraphNodeCard extends StatelessWidget {
           Text(
             cues,
             key: Key('person-provider-cues-${object.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        if (personRoleCardSummary(current.roleAssignments) case final summary?)
+          Text(
+            summary,
+            key: Key('person-role-summary-${object.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),

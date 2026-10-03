@@ -36,6 +36,7 @@ from app.services.person_consolidation_service import PersonConsolidationService
 from app.services.person_evidence_service import PersonEvidenceService, _identity_from_identity_row
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
 from app.services.person_promotion_service import PersonPromotionService, parse_promotion_identity
+from app.services.person_role_service import PersonRoleService
 from app.services.person_salience_service import PersonSalienceService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
 from app.tools.schemas import (
@@ -276,6 +277,7 @@ class PersonGraphWorkspaceService:
         if scores is None:
             scores = self._scores()
         person_ids = [person.id for person in people]
+        role_assignments = PersonRoleService(self._session, self._user_id).active_for_people(person_ids)
         communication_counts, communication_truncated = self._communication_counts(person_ids)
         landscape_anchors = self._landscape_task_anchors(person_ids)
         people_payloads = [
@@ -288,6 +290,7 @@ class PersonGraphWorkspaceService:
                 communication_count_truncated=communication_truncated,
                 landscape_task_ids=landscape_anchors[person.id][0],
                 landscape_task_ids_complete=landscape_anchors[person.id][1],
+                role_assignments=role_assignments.get(person.id, []),
             )
             for person in people
         ]
@@ -447,6 +450,7 @@ class PersonGraphWorkspaceService:
         communication_count_truncated: bool = False,
         landscape_task_ids: list[UUID] | None = None,
         landscape_task_ids_complete: bool = True,
+        role_assignments: list[dict] | None = None,
     ) -> dict:
         identities = self._identity_presentations(person.id, include_rejected=include_details)
         conflict = any(item["state"] == "conflicted" for item in identities)
@@ -463,6 +467,7 @@ class PersonGraphWorkspaceService:
             "recent_communication_count_truncated": communication_count_truncated,
             "landscape_task_ids": landscape_task_ids or [],
             "landscape_task_ids_complete": landscape_task_ids_complete,
+            "role_assignments": role_assignments or [],
         }
         if include_truth:
             involvement, involvement_truncated = self._task_involvement(person.id)

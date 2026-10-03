@@ -2877,6 +2877,7 @@ class PersonPresentation {
     this.identityCandidatesTruncated = false,
     this.rejectedIdentityCandidates = const [],
     this.consolidations = const [],
+    this.roleAssignments = const [],
   });
 
   final String personId;
@@ -2899,6 +2900,7 @@ class PersonPresentation {
   final bool identityCandidatesTruncated;
   final List<PersonRejectedIdentityCandidate> rejectedIdentityCandidates;
   final List<PersonConsolidation> consolidations;
+  final List<PersonRoleAssignment> roleAssignments;
 
   factory PersonPresentation.fromJson(Map<String, dynamic> json) {
     return PersonPresentation(
@@ -2951,6 +2953,60 @@ class PersonPresentation {
       consolidations: (json['consolidations'] as List<dynamic>? ?? [])
           .map((item) => PersonConsolidation.fromJson(item as Map<String, dynamic>))
           .toList(),
+      roleAssignments: (json['role_assignments'] as List<dynamic>? ?? [])
+          .map((item) => PersonRoleAssignment.fromJson(item as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class PersonRoleTerm {
+  PersonRoleTerm({required this.id, required this.displayText});
+
+  final String id;
+  final String displayText;
+
+  factory PersonRoleTerm.fromJson(Map<String, dynamic> json) {
+    return PersonRoleTerm(
+      id: json['id'] as String,
+      displayText: json['display_text'] as String? ?? '',
+    );
+  }
+}
+
+class PersonRoleAssignment {
+  PersonRoleAssignment({
+    required this.id,
+    required this.roleTermId,
+    required this.roleDisplayText,
+    required this.origin,
+    required this.state,
+    this.context,
+  });
+
+  final String id;
+  final String roleTermId;
+  final String roleDisplayText;
+  final String? context;
+  final String origin;
+  final String state;
+
+  String get label {
+    final place = context;
+    if (place == null || place.isEmpty) {
+      return roleDisplayText;
+    }
+    return '$roleDisplayText · $place';
+  }
+
+  factory PersonRoleAssignment.fromJson(Map<String, dynamic> json) {
+    return PersonRoleAssignment(
+      id: json['id'] as String,
+      roleTermId: json['role_term_id'] as String,
+      roleDisplayText: json['role_display_text'] as String? ?? '',
+      context: json['context'] as String?,
+      origin: json['origin'] as String? ?? '',
+      state: json['state'] as String? ?? '',
     );
   }
 }

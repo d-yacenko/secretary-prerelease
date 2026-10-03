@@ -860,6 +860,51 @@ class SecretaryApiClient {
     );
   }
 
+  Future<List<PersonRoleTerm>> searchPersonRoleTerms({
+    String? query,
+    int limit = 8,
+  }) async {
+    final queryParameters = <String, String>{'limit': '$limit'};
+    if (query != null) {
+      queryParameters['q'] = query;
+    }
+    final body = await _request(
+      'GET',
+      '/graph/person-role-terms',
+      queryParameters: queryParameters,
+    );
+    return (body['terms'] as List<dynamic>? ?? [])
+        .map((item) => PersonRoleTerm.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<PersonRoleAssignment> assignPersonRole({
+    required String personId,
+    required String role,
+    String? context,
+  }) async {
+    final body = await _request(
+      'POST',
+      '/graph/people/$personId/roles',
+      jsonBody: {
+        'role': role,
+        if (context != null && context.trim().isNotEmpty) 'context': context,
+      },
+    );
+    return PersonRoleAssignment.fromJson(body);
+  }
+
+  Future<PersonRoleAssignment> retractPersonRole({
+    required String personId,
+    required String assignmentId,
+  }) async {
+    final body = await _request(
+      'DELETE',
+      '/graph/people/$personId/roles/$assignmentId',
+    );
+    return PersonRoleAssignment.fromJson(body);
+  }
+
   Future<void> correctPersonIdentity({
     required String personId,
     required String action,
