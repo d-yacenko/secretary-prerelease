@@ -21,6 +21,7 @@ from app.resources.constants import (
     MAX_UPLOAD_BYTES,
     PROVIDER_UPLOAD,
     PROVIDER_WEB,
+    RASTER_UPLOAD_SUFFIXES,
     REVISION_METADATA_KEYS,
 )
 from app.resources.upload_staging import StagedUpload
@@ -96,6 +97,9 @@ class ResourceRegistrationService:
             metadata["local_path_metadata"] = data.local_path_metadata
 
         if staged_upload is not None:
+            suffix = Path(staged_upload.original_filename).suffix.lower()
+            if suffix in RASTER_UPLOAD_SUFFIXES and data.ingest_content:
+                raise ValidationError("raster upload requires ingest_content=false")
             metadata["content_hash"] = staged_upload.content_hash
             metadata["upload_filename"] = staged_upload.original_filename
             if provider is None:

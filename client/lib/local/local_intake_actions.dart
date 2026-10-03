@@ -11,6 +11,7 @@ import '../api/secretary_api_client.dart';
 import '../auth/auth_controller.dart';
 import '../capture/capture_controller.dart';
 import '../assistant/assistant_controller.dart';
+import 'extraction/extraction_constants.dart';
 import 'local_file_intake_service.dart';
 
 typedef IntakeObjectHandler = void Function(SecretaryObject object);
@@ -222,6 +223,14 @@ class LocalIntakeActions {
     File file, {
     bool notifySuccess = true,
   }) async {
+    final suffix = p.extension(file.path).toLowerCase();
+    if (kRoleImportRasterSuffixes.contains(suffix)) {
+      return _registerRasterFile(context, file, notifySuccess: notifySuccess);
+    }
+    if (kUnsupportedRoleImageSuffixes.contains(suffix)) {
+      _showMessage(context, kUnsupportedRoleImageMessage);
+      return false;
+    }
     try {
       final object = await _intakeService.registerFileAndFetch(
         file,
@@ -239,6 +248,35 @@ class LocalIntakeActions {
                 ? 'Формат пока индексируется только по метаданным: ${object.title}'
                 : 'Файл добавлен: ${object.title}',
       );
+      if (notifySuccess) {
+        _notifyIntakeSuccess();
+      }
+      return true;
+    } on AuthenticationException {
+      authController.handleAuthenticationFailure();
+    } on ApiException catch (e) {
+      _showMessage(context, e.message);
+    } catch (_) {
+      _showMessage(context, 'Не удалось зарегистрировать источник');
+    }
+    return false;
+  }
+
+  Future<bool> _registerRasterFile(
+    BuildContext context,
+    File file, {
+    bool notifySuccess = true,
+  }) async {
+    try {
+      final object = await apiClient.registerRasterResource(
+        filename: p.basename(file.path),
+        bytes: await file.readAsBytes(),
+      );
+      if (!forInbox) {
+        onIntakeObject?.call(object);
+        _attachObject(object);
+      }
+      _showMessage(context, 'Файл добавлен: ${object.title}');
       if (notifySuccess) {
         _notifyIntakeSuccess();
       }

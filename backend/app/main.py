@@ -23,6 +23,7 @@ from app.api.routes.graph_workspace import router as graph_workspace_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.relations import router as relations_router
 from app.api.routes.resources import router as resources_router
+from app.api.routes.role_import import router as role_import_router
 from app.api.routes.tasks import router as tasks_router
 from app.api.source_preferences import router as source_preferences_router
 from app.api.sources import router as sources_router
@@ -97,6 +98,7 @@ app.include_router(graph_workspace_router)
 app.include_router(tasks_router)
 app.include_router(relations_router)
 app.include_router(resources_router)
+app.include_router(role_import_router)
 app.include_router(local_router)
 app.include_router(notifications_router)
 app.include_router(google_router)

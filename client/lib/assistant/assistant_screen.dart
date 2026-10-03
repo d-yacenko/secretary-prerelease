@@ -16,6 +16,7 @@ import '../navigation/secretary_navigation.dart';
 import '../ui/domain_labels.dart';
 import '../ui/object_bookmark_controller.dart';
 import 'assistant_message_body.dart';
+import 'role_import_preview.dart';
 import 'assistant_reference_chip.dart';
 
 class AssistantScreen extends StatefulWidget {
@@ -237,11 +238,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
               ),
           ],
         ),
-        if (controller.objectContext != null)
+        if (controller.objectContext != null) ...[
           _ContextBanner(
             label: _objectContextLabel(controller.objectContext!),
             onClear: controller.clearObjectContext,
           ),
+          RoleImportPreviewPanel(
+            loading: controller.roleImportLoading,
+            error: controller.roleImportError,
+            preview: controller.roleImportPreview,
+            onExtract: controller.extractRoles,
+          ),
+        ],
         if (controller.notificationContext != null)
           _ContextBanner(
             label: _notificationContextLabel(controller.notificationContext!),

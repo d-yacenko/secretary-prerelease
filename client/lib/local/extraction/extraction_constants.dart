@@ -51,3 +51,24 @@ const Set<String> kLegacyMetadataOnlySuffixes = {
   '.xls',
   '.ppt',
 };
+
+const Set<String> kRoleImportRasterSuffixes = {
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+};
+
+const Set<String> kUnsupportedRoleImageSuffixes = {
+  '.svg',
+  '.gif',
+  '.bmp',
+  '.ico',
+  '.heic',
+  '.heif',
+  '.tiff',
+  '.tif',
+};
+
+const String kUnsupportedRoleImageMessage =
+    'Этот формат изображения не поддерживается для извлечения ролей';

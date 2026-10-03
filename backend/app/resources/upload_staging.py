@@ -4,7 +4,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.resources.constants import ALLOWED_UPLOAD_SUFFIXES, MAX_UPLOAD_BYTES, UPLOAD_CHUNK_BYTES
+from app.resources.constants import (
+    ALLOWED_UPLOAD_SUFFIXES,
+    MAX_UPLOAD_BYTES,
+    RASTER_UPLOAD_SUFFIXES,
+    UPLOAD_CHUNK_BYTES,
+)
+from app.resources.raster_signatures import raster_signature_matches
 from app.services.errors import ValidationError
 
 
@@ -53,6 +59,10 @@ async def stage_upload_file(upload, temp_dir: Path) -> StagedUpload:
     if total == 0:
         temp_path.unlink(missing_ok=True)
         raise ValidationError("upload is empty")
+
+    if suffix in RASTER_UPLOAD_SUFFIXES and not raster_signature_matches(suffix, temp_path):
+        temp_path.unlink(missing_ok=True)
+        raise ValidationError("upload bytes do not match the image format")
 
     return StagedUpload(
         path=temp_path,

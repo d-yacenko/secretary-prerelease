@@ -26,7 +26,8 @@ MAX_WEB_REDIRECTS = 5
 WEB_FETCH_TIMEOUT_SECONDS = 15.0
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
-ALLOWED_UPLOAD_SUFFIXES = frozenset({".txt", ".md", ".csv", ".parquet"})
+RASTER_UPLOAD_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+ALLOWED_UPLOAD_SUFFIXES = frozenset({".txt", ".md", ".csv", ".parquet"}) | RASTER_UPLOAD_SUFFIXES
 
 REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 

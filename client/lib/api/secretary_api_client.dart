@@ -6,6 +6,7 @@ import 'package:http_parser/http_parser.dart';
 
 import 'api_error.dart';
 import 'api_models.dart';
+import 'role_import_models.dart';
 import '../config/url_utils.dart';
 import '../timezone/client_timezone_context.dart';
 
@@ -1374,6 +1375,63 @@ class SecretaryApiClient {
       '/assistant/action-plans/$planId/resume',
     );
     return ActionPlanResumeResponse.fromJson(body);
+  }
+
+  Future<SecretaryObject> registerRasterResource({
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    if (_baseUri == null) {
+      throw StateError('API client is not configured with a base URL');
+    }
+    if (_token == null || _token!.isEmpty) {
+      throw AuthenticationException();
+    }
+    final uri = buildApiEndpointUri(_baseUri!, '/resources/register');
+    final request = http.MultipartRequest('POST', uri);
+    request.headers['Accept'] = 'application/json';
+    request.headers['Authorization'] = 'Bearer $_token';
+    request.fields['payload'] = jsonEncode({
+      'kind': 'file',
+      'title': filename,
+      'ingest_content': false,
+    });
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: filename,
+      ),
+    );
+    try {
+      final streamed = await _httpClient.send(request).timeout(_timeout);
+      final response = await http.Response.fromStream(streamed);
+      final decoded = _mapResponse(response, const {201});
+      if (decoded is! Map<String, dynamic>) {
+        throw ServerException('Unexpected response format');
+      }
+      final objectId = decoded['object_id'];
+      if (objectId is! String || objectId.isEmpty) {
+        throw ServerException('Unexpected response format');
+      }
+      return await getObject(objectId);
+    } on TimeoutException {
+      throw NetworkException();
+    } on http.ClientException {
+      throw NetworkException();
+    }
+  }
+
+  Future<RoleImportPreview> extractRoleImport(String sourceObjectId) async {
+    final decoded = await _requestJson(
+      'POST',
+      '/people/role-import/extract',
+      jsonBody: {'source_object_id': sourceObjectId},
+    );
+    if (decoded is! Map<String, dynamic>) {
+      throw ServerException('Unexpected response format');
+    }
+    return RoleImportPreview.fromJson(decoded);
   }
 
   Future<String> transcribeAudio({

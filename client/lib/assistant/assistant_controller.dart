@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../api/api_error.dart';
 import '../api/api_models.dart';
+import '../api/role_import_models.dart';
 import '../api/secretary_api_client.dart';
 import '../assistant/voice_recorder.dart';
 import '../assistant/voice_temp_files.dart';
@@ -266,6 +267,10 @@ class AssistantController extends ChangeNotifier {
 
   final List<AssistantChatMessage> _messages = [];
   AssistantContextRef? _objectContext;
+  int _roleImportEpoch = 0;
+  bool roleImportLoading = false;
+  String? roleImportError;
+  RoleImportPreview? roleImportPreview;
   AssistantContextRef? _notificationContext;
   AssistantSendState sendState = AssistantSendState.idle;
   AssistantActionPlanOperationState actionPlanOperationState =
@@ -397,6 +402,7 @@ class AssistantController extends ChangeNotifier {
   }
 
   void setObjectContext(SecretaryObject object) {
+    _clearRoleImportPreview();
     _objectContext = AssistantContextRef(
       id: object.id,
       title: object.title,
@@ -407,6 +413,7 @@ class AssistantController extends ChangeNotifier {
   }
 
   void setNotificationContext(NotificationOut notification) {
+    _clearRoleImportPreview();
     _notificationContext = AssistantContextRef(
       id: notification.id,
       title: notification.title,
@@ -417,7 +424,49 @@ class AssistantController extends ChangeNotifier {
   }
 
   void clearObjectContext() {
+    _clearRoleImportPreview();
     _objectContext = null;
+    notifyListeners();
+  }
+
+  void _clearRoleImportPreview() {
+    _roleImportEpoch += 1;
+    roleImportLoading = false;
+    roleImportError = null;
+    roleImportPreview = null;
+  }
+
+  Future<void> extractRoles() async {
+    final source = _objectContext;
+    if (source == null || roleImportLoading) {
+      return;
+    }
+    final epoch = _roleImportEpoch;
+    final sourceId = source.id;
+    roleImportLoading = true;
+    roleImportError = null;
+    roleImportPreview = null;
+    notifyListeners();
+    try {
+      final preview = await _apiClient.extractRoleImport(sourceId);
+      if (epoch != _roleImportEpoch || _objectContext?.id != sourceId) {
+        return;
+      }
+      roleImportPreview = preview;
+      roleImportLoading = false;
+    } on ApiException catch (error) {
+      if (epoch != _roleImportEpoch || _objectContext?.id != sourceId) {
+        return;
+      }
+      roleImportLoading = false;
+      roleImportError = error.message;
+    } catch (_) {
+      if (epoch != _roleImportEpoch || _objectContext?.id != sourceId) {
+        return;
+      }
+      roleImportLoading = false;
+      roleImportError = 'Не удалось извлечь роли';
+    }
     notifyListeners();
   }
 
