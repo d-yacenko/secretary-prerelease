@@ -386,12 +386,18 @@ rows before the release runtime starts. Those checks print booleans and
 counts only. Only then does it recreate `api` and `worker`. The database
 container, volume, and `.env` stay in place. `db` is never included in `up`.
 
-Before `0054` is applied, a failed rollout restores the rollback runtime
-with the database still at `0052`. After `0054` and before the release
-runtime is accepted, downgrade to `0052` is allowed only when both role
-tables are directly proven empty. After the release runtime has started,
-the harness stops `api` and `worker` and may downgrade only when the
-revision is still `0054` and both tables are still empty. If either table
-has rows, emptiness cannot be proven, or another safety check fails, the
-harness keeps the application stopped, does not downgrade, does not delete
-or edit role rows, and emits `BREAK_GLASS_REQUIRED=true`.
+Before the release runtime is accepted, a failed `alembic upgrade 0054`
+reads the actual Alembic revision. It does not treat the attempt itself as
+proof that the role tables exist. If the revision is exactly `0052` and both
+role tables are absent, the harness restores the rollback runtime and does
+not downgrade. If the revision is `0052` but either role table exists, it
+does not drop the table, does not restore the runtime, and emits
+`BREAK_GLASS_REQUIRED=true`. If the revision is `0053` or `0054`, downgrade
+to `0052` is allowed only when both tables exist and are empty; after that
+downgrade both tables must be absent. An unreadable, ambiguous, or other
+revision does not downgrade and does not restore a runtime. After the release
+runtime has started, the harness stops `api` and `worker` and may downgrade
+only when the revision is still `0054` and both tables are still empty. If
+either table has rows, emptiness cannot be proven, or another safety check
+fails, the harness keeps the application stopped, does not downgrade, does
+not delete or edit role rows, and emits `BREAK_GLASS_REQUIRED=true`.

@@ -101,6 +101,11 @@ EMPTY_SQL = (
     "SELECT (SELECT count(*) FROM person_role_terms)::text || '|' || "
     "(SELECT count(*) FROM person_role_assignments)::text"
 )
+ROLE_TABLE_PRESENCE_SQL = (
+    "SELECT (to_regclass('public.person_role_terms') IS NOT NULL)::int || '|' || "
+    "(to_regclass('public.person_role_assignments') IS NOT NULL)::int"
+)
+FAILED_MIGRATION_REVISIONS = frozenset({FROM_ALEMBIC, "0053", TO_ALEMBIC})
 EXPECTED_STRUCTURE = [
     "1",
     "1",
@@ -376,6 +381,37 @@ def prove_role_tables_empty(
         raise DeployError("person role tables are not empty")
 
 
+def _role_table_presence(db: str, values: dict[str, str]) -> tuple[bool, bool]:
+    try:
+        raw = _psql(db, values, ROLE_TABLE_PRESENCE_SQL)
+    except Exception as exc:
+        raise DeployError("unable to prove person role table presence") from exc
+    if raw not in {"0|0", "0|1", "1|0", "1|1"}:
+        raise DeployError("unable to prove person role table presence")
+    terms, assignments = raw.split("|")
+    return terms == "1", assignments == "1"
+
+
+def prove_role_tables_absent(db: str, values: dict[str, str]) -> None:
+    if _role_table_presence(db, values) != (False, False):
+        raise DeployError("person role tables remain after downgrade")
+
+
+def classify_failed_migration(db: str, values: dict[str, str], revision: str) -> str:
+    """Return untouched_0052 or migrated_empty. Every other state raises."""
+    if revision not in FAILED_MIGRATION_REVISIONS:
+        raise DeployError("unexpected database Alembic revision")
+    terms, assignments = _role_table_presence(db, values)
+    if revision == FROM_ALEMBIC:
+        if (terms, assignments) == (False, False):
+            return "untouched_0052"
+        raise DeployError("role schema is inconsistent")
+    if (terms, assignments) != (True, True):
+        raise DeployError("role schema is inconsistent")
+    prove_role_tables_empty(db, values)
+    return "migrated_empty"
+
+
 def prove_post_cutover_rollback_safe(db: str, db_values: dict[str, str]) -> None:
     current_api = current_service_id("api")
     current_worker = current_service_id("worker")
@@ -450,19 +486,30 @@ def recover_failed_rollout(
     api: str,
     worker: str,
 ) -> int:
+    downgrade = False
     if live:
         try:
             stop_and_prove_post_cutover_rollback_safe(db, release_db_values)
         except RECOVERABLE_ERRORS:
             return _blocked("post_cutover_role_rows")
+        downgrade = migration_started
     elif migration_started:
         try:
-            prove_role_tables_empty(db, release_db_values)
+            revision = read_db_revision(db, release_db_values)
+        except RECOVERABLE_ERRORS:
+            return _blocked("revision_unreadable")
+        if revision not in FAILED_MIGRATION_REVISIONS:
+            return _blocked("revision_unreadable")
+        try:
+            state = classify_failed_migration(db, release_db_values, revision)
         except RECOVERABLE_ERRORS:
             return _blocked("tables_not_proven_empty")
-    if migration_started:
+        downgrade = state == "migrated_empty"
+    if downgrade:
         try:
             downgrade_to_rollback_revision(db, db_values, from_alembic)
+            if not live:
+                prove_role_tables_absent(db, release_db_values)
         except RECOVERABLE_ERRORS:
             print("PERSON_ROLE_MIGRATION_ROLLBACK=FAILED", file=sys.stderr)
             return 2

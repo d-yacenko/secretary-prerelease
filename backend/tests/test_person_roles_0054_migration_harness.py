@@ -198,6 +198,8 @@ def test_remote_builds_before_downtime_and_checks_structure_before_start():
     assert 'compose("up", "-d", "--no-deps", "--force-recreate", "db")' not in source
     assert "DELETE FROM" not in source
     assert "TRUNCATE" not in source
+    assert "DROP TABLE" not in source
+    assert "UPDATE alembic_version" not in source
     assert '"docker", "rm"' not in source
     assert "/graph/people" not in source
     idempotent = main[main.index('if action == "idempotent"') : main.index("stopped = False")]
@@ -214,45 +216,138 @@ def test_migration_requires_stopped_api_and_worker(monkeypatch):
         remote.require_stopped("api", "worker")
 
 
-def test_pre_cutover_empty_tables_can_downgrade(monkeypatch):
+def _recover(monkeypatch, *, revision, query):
     calls = []
+    restored = []
     monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args) or "")
+    monkeypatch.setattr(remote, "read_db_revision", lambda db, values: revision)
     monkeypatch.setattr(
         remote,
         "require_db_revision",
         lambda db, values, expected: calls.append(("revision", expected)),
     )
-    monkeypatch.setattr(remote, "restore_old", lambda *args, **kwargs: True)
+    monkeypatch.setattr(remote, "run", query)
+    monkeypatch.setattr(
+        remote,
+        "restore_old",
+        lambda *args, **kwargs: restored.append(args[1]) or True,
+    )
+    code = remote.recover_failed_rollout(live=False, migration_started=True, **_recovery_kwargs())
+    return code, calls, restored
+
+
+def test_failed_upgrade_boundary_untouched_0052_restores_without_downgrade(monkeypatch):
+    queries = []
 
     def query(cmd, **kwargs):
-        assert cmd[-1] == remote.EMPTY_SQL
+        queries.append(cmd[-1])
+        assert cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL
         return "0|0"
 
-    monkeypatch.setattr(remote, "run", query)
-    code = remote.recover_failed_rollout(live=False, migration_started=True, **_recovery_kwargs())
+    code, calls, restored = _recover(monkeypatch, revision="0052", query=query)
     assert code == 0
-    assert ("run", "--rm", "--no-deps", "api", "alembic", "downgrade", "0052") in calls
-    assert ("revision", "0052") in calls
+    assert restored == ["0052"]
+    assert remote.EMPTY_SQL not in queries
+    assert not any("downgrade" in arg for call in calls for arg in call)
+    source = (ROOT / "ops/production/remote_migrate_person_roles_0054.py").read_text()
+    main = source[source.index("def main()") :]
+    upgrade = main.index('"alembic", "upgrade", args.to_alembic')
+    assert main.rindex("migration_started = True", 0, upgrade) < upgrade
 
 
-@pytest.mark.parametrize("row", ["1|0", "0|1", "2|3"])
-def test_pre_cutover_nonempty_tables_do_not_downgrade(monkeypatch, capsys, row):
-    calls = []
-    monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args) or "")
-    monkeypatch.setattr(remote, "restore_old", lambda *args, **kwargs: pytest.fail("restore"))
-    monkeypatch.setattr(remote, "run", lambda cmd, **kwargs: row)
-    code = remote.recover_failed_rollout(live=False, migration_started=True, **_recovery_kwargs())
+@pytest.mark.parametrize("presence", ["1|0", "0|1", "1|1"])
+def test_revision_0052_with_role_table_is_break_glass(monkeypatch, capsys, presence):
+    def query(cmd, **kwargs):
+        assert cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL
+        return presence
+
+    code, calls, restored = _recover(monkeypatch, revision="0052", query=query)
     assert code == 2
+    assert restored == []
     assert not any("downgrade" in arg for call in calls for arg in call)
     error = capsys.readouterr().err
-    assert "tables_not_proven_empty" in error
     assert "BREAK_GLASS_REQUIRED=true" in error
+    assert "tables_not_proven_empty" in error
     assert "db-password" not in error
 
 
-def test_pre_cutover_unreadable_tables_do_not_downgrade(monkeypatch, capsys):
+@pytest.mark.parametrize("revision", ["0053", "0054"])
+def test_migrated_empty_role_tables_can_downgrade(monkeypatch, revision):
+    answers = iter(("1|1", "0|0"))
+
+    def query(cmd, **kwargs):
+        if cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL:
+            return next(answers)
+        assert cmd[-1] == remote.EMPTY_SQL
+        return "0|0"
+
+    code, calls, restored = _recover(monkeypatch, revision=revision, query=query)
+    assert code == 0
+    assert restored == ["0052"]
+    assert ("run", "--rm", "--no-deps", "api", "alembic", "downgrade", "0052") in calls
+    assert ("revision", "0052") in calls
+    assert list(answers) == []
+
+
+@pytest.mark.parametrize("revision", ["0053", "0054"])
+@pytest.mark.parametrize("presence", ["0|0", "1|0", "0|1"])
+def test_migrated_missing_table_is_break_glass(monkeypatch, capsys, revision, presence):
+    def query(cmd, **kwargs):
+        assert cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL
+        return presence
+
+    code, calls, restored = _recover(monkeypatch, revision=revision, query=query)
+    assert code == 2
+    assert restored == []
+    assert not any("downgrade" in arg for call in calls for arg in call)
+    error = capsys.readouterr().err
+    assert "BREAK_GLASS_REQUIRED=true" in error
+    assert "tables_not_proven_empty" in error
+
+
+@pytest.mark.parametrize("revision", ["0053", "0054"])
+@pytest.mark.parametrize("row", ["1|0", "0|1", "2|3"])
+def test_migrated_nonempty_tables_do_not_downgrade(monkeypatch, capsys, revision, row):
+    def query(cmd, **kwargs):
+        if cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL:
+            return "1|1"
+        assert cmd[-1] == remote.EMPTY_SQL
+        return row
+
+    code, calls, restored = _recover(monkeypatch, revision=revision, query=query)
+    assert code == 2
+    assert restored == []
+    assert not any("downgrade" in arg for call in calls for arg in call)
+    error = capsys.readouterr().err
+    assert "BREAK_GLASS_REQUIRED=true" in error
+    assert "tables_not_proven_empty" in error
+    assert "db-password" not in error
+
+
+@pytest.mark.parametrize("revision", ["0053", "0054"])
+@pytest.mark.parametrize("stage", ["presence", "count"])
+def test_migrated_table_query_failure_does_not_downgrade(monkeypatch, capsys, revision, stage):
+    def query(cmd, **kwargs):
+        if stage == "presence" or cmd[-1] == remote.EMPTY_SQL:
+            raise remote.DeployError("sensitive preflight failed")
+        assert cmd[-1] == remote.ROLE_TABLE_PRESENCE_SQL
+        return "1|1"
+
+    code, calls, restored = _recover(monkeypatch, revision=revision, query=query)
+    assert code == 2
+    assert restored == []
+    assert not any("downgrade" in arg for call in calls for arg in call)
+    error = capsys.readouterr().err
+    assert "BREAK_GLASS_REQUIRED=true" in error
+    assert "tables_not_proven_empty" in error
+    assert "sensitive preflight failed" not in error
+    assert "db-password" not in error
+
+
+def test_revision_query_failure_does_not_restore(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args) or "")
+    monkeypatch.setattr(remote, "restore_old", lambda *args, **kwargs: pytest.fail("restore"))
 
     def fail(cmd, **kwargs):
         raise remote.DeployError("sensitive preflight failed")
@@ -262,9 +357,24 @@ def test_pre_cutover_unreadable_tables_do_not_downgrade(monkeypatch, capsys):
     assert code == 2
     assert not any("downgrade" in arg for call in calls for arg in call)
     error = capsys.readouterr().err
-    assert "tables_not_proven_empty" in error
+    assert "revision_unreadable" in error
     assert "BREAK_GLASS_REQUIRED=true" in error
     assert "sensitive preflight failed" not in error
+
+
+@pytest.mark.parametrize("output", ["0051", "0052\n0053", ""])
+def test_unreadable_revision_does_not_restore(monkeypatch, capsys, output):
+    calls = []
+    monkeypatch.setattr(remote, "compose", lambda *args, **kwargs: calls.append(args) or "")
+    monkeypatch.setattr(remote, "restore_old", lambda *args, **kwargs: pytest.fail("restore"))
+    monkeypatch.setattr(remote, "run", lambda cmd, **kwargs: output)
+    code = remote.recover_failed_rollout(live=False, migration_started=True, **_recovery_kwargs())
+    assert code == 2
+    assert not any("downgrade" in arg for call in calls for arg in call)
+    error = capsys.readouterr().err
+    assert "revision_unreadable" in error
+    assert "BREAK_GLASS_REQUIRED=true" in error
+    assert "db-password" not in error
 
 
 def _post_cutover(monkeypatch, row: str):
