@@ -348,3 +348,50 @@ is nonzero, a safety query fails, or another proof fails, the harness keeps
 table, and emits `BREAK_GLASS_REQUIRED=true`. Rows written by PP1 approval
 into `objects`, `person_identities`, or `person_identity_evidence` are not
 deleted.
+
+## Person role migration 0052 -> 0054
+
+Normal `ops/production/deploy.py` remains schema-neutral and rejects this
+release. The only entrypoint is:
+
+```bash
+python3 ops/production/migrate_person_roles_0054.py \
+  --release-sha 6f802d6959aca40758376a83d5bdfcbbd77fc537 \
+  --rollback-sha 2314bf72101fbd83d50a7b264154d73740e28db1 \
+  --from-alembic 0052 \
+  --to-alembic 0054
+```
+
+Both SHAs and the revision pair are fixed. The Alembic delta must add exactly
+`backend/alembic/versions/0053_person_role_vocabulary.py` and
+`backend/alembic/versions/0054_person_role_key_width.py`, with
+`0053 -> 0052` and `0054 -> 0053`. Alembic env, config, and template must be
+unchanged. The harness reuses the pinned production target and host-key
+contract. Preparing this entrypoint does not authorize a live rollout.
+
+The remote helper requires `origin/production` to equal
+`6f802d6959aca40758376a83d5bdfcbbd77fc537`. The checkout must be the rollback
+runtime with Alembic `0052`, or already the release with Alembic `0054`. The
+second case verifies role schema widths and constraints without requiring the
+role tables to be empty, and returns without migrating again. Any other
+checkout/revision pair fails closed.
+
+On a first rollout it checks out the release and builds `api` and `worker`
+while the previous containers keep serving, then stops only those two
+services. It runs `alembic upgrade 0054` with `--rm --no-deps`, requires
+revision `0054`, and requires both role tables, their columns, the 120/360
+and 200/600 widths, named checks, the user-key unique constraint, the active
+assignment index, and RESTRICT foreign keys. Both tables must contain zero
+rows before the release runtime starts. Those checks print booleans and
+counts only. Only then does it recreate `api` and `worker`. The database
+container, volume, and `.env` stay in place. `db` is never included in `up`.
+
+Before `0054` is applied, a failed rollout restores the rollback runtime
+with the database still at `0052`. After `0054` and before the release
+runtime is accepted, downgrade to `0052` is allowed only when both role
+tables are directly proven empty. After the release runtime has started,
+the harness stops `api` and `worker` and may downgrade only when the
+revision is still `0054` and both tables are still empty. If either table
+has rows, emptiness cannot be proven, or another safety check fails, the
+harness keeps the application stopped, does not downgrade, does not delete
+or edit role rows, and emits `BREAK_GLASS_REQUIRED=true`.
