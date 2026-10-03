@@ -5,8 +5,18 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
+from app.ai_audit.constants import (
+    EVENT_MODEL_ROUND,
+    EVENT_MODEL_ROUND_FAILED,
+    EVENT_ROLE_IMPORT_PROPOSAL,
+    EVENT_TRACE_FINISHED,
+)
+from app.ai_audit.trace_service import AITraceService
+from app.db.engine import engine
 from app.db.models import (
+    AITrace,
     AITraceEvent,
     Edge,
     Notification,
@@ -23,7 +33,9 @@ from app.llm.openai_role_import_provider import (
 from app.services.effective_user_settings_service import EffectiveUserSettingsService
 from app.services.errors import ValidationError
 from app.services.openai_daily_budget import (
+    BUDGET_USAGE_EVENT_TYPES,
     OpenAIDailyBudgetExhaustedError,
+    OpenAIDailyBudgetGuard,
     OpenAIDailyBudgetStatus,
 )
 from app.services.person_role_import_extraction_service import (
@@ -201,10 +213,9 @@ def test_audit_metadata_omits_source_and_extracted_text(db_session, tmp_path) ->
         text.id,
         [_row(name="Мария Секретарева", role="Казначей", evidence_text="цитата из источника")],
     )
-    events = db_session.scalars(
-        select(AITraceEvent).where(AITraceEvent.user_id == BOOTSTRAP_USER_ID)
-    ).all()
-    blob = json.dumps([event.metadata_ for event in events], ensure_ascii=False)
+    traces = _persisted_traces(text.id)
+    events = traces[0]["events"]
+    blob = json.dumps([event["metadata"] for event in events], ensure_ascii=False)
     assert events
     assert _TOKEN not in blob
     assert "Мария" not in blob
@@ -346,3 +357,225 @@ def test_missing_credential_and_budget_do_not_mutate(db_session, monkeypatch) ->
         provider.extract_text("строка")
     assert responses.kwargs is None
     assert _counts(db_session) == before
+
+
+_NAME = "Мария Секретарева"
+_ROLE = "Казначей"
+_EVIDENCE = "цитата из источника"
+_PROVIDER_SENTINEL = "PROVIDER_EXCEPTION_SENTINEL"
+
+
+def test_one_provider_call_charges_once_and_keeps_proposal_metadata(db_session, tmp_path) -> None:
+    upload_root = tmp_path / "uploads"
+    text = _text_object(db_session, f"тело {_TOKEN}")
+    responses = _FakeResponses(_provider_payload())
+    service = _openai_service(db_session, upload_root, responses)
+    before_tokens = _tokens_used()
+    before_counts = _counts(db_session)
+    first = service.extract(text.id)
+    assert _tokens_used() - before_tokens == 5
+    second = service.extract(text.id)
+    assert _tokens_used() - before_tokens == 10
+    assert first.source_revision == second.source_revision
+    assert _counts(db_session) == before_counts
+
+    traces = _persisted_traces(text.id)
+    assert len(traces) == 2
+    for trace in traces:
+        assert trace["finished_at"] is not None
+        assert trace["success"] is True
+        assert trace["error_category"] is None
+        assert _event_types(trace, EVENT_MODEL_ROUND) == 1
+        assert _event_types(trace, EVENT_MODEL_ROUND_FAILED) == 0
+        assert _event_types(trace, EVENT_TRACE_FINISHED) == 1
+        assert _event_types(trace, EVENT_ROLE_IMPORT_PROPOSAL) == 1
+        model_event = _event(trace, EVENT_MODEL_ROUND)
+        proposal_event = _event(trace, EVENT_ROLE_IMPORT_PROPOSAL)
+        assert model_event["input_tokens"] == 2
+        assert model_event["output_tokens"] == 3
+        assert "input_tokens" not in proposal_event
+        assert "output_tokens" not in proposal_event
+        assert proposal_event["source_revision"] == first.source_revision
+        assert proposal_event["item_count"] == 1
+        assert proposal_event["source_truncated"] is False
+        assert proposal_event["items_truncated"] is False
+        assert EVENT_ROLE_IMPORT_PROPOSAL not in BUDGET_USAGE_EVENT_TYPES
+        listed = _listed_events(trace["id"])
+        model_calls = [
+            event
+            for event in listed
+            if event["event_type"] in {EVENT_MODEL_ROUND, EVENT_MODEL_ROUND_FAILED}
+        ]
+        assert len(model_calls) == 1
+        _assert_audit_private(trace)
+
+
+def test_provider_failure_trace_survives_request_rollback(db_session, tmp_path) -> None:
+    text = _text_object(db_session, f"тело {_TOKEN}")
+    object_id = text.id
+    responses = _FakeResponses(
+        "{}",
+        fail=RuntimeError(f"{_PROVIDER_SENTINEL} {_TOKEN} {_NAME}"),
+    )
+    service = _openai_service(db_session, tmp_path, responses)
+    before_tokens = _tokens_used()
+    before_counts = _counts(db_session)
+    with pytest.raises(ValidationError, match="role import extraction failed"):
+        service.extract(object_id)
+    assert _tokens_used() == before_tokens
+    db_session.rollback()
+    assert db_session.get(Object, object_id) is None
+    assert _counts(db_session)["objects"] == before_counts["objects"] - 1
+
+    traces = _persisted_traces(object_id)
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace["finished_at"] is not None
+    assert trace["success"] is False
+    assert trace["error_category"] == "ValidationError"
+    assert _event_types(trace, EVENT_MODEL_ROUND) == 0
+    assert _event_types(trace, EVENT_MODEL_ROUND_FAILED) == 1
+    assert _event_types(trace, EVENT_TRACE_FINISHED) == 1
+    failed = _event(trace, EVENT_MODEL_ROUND_FAILED)
+    assert "input_tokens" not in failed
+    assert "output_tokens" not in failed
+    _assert_audit_private(trace)
+
+
+def test_budget_block_before_provider_call_charges_nothing(db_session, tmp_path) -> None:
+    text = _text_object(db_session, f"тело {_TOKEN}")
+    responses = _FakeResponses(_provider_payload())
+    status = OpenAIDailyBudgetStatus(
+        daily_token_limit=1,
+        tokens_used_today=1,
+        exhausted=True,
+        day_start=datetime.now(UTC),
+        reset_at=datetime.now(UTC),
+    )
+    service = _openai_service(
+        db_session,
+        tmp_path,
+        responses,
+        guard=_Guard(fail=OpenAIDailyBudgetExhaustedError(status)),
+    )
+    before_tokens = _tokens_used()
+    before_counts = _counts(db_session)
+    with pytest.raises(OpenAIDailyBudgetExhaustedError):
+        service.extract(text.id)
+    assert responses.kwargs is None
+    assert _tokens_used() == before_tokens
+    assert _counts(db_session) == before_counts
+    traces = _persisted_traces(text.id)
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace["finished_at"] is not None
+    assert trace["success"] is False
+    assert trace["error_category"] == "OpenAIDailyBudgetExhaustedError"
+    assert _event_types(trace, EVENT_MODEL_ROUND) == 0
+    assert _event_types(trace, EVENT_MODEL_ROUND_FAILED) == 0
+    assert _event_types(trace, EVENT_TRACE_FINISHED) == 1
+    _assert_audit_private(trace)
+
+
+def _openai_service(db_session, upload_root, responses: _FakeResponses, guard=None):
+    provider = OpenAIRoleImportExtractionProvider(
+        session=db_session,
+        user_id=BOOTSTRAP_USER_ID,
+        model="gpt-role-test",
+        api_key="sk-test",
+        client=_FakeClient(responses),
+        guard=guard or _Guard(),
+    )
+    return PersonRoleImportExtractionService(
+        db_session, BOOTSTRAP_USER_ID, provider, upload_root
+    )
+
+
+def _provider_payload() -> str:
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "person_name": _NAME,
+                    "role": _ROLE,
+                    "context": None,
+                    "evidence_text": _EVIDENCE,
+                    "source_locator": None,
+                }
+            ]
+        }
+    )
+
+
+def _tokens_used() -> int:
+    session = Session(engine)
+    try:
+        return OpenAIDailyBudgetGuard(session, BOOTSTRAP_USER_ID).status().tokens_used_today
+    finally:
+        session.close()
+
+
+def _persisted_traces(object_id) -> list[dict]:
+    session = Session(engine)
+    try:
+        traces = list(
+            session.scalars(select(AITrace).where(AITrace.object_id == object_id)).all()
+        )
+        payload = []
+        for trace in traces:
+            events = list(
+                session.scalars(
+                    select(AITraceEvent)
+                    .where(AITraceEvent.trace_id == trace.id)
+                    .order_by(AITraceEvent.sequence)
+                ).all()
+            )
+            payload.append(
+                {
+                    "id": trace.id,
+                    "finished_at": trace.finished_at,
+                    "success": trace.success,
+                    "error_category": trace.error_category,
+                    "events": [
+                        {
+                            "event_type": event.event_type,
+                            "metadata": dict(event.metadata_ or {}),
+                        }
+                        for event in events
+                    ],
+                }
+            )
+        return payload
+    finally:
+        session.close()
+
+
+def _listed_events(trace_id) -> list[dict]:
+    session = Session(engine)
+    try:
+        return AITraceService(session).list_trace_events(trace_id, BOOTSTRAP_USER_ID)
+    finally:
+        session.close()
+
+
+def _event_types(trace: dict, event_type: str) -> int:
+    return sum(1 for event in trace["events"] if event["event_type"] == event_type)
+
+
+def _event(trace: dict, event_type: str) -> dict:
+    matches = [event["metadata"] for event in trace["events"] if event["event_type"] == event_type]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _assert_audit_private(trace: dict) -> None:
+    blob = json.dumps(
+        {
+            "error_category": trace["error_category"],
+            "events": trace["events"],
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    for sentinel in (_TOKEN, _NAME, _ROLE, _EVIDENCE, _PROVIDER_SENTINEL, "sk-test", "unique-png"):
+        assert sentinel not in blob

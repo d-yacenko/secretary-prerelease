@@ -13,7 +13,8 @@ from app.services.errors import ValidationError
 from app.services.openai_daily_budget import OpenAIDailyBudgetGuard
 from app.services.person_role_import_extraction_service import (
     RoleImportProviderResult,
-    record_role_import_audit,
+    record_role_import_model_failure,
+    record_role_import_model_round,
 )
 from app.services.user_openai_credential_errors import UserOpenAICredentialConfigurationError
 
@@ -147,6 +148,15 @@ class OpenAIRoleImportExtractionProvider:
                 },
             )
         except Exception:  # noqa: BLE001 — provider errors must not echo source bytes
+            record_role_import_model_failure(
+                {
+                    "workload": WORKLOAD_ROLE_IMPORT_EXTRACTION,
+                    "model": self._model,
+                    "source_kind": "image" if image else "text",
+                    "source_bytes": source_bytes,
+                    "source_text_chars": source_text_chars,
+                }
+            )
             message = _IMAGE_REJECTED if image else _EXTRACTION_FAILED
             raise ValidationError(message) from None
         if getattr(response, "status", None) == "incomplete":
@@ -159,7 +169,7 @@ class OpenAIRoleImportExtractionProvider:
             input_tokens=getattr(usage, "input_tokens", None) if usage is not None else None,
             output_tokens=getattr(usage, "output_tokens", None) if usage is not None else None,
         )
-        record_role_import_audit(
+        record_role_import_model_round(
             {
                 "workload": WORKLOAD_ROLE_IMPORT_EXTRACTION,
                 "model": self._model,

@@ -37,6 +37,8 @@ EVENT_MODEL_ROUND = "model_round"
 EVENT_MODEL_ROUND_FAILED = "model_round_failed"
 EVENT_TOOL_CALL = "tool_call"
 EVENT_TRACE_FINISHED = "trace_finished"
+# Proposal facts for role import. Not a model call and not in BUDGET_USAGE_EVENT_TYPES.
+EVENT_ROLE_IMPORT_PROPOSAL = "role_import_proposal"
 
 # Capture session bounds
 DEFAULT_CAPTURE_DURATION_MINUTES = 60
