@@ -139,6 +139,63 @@ void main() {
     expect(posts.last['context'], 'МГУ');
   });
 
+  testWidgets('a pending query drops the previous create action', (tester) async {
+    final gates = <String, Completer<void>>{};
+    final api = _searchApi(gates);
+    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsOneWidget);
+    gates['Директор'] = Completer<void>();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gates['Директор']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+  });
+
+  testWidgets('a pending query does not invent create before the server answers', (tester) async {
+    final gates = <String, Completer<void>>{};
+    final api = _searchApi(gates);
+    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gates['оппонент'] = Completer<void>();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gates['оппонент']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Создать роль «оппонент»'), findsOneWidget);
+  });
+
+  testWidgets('pending query hides the previous suggestions', (tester) async {
+    final gates = <String, Completer<void>>{};
+    final api = _searchApi(gates);
+    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.pumpAndSettle();
+    expect(find.text('генеральный директор'), findsOneWidget);
+    gates['оппонент'] = Completer<void>();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.pump();
+    expect(find.text('генеральный директор'), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-opponent')), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gates['оппонент']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('генеральный директор'), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-opponent')), findsOneWidget);
+  });
+
   testWidgets('stale search cannot flip a newer exact-match decision', (tester) async {
     final gates = <String, Completer<void>>{};
     final api = _api((request) async {
@@ -149,8 +206,18 @@ void main() {
       }
       if (query == 'Директор') {
         return _json({
-          'terms': <Map<String, String>>[],
+          'terms': [
+            {'id': 't-director', 'display_text': 'Директор'},
+          ],
           'exact_match_term_id': 't-director',
+        });
+      }
+      if (query == 'ген') {
+        return _json({
+          'terms': [
+            {'id': 't-general', 'display_text': 'генеральный директор'},
+          ],
+          'exact_match_term_id': null,
         });
       }
       return _json({'terms': <Map<String, String>>[], 'exact_match_term_id': null});
@@ -167,8 +234,37 @@ void main() {
     gates['Директор']!.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-director')), findsOneWidget);
     gates['ген']!.complete();
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-director')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsNothing);
+  });
+
+  testWidgets('a failed search does not restore the previous query', (tester) async {
+    final api = _api((request) async {
+      final query = request.url.queryParameters['q'] ?? '';
+      if (query == 'ген') {
+        return _json({
+          'terms': [
+            {'id': 't-general', 'display_text': 'генеральный директор'},
+          ],
+          'exact_match_term_id': null,
+        });
+      }
+      return http.Response('{"detail":"down"}', 500);
+    });
+    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-create')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsNothing);
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
   });
 
@@ -232,6 +328,42 @@ PersonPresentation _person({List<PersonRoleAssignment> roles = const []}) {
     recentCommunicationCount: 0,
     roleAssignments: roles,
   );
+}
+
+SecretaryApiClient _searchApi(Map<String, Completer<void>> gates) {
+  return _api((request) async {
+    final query = request.url.queryParameters['q'] ?? '';
+    final gate = gates[query];
+    if (gate != null) {
+      await gate.future;
+    }
+    final key = query.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+    if (key == 'директор') {
+      return _json({
+        'terms': [
+          {'id': 't-director', 'display_text': 'Директор'},
+        ],
+        'exact_match_term_id': 't-director',
+      });
+    }
+    if (key == 'ген') {
+      return _json({
+        'terms': [
+          {'id': 't-general', 'display_text': 'генеральный директор'},
+        ],
+        'exact_match_term_id': null,
+      });
+    }
+    if (key == 'оппонент') {
+      return _json({
+        'terms': [
+          {'id': 't-opponent', 'display_text': 'оппонент'},
+        ],
+        'exact_match_term_id': null,
+      });
+    }
+    return _json({'terms': <Map<String, String>>[], 'exact_match_term_id': null});
+  });
 }
 
 SecretaryApiClient _api(MockClientHandler handler) {

@@ -117,11 +117,12 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   List<PersonRoleTerm> _terms = const [];
   String? _exactMatchTermId;
   int _searchGeneration = 0;
+  bool _searchSettled = false;
 
   @override
   void initState() {
     super.initState();
-    _load('');
+    _search('');
   }
 
   @override
@@ -131,16 +132,32 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
     super.dispose();
   }
 
-  Future<void> _load(String value) async {
-    final generation = ++_searchGeneration;
-    final next = await widget.apiClient.searchPersonRoleTerms(query: value);
-    if (!mounted || generation != _searchGeneration) {
-      return;
-    }
+  Future<void> _load(String value) {
     setState(() {
-      _terms = next.terms;
-      _exactMatchTermId = next.exactMatchTermId;
+      _terms = const [];
+      _exactMatchTermId = null;
+      _searchSettled = false;
     });
+    return _search(value);
+  }
+
+  Future<void> _search(String value) async {
+    final generation = ++_searchGeneration;
+    try {
+      final next = await widget.apiClient.searchPersonRoleTerms(query: value);
+      if (!mounted || generation != _searchGeneration) {
+        return;
+      }
+      setState(() {
+        _terms = next.terms;
+        _exactMatchTermId = next.exactMatchTermId;
+        _searchSettled = true;
+      });
+    } on Object {
+      if (!mounted || generation != _searchGeneration) {
+        return;
+      }
+    }
   }
 
   Future<void> _assign(String role) async {
@@ -177,7 +194,7 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
                 title: Text(term.displayText),
                 onTap: () => _assign(term.displayText),
               ),
-            if (typed.isNotEmpty && _exactMatchTermId == null)
+            if (typed.isNotEmpty && _searchSettled && _exactMatchTermId == null)
               TextButton(
                 key: const ValueKey('person-role-create'),
                 onPressed: () => _assign(_role.text),
