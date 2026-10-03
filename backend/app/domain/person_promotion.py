@@ -5,6 +5,7 @@ A qualifying row is not a Person. Display-name similarity is not authority.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from uuid import UUID
 
@@ -25,6 +26,15 @@ MAX_DIRECT_HITS = 8
 MAX_PROMOTION_CANDIDATES = 5
 MAX_SOURCE_PREVIEWS = 3
 REPEATED_DIRECT_CONTACT = "repeated_direct_contact"
+
+
+def promotion_candidate_key(identity: NormalizedPersonIdentity) -> str:
+    """Opaque preview key. It is not an authorization token."""
+    raw = (
+        f"{identity.provider}\n{identity.identity_type}\n"
+        f"{identity.realm}\n{identity.canonical_value}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def direct_promotion_identity(source: Object) -> NormalizedPersonIdentity | None:

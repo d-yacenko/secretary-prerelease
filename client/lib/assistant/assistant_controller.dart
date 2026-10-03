@@ -268,9 +268,14 @@ class AssistantController extends ChangeNotifier {
   final List<AssistantChatMessage> _messages = [];
   AssistantContextRef? _objectContext;
   int _roleImportEpoch = 0;
+  int _roleGroundEpoch = 0;
   bool roleImportLoading = false;
   String? roleImportError;
   RoleImportPreview? roleImportPreview;
+  bool roleGroundingLoading = false;
+  String? roleGroundingError;
+  RoleImportGroundedPreview? roleGrounding;
+  bool roleImportStale = false;
   AssistantContextRef? _notificationContext;
   AssistantSendState sendState = AssistantSendState.idle;
   AssistantActionPlanOperationState actionPlanOperationState =
@@ -431,9 +436,18 @@ class AssistantController extends ChangeNotifier {
 
   void _clearRoleImportPreview() {
     _roleImportEpoch += 1;
+    _roleGroundEpoch += 1;
     roleImportLoading = false;
     roleImportError = null;
     roleImportPreview = null;
+    _clearRoleGrounding();
+  }
+
+  void _clearRoleGrounding() {
+    roleGroundingLoading = false;
+    roleGroundingError = null;
+    roleGrounding = null;
+    roleImportStale = false;
   }
 
   Future<void> extractRoles() async {
@@ -443,9 +457,11 @@ class AssistantController extends ChangeNotifier {
     }
     final epoch = _roleImportEpoch;
     final sourceId = source.id;
+    _roleGroundEpoch += 1;
     roleImportLoading = true;
     roleImportError = null;
     roleImportPreview = null;
+    _clearRoleGrounding();
     notifyListeners();
     try {
       final preview = await _apiClient.extractRoleImport(sourceId);
@@ -466,6 +482,54 @@ class AssistantController extends ChangeNotifier {
       }
       roleImportLoading = false;
       roleImportError = 'Не удалось извлечь роли';
+    }
+    notifyListeners();
+  }
+
+  Future<void> groundRoles() async {
+    final source = _objectContext;
+    final preview = roleImportPreview;
+    if (source == null ||
+        preview == null ||
+        preview.items.isEmpty ||
+        roleImportLoading ||
+        roleGroundingLoading) {
+      return;
+    }
+    final epoch = _roleGroundEpoch;
+    final sourceId = source.id;
+    final revision = preview.sourceRevision;
+    roleGroundingLoading = true;
+    roleGroundingError = null;
+    roleGrounding = null;
+    notifyListeners();
+    try {
+      final grounded = await _apiClient.groundRoleImport(preview);
+      if (epoch != _roleGroundEpoch ||
+          _objectContext?.id != sourceId ||
+          roleImportPreview?.sourceRevision != revision) {
+        return;
+      }
+      roleGrounding = grounded;
+      roleGroundingLoading = false;
+    } on ApiException catch (error) {
+      if (epoch != _roleGroundEpoch || _objectContext?.id != sourceId) {
+        return;
+      }
+      roleGroundingLoading = false;
+      roleGrounding = null;
+      if (error.message == 'role_import_source_changed') {
+        roleImportStale = true;
+        roleGroundingError = null;
+      } else {
+        roleGroundingError = error.message;
+      }
+    } catch (_) {
+      if (epoch != _roleGroundEpoch || _objectContext?.id != sourceId) {
+        return;
+      }
+      roleGroundingLoading = false;
+      roleGroundingError = 'Не удалось сопоставить роли';
     }
     notifyListeners();
   }

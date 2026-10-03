@@ -342,6 +342,145 @@ void main() {
     expect(find.text('Борис'), findsOneWidget);
     expect(find.text('Ничего не сохранено'), findsOneWidget);
   });
+
+  testWidgets('explicit grounding shows a draft and drops stale results', (
+    tester,
+  ) async {
+    final lateGate = Completer<void>();
+    var extractCalls = 0;
+    var groundCalls = 0;
+    Map<String, dynamic>? groundBody;
+    String? sentBody;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/people/role-import/extract') {
+        extractCalls += 1;
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final sourceId = body['source_object_id'] as String;
+        return _json(
+          _proposal(
+            sourceId: sourceId,
+            revision: extractCalls == 1 ? 'rev-1' : 'rev-2',
+            items: [_item(name: 'Анна', role: 'директор')],
+          ),
+        );
+      }
+      if (request.url.path == '/people/role-import/ground') {
+        groundCalls += 1;
+        groundBody = jsonDecode(request.body) as Map<String, dynamic>;
+        if (groundCalls == 1) {
+          return _json(_grounded());
+        }
+        if (groundCalls == 2) {
+          return http.Response(
+            jsonEncode({'detail': 'role_import_source_changed'}),
+            422,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        await lateGate.future;
+        return _json(_grounded(personTitle: 'Старая'));
+      }
+      if (request.url.path == '/assistant/message') {
+        sentBody = request.body;
+        return _json({
+          'answer': 'ok',
+          'references': [],
+          'affected_objects': [],
+        });
+      }
+      return http.Response('{}', 404);
+    });
+    final apiClient = testSecretaryApiClient(mock);
+    apiClient.configure(baseUrl: 'https://example.com', token: 'secret-token');
+    final assistant = AssistantController(
+      apiClient: apiClient,
+      authController: _auth(apiClient),
+    );
+    assistant.setObjectContext(_secretaryObject('source-a', 'a.png'));
+    await tester.pumpWidget(_panel(assistant));
+
+    await tester.tap(find.byKey(const Key('extract_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(extractCalls, 1);
+    expect(groundCalls, 0);
+    expect(find.byKey(const Key('ground_roles_button')), findsOneWidget);
+    expect(find.text('Сохранить'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ground_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(groundCalls, 1);
+    expect(groundBody?['source_object_id'], 'source-a');
+    expect(groundBody?['source_revision'], 'rev-1');
+    expect(groundBody?['items'], [
+      _item(name: 'Анна', role: 'директор'),
+    ]);
+    expect(find.text('Ничего не сохранено'), findsOneWidget);
+    expect(find.text('Person: Ольга Володько'), findsOneWidget);
+    expect(find.text('Использовать существующую роль: Директор'), findsOneWidget);
+    expect(find.text('Нужно выбрать Person'), findsOneWidget);
+    expect(find.text('Борис'), findsOneWidget);
+    expect(find.text('Можно предложить нового Person'), findsOneWidget);
+    expect(find.text('Ада · email · 2'), findsOneWidget);
+    expect(find.text('Person не найден'), findsOneWidget);
+    expect(find.text('Новая роль: директор'), findsOneWidget);
+    expect(find.text('Похожие термины'), findsOneWidget);
+    expect(find.text('генеральный директор'), findsOneWidget);
+    expect(find.text('Сохранить'), findsNothing);
+    expect(find.text('Подтвердить'), findsNothing);
+    expect(find.text('Применить'), findsNothing);
+    expect(find.text('Создать'), findsNothing);
+    expect(find.byType(Checkbox), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ground_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.text('Источник изменился — извлеките роли заново'), findsOneWidget);
+    expect(find.text('Person: Ольга Володько'), findsNothing);
+    expect(find.text('Анна'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('extract_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(assistant.roleGrounding, isNull);
+    expect(find.text('Источник изменился — извлеките роли заново'), findsNothing);
+    expect(find.text('Person: Ольга Володько'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ground_roles_button')));
+    assistant.setObjectContext(_secretaryObject('source-b', 'b.png'));
+    lateGate.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.text('Person: Старая'), findsNothing);
+    expect(assistant.roleGrounding, isNull);
+
+    await assistant.sendMessage('обычный вопрос');
+    final sent = jsonDecode(sentBody!) as Map<String, dynamic>;
+    expect(sent['message'], 'обычный вопрос');
+    expect(sent['context_object_id'], 'source-b');
+  });
+}
+
+Widget _panel(AssistantController assistant) {
+  return MaterialApp(
+    home: Scaffold(
+      body: ListenableBuilder(
+        listenable: assistant,
+        builder: (context, _) => RoleImportPreviewPanel(
+          loading: assistant.roleImportLoading,
+          error: assistant.roleImportError,
+          preview: assistant.roleImportPreview,
+          onExtract: assistant.extractRoles,
+          groundingLoading: assistant.roleGroundingLoading,
+          groundingError: assistant.roleGroundingError,
+          grounded: assistant.roleGrounding,
+          sourceStale: assistant.roleImportStale,
+          onGround: assistant.groundRoles,
+        ),
+      ),
+    ),
+  );
 }
 
 http.Response _json(Object body, {int statusCode = 200}) {
@@ -398,14 +537,102 @@ Map<String, dynamic> _proposal({
   List<Map<String, dynamic>> items = const [],
   bool sourceTruncated = false,
   bool itemsTruncated = false,
+  String revision = 'abc',
 }) {
   return {
     'source_object_id': sourceId,
-    'source_revision': 'abc',
+    'source_revision': revision,
     'source_kind': 'image',
     'source_truncated': sourceTruncated,
     'items_truncated': itemsTruncated,
     'items': items,
+  };
+}
+
+Map<String, dynamic> _grounded({String personTitle = 'Ольга Володько'}) {
+  return {
+    'source_object_id': 'source-a',
+    'source_revision': 'rev-1',
+    'source_kind': 'image',
+    'source_truncated': false,
+    'items_truncated': false,
+    'grounding_revision': 'ground-1',
+    'items': [
+      {
+        'row_index': 0,
+        'person_name': 'Анна',
+        'role': 'Директор',
+        'context': null,
+        'evidence_text': 'цитата',
+        'source_locator': null,
+        'person_resolution': {
+          'state': 'resolved',
+          'person_id': 'p1',
+          'title': personTitle,
+          'reasons': ['alias'],
+          'candidates': [],
+          'promotion_candidates': [],
+        },
+        'role_resolution': {
+          'state': 'reuse_existing',
+          'role_term_id': 't1',
+          'display_text': 'Директор',
+          'suggestions': [],
+        },
+      },
+      {
+        'row_index': 1,
+        'person_name': 'Борис',
+        'role': 'директор',
+        'evidence_text': 'цитата',
+        'person_resolution': {
+          'state': 'ambiguous',
+          'candidates': [
+            {'person_id': 'p2', 'title': 'Борис', 'reasons': ['alias']},
+          ],
+          'promotion_candidates': [],
+        },
+        'role_resolution': {
+          'state': 'propose_new',
+          'display_text': 'директор',
+          'suggestions': ['генеральный директор'],
+        },
+      },
+      {
+        'row_index': 2,
+        'person_name': 'Ада',
+        'role': 'казначей',
+        'evidence_text': 'цитата',
+        'person_resolution': {
+          'state': 'promotion_candidates',
+          'promotion_candidates': [
+            {
+              'candidate_key': 'k',
+              'display_name': 'Ада',
+              'provider': 'email',
+              'direct_hit_count': 2,
+            },
+          ],
+        },
+        'role_resolution': {
+          'state': 'propose_new',
+          'display_text': 'казначей',
+          'suggestions': [],
+        },
+      },
+      {
+        'row_index': 3,
+        'person_name': 'Никто',
+        'role': 'гость',
+        'evidence_text': 'цитата',
+        'person_resolution': {'state': 'unresolved'},
+        'role_resolution': {
+          'state': 'propose_new',
+          'display_text': 'гость',
+          'suggestions': [],
+        },
+      },
+    ],
   };
 }
 

@@ -96,6 +96,19 @@ class PersonPromotionService:
             [self._suppression_payload(row) for row in suppressed.values()],
         )
 
+    def eligible_direct_contacts(self) -> list[PromotionCandidate]:
+        """One read-only scan of identities that overview would be allowed to show."""
+        hits, _truncated = self._hits(include_quarantined_telegram=False)
+        owned = self._owned_keys()
+        suppressed = {self._key(row) for row in self._active_feedback()}
+        return [
+            self._candidate(item)
+            for item in hits.values()
+            if item.count >= MIN_DIRECT_HITS
+            and self._key(item.identity) not in owned
+            and self._key(item.identity) not in suppressed
+        ]
+
     def suppress(
         self, identity: NormalizedPersonIdentity, *, display_value: str | None = None
     ) -> PersonPromotionFeedback:

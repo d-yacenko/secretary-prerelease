@@ -248,6 +248,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
             error: controller.roleImportError,
             preview: controller.roleImportPreview,
             onExtract: controller.extractRoles,
+            groundingLoading: controller.roleGroundingLoading,
+            groundingError: controller.roleGroundingError,
+            grounded: controller.roleGrounding,
+            sourceStale: controller.roleImportStale,
+            onGround: controller.groundRoles,
           ),
         ],
         if (controller.notificationContext != null)

@@ -22,6 +22,16 @@ class RoleImportPreviewItem {
       sourceLocator: json['source_locator'] as String?,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'person_name': personName,
+      'role': role,
+      'context': contextText,
+      'evidence_text': evidenceText,
+      'source_locator': sourceLocator,
+    };
+  }
 }
 
 class RoleImportPreview {
@@ -60,4 +70,176 @@ class RoleImportPreview {
           : const [],
     );
   }
+}
+
+class RoleImportPersonCandidate {
+  RoleImportPersonCandidate({
+    required this.personId,
+    required this.title,
+    required this.reasons,
+  });
+
+  final String personId;
+  final String title;
+  final List<String> reasons;
+
+  factory RoleImportPersonCandidate.fromJson(Map<String, dynamic> json) {
+    return RoleImportPersonCandidate(
+      personId: json['person_id'] as String,
+      title: json['title'] as String? ?? '',
+      reasons: _strings(json['reasons']),
+    );
+  }
+}
+
+class RoleImportPromotionCandidate {
+  RoleImportPromotionCandidate({
+    required this.candidateKey,
+    required this.displayName,
+    required this.provider,
+    required this.directHitCount,
+  });
+
+  final String candidateKey;
+  final String displayName;
+  final String provider;
+  final int directHitCount;
+
+  factory RoleImportPromotionCandidate.fromJson(Map<String, dynamic> json) {
+    return RoleImportPromotionCandidate(
+      candidateKey: json['candidate_key'] as String,
+      displayName: json['display_name'] as String? ?? '',
+      provider: json['provider'] as String? ?? '',
+      directHitCount: json['direct_hit_count'] as int? ?? 0,
+    );
+  }
+}
+
+class RoleImportPersonResolution {
+  RoleImportPersonResolution({
+    required this.state,
+    this.personId,
+    this.title,
+    this.candidates = const [],
+    this.promotionCandidates = const [],
+  });
+
+  final String state;
+  final String? personId;
+  final String? title;
+  final List<RoleImportPersonCandidate> candidates;
+  final List<RoleImportPromotionCandidate> promotionCandidates;
+
+  factory RoleImportPersonResolution.fromJson(Map<String, dynamic> json) {
+    return RoleImportPersonResolution(
+      state: json['state'] as String? ?? '',
+      personId: json['person_id'] as String?,
+      title: json['title'] as String?,
+      candidates: _maps(json['candidates'])
+          .map(RoleImportPersonCandidate.fromJson)
+          .toList(),
+      promotionCandidates: _maps(json['promotion_candidates'])
+          .map(RoleImportPromotionCandidate.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class RoleImportRoleResolution {
+  RoleImportRoleResolution({
+    required this.state,
+    required this.displayText,
+    this.roleTermId,
+    this.suggestions = const [],
+  });
+
+  final String state;
+  final String displayText;
+  final String? roleTermId;
+  final List<String> suggestions;
+
+  factory RoleImportRoleResolution.fromJson(Map<String, dynamic> json) {
+    return RoleImportRoleResolution(
+      state: json['state'] as String? ?? '',
+      displayText: json['display_text'] as String? ?? '',
+      roleTermId: json['role_term_id'] as String?,
+      suggestions: _strings(json['suggestions']),
+    );
+  }
+}
+
+class RoleImportGroundedItem {
+  RoleImportGroundedItem({
+    required this.rowIndex,
+    required this.personName,
+    required this.role,
+    required this.evidenceText,
+    required this.personResolution,
+    required this.roleResolution,
+    this.contextText,
+    this.sourceLocator,
+  });
+
+  final int rowIndex;
+  final String personName;
+  final String role;
+  final String? contextText;
+  final String evidenceText;
+  final String? sourceLocator;
+  final RoleImportPersonResolution personResolution;
+  final RoleImportRoleResolution roleResolution;
+
+  factory RoleImportGroundedItem.fromJson(Map<String, dynamic> json) {
+    return RoleImportGroundedItem(
+      rowIndex: json['row_index'] as int? ?? 0,
+      personName: json['person_name'] as String? ?? '',
+      role: json['role'] as String? ?? '',
+      contextText: json['context'] as String?,
+      evidenceText: json['evidence_text'] as String? ?? '',
+      sourceLocator: json['source_locator'] as String?,
+      personResolution: RoleImportPersonResolution.fromJson(
+        json['person_resolution'] as Map<String, dynamic>? ?? const {},
+      ),
+      roleResolution: RoleImportRoleResolution.fromJson(
+        json['role_resolution'] as Map<String, dynamic>? ?? const {},
+      ),
+    );
+  }
+}
+
+class RoleImportGroundedPreview {
+  RoleImportGroundedPreview({
+    required this.sourceObjectId,
+    required this.sourceRevision,
+    required this.groundingRevision,
+    required this.items,
+  });
+
+  final String sourceObjectId;
+  final String sourceRevision;
+  final String groundingRevision;
+  final List<RoleImportGroundedItem> items;
+
+  factory RoleImportGroundedPreview.fromJson(Map<String, dynamic> json) {
+    return RoleImportGroundedPreview(
+      sourceObjectId: json['source_object_id'] as String,
+      sourceRevision: json['source_revision'] as String,
+      groundingRevision: json['grounding_revision'] as String,
+      items: _maps(json['items']).map(RoleImportGroundedItem.fromJson).toList(),
+    );
+  }
+}
+
+List<Map<String, dynamic>> _maps(Object? raw) {
+  if (raw is! List) {
+    return const [];
+  }
+  return raw.whereType<Map<String, dynamic>>().toList();
+}
+
+List<String> _strings(Object? raw) {
+  if (raw is! List) {
+    return const [];
+  }
+  return raw.whereType<String>().toList();
 }

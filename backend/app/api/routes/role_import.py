@@ -21,6 +21,11 @@ from app.services.person_role_import_extraction_service import (
     PersonRoleImportExtractionService,
     RoleImportProposal,
 )
+from app.services.person_role_import_grounding_service import (
+    PersonRoleImportGroundingService,
+    RoleImportGroundedProposal,
+    RoleImportGroundRequest,
+)
 from app.services.user_openai_credential_errors import UserOpenAICredentialConfigurationError
 
 router = APIRouter()
@@ -66,4 +71,29 @@ def extract_role_import(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=build_assistant_error_detail(exc),
+        ) from exc
+
+
+@router.post("/people/role-import/ground", response_model=RoleImportGroundedProposal)
+def ground_role_import(
+    body: RoleImportGroundRequest,
+    session: Session = Depends(get_db),
+    current_user: CurrentUserContext = Depends(get_current_user),
+) -> RoleImportGroundedProposal:
+    try:
+        service = PersonRoleImportGroundingService(
+            session,
+            current_user.user_id,
+            Path(settings.resource_upload_root),
+        )
+        return service.ground(body)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
         ) from exc

@@ -1434,6 +1434,24 @@ class SecretaryApiClient {
     return RoleImportPreview.fromJson(decoded);
   }
 
+  Future<RoleImportGroundedPreview> groundRoleImport(
+    RoleImportPreview preview,
+  ) async {
+    final decoded = await _requestJson(
+      'POST',
+      '/people/role-import/ground',
+      jsonBody: {
+        'source_object_id': preview.sourceObjectId,
+        'source_revision': preview.sourceRevision,
+        'items': preview.items.map((item) => item.toJson()).toList(),
+      },
+    );
+    if (decoded is! Map<String, dynamic>) {
+      throw ServerException('Unexpected response format');
+    }
+    return RoleImportGroundedPreview.fromJson(decoded);
+  }
+
   Future<String> transcribeAudio({
     required List<int> audioBytes,
     required String filename,
