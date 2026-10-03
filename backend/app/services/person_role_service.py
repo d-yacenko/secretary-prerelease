@@ -21,6 +21,7 @@ from app.domain.person_role_text import (
 from app.services.errors import NotFoundError, ValidationError
 from app.services.person_identity_service import PERSON_KIND
 from app.services.provenance import REJECTED_STATE
+from app.services.user_serialization_gate import lock_user_serialization_row
 
 ACTIVE_STATE = "active"
 RETRACTED_STATE = "retracted"
@@ -73,6 +74,7 @@ class PersonRoleService:
             context_text, context_key = role_context_identity(context)
         except PersonRoleTextError as exc:
             raise ValidationError(exc.message) from exc
+        self._lock_user()
         self._require_person(person_id)
         existing = self._active_assignment(person_id, key, context_key)
         if existing is not None:
@@ -108,6 +110,7 @@ class PersonRoleService:
         return row
 
     def retract(self, person_id: uuid.UUID, assignment_id: uuid.UUID) -> PersonRoleAssignment:
+        self._lock_user()
         row = self._session.get(PersonRoleAssignment, assignment_id)
         if row is None or row.user_id != self._user_id or row.person_object_id != person_id:
             raise NotFoundError("person_role_assignment", assignment_id)
@@ -143,6 +146,11 @@ class PersonRoleService:
                 _assignment_payload(assignment, term)
             )
         return grouped
+
+    def _lock_user(self) -> None:
+        row = lock_user_serialization_row(self._session, self._user_id)
+        if row is None:
+            raise NotFoundError("user", self._user_id)
 
     def _require_person(self, person_id: uuid.UUID) -> Object:
         person = self._session.get(Object, person_id)

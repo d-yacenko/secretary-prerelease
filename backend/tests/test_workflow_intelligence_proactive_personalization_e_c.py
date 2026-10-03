@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.ai_audit.constants import EVENT_TRACE_STARTED
-from app.api.schemas import ObjectCreate
+from app.api.schemas import ObjectCreate, ObjectUpdate
 from app.db.engine import engine
 from app.db.models import (
     AITrace,
@@ -27,11 +27,16 @@ from app.db.models import (
     Job,
     Notification,
     Object,
+    PersonIdentity,
+    PersonIdentityEvidence,
+    PersonRoleAssignment,
+    PersonRoleTerm,
     User,
     UserIdentityProfile,
     UserSemanticContext,
     UserSettings,
 )
+from app.domain.person_identity import normalize_email
 from app.jobs.constants import JOB_STATUS_PENDING, JOB_TYPE_PROACTIVE_REVIEW
 from app.personal_relevance.models import PERSONAL_RELEVANCE_EVIDENCE_VERSION
 from app.proactive.constants import (
@@ -45,6 +50,9 @@ from app.proactive.decision import ProactiveDecision
 from app.proactive.instructions import PROACTIVE_SYSTEM_INSTRUCTIONS
 from app.services.graph_service import GraphService
 from app.services.label_service import LabelService
+from app.services.person_consolidation_service import PersonConsolidationService
+from app.services.person_identity_service import PersonIdentityService
+from app.services.person_role_service import PersonRoleService
 from app.services.personal_relevance_evidence_service import PersonalRelevanceEvidenceService
 from app.services.personal_semantic_context_service import PersonalSemanticContextService
 from app.services.proactive_review_service import (
@@ -62,8 +70,10 @@ from tests.test_proactive_secretary_c import (
     _enable,
     _insight_answer,
     _install_provider,
+    _new_notifications,
     _none_answer,
     _noop_trace,
+    _notification_ids,
     _notifications,
     _proactive_payload,
     _source_email,
@@ -267,9 +277,10 @@ def test_source_must_be_initial_seed_related_may_be_tool_seen(
             tool_calls=[("get_object", {"object_id": str(unseen.id)})],
         ),
     )
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
     assert provider.calls == 1
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
 
     _install_provider(
         monkeypatch,
@@ -279,7 +290,7 @@ def test_source_must_be_initial_seed_related_may_be_tool_seen(
         ),
     )
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    notes = _notifications(db_session)
+    notes = _new_notifications(db_session, baseline)
     assert len(notes) == 1
     assert notes[0].source_object_id == seed.id
     assert notes[0].related_object_id == unseen.id
@@ -317,8 +328,9 @@ def test_malformed_json_fails_closed(db_session, monkeypatch, silent_trace) -> N
     _enable(db_session)
     _source_email(db_session)
     _install_provider(monkeypatch, ScriptedProactiveProvider("{not-json"))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
     assert _count_jobs(db_session, status=JOB_STATUS_PENDING) == 1
 
 
@@ -330,8 +342,9 @@ def test_notify_without_personal_relevance_fails_closed(
     raw = json.loads(_insight_answer(source.id))
     del raw["personal_relevance"]
     _install_provider(monkeypatch, ScriptedProactiveProvider(json.dumps(raw)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
 
 
 def test_task_source_cannot_emit_task_proposal(
@@ -348,11 +361,17 @@ def test_task_source_cannot_emit_task_proposal(
         )
     )
     _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(task.id)))
+    baseline = _notification_ids(db_session)
+    before_tasks = db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    )
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(
         {"window_start": (_utcnow() - timedelta(minutes=5)).isoformat()}
     )
-    assert _notifications(db_session) == []
-    assert db_session.scalar(select(func.count()).select_from(Object).where(Object.kind == "task")) == 1
+    assert _new_notifications(db_session, baseline) == []
+    assert db_session.scalar(
+        select(func.count()).select_from(Object).where(Object.kind == "task")
+    ) == before_tasks
 
 
 def _run_stale(db_session, monkeypatch, source: Object, after_tools) -> ScriptedProactiveProvider:
@@ -495,14 +514,15 @@ def test_unchanged_evidence_creates_one_notification(
     provider = _install_provider(
         monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id))
     )
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
     assert provider.calls == 1
     assert len(calls) == 2
-    notes = _notifications(db_session)
+    notes = _new_notifications(db_session, baseline)
     assert len(notes) == 1
     assert notes[0].source_object_id == source.id
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 1
+    assert [row.id for row in _new_notifications(db_session, baseline)] == [notes[0].id]
 
 
 def test_audit_metadata_is_bounded(db_session, monkeypatch) -> None:
@@ -563,6 +583,7 @@ def test_stale_fence_audit_is_none(db_session, monkeypatch) -> None:
         monkeypatch,
         ScriptedProactiveProvider(_insight_answer(source.id), after_tools=mutate),
     )
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
     events = list(
         db_session.scalars(
@@ -573,7 +594,7 @@ def test_stale_fence_audit_is_none(db_session, monkeypatch) -> None:
     )
     assert events[-1].metadata_["stale_fence"] == STALE_FENCE_STALE
     assert events[-1].metadata_["decision"] == "none"
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
 
 
 def test_disabled_proactive_makes_zero_llm_and_snapshot_calls(
@@ -633,9 +654,10 @@ def test_incomplete_snapshot_skips_llm(db_session, monkeypatch, silent_trace) ->
     monkeypatch.setattr(PersonalRelevanceEvidenceService, "build_snapshot", incomplete)
     provider = _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id)))
     before_jobs = _count_jobs(db_session, status=JOB_STATUS_PENDING)
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
     assert provider.calls == 0
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
     assert _count_jobs(db_session, status=JOB_STATUS_PENDING) == before_jobs + 1
 
 
@@ -674,6 +696,14 @@ def _isolated_proactive_user():
     finally:
         with Session(engine) as session:
             session.execute(delete(Notification).where(Notification.user_id == user_id))
+            session.execute(
+                delete(PersonRoleAssignment).where(PersonRoleAssignment.user_id == user_id)
+            )
+            session.execute(delete(PersonRoleTerm).where(PersonRoleTerm.user_id == user_id))
+            session.execute(
+                delete(PersonIdentityEvidence).where(PersonIdentityEvidence.user_id == user_id)
+            )
+            session.execute(delete(PersonIdentity).where(PersonIdentity.user_id == user_id))
             session.execute(
                 delete(AITraceEvent).where(
                     AITraceEvent.trace_id.in_(select(AITrace.id).where(AITrace.user_id == user_id))
@@ -805,5 +835,184 @@ def test_authority_blocks_user_gate_until_notification_flush(monkeypatch) -> Non
         )
         with Session(engine) as session:
             notes = list(session.scalars(select(Notification).where(Notification.user_id == user_id)))
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def _gmail_from(session: Session, user_id, address: str) -> Object:
+    return GraphService(session, user_id).create_object(
+        ObjectCreate(
+            kind="email",
+            title="From known person",
+            origin="source",
+            provider="gmail",
+            metadata={"sender": address},
+        )
+    )
+
+
+def _known_sender(session: Session, user_id, *, role: str | None = None):
+    people = PersonIdentityService(session, user_id)
+    person = people.create_person("Ada")
+    identity = people.attach(person.id, normalize_email("ada@example.com"))
+    assignment_id = None
+    if role is not None:
+        assignment_id = PersonRoleService(session, user_id).assign(person.id, role).id
+    source = _gmail_from(session, user_id, "ada@example.com")
+    session.flush()
+    return person.id, identity.id, assignment_id, source.id
+
+
+def _user_notes(session: Session, user_id) -> list[Notification]:
+    return list(session.scalars(select(Notification).where(Notification.user_id == user_id)))
+
+
+def test_role_write_before_authority_discards_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, assignment_id, source_id = _known_sender(
+                session, user_id, role="директор"
+            )
+            session.commit()
+
+        def after_llm() -> None:
+            with Session(engine) as other:
+                PersonRoleService(other, user_id).retract(person_id, assignment_id)
+                other.commit()
+
+        _run_isolated_review(monkeypatch, user_id, source_id, after_llm=after_llm)
+        with Session(engine) as session:
+            assert _user_notes(session, user_id) == []
+
+
+def test_role_write_after_authority_blocks_until_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id, role="директор")
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    PersonRoleService(other, user_id).assign(person_id, "куратор")
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def test_identity_write_before_authority_discards_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            _, identity_id, _, source_id = _known_sender(session, user_id)
+            other_person = PersonIdentityService(session, user_id).create_person("Bea")
+            other_id = other_person.id
+            session.commit()
+
+        def after_llm() -> None:
+            with Session(engine) as other:
+                PersonIdentityService(other, user_id).reassign(identity_id, other_id)
+                other.commit()
+
+        _run_isolated_review(monkeypatch, user_id, source_id, after_llm=after_llm)
+        with Session(engine) as session:
+            assert _user_notes(session, user_id) == []
+
+
+def test_identity_write_after_authority_blocks_until_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            _, identity_id, _, source_id = _known_sender(session, user_id)
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    PersonIdentityService(other, user_id).detach(identity_id)
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def test_person_display_write_after_authority_blocks_on_person_row(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            person_id, _, _, source_id = _known_sender(session, user_id)
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    GraphService(other, user_id).update_object(
+                        person_id, ObjectUpdate(title="Ada Renamed")
+                    )
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+            person = session.get(Object, person_id)
+            assert person is not None
+            assert person.title == "Ada"
+
+
+def test_consolidation_apply_after_authority_blocks_until_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            duplicate_id, _, _, source_id = _known_sender(session, user_id)
+            survivor = PersonIdentityService(session, user_id).create_person("Survivor")
+            survivor_id = survivor.id
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    PersonConsolidationService(other, user_id).apply(survivor_id, duplicate_id)
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
+            assert len(notes) == 1
+            assert notes[0].source_object_id == source_id
+
+
+def test_consolidation_undo_after_authority_blocks_until_notification(monkeypatch) -> None:
+    with _isolated_proactive_user() as user_id:
+        with Session(engine) as session:
+            duplicate_id, _, _, source_id = _known_sender(session, user_id)
+            survivor = PersonIdentityService(session, user_id).create_person("Survivor")
+            survivor_id = survivor.id
+            PersonConsolidationService(session, user_id).apply(survivor_id, duplicate_id)
+            session.commit()
+
+        def after_authority() -> None:
+            with Session(engine) as other:
+                other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                with pytest.raises(OperationalError):
+                    PersonConsolidationService(other, user_id).undo(survivor_id, duplicate_id)
+
+        _run_isolated_review(
+            monkeypatch, user_id, source_id, after_authority=after_authority
+        )
+        with Session(engine) as session:
+            notes = _user_notes(session, user_id)
             assert len(notes) == 1
             assert notes[0].source_object_id == source_id

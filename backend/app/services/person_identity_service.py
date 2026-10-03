@@ -19,6 +19,7 @@ from app.domain.person_identity import NormalizedPersonIdentity
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE, USER_ORIGIN
+from app.services.user_serialization_gate import lock_user_serialization_row
 
 PERSON_KIND = "person"
 IDENTITY_CONFLICT = "person_identity_conflict"
@@ -45,6 +46,7 @@ class PersonIdentityService:
         )
 
     def attach(self, person_id: UUID, identity: NormalizedPersonIdentity) -> PersonIdentity:
+        self._lock_user()
         self._require_person(person_id)
         existing = self._active_identity(identity)
         if existing is not None:
@@ -100,12 +102,14 @@ class PersonIdentityService:
         return list(rows)
 
     def detach(self, identity_id: UUID) -> PersonIdentity:
+        self._lock_user()
         row = self._require_identity(identity_id)
         row.state = REJECTED_STATE
         self._session.flush()
         return row
 
     def reassign(self, identity_id: UUID, person_id: UUID) -> PersonIdentity:
+        self._lock_user()
         row = self._require_identity(identity_id)
         self._require_person(person_id)
         if row.person_object_id == person_id and row.state != REJECTED_STATE:
@@ -123,6 +127,11 @@ class PersonIdentityService:
         row.state = REJECTED_STATE
         self._session.flush()
         return self.attach(person_id, identity)
+
+    def _lock_user(self) -> None:
+        row = lock_user_serialization_row(self._session, self._user_id)
+        if row is None:
+            raise NotFoundError("user", self._user_id)
 
     def _require_person(self, person_id: UUID) -> Object:
         person = self._session.get(Object, person_id)

@@ -35,6 +35,7 @@ from app.services.person_identity_service import PERSON_KIND, PersonIdentityServ
 from app.services.person_role_service import ACTIVE_STATE, MAX_ACTIVE_ASSIGNMENTS, RETRACTED_STATE
 from app.services.provenance import CONFIRMED_STATE, REJECTED_STATE
 from app.services.task_relation_service import TaskRelationService
+from app.services.user_serialization_gate import lock_user_serialization_row
 
 AUDIT_KEY = "person_consolidation"
 MAX_IDENTITIES = 32
@@ -51,10 +52,16 @@ class PersonConsolidationService:
         self._tasks = TaskRelationService(session, user_id)
         self._bookmarks = ObjectBookmarkService(session, user_id)
 
+    def _lock_user(self) -> None:
+        row = lock_user_serialization_row(self._session, self._user_id)
+        if row is None:
+            raise NotFoundError("user", self._user_id)
+
     def preview(self, survivor_id: UUID, duplicate_id: UUID) -> dict:
         return self._assess(survivor_id, duplicate_id).public
 
     def apply(self, survivor_id: UUID, duplicate_id: UUID) -> dict:
+        self._lock_user()
         established = self._established(survivor_id, duplicate_id)
         if established is not None:
             return established
@@ -70,6 +77,7 @@ class PersonConsolidationService:
         }
 
     def undo(self, survivor_id: UUID, duplicate_id: UUID) -> dict:
+        self._lock_user()
         duplicate = self._require_known_person(duplicate_id)
         survivor = self._require_known_person(survivor_id)
         audit = self._audit(duplicate)

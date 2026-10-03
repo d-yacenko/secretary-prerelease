@@ -709,6 +709,7 @@ def acquire_personal_relevance_authority(
     session: Session,
     user_id: UUID,
     seed_ids: Sequence[UUID],
+    known_person_ids: Sequence[UUID] = (),
 ) -> UserSettings | None:
     """Lock E-B signature inputs. Order matches auto-label: User, settings, semantic, identity, then objects.
 
@@ -736,4 +737,21 @@ def acquire_personal_relevance_authority(
             .with_for_update()
             .execution_options(populate_existing=True)
         )
+    _lock_known_people(session, user_id, known_person_ids)
     return settings
+
+
+def _lock_known_people(
+    session: Session, user_id: UUID, person_ids: Sequence[UUID]
+) -> None:
+    for person_id in sorted(set(person_ids), key=lambda item: item.bytes):
+        session.scalar(
+            select(Object)
+            .where(
+                Object.id == person_id,
+                Object.user_id == user_id,
+                Object.kind == PERSON_KIND,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )

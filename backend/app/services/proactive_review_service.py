@@ -501,7 +501,14 @@ class ProactiveReviewService:
                         self._after_llm()
                     self._session.expire_all()
                     settings = acquire_personal_relevance_authority(
-                        self._session, self._user_id, seed_ids
+                        self._session,
+                        self._user_id,
+                        seed_ids,
+                        [
+                            person.person_id
+                            for record in snapshot.objects
+                            for person in record.known_people
+                        ],
                     )
                     authority_held = True
                     if settings is None:

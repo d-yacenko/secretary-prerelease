@@ -251,6 +251,18 @@ def _notifications(session: Session, user_id=BOOTSTRAP_USER_ID) -> list[Notifica
     )
 
 
+def _notification_ids(session: Session, user_id=BOOTSTRAP_USER_ID) -> set:
+    return set(
+        session.scalars(select(Notification.id).where(Notification.user_id == user_id))
+    )
+
+
+def _new_notifications(
+    session: Session, baseline: set, user_id=BOOTSTRAP_USER_ID
+) -> list[Notification]:
+    return [row for row in _notifications(session, user_id) if row.id not in baseline]
+
+
 def _proactive_payload(hours_ago: float = 1) -> dict:
     return {"window_start": (_utcnow() - timedelta(hours=hours_ago)).isoformat()}
 
@@ -497,10 +509,11 @@ def test_forbidden_tool_then_valid_insight_is_not_persisted(
     )
     before_plans = db_session.scalar(select(func.count()).select_from(PendingActionPlan))
     before_attempts = db_session.scalar(select(func.count()).select_from(ExternalActionAttempt))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
     assert provider.calls == 1
     assert provider.rejected == [tool_name]
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
     assert db_session.scalar(select(func.count()).select_from(PendingActionPlan)) == before_plans
     assert db_session.scalar(select(func.count()).select_from(ExternalActionAttempt)) == before_attempts
     assert _count_jobs(db_session, status=JOB_STATUS_PENDING) == 1
@@ -520,8 +533,9 @@ def test_none_result_and_low_confidence(
     _enable(db_session)
     source = _source_email(db_session)
     _install_provider(monkeypatch, ScriptedProactiveProvider(_none_answer()))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 0
+    assert _new_notifications(db_session, baseline) == []
     assert _count_jobs(db_session, status=JOB_STATUS_PENDING) == 1
 
     _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id, confidence=0.5)))
@@ -539,8 +553,9 @@ def test_valid_insight_creates_one_notification(
     before_edges = db_session.scalar(select(func.count()).select_from(Edge))
     before_plans = db_session.scalar(select(func.count()).select_from(PendingActionPlan))
     _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    notes = _notifications(db_session)
+    notes = _new_notifications(db_session, baseline)
     assert len(notes) == 1
     assert notes[0].proposal_["type"] == "proactive_insight"
     assert notes[0].source_object_id == source.id
@@ -558,8 +573,9 @@ def test_task_proposal_created_only_after_accept(
         select(func.count()).select_from(Object).where(Object.kind == "task")
     )
     _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(source.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    notes = _notifications(db_session)
+    notes = _new_notifications(db_session, baseline)
     assert len(notes) == 1
     assert notes[0].proposal_["type"] == "task"
     assert notes[0].proposal_["proactive"] is True
@@ -605,8 +621,9 @@ def test_duplicate_active_task_suppresses_proposal(
         )
     )
     _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(source.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
     assert db_session.get(Object, task.id).title == "Existing"
 
 
@@ -616,14 +633,16 @@ def test_unresolved_and_cooldown_dedupe(
     _enable(db_session)
     source = _source_email(db_session)
     _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(source.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 1
+    created = _new_notifications(db_session, baseline)
+    assert len(created) == 1
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 1
-    note = _notifications(db_session)[0]
+    assert [row.id for row in _new_notifications(db_session, baseline)] == [created[0].id]
+    note = created[0]
     NotificationService(db_session, BOOTSTRAP_USER_ID).ignore(note.id)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 1
+    assert [row.id for row in _new_notifications(db_session, baseline)] == [created[0].id]
 
 
 def test_attention_cap_skips_llm(db_session, monkeypatch, silent_trace) -> None:
@@ -692,8 +711,9 @@ def test_evidence_id_safety(db_session, monkeypatch, silent_trace, mode) -> None
         cited = unseen.id
         seed = visible
     _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(cited)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert _notifications(db_session) == []
+    assert _new_notifications(db_session, baseline) == []
     assert seed.id is not None
 
 
@@ -702,8 +722,9 @@ def test_one_notification_per_run(db_session, monkeypatch, silent_trace) -> None
     first = _source_email(db_session, title="One")
     _source_email(db_session, title="Two")
     _install_provider(monkeypatch, ScriptedProactiveProvider(_insight_answer(first.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    assert len(_notifications(db_session)) == 1
+    assert len(_new_notifications(db_session, baseline)) == 1
 
 
 def test_interactive_assistant_keeps_full_tool_set(monkeypatch) -> None:
@@ -1129,8 +1150,9 @@ def test_proposed_references_edge_does_not_suppress_task_proposal(
         )
     )
     _install_provider(monkeypatch, ScriptedProactiveProvider(_task_answer(source.id)))
+    baseline = _notification_ids(db_session)
     ProactiveReviewService(db_session, BOOTSTRAP_USER_ID).run(_proactive_payload())
-    notes = _notifications(db_session)
+    notes = _new_notifications(db_session, baseline)
     assert len(notes) == 1
     assert notes[0].proposal_["type"] == "task"
 
