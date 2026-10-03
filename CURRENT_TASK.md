@@ -1,55 +1,177 @@
-# Current task — HOLD
+# Current task — ACTIVE
 
-REL1A.2 is implemented and waiting for Architect review. Do not deploy, migrate production, install the client, or start REL1B, REL1C, or REL1D from this HOLD.
+## REL1A.2.1 — bind role autocomplete truth to the current query
 
-## REL1A.2 — Unicode lexical-identity hardening
+REL1A.2 implementation `5b2e19c8f386225c262be4b3a551096f0427d6fc` is directionally accepted, but NOT yet Architect source-accepted because one narrow client truth gap remains in the reuse-first role dialog.
 
-- Implementation: `5b2e19c8f386225c262be4b3a551096f0427d6fc`
+Do only this corrective.
+
+Do not deploy production, migrate production, install the client, or start REL1B/REL1C/REL1D.
+
+## Verified baseline
+
+- main before this authorization: `f17c69aacab2c30b2261f0ab38ec0a2da2e47588`
+- REL1A: `e7f1e79dd83e3007bc97a6dff7aa1bd083128d93`
+- REL1A.1: `9de2cccd218b76c04e98049b7bcc86c36a4058fe`
+- REL1A.2: `5b2e19c8f386225c262be4b3a551096f0427d6fc`
 - Alembic head: `0054`
-- Down revision: `0053`
-- `0053` was not rewritten
-- Production remains `2314bf72101fbd83d50a7b264154d73740e28db1`
-- Production Alembic remains `0052 / 0052`
-- Installed Linux client source remains `2314bf72101fbd83d50a7b264154d73740e28db1`
+- production backend/source: `2314bf72101fbd83d50a7b264154d73740e28db1`
+- production Alembic: `0052 / 0052`
+- installed Linux client source: `2314bf72101fbd83d50a7b264154d73740e28db1`
 
-## Changed files
+REL1A.2 backend/schema work is accepted in direction:
 
-- `backend/alembic/versions/0054_person_role_key_width.py`
-- `backend/app/db/models.py`
-- `backend/app/domain/person_role_text.py`
-- `backend/app/services/person_role_service.py`
-- `backend/app/api/schemas.py`
-- `backend/app/api/routes/graph_workspace.py`
-- `backend/tests/test_rel1a_person_roles.py`
-- `backend/tests/test_task_layout.py`
-- `client/lib/api/api_models.dart`
-- `client/lib/api/secretary_api_client.dart`
-- `client/lib/graph/person_roles_section.dart`
-- `client/test/graph/person_roles_section_test.dart`
+- `0054` widens canonical case-fold keys to 360/600 without rewriting `0053`;
+- display bounds remain 120/200;
+- full Unicode `casefold()` remains canonical;
+- overlong canonical keys fail before persistence;
+- search returns server-authoritative `exact_match_term_id`;
+- exact matching is independent of bounded suggestion-page inclusion;
+- stale completed older responses are fenced by generation.
 
-## Schema and exact match
+Do not change those semantics.
 
-`normalized_key` is VARCHAR(360). `context_key` is VARCHAR(600). Display text stays at most 120, context text at most 200. Unique user/key and active assignment uniqueness are unchanged. Downgrade restores the `0053` widths for compatible rows and raises instead of truncating a longer key.
+## Verified remaining defect
 
-Case-fold still uses Unicode `casefold()`. A folded key that would exceed 360 or 600 is a validation error before persistence. A 120-character `ß` role stores `ss` repeated 120 times. A 200-character `ß` context stores the full 400-character key and repeats as the same assignment. `Straße` and `STRASSE` are one term. `директор` and `генеральный директор` stay distinct.
+Current Flutter `_AddPersonRoleDialogState._load` increments a generation and ignores an older response after it completes, but it leaves the previous query's:
 
-Search returns `exact_match_term_id` for the current user's canonical key. The id is present even when the bounded page does not include that term. Empty and unmatched queries return null.
+- `_terms`;
+- `_exactMatchTermId`;
 
-The add-role dialog shows `Создать роль «…»` only when the server exact-match id is null. It does not decide equality with `toLowerCase()`. A completed search for older text cannot change the exact-match state of newer text.
+in visible state until the new request completes.
 
-Role vocabulary, the 16-role cap, retract, consolidation copy/undo, workspace projection, Task actor relations, and Person identity matching are unchanged. No role graph edge was added.
+The parent dialog also does not synchronously bind the displayed create/reuse truth to the newly typed query before awaiting the server.
 
-## Checks
+Therefore during an in-flight search for query B, the UI can still expose truth from query A.
 
-- role, consolidation, workspace, identity, identity review, promotion, SEM1, task relations, and task layout: 124 passed, 0 failed
-- Flutter `person_roles_section_test.dart`, `people_overview_test.dart`, `people_create_test.dart`: 17 passed, 0 failed
-- `flutter analyze` of the four role client files: 0 errors, 7 pre-existing infos on `graph_workspace_screen.dart`
-- `flutter build linux --debug`: succeeded, not installed
-- Ruff: passed
-- `git diff --check`: clean
+Examples:
 
-Model calls: 0. No production deploy. No production migration. No client install.
+1. query A had no exact match and exposed `Создать роль …`;
+2. user types query B which is actually an exact existing RoleTerm;
+3. before B's server response arrives, the prior create affordance/truth can remain visible.
 
-## HOLD
+Or conversely, a previous exact match can temporarily suppress create for a genuinely new current query.
 
-Do not start role-aware importance, Assistant role writes, screenshot import, Organization, Scheduled Activity, deployment, or client installation.
+The backend remains safe and assignment is idempotent, so this is not durable-data corruption. It is a first-party truth/UX defect: the accepted contract says create-new is shown only when the server has reported no exact match for the CURRENT typed query.
+
+Old suggestions are likewise not authoritative suggestions for the new current query while its search is pending.
+
+## Required correction
+
+Make autocomplete state explicitly query-bound.
+
+Preferred behavior:
+
+1. On every role-input change, synchronously invalidate the previous query's server-derived state before awaiting the next request.
+2. While the current non-empty query is awaiting its server response:
+   - do not show `Создать роль «…»`;
+   - do not present prior-query RoleTerm suggestions as if they belonged to the current query.
+3. When the response for the current generation/query arrives:
+   - publish its `terms`;
+   - publish its `exact_match_term_id`;
+   - allow create-new only when:
+     - current collapsed input is non-empty;
+     - the current query has a completed authoritative server result;
+     - that result has `exact_match_term_id == null`.
+4. An older response must never publish terms OR exact-match state after a newer input exists.
+5. Empty query behavior may continue to show the bounded reusable vocabulary page after its own response, but must still be query-bound.
+6. A failed current search must not fall back to previous-query suggestions or previous-query exact-match truth. Preserve existing error conventions; do not invent a new global error system.
+
+Implementation may use a generation/token plus explicit loading/resolved-query state. Keep it local and simple.
+
+Do not implement Unicode case-folding in Dart. Server remains the lexical-identity authority.
+
+## Required deterministic tests
+
+Extend focused Flutter tests to prove at least:
+
+1. **new query invalidates old non-exact truth immediately**
+   - query A completes with `exact_match_term_id = null` and create-new visible;
+   - query B is entered and its response is deliberately held;
+   - while B is pending, create-new is NOT visible;
+   - after B returns exact match, create-new remains absent.
+
+2. **new query invalidates old exact truth immediately**
+   - query A completes as exact;
+   - query B is entered and held;
+   - while B is pending, create-new is NOT shown merely from guessed client state;
+   - after B returns non-exact, create-new appears.
+
+3. **old suggestions are not current-query suggestions**
+   - query A returns one or more terms;
+   - query B is entered and held;
+   - A's suggestions are absent while B is pending;
+   - B's terms appear only after B completes.
+
+4. **out-of-order response fence remains**
+   - A request is slower than B;
+   - B completes and publishes its truth;
+   - A completes later;
+   - neither terms nor exact-match/create state regress to A.
+
+5. Existing role flows stay green:
+   - suggestion selection;
+   - exact-match suppresses create;
+   - new role create;
+   - optional context;
+   - retract;
+   - multiple-role rendering.
+
+## Required checks
+
+Client:
+
+- `client/test/graph/person_roles_section_test.dart`;
+- affected People overview/create tests;
+- focused `flutter analyze` on changed files;
+- `flutter build linux --debug`.
+
+Backend/schema:
+
+- no backend/schema change is expected.
+- Re-run the focused REL1A backend set only if any shared API/model source is unexpectedly touched.
+
+Also:
+
+- `git diff --check`.
+
+Record exact pass/fail counts.
+
+## Explicit non-goals
+
+Do not:
+
+- change Alembic `0054`;
+- add `0055`;
+- change RoleTerm normalization;
+- change role search semantics or API response shape;
+- change assignment/retract/consolidation semantics;
+- redesign People UI;
+- add debounce unless strictly needed for correctness;
+- change Personal Relevance or Proactive;
+- add Assistant role tools;
+- add screenshot/document import;
+- add Organization;
+- change Scheduled Activity;
+- deploy/migrate production;
+- install/replace the user's client;
+- call a real model/provider.
+
+## Completion protocol
+
+After implementation:
+
+1. append a compact REL1A.2.1 result to `PROJECT_STATE.md`;
+2. return `CURRENT_TASK.md` to HOLD with:
+   - implementation SHA;
+   - exact client state semantics;
+   - exact test/build evidence;
+   - confirmation Alembic head remains `0054`;
+   - confirmation backend/schema semantics are unchanged unless explicitly required by the fix;
+   - production still `2314bf72101fbd83d50a7b264154d73740e28db1`, Alembic `0052 / 0052`;
+   - installed client unchanged;
+   - no deploy/migration/model/provider action;
+3. commit + push to `main`;
+4. STOP.
+
+Do not start rollout or REL1B/REL1C/REL1D from HOLD.
