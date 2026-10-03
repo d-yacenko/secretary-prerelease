@@ -1487,6 +1487,58 @@ class ListPersonRoutesOutput(BaseModel):
     truncated: bool = False
 
 
+class PersonRoleAssignmentOut(BaseModel):
+    assignment_id: UUID
+    role_term_id: UUID
+    role: str
+    context: str | None = None
+
+
+class GetPersonRolesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+
+
+class GetPersonRolesOutput(BaseModel):
+    person_id: UUID
+    title: str
+    roles: list[PersonRoleAssignmentOut]
+    truncated: bool = False
+
+
+class FindPeopleByRoleInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(min_length=1, max_length=120)
+    limit: int = Field(default=10, ge=1, le=12)
+
+
+class PersonRoleSuggestionOut(BaseModel):
+    role_term_id: UUID
+    display_text: str
+
+
+class PersonRoleMatchAssignmentOut(BaseModel):
+    assignment_id: UUID
+    context: str | None = None
+
+
+class PersonRoleMatchOut(BaseModel):
+    person_id: UUID
+    title: str
+    assignments: list[PersonRoleMatchAssignmentOut]
+
+
+class FindPeopleByRoleOutput(BaseModel):
+    query: str
+    exact_match_term_id: UUID | None = None
+    exact_role: str | None = None
+    people: list[PersonRoleMatchOut]
+    people_truncated: bool = False
+    suggestions: list[PersonRoleSuggestionOut]
+
+
 class RecordPersonRouteChoiceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

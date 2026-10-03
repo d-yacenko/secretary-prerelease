@@ -359,7 +359,13 @@ def test_owned_source_identity_is_conflict_not_confirmable(db_session, monkeypat
     owner = people.create_person("Real Owner")
     identity = normalize_email("owned@example.com")
     people.attach(owner.id, identity)
-    _email(db_session, user_id, "Olga Volkova <owned@example.com>")
+    people.attach(shown.id, normalize_email("olga.shown@example.com"))
+    _email(
+        db_session,
+        user_id,
+        "Olga Volkova <owned@example.com>",
+        metadata={"reply_to": "olga.shown@example.com"},
+    )
     budget = PerTurnToolBudget()
     runner = BoundAssistantToolRunner(budget, user_id)
     runner("resolve_person", {"query": "Olga Volkova"})

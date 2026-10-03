@@ -452,6 +452,48 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         },
         "strict": False,
     },
+    "get_person_roles": {
+        "type": "function",
+        "name": "get_person_roles",
+        "description": (
+            "READ only. Return the active Person roles already stored for one Person. "
+            "person_id must come from resolve_person in this turn with state=resolved. "
+            "An ambiguous or missing resolution does not authorize this read. "
+            "Each role is the stored RoleTerm display text plus its optional assignment "
+            "context. These are descriptive facts, not Task actor roles, labels, "
+            "permissions, or priority. Absence of a role means it is not recorded."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"person_id": {"type": "string"}},
+            "required": ["person_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "find_people_by_role": {
+        "type": "function",
+        "name": "find_people_by_role",
+        "description": (
+            "READ only. Return People who have an active assignment of one exact "
+            "RoleTerm. The role text matches only by exact lexical identity: trim, "
+            "collapsed whitespace, and Unicode casefold. A nearby wording is not the "
+            "same term. suggestions are lexical vocabulary hints, not semantic matches "
+            "and not People. Do not substitute a suggestion for the requested role. "
+            "This does not resolve a Person and does not authorize a later protected "
+            "Person read."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12},
+            },
+            "required": ["role"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
     "list_person_routes": {
         "type": "function",
         "name": "list_person_routes",

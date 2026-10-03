@@ -827,6 +827,55 @@ def serialize_tool_output_for_model(tool_name: str, raw_output: dict[str, Any]) 
             "changed": raw_output.get("changed", False),
         }
 
+    if tool_name == "get_person_roles":
+        return {
+            "person_id": raw_output.get("person_id"),
+            "title": raw_output.get("title"),
+            "roles": [
+                {
+                    "assignment_id": item.get("assignment_id"),
+                    "role_term_id": item.get("role_term_id"),
+                    "role": item.get("role"),
+                    "context": item.get("context"),
+                }
+                for item in raw_output.get("roles") or []
+                if isinstance(item, dict)
+            ],
+            "truncated": bool(raw_output.get("truncated")),
+        }
+
+    if tool_name == "find_people_by_role":
+        return {
+            "query": raw_output.get("query"),
+            "exact_match_term_id": raw_output.get("exact_match_term_id"),
+            "exact_role": raw_output.get("exact_role"),
+            "people": [
+                {
+                    "person_id": person.get("person_id"),
+                    "title": person.get("title"),
+                    "assignments": [
+                        {
+                            "assignment_id": item.get("assignment_id"),
+                            "context": item.get("context"),
+                        }
+                        for item in person.get("assignments") or []
+                        if isinstance(item, dict)
+                    ],
+                }
+                for person in raw_output.get("people") or []
+                if isinstance(person, dict)
+            ],
+            "people_truncated": bool(raw_output.get("people_truncated")),
+            "suggestions": [
+                {
+                    "role_term_id": item.get("role_term_id"),
+                    "display_text": item.get("display_text"),
+                }
+                for item in raw_output.get("suggestions") or []
+                if isinstance(item, dict)
+            ],
+        }
+
     return raw_output
 
 
@@ -974,6 +1023,38 @@ def serialize_tool_output_for_assistant(
             )
             fallback = _conversation_members_visible_payload(raw_output, [last_member])
             fallback.pop("message", None)
+            return AssistantToolModelOutput(
+                json.dumps(fallback, ensure_ascii=False),
+                fallback,
+            )
+
+    if tool_name == "find_people_by_role":
+        people = list(bounded.get("people") or [])
+        suggestions = list(bounded.get("suggestions") or [])
+        truncated = bool(bounded.get("people_truncated"))
+        while True:
+            candidate = dict(bounded)
+            candidate["people"] = people
+            candidate["suggestions"] = suggestions
+            candidate["people_truncated"] = truncated
+            text = json.dumps(candidate, ensure_ascii=False)
+            if len(text) <= MAX_ASSISTANT_TOOL_OUTPUT_CHARS:
+                return AssistantToolModelOutput(text, candidate)
+            if people:
+                people.pop()
+                truncated = True
+                continue
+            if suggestions:
+                suggestions.pop()
+                continue
+            fallback = {
+                "query": bounded.get("query"),
+                "exact_match_term_id": bounded.get("exact_match_term_id"),
+                "exact_role": bounded.get("exact_role"),
+                "people": [],
+                "people_truncated": True,
+                "suggestions": [],
+            }
             return AssistantToolModelOutput(
                 json.dumps(fallback, ensure_ascii=False),
                 fallback,

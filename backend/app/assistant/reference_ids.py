@@ -146,6 +146,10 @@ def collect_seen_object_ids_from_bounded_tool(
         for route in bounded.get("routes") or []:
             if isinstance(route, dict):
                 _append_uuid(seen_ids, route.get("anchor_object_id"))
+    elif tool_name == "find_people_by_role":
+        for person in bounded.get("people") or []:
+            if isinstance(person, dict):
+                _append_uuid(seen_ids, person.get("person_id"))
     elif tool_name in (
         "create_task",
         "update_task",

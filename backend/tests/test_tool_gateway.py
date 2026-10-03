@@ -37,6 +37,8 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "find_person_communications",
         "find_person_identity_candidates",
         "list_person_routes",
+        "get_person_roles",
+        "find_people_by_role",
         "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
@@ -99,6 +101,8 @@ def test_registry_covers_executor_dispatch_tools():
         "find_person_communications",
         "find_person_identity_candidates",
         "list_person_routes",
+        "get_person_roles",
+        "find_people_by_role",
         "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
@@ -174,6 +178,8 @@ def test_permission_classifications():
         "find_person_communications",
         "find_person_identity_candidates",
         "list_person_routes",
+        "get_person_roles",
+        "find_people_by_role",
         "get_today",
     }
     internal_write = {

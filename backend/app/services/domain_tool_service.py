@@ -74,6 +74,8 @@ from app.tools.schemas import (
     DeleteLabelOutput,
     DeleteTaskInput,
     DeleteTaskOutput,
+    FindPeopleByRoleInput,
+    FindPeopleByRoleOutput,
     FindPersonCommunicationsInput,
     FindPersonCommunicationsOutput,
     FindPersonIdentityCandidatesInput,
@@ -82,6 +84,8 @@ from app.tools.schemas import (
     GetContextOutput,
     GetObjectInput,
     GetObjectOutput,
+    GetPersonRolesInput,
+    GetPersonRolesOutput,
     GetTaskProfileInput,
     GetTaskProfileOutput,
     GetTodayOutput,
@@ -741,6 +745,26 @@ class DomainToolService:
 
         try:
             return PersonAssistantService(self._session, self._user_id).list_routes(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def get_person_roles(self, payload: GetPersonRolesInput) -> GetPersonRolesOutput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).get_person_roles(
+                payload.person_id
+            )
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def find_people_by_role(self, payload: FindPeopleByRoleInput) -> FindPeopleByRoleOutput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).find_people_by_role(
+                payload.role, payload.limit
+            )
         except (ValidationError, NotFoundError) as exc:
             raise ToolError(getattr(exc, "message", str(exc))) from exc
 

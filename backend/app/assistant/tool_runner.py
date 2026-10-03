@@ -39,6 +39,8 @@ _READ_TOOLS = frozenset(
         "find_person_communications",
         "find_person_identity_candidates",
         "list_person_routes",
+        "get_person_roles",
+        "find_people_by_role",
     }
 )
 _EVIDENCE_WRITE_TOOLS = frozenset({"create_task", "update_task", "set_task_status", "delete_task"})
@@ -64,6 +66,7 @@ _PERSON_READ_TOOLS = frozenset(
         "find_person_communications",
         "find_person_identity_candidates",
         "list_person_routes",
+        "get_person_roles",
     }
 )
 _PERSON_FEEDBACK_TOOLS = frozenset(

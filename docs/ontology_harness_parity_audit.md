@@ -49,6 +49,8 @@ resolve_person assistant=1 mcp=0 proactive=0 permission=READ
 find_person_communications assistant=1 mcp=0 proactive=0 permission=READ
 find_person_identity_candidates assistant=1 mcp=0 proactive=0 permission=READ
 list_person_routes assistant=1 mcp=0 proactive=0 permission=READ
+get_person_roles assistant=1 mcp=0 proactive=0 permission=READ
+find_people_by_role assistant=1 mcp=0 proactive=0 permission=READ
 record_person_route_choice assistant=1 mcp=0 proactive=0 permission=ANNOTATE
 confirm_person_identity assistant=1 mcp=0 proactive=0 permission=ANNOTATE
 reject_person_identity assistant=1 mcp=0 proactive=0 permission=ANNOTATE

@@ -37,6 +37,8 @@ PERSON_MCP_TOOLS = (
     "find_person_communications",
     "find_person_identity_candidates",
     "list_person_routes",
+    "get_person_roles",
+    "find_people_by_role",
     "record_person_route_choice",
     "confirm_person_identity",
     "reject_person_identity",
