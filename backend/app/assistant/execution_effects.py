@@ -20,6 +20,10 @@ def classify_tool_execution_effect(tool_name: str, output: dict[str, Any] | None
         return "changed" if output.get("changed") else "no_op"
     if tool_name == "remove_relation":
         return "removed" if output.get("changed") else "no_op"
+    if tool_name == "retract_person_role":
+        return "removed" if output.get("changed") else "no_op"
+    if tool_name == "assign_person_role":
+        return "changed" if output.get("changed") else "no_op"
     if tool_name == "link_objects":
         return "created" if output.get("created") else "no_op"
     if tool_name in ("update_task", "set_task_status", "delete_task", "cancel_scheduled_activity"):
@@ -71,6 +75,8 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
         obj = (output or {}).get("object") or {}
         return f"{tool_name}: created object {obj.get('id')} ({obj.get('kind')})"
     if effect == "removed":
+        if tool_name == "retract_person_role":
+            return "retract_person_role: role assignment retracted; changed=true"
         if tool_name == "remove_relation":
             edge = (output or {}).get("edge") or {}
             return (
@@ -98,6 +104,8 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
             )
         if tool_name == "delete_task":
             return "delete_task: soft-deleted task; changed=true"
+        if tool_name == "assign_person_role":
+            return "assign_person_role: role assignment added; changed=true"
         return f"{tool_name}: changed=true"
     if effect == "no_op":
         if tool_name == "update_task":
@@ -107,6 +115,10 @@ def describe_execution_effect(tool_name: str, output: dict[str, Any] | None) -> 
                     f"update_task: no field changes; evidence already linked "
                     f"({already} object(s)); changed=false"
                 )
+        if tool_name == "assign_person_role":
+            return "assign_person_role: role assignment already active; changed=false"
+        if tool_name == "retract_person_role":
+            return "retract_person_role: role assignment already retracted; changed=false"
         if tool_name == "remove_relation":
             return "remove_relation: edge already rejected; changed=false"
         if tool_name == "link_objects":

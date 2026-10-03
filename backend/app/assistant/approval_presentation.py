@@ -25,6 +25,8 @@ _INTERNAL_TOOLS = frozenset(
         "link_objects",
         "remove_relation",
         "create_scheduled_activity",
+        "assign_person_role",
+        "retract_person_role",
     }
 )
 _UPDATE_FIELDS = (
@@ -74,6 +76,10 @@ def build_approval_presentation(
         return _remove(session, user_id, arguments)
     if tool_name == "create_scheduled_activity":
         return _scheduled(arguments)
+    if tool_name == "assign_person_role":
+        return _assign_person_role(session, user_id, arguments)
+    if tool_name == "retract_person_role":
+        return _retract_person_role(session, user_id, arguments)
     return None
 
 
@@ -148,6 +154,36 @@ def _remove(session: Session, user_id: UUID, arguments: dict[str, Any]) -> dict[
     if relation:
         snapshot["relation_type"] = relation
     return snapshot
+
+
+def _assign_person_role(
+    session: Session, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    target = _entity(session, user_id, arguments.get("person_id"), "target")
+    mode = "create_if_missing" if arguments.get("create_if_missing") else "reuse_existing"
+    fields = [{"name": "role", "value": _scalar(arguments.get("role"))}]
+    if arguments.get("context"):
+        fields.append({"name": "context", "value": _scalar(arguments.get("context"))})
+    fields.append({"name": "vocabulary_mode", "value": mode})
+    return {
+        "operation": "assign_person_role",
+        "entities": [target] if target is not None else [],
+        "fields": fields,
+    }
+
+
+def _retract_person_role(
+    session: Session, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    target = _entity(session, user_id, arguments.get("person_id"), "target")
+    fields = [{"name": "role", "value": _scalar(arguments.get("role"))}]
+    if arguments.get("context"):
+        fields.append({"name": "context", "value": _scalar(arguments.get("context"))})
+    return {
+        "operation": "retract_person_role",
+        "entities": [target] if target is not None else [],
+        "fields": fields,
+    }
 
 
 def _scheduled(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -51,6 +51,8 @@ find_person_identity_candidates assistant=1 mcp=0 proactive=0 permission=READ
 list_person_routes assistant=1 mcp=0 proactive=0 permission=READ
 get_person_roles assistant=1 mcp=0 proactive=0 permission=READ
 find_people_by_role assistant=1 mcp=0 proactive=0 permission=READ
+assign_person_role assistant=1 mcp=0 proactive=0 permission=INTERNAL_WRITE
+retract_person_role assistant=1 mcp=0 proactive=0 permission=DESTRUCTIVE_INTERNAL_WRITE
 record_person_route_choice assistant=1 mcp=0 proactive=0 permission=ANNOTATE
 confirm_person_identity assistant=1 mcp=0 proactive=0 permission=ANNOTATE
 reject_person_identity assistant=1 mcp=0 proactive=0 permission=ANNOTATE

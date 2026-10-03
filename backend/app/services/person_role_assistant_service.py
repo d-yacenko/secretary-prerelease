@@ -5,32 +5,47 @@ This service does not assign, retract, merge, or infer roles.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Object, PersonRoleAssignment, PersonRoleTerm
 from app.domain.object_visibility import is_object_hidden_from_active_reads, object_is_active
-from app.domain.person_role_text import PersonRoleTextError, role_term_identity
+from app.domain.person_role_text import (
+    PersonRoleTextError,
+    role_context_identity,
+    role_term_identity,
+)
 from app.services.errors import NotFoundError, ValidationError
 from app.services.person_identity_service import PERSON_KIND
 from app.services.person_role_service import (
     ACTIVE_STATE,
     MAX_ACTIVE_ASSIGNMENTS,
+    RETRACTED_STATE,
     PersonRoleService,
 )
-from app.services.provenance import REJECTED_STATE
+from app.services.provenance import AGENT_ORIGIN, REJECTED_STATE
 from app.tools.schemas import (
+    AssignPersonRoleCanonicalInput,
+    AssignPersonRoleInput,
+    AssignPersonRoleOutput,
     FindPeopleByRoleOutput,
     GetPersonRolesOutput,
     PersonRoleAssignmentOut,
     PersonRoleMatchAssignmentOut,
     PersonRoleMatchOut,
     PersonRoleSuggestionOut,
+    RetractPersonRoleCanonicalInput,
+    RetractPersonRoleInput,
+    RetractPersonRoleOutput,
 )
 
 MAX_ROLE_SUGGESTIONS = 8
+ASSISTANT_PROVENANCE_KIND = "assistant_action_plan"
+EXACT_TERM_NOW_EXISTS = "exact RoleTerm now exists; re-read and reuse that term"
+ASSIGNMENT_NO_LONGER_ACTIVE = "role assignment is no longer active"
+FROZEN_ROLE_MISMATCH = "frozen role no longer matches the stored RoleTerm"
 
 
 class PersonRoleAssistantService:
@@ -104,6 +119,113 @@ class PersonRoleAssistantService:
             people_truncated=truncated,
             suggestions=suggestions,
         )
+
+    def prepare_assign(self, payload: AssignPersonRoleInput) -> AssignPersonRoleCanonicalInput:
+        self._require_active_person(payload.person_id)
+        try:
+            context_text, _context_key = role_context_identity(payload.context)
+        except PersonRoleTextError as exc:
+            raise ValidationError(exc.message) from exc
+        operation_id = uuid4()
+        if payload.role_term_id is not None:
+            term = self._owned_term(payload.role_term_id)
+            return AssignPersonRoleCanonicalInput(
+                person_id=payload.person_id,
+                role_term_id=term.id,
+                role=term.display_text,
+                context=context_text,
+                create_if_missing=False,
+                operation_id=operation_id,
+            )
+        try:
+            display, key = role_term_identity(payload.new_role)
+        except PersonRoleTextError as exc:
+            raise ValidationError(exc.message) from exc
+        if self._exact_term(key) is not None:
+            raise ValidationError(EXACT_TERM_NOW_EXISTS)
+        return AssignPersonRoleCanonicalInput(
+            person_id=payload.person_id,
+            role_term_id=None,
+            role=display,
+            context=context_text,
+            create_if_missing=True,
+            operation_id=operation_id,
+        )
+
+    def execute_assign(self, payload: AssignPersonRoleCanonicalInput) -> AssignPersonRoleOutput:
+        if payload.create_if_missing:
+            role_text = payload.role
+        else:
+            if payload.role_term_id is None:
+                raise ValidationError(FROZEN_ROLE_MISMATCH)
+            term = self._owned_term(payload.role_term_id)
+            try:
+                _display, key = role_term_identity(payload.role)
+            except PersonRoleTextError as exc:
+                raise ValidationError(exc.message) from exc
+            if term.normalized_key != key:
+                raise ValidationError(FROZEN_ROLE_MISMATCH)
+            role_text = payload.role
+        row, changed = self._roles.assign_outcome(
+            payload.person_id,
+            role_text,
+            payload.context,
+            origin=AGENT_ORIGIN,
+            provenance_kind=ASSISTANT_PROVENANCE_KIND,
+            provenance_key=f"aap:{payload.operation_id}",
+        )
+        stored = self._owned_term(row.role_term_id)
+        return AssignPersonRoleOutput(
+            person_id=row.person_object_id,
+            assignment_id=row.id,
+            role_term_id=stored.id,
+            role=stored.display_text,
+            context=row.context_text,
+            changed=changed,
+            state=ACTIVE_STATE,
+        )
+
+    def prepare_retract(self, payload: RetractPersonRoleInput) -> RetractPersonRoleCanonicalInput:
+        self._require_active_person(payload.person_id)
+        row = self._owned_assignment(payload.person_id, payload.assignment_id)
+        if row.state != ACTIVE_STATE:
+            raise ValidationError(ASSIGNMENT_NO_LONGER_ACTIVE)
+        term = self._owned_term(row.role_term_id)
+        return RetractPersonRoleCanonicalInput(
+            person_id=row.person_object_id,
+            assignment_id=row.id,
+            role_term_id=term.id,
+            role=term.display_text,
+            context=row.context_text,
+            operation_id=uuid4(),
+        )
+
+    def execute_retract(self, payload: RetractPersonRoleCanonicalInput) -> RetractPersonRoleOutput:
+        row, changed = self._roles.retract_outcome(payload.person_id, payload.assignment_id)
+        if row.state != RETRACTED_STATE and changed:
+            raise ValidationError(ASSIGNMENT_NO_LONGER_ACTIVE)
+        term = self._owned_term(row.role_term_id)
+        return RetractPersonRoleOutput(
+            person_id=row.person_object_id,
+            assignment_id=row.id,
+            role_term_id=term.id,
+            role=term.display_text,
+            context=row.context_text,
+            changed=changed,
+            state=row.state,
+        )
+
+    def _owned_term(self, term_id: UUID) -> PersonRoleTerm:
+        term = self._session.get(PersonRoleTerm, term_id)
+        if term is None or term.user_id != self._user_id:
+            raise NotFoundError("person_role_term", term_id)
+        return term
+
+    def _owned_assignment(self, person_id: UUID, assignment_id: UUID) -> PersonRoleAssignment:
+        row = self._session.get(PersonRoleAssignment, assignment_id)
+        if row is None or row.user_id != self._user_id or row.person_object_id != person_id:
+            raise NotFoundError("person_role_assignment", assignment_id)
+        return row
 
     def _exact_term(self, key: str) -> PersonRoleTerm | None:
         return self._session.scalar(

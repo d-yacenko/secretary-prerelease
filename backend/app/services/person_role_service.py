@@ -69,6 +69,19 @@ class PersonRoleService:
     def assign(
         self, person_id: uuid.UUID, role: str, context: str | None = None
     ) -> PersonRoleAssignment:
+        row, _changed = self.assign_outcome(person_id, role, context)
+        return row
+
+    def assign_outcome(
+        self,
+        person_id: uuid.UUID,
+        role: str,
+        context: str | None = None,
+        *,
+        origin: str = MANUAL_ORIGIN,
+        provenance_kind: str = MANUAL_PROVENANCE_KIND,
+        provenance_key: str = MANUAL_PROVENANCE_KEY,
+    ) -> tuple[PersonRoleAssignment, bool]:
         try:
             display, key = role_term_identity(role)
             context_text, context_key = role_context_identity(context)
@@ -78,7 +91,7 @@ class PersonRoleService:
         self._require_person(person_id)
         existing = self._active_assignment(person_id, key, context_key)
         if existing is not None:
-            return existing
+            return existing, False
         if self._active_count(person_id) >= MAX_ACTIVE_ASSIGNMENTS:
             raise ValidationError("active role assignment cap reached")
         nested = self._session.begin_nested()
@@ -90,10 +103,10 @@ class PersonRoleService:
                 role_term_id=term.id,
                 context_text=context_text,
                 context_key=context_key,
-                origin=MANUAL_ORIGIN,
+                origin=origin,
                 state=ACTIVE_STATE,
-                provenance_kind=MANUAL_PROVENANCE_KIND,
-                provenance_key=MANUAL_PROVENANCE_KEY,
+                provenance_kind=provenance_kind,
+                provenance_key=provenance_key[:128],
             )
             self._session.add(row)
             self._session.flush()
@@ -102,25 +115,31 @@ class PersonRoleService:
             nested.rollback()
             raced = self._active_assignment(person_id, key, context_key)
             if raced is not None:
-                return raced
+                return raced, False
             raise
         except Exception:
             nested.rollback()
             raise
-        return row
+        return row, True
 
     def retract(self, person_id: uuid.UUID, assignment_id: uuid.UUID) -> PersonRoleAssignment:
+        row, _changed = self.retract_outcome(person_id, assignment_id)
+        return row
+
+    def retract_outcome(
+        self, person_id: uuid.UUID, assignment_id: uuid.UUID
+    ) -> tuple[PersonRoleAssignment, bool]:
         self._lock_user()
         row = self._session.get(PersonRoleAssignment, assignment_id)
         if row is None or row.user_id != self._user_id or row.person_object_id != person_id:
             raise NotFoundError("person_role_assignment", assignment_id)
         self._require_person(person_id)
         if row.state == RETRACTED_STATE:
-            return row
+            return row, False
         row.state = RETRACTED_STATE
         row.retracted_at = datetime.now(UTC)
         self._session.flush()
-        return row
+        return row, True
 
     def active_for_people(self, person_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
         grouped: dict[uuid.UUID, list[dict]] = {person_id: [] for person_id in person_ids}

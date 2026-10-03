@@ -494,6 +494,55 @@ ASSISTANT_FUNCTION_SCHEMAS: dict[str, dict] = {
         },
         "strict": False,
     },
+    "assign_person_role": {
+        "type": "function",
+        "name": "assign_person_role",
+        "description": (
+            "Stage an approval-gated Person role assignment. person_id must come from "
+            "resolve_person in this turn with state=resolved. To reuse a stored RoleTerm, "
+            "pass role_term_id from an exact term shown this turn by get_person_roles or "
+            "find_people_by_role exact_match_term_id. A suggestion role_term_id is not "
+            "authorized. To propose a new RoleTerm, pass new_role only after "
+            "find_people_by_role for that same lexical wording returned no exact term. "
+            "Lexical suggestions are not substitutes. Supply exactly one of role_term_id "
+            "or new_role. context is optional and only when the user established it. "
+            "This call does not write; it returns approval_required."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "person_id": {"type": "string"},
+                "role_term_id": {"type": ["string", "null"]},
+                "new_role": {"type": ["string", "null"]},
+                "context": {"type": ["string", "null"]},
+            },
+            "required": ["person_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
+    "retract_person_role": {
+        "type": "function",
+        "name": "retract_person_role",
+        "description": (
+            "Stage an approval-gated retraction of one active Person role assignment. "
+            "person_id must come from resolve_person in this turn with state=resolved. "
+            "assignment_id must be an exact assignment exposed this turn by "
+            "get_person_roles or find_people_by_role for that same Person. "
+            "This retracts the assignment only and does not delete the RoleTerm. "
+            "This call does not write; it returns approval_required."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "person_id": {"type": "string"},
+                "assignment_id": {"type": "string"},
+            },
+            "required": ["person_id", "assignment_id"],
+            "additionalProperties": False,
+        },
+        "strict": False,
+    },
     "list_person_routes": {
         "type": "function",
         "name": "list_person_routes",

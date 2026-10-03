@@ -1539,6 +1539,70 @@ class FindPeopleByRoleOutput(BaseModel):
     suggestions: list[PersonRoleSuggestionOut]
 
 
+class AssignPersonRoleInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    role_term_id: UUID | None = None
+    new_role: str | None = Field(default=None, min_length=1, max_length=120)
+    context: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _exactly_one_role_source(self) -> Self:
+        if (self.role_term_id is None) == (self.new_role is None):
+            raise ValueError("supply exactly one of role_term_id or new_role")
+        return self
+
+
+class AssignPersonRoleCanonicalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    role_term_id: UUID | None = None
+    role: str = Field(min_length=1, max_length=120)
+    context: str | None = Field(default=None, max_length=200)
+    create_if_missing: bool
+    operation_id: UUID
+
+
+class AssignPersonRoleOutput(BaseModel):
+    person_id: UUID
+    assignment_id: UUID
+    role_term_id: UUID
+    role: str
+    context: str | None = None
+    changed: bool
+    state: Literal["active"]
+
+
+class RetractPersonRoleInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    assignment_id: UUID
+
+
+class RetractPersonRoleCanonicalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: UUID
+    assignment_id: UUID
+    role_term_id: UUID
+    role: str = Field(min_length=1, max_length=120)
+    context: str | None = Field(default=None, max_length=200)
+    operation_id: UUID
+
+
+class RetractPersonRoleOutput(BaseModel):
+    person_id: UUID
+    assignment_id: UUID
+    role_term_id: UUID
+    role: str
+    context: str | None = None
+    changed: bool
+    state: Literal["retracted"]
+
+
 class RecordPersonRouteChoiceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

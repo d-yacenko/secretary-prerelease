@@ -39,6 +39,8 @@ _EXPECTED_ASSISTANT_TOOL_NAMES = frozenset(
         "list_person_routes",
         "get_person_roles",
         "find_people_by_role",
+        "assign_person_role",
+        "retract_person_role",
         "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
@@ -103,6 +105,8 @@ def test_registry_covers_executor_dispatch_tools():
         "list_person_routes",
         "get_person_roles",
         "find_people_by_role",
+        "assign_person_role",
+        "retract_person_role",
         "record_person_route_choice",
         "confirm_person_identity",
         "reject_person_identity",
@@ -191,8 +195,9 @@ def test_permission_classifications():
         "cancel_scheduled_activity",
         "create_label",
         "rename_label",
+        "assign_person_role",
     }
-    destructive = {"delete_task", "remove_relation", "delete_label"}
+    destructive = {"delete_task", "remove_relation", "delete_label", "retract_person_role"}
     annotate = {
         "assign_label",
         "remove_label",

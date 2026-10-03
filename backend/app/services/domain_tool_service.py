@@ -53,6 +53,9 @@ from app.tools.schemas import (
     MAX_TASK_EVIDENCE_IDS,
     AssignLabelInput,
     AssignLabelOutput,
+    AssignPersonRoleCanonicalInput,
+    AssignPersonRoleInput,
+    AssignPersonRoleOutput,
     CancelScheduledActivityInput,
     CancelScheduledActivityOutput,
     ClearInboxReviewMarkerOutput,
@@ -123,6 +126,9 @@ from app.tools.schemas import (
     RenameLabelOutput,
     ResolvePersonInput,
     ResolvePersonOutput,
+    RetractPersonRoleCanonicalInput,
+    RetractPersonRoleInput,
+    RetractPersonRoleOutput,
     RetrievalHitOut,
     RetrieveInput,
     RetrieveOutput,
@@ -765,6 +771,44 @@ class DomainToolService:
             return PersonRoleAssistantService(self._session, self._user_id).find_people_by_role(
                 payload.role, payload.limit
             )
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def prepare_assign_person_role(
+        self, payload: AssignPersonRoleInput
+    ) -> AssignPersonRoleCanonicalInput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).prepare_assign(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def assign_person_role(self, payload: AssignPersonRoleCanonicalInput) -> AssignPersonRoleOutput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).execute_assign(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def prepare_retract_person_role(
+        self, payload: RetractPersonRoleInput
+    ) -> RetractPersonRoleCanonicalInput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).prepare_retract(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def retract_person_role(
+        self, payload: RetractPersonRoleCanonicalInput
+    ) -> RetractPersonRoleOutput:
+        from app.services.person_role_assistant_service import PersonRoleAssistantService
+
+        try:
+            return PersonRoleAssistantService(self._session, self._user_id).execute_retract(payload)
         except (ValidationError, NotFoundError) as exc:
             raise ToolError(getattr(exc, "message", str(exc))) from exc
 

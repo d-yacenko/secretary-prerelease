@@ -39,6 +39,8 @@ PERSON_MCP_TOOLS = (
     "list_person_routes",
     "get_person_roles",
     "find_people_by_role",
+    "assign_person_role",
+    "retract_person_role",
     "record_person_route_choice",
     "confirm_person_identity",
     "reject_person_identity",

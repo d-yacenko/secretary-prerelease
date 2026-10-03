@@ -188,6 +188,65 @@ def collect_seen_person_routes(
     return found
 
 
+def collect_exact_role_term_ids(tool_name: str, bounded: dict[str, Any]) -> list[UUID]:
+    found: list[UUID] = []
+    if tool_name == "get_person_roles":
+        for role in bounded.get("roles") or []:
+            if isinstance(role, dict):
+                _append_uuid(found, role.get("role_term_id"))
+    elif tool_name == "find_people_by_role":
+        _append_uuid(found, bounded.get("exact_match_term_id"))
+    return found
+
+
+def collect_exposed_role_assignments(
+    tool_name: str, bounded: dict[str, Any]
+) -> list[tuple[UUID, UUID]]:
+    found: list[tuple[UUID, UUID]] = []
+    if tool_name == "get_person_roles":
+        try:
+            person_id = UUID(str(bounded.get("person_id")))
+        except (ValueError, TypeError):
+            return []
+        for role in bounded.get("roles") or []:
+            if not isinstance(role, dict):
+                continue
+            try:
+                assignment_id = UUID(str(role.get("assignment_id")))
+            except (ValueError, TypeError):
+                continue
+            found.append((person_id, assignment_id))
+    elif tool_name == "find_people_by_role":
+        for person in bounded.get("people") or []:
+            if not isinstance(person, dict):
+                continue
+            try:
+                person_id = UUID(str(person.get("person_id")))
+            except (ValueError, TypeError):
+                continue
+            for assignment in person.get("assignments") or []:
+                if not isinstance(assignment, dict):
+                    continue
+                try:
+                    assignment_id = UUID(str(assignment.get("assignment_id")))
+                except (ValueError, TypeError):
+                    continue
+                found.append((person_id, assignment_id))
+    return found
+
+
+def collect_no_exact_role_key(tool_name: str, bounded: dict[str, Any]) -> str | None:
+    if tool_name != "find_people_by_role" or bounded.get("exact_match_term_id"):
+        return None
+    from app.domain.person_role_text import PersonRoleTextError, role_term_identity
+
+    try:
+        _display, key = role_term_identity(str(bounded.get("query") or ""))
+    except PersonRoleTextError:
+        return None
+    return key
+
+
 def collect_resolved_person_id(tool_name: str, bounded: dict[str, Any]) -> UUID | None:
     if tool_name != "resolve_person" or bounded.get("state") != "resolved":
         return None

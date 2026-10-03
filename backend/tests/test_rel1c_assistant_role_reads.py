@@ -29,8 +29,6 @@ def test_role_read_tools_are_assistant_reads_without_prepare() -> None:
         assert spec.assistant_exposed is True
         assert spec.mcp_exposed is False
         assert spec.prepare_method is None
-    assert "assign_person_role" not in TOOL_REGISTRY
-    assert "retract_person_role" not in TOOL_REGISTRY
 
 
 def test_get_person_roles_requires_committed_resolution(db_session, monkeypatch) -> None:

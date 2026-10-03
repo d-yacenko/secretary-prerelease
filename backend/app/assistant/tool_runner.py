@@ -6,6 +6,9 @@ from app.assistant.action_plan_constants import MAX_ACTIONS_PER_PLAN
 from app.assistant.constants import MAX_ASSISTANT_TOOL_CALLS_PER_TURN
 from app.assistant.inbox_review_progress import InboxReviewTurnProgress
 from app.assistant.reference_ids import (
+    collect_exact_role_term_ids,
+    collect_exposed_role_assignments,
+    collect_no_exact_role_key,
     collect_resolved_person_id,
     collect_seen_edge_ids_from_bounded_tool,
     collect_seen_object_ids_from_bounded_tool,
@@ -16,6 +19,7 @@ from app.assistant.tool_output import serialize_tool_output_for_assistant
 from app.assistant.turn_telemetry import AssistantTurnTelemetry
 from app.domain.person_assistant import feedback_identity_key, parse_feedback_identity
 from app.domain.person_identity import PersonIdentityInputError, normalize_email
+from app.domain.person_role_text import PersonRoleTextError, role_term_identity
 from app.tools.policy import ToolPermission
 from app.tools.registry import get_tool_spec
 from app.tools.results import ToolExecutionResult, ToolExecutionStatus
@@ -105,8 +109,11 @@ _MUTATION_TOOLS = frozenset(
         "reject_person_identity",
         "retract_person_identity_feedback",
         "record_person_route_choice",
+        "assign_person_role",
+        "retract_person_role",
     }
 )
+_PERSON_ROLE_WRITE_TOOLS = frozenset({"assign_person_role", "retract_person_role"})
 
 
 class PerTurnToolBudget:
@@ -128,6 +135,12 @@ class PerTurnToolBudget:
         self._pending_seen_person_candidates: set[tuple[UUID, str, str, str, str]] = set()
         self._resolved_person_ids: set[UUID] = set()
         self._pending_resolved_person_ids: set[UUID] = set()
+        self._exact_role_term_ids: set[UUID] = set()
+        self._pending_exact_role_term_ids: set[UUID] = set()
+        self._exposed_role_assignments: set[tuple[UUID, UUID]] = set()
+        self._pending_exposed_role_assignments: set[tuple[UUID, UUID]] = set()
+        self._no_exact_role_keys: set[str] = set()
+        self._pending_no_exact_role_keys: set[str] = set()
         self._seen_person_routes: set[tuple[UUID, str]] = set()
         self._pending_seen_person_routes: set[tuple[UUID, str]] = set()
         self._staged_actions: list[dict] = []
@@ -164,6 +177,12 @@ class PerTurnToolBudget:
         self._pending_seen_person_candidates.clear()
         self._resolved_person_ids.update(self._pending_resolved_person_ids)
         self._pending_resolved_person_ids.clear()
+        self._exact_role_term_ids.update(self._pending_exact_role_term_ids)
+        self._pending_exact_role_term_ids.clear()
+        self._exposed_role_assignments.update(self._pending_exposed_role_assignments)
+        self._pending_exposed_role_assignments.clear()
+        self._no_exact_role_keys.update(self._pending_no_exact_role_keys)
+        self._pending_no_exact_role_keys.clear()
         self._seen_person_routes.update(self._pending_seen_person_routes)
         self._pending_seen_person_routes.clear()
         if self._staged_actions:
@@ -279,6 +298,13 @@ class PerTurnToolBudget:
                     self._telemetry.tool_calls += 1
                 return annotation_error
 
+        if tool_name in _PERSON_ROLE_WRITE_TOOLS:
+            role_error = self._validate_person_role_write(tool_name, arguments)
+            if role_error is not None:
+                if self._telemetry is not None:
+                    self._telemetry.tool_calls += 1
+                return role_error
+
         if tool_name in _PERSON_READ_TOOLS:
             person_error = self._validate_seen_person(tool_name, arguments)
             if person_error is not None:
@@ -343,6 +369,19 @@ class PerTurnToolBudget:
             )
             if resolved_person_id is not None:
                 self._pending_resolved_person_ids.add(resolved_person_id)
+            for term_id in collect_exact_role_term_ids(
+                tool_name, model_output.model_visible_payload
+            ):
+                self._pending_exact_role_term_ids.add(term_id)
+            for pair in collect_exposed_role_assignments(
+                tool_name, model_output.model_visible_payload
+            ):
+                self._pending_exposed_role_assignments.add(pair)
+            no_exact_key = collect_no_exact_role_key(
+                tool_name, model_output.model_visible_payload
+            )
+            if no_exact_key is not None:
+                self._pending_no_exact_role_keys.add(no_exact_key)
             for route_token in collect_seen_person_routes(
                 tool_name, model_output.model_visible_payload
             ):
@@ -665,6 +704,81 @@ class PerTurnToolBudget:
                 success=False,
                 tool_name=tool_name,
                 error="target object was not exposed in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        return None
+
+    def _validate_person_role_write(
+        self, tool_name: str, arguments: dict
+    ) -> ToolExecutionResult | None:
+        try:
+            person_id = UUID(str(arguments.get("person_id")))
+        except (ValueError, TypeError):
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="invalid person id",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if person_id not in self._resolved_person_ids:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="person was not resolved in this Assistant turn",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if tool_name == "retract_person_role":
+            try:
+                assignment_id = UUID(str(arguments.get("assignment_id")))
+            except (ValueError, TypeError):
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="invalid role assignment id",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            if (person_id, assignment_id) not in self._exposed_role_assignments:
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="role assignment was not exposed in this Assistant turn",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            return None
+        role_term_id = arguments.get("role_term_id")
+        new_role = arguments.get("new_role")
+        if role_term_id:
+            try:
+                parsed_term = UUID(str(role_term_id))
+            except (ValueError, TypeError):
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="invalid role term id",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            if parsed_term not in self._exact_role_term_ids:
+                return ToolExecutionResult(
+                    success=False,
+                    tool_name=tool_name,
+                    error="role term was not exposed as an exact match in this Assistant turn",
+                    status=ToolExecutionStatus.TOOL_ERROR,
+                )
+            return None
+        try:
+            _display, key = role_term_identity(None if new_role is None else str(new_role))
+        except PersonRoleTextError:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="role text is empty",
+                status=ToolExecutionStatus.TOOL_ERROR,
+            )
+        if key not in self._no_exact_role_keys:
+            return ToolExecutionResult(
+                success=False,
+                tool_name=tool_name,
+                error="new role was not authorized by a no-exact role lookup in this Assistant turn",
                 status=ToolExecutionStatus.TOOL_ERROR,
             )
         return None
