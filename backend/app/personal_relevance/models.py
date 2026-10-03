@@ -11,13 +11,25 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-PERSONAL_RELEVANCE_EVIDENCE_VERSION = 1
+PERSONAL_RELEVANCE_EVIDENCE_VERSION = 2
 PERSONAL_RELEVANCE_MAX_OBJECTS = 20
 PERSONAL_RELEVANCE_MAX_LABELS_PER_OBJECT = 8
 PERSONAL_RELEVANCE_MAX_TITLE_CHARS = 500
 PERSONAL_RELEVANCE_MAX_SEMANTIC_CONTEXT_CHARS = 4000
 PERSONAL_RELEVANCE_MAX_IDENTITY_JSON_CHARS = 4000
 PERSONAL_RELEVANCE_MAX_PARTICIPATION_ROLES = 8
+PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT = 8
+PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON = 8
+KNOWN_PERSON_SOURCE_ROLES = (
+    "sender",
+    "recipient",
+    "copied_recipient",
+    "organizer",
+    "attendee",
+    "author",
+    "mentioned",
+    "conversation_peer",
+)
 PERSONAL_RELEVANCE_MAX_EMAIL_ADDRESSES = 20
 PERSONAL_RELEVANCE_MAX_ATTENDEES = 20
 PERSONAL_RELEVANCE_MAX_MENTIONS = 30
@@ -112,6 +124,38 @@ class AssignedLabelEvidence:
 
 
 @dataclass(frozen=True)
+class PersonRoleEvidence:
+    role_term_id: UUID
+    role: str
+    context: str | None
+
+    def to_payload(self) -> dict:
+        return {
+            "role_term_id": str(self.role_term_id),
+            "role": self.role,
+            "context": self.context,
+        }
+
+
+@dataclass(frozen=True)
+class KnownPersonEvidence:
+    person_id: UUID
+    display_name: str
+    source_roles: tuple[str, ...]
+    roles: tuple[PersonRoleEvidence, ...]
+    roles_truncated: bool = False
+
+    def to_payload(self) -> dict:
+        return {
+            "person_id": str(self.person_id),
+            "display_name": self.display_name,
+            "source_roles": list(self.source_roles),
+            "roles": [item.to_payload() for item in self.roles],
+            "roles_truncated": self.roles_truncated,
+        }
+
+
+@dataclass(frozen=True)
 class ObjectPersonalRelevanceEvidence:
     object_id: UUID
     kind: str
@@ -128,6 +172,8 @@ class ObjectPersonalRelevanceEvidence:
     assigned_labels: tuple[AssignedLabelEvidence, ...]
     labels_truncated: bool = False
     participation_truncated: bool = False
+    known_people: tuple[KnownPersonEvidence, ...] = ()
+    known_people_truncated: bool = False
 
     def to_payload(self) -> dict:
         return {
@@ -146,6 +192,8 @@ class ObjectPersonalRelevanceEvidence:
             "participation_truncated": self.participation_truncated,
             "assigned_labels": [item.to_payload() for item in self.assigned_labels],
             "labels_truncated": self.labels_truncated,
+            "known_people": [item.to_payload() for item in self.known_people],
+            "known_people_truncated": self.known_people_truncated,
         }
 
 

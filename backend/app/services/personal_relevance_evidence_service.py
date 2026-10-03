@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import NamedTuple
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -20,6 +20,7 @@ from app.db.models import (
     GoogleAccount,
     MattermostAccount,
     Object,
+    PersonIdentity,
     TeamsAccount,
     TelegramAccount,
     TelegramMtprotoAccount,
@@ -29,22 +30,31 @@ from app.db.models import (
 )
 from app.domain.labels import EDGE_TYPE_LABELED_WITH, KIND_LABEL
 from app.domain.object_visibility import object_is_active
+from app.domain.person_identity import NormalizedPersonIdentity
+from app.personal_relevance.known_people import extract_known_person_positions
 from app.personal_relevance.models import (
+    KNOWN_PERSON_SOURCE_ROLES,
     LABEL_EVIDENCE_FETCH_LIMIT,
     PERSONAL_RELEVANCE_EVIDENCE_VERSION,
     PERSONAL_RELEVANCE_MAX_IDENTITY_JSON_CHARS,
+    PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT,
     PERSONAL_RELEVANCE_MAX_LABELS_PER_OBJECT,
     PERSONAL_RELEVANCE_MAX_OBJECTS,
+    PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON,
     PERSONAL_RELEVANCE_MAX_SEMANTIC_CONTEXT_CHARS,
     PERSONAL_RELEVANCE_MAX_TITLE_CHARS,
     AssignedLabelEvidence,
+    KnownPersonEvidence,
     ObjectPersonalRelevanceEvidence,
     PersonalRelevanceEvidenceSnapshot,
     PersonalRelevanceUserContext,
+    PersonRoleEvidence,
     object_evidence_canonical_payload,
     user_context_canonical_payload,
 )
 from app.services.label_service import label_description
+from app.services.person_identity_service import PERSON_KIND
+from app.services.person_role_service import PersonRoleService
 from app.services.personal_semantic_context_service import (
     load_personal_semantic_context,
     lock_identity_profile_row,
@@ -118,11 +128,13 @@ class PersonalRelevanceEvidenceService:
         bounded_ids = requested[:PERSONAL_RELEVANCE_MAX_OBJECTS]
         owned = self._load_owned_objects(user_id, bounded_ids)
         labels_by_object = self._load_assigned_labels(user_id, [obj.id for obj in owned])
+        people_by_object = self._load_known_people(user_id, owned)
 
         object_records: list[ObjectPersonalRelevanceEvidence] = []
         signatures: dict[str, str] = {}
         for obj in owned:
             labels, labels_truncated = labels_by_object.get(obj.id, ((), False))
+            known_people, known_people_truncated = people_by_object.get(obj.id, ((), False))
             participation = current_user_participation(obj, identity)
             title = obj.title or ""
             record = ObjectPersonalRelevanceEvidence(
@@ -141,11 +153,11 @@ class PersonalRelevanceEvidenceService:
                 assigned_labels=labels,
                 labels_truncated=labels_truncated,
                 participation_truncated=participation.truncated,
+                known_people=known_people,
+                known_people_truncated=known_people_truncated,
             )
             object_records.append(record)
-            signatures[str(obj.id)] = object_evidence_signature(
-                record, user_context_signature
-            )
+            signatures[str(obj.id)] = object_evidence_signature(record, user_context_signature)
 
         return PersonalRelevanceEvidenceSnapshot(
             version=PERSONAL_RELEVANCE_EVIDENCE_VERSION,
@@ -155,6 +167,99 @@ class PersonalRelevanceEvidenceService:
             truncated_objects=truncated_objects,
             object_evidence_signatures=signatures,
         )
+
+    def _load_known_people(
+        self,
+        user_id: UUID,
+        objects: list[Object],
+    ) -> dict[UUID, tuple[tuple[KnownPersonEvidence, ...], bool]]:
+        extracted: dict[
+            UUID, tuple[tuple[tuple[NormalizedPersonIdentity, tuple[str, ...]], ...], bool]
+        ] = {}
+        unique: dict[tuple[str, str, str, str], NormalizedPersonIdentity] = {}
+        for obj in objects:
+            positions, truncated = extract_known_person_positions(obj)
+            extracted[obj.id] = (positions, truncated)
+            for identity, _roles in positions:
+                unique[_identity_key(identity)] = identity
+        matched = self._match_active_people(user_id, list(unique.values()))
+        person_ids = list({person_id for person_id, _title in matched.values()})
+        role_rows = PersonRoleService(self._session, user_id).active_for_people(person_ids)
+        result: dict[UUID, tuple[tuple[KnownPersonEvidence, ...], bool]] = {}
+        for obj in objects:
+            positions, extraction_truncated = extracted[obj.id]
+            by_person: dict[UUID, set[str]] = {}
+            titles: dict[UUID, str] = {}
+            for identity, source_roles in positions:
+                found = matched.get(_identity_key(identity))
+                if found is None:
+                    continue
+                person_id, title = found
+                titles[person_id] = title
+                by_person.setdefault(person_id, set()).update(source_roles)
+            ordered_ids = sorted(by_person)
+            truncated = extraction_truncated or (
+                len(ordered_ids) > PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT
+            )
+            kept = ordered_ids[:PERSONAL_RELEVANCE_MAX_KNOWN_PEOPLE_PER_OBJECT]
+            people = tuple(
+                _known_person(person_id, titles[person_id], by_person[person_id], role_rows)
+                for person_id in kept
+            )
+            result[obj.id] = (people, truncated)
+        return result
+
+    def _match_active_people(
+        self,
+        user_id: UUID,
+        identities: list[NormalizedPersonIdentity],
+    ) -> dict[tuple[str, str, str, str], tuple[UUID, str]]:
+        if not identities:
+            return {}
+        rows = list(
+            self._session.scalars(
+                select(PersonIdentity).where(
+                    PersonIdentity.user_id == user_id,
+                    PersonIdentity.state != REJECTED_STATE,
+                    or_(
+                        *[
+                            and_(
+                                PersonIdentity.provider == identity.provider,
+                                PersonIdentity.identity_type == identity.identity_type,
+                                PersonIdentity.realm == identity.realm,
+                                PersonIdentity.canonical_value == identity.canonical_value,
+                            )
+                            for identity in identities
+                        ]
+                    ),
+                )
+            )
+        )
+        person_ids = {row.person_object_id for row in rows}
+        if not person_ids:
+            return {}
+        people = {
+            person.id: person
+            for person in self._session.scalars(
+                select(Object).where(
+                    Object.id.in_(person_ids),
+                    Object.user_id == user_id,
+                    Object.kind == PERSON_KIND,
+                    Object.state != REJECTED_STATE,
+                    object_is_active(),
+                )
+            )
+        }
+        matched: dict[tuple[str, str, str, str], tuple[UUID, str]] = {}
+        for row in rows:
+            person = people.get(row.person_object_id)
+            if person is None:
+                continue
+            matched[(row.provider, row.identity_type, row.realm, row.canonical_value)] = (
+                person.id,
+                person.title or "",
+            )
+        return matched
 
     def _load_user_context(
         self, user_id: UUID
@@ -176,9 +281,7 @@ class PersonalRelevanceEvidenceService:
             mm_usernames,
             telegram_ids,
             teams_ids,
-        ) = (
-            self._connected_match_tokens(user_id)
-        )
+        ) = self._connected_match_tokens(user_id)
         emails = frozenset(
             email
             for email in (
@@ -274,7 +377,9 @@ class PersonalRelevanceEvidenceService:
         frozenset[str],
     ]:
         google_emails = _emails_from_query(
-            self._session.scalars(select(GoogleAccount.email).where(GoogleAccount.user_id == user_id))
+            self._session.scalars(
+                select(GoogleAccount.email).where(GoogleAccount.user_id == user_id)
+            )
         )
         yandex_mail_emails = _emails_from_query(
             self._session.scalars(
@@ -415,9 +520,7 @@ def fetch_bounded_label_assignment_rows(
         )
         .subquery()
     )
-    rows = session.execute(
-        select(ranked).where(ranked.c.rn <= LABEL_EVIDENCE_FETCH_LIMIT)
-    ).all()
+    rows = session.execute(select(ranked).where(ranked.c.rn <= LABEL_EVIDENCE_FETCH_LIMIT)).all()
     return [
         _LabelAssignmentRow(
             source_id=row.source_id,
@@ -432,13 +535,41 @@ def fetch_bounded_label_assignment_rows(
     ]
 
 
+def _identity_key(identity: NormalizedPersonIdentity) -> tuple[str, str, str, str]:
+    return (identity.provider, identity.identity_type, identity.realm, identity.canonical_value)
+
+
+def _known_person(
+    person_id: UUID,
+    title: str,
+    source_roles: set[str],
+    role_rows: dict[UUID, list[dict]],
+) -> KnownPersonEvidence:
+    ordered_roles = tuple(role for role in KNOWN_PERSON_SOURCE_ROLES if role in source_roles)
+    assignments = role_rows.get(person_id, [])
+    truncated = len(assignments) > PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON
+    kept = assignments[:PERSONAL_RELEVANCE_MAX_ROLES_PER_KNOWN_PERSON]
+    return KnownPersonEvidence(
+        person_id=person_id,
+        display_name=title,
+        source_roles=ordered_roles,
+        roles=tuple(
+            PersonRoleEvidence(
+                role_term_id=item["role_term_id"],
+                role=item["role_display_text"],
+                context=item["context"],
+            )
+            for item in kept
+        ),
+        roles_truncated=truncated,
+    )
+
+
 def object_evidence_signature(
     record: ObjectPersonalRelevanceEvidence,
     user_context_signature: str,
 ) -> str:
-    return _sha256_canonical(
-        object_evidence_canonical_payload(record, user_context_signature)
-    )
+    return _sha256_canonical(object_evidence_canonical_payload(record, user_context_signature))
 
 
 def fit_identity_json_budget(projection: dict) -> tuple[dict, bool]:
@@ -475,9 +606,7 @@ def _identity_was_truncated(
 ) -> bool:
     if _scalar_truncated(raw.full_name, bounded.full_name, MAX_FULL_NAME_CHARS):
         return True
-    if _scalar_truncated(
-        raw.preferred_name, bounded.preferred_name, MAX_PREFERRED_NAME_CHARS
-    ):
+    if _scalar_truncated(raw.preferred_name, bounded.preferred_name, MAX_PREFERRED_NAME_CHARS):
         return True
     pairs = (
         (raw.aliases, bounded.aliases, MAX_ALIAS_ITEMS, MAX_IDENTITY_LIST_ITEM_CHARS),
@@ -504,7 +633,10 @@ def _identity_was_truncated(
             MAX_CONNECTED_ACCOUNT_IDENTIFIER_CHARS,
         ),
     )
-    return any(_list_truncated(raw_list, bounded_list, max_items, max_chars) for raw_list, bounded_list, max_items, max_chars in pairs)
+    return any(
+        _list_truncated(raw_list, bounded_list, max_items, max_chars)
+        for raw_list, bounded_list, max_items, max_chars in pairs
+    )
 
 
 def _scalar_truncated(raw: str | None, bounded: str | None, limit: int) -> bool:

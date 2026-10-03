@@ -1168,7 +1168,7 @@ def test_proactive_allowlist_and_instructions_untouched() -> None:
         "list_notifications",
     )
     assert tuple(item["name"] for item in PROACTIVE_TOOL_DEFINITIONS) == PROACTIVE_READ_TOOL_NAMES
-    assert PERSONAL_RELEVANCE_EVIDENCE_VERSION == 1
+    assert PERSONAL_RELEVANCE_EVIDENCE_VERSION == 2
     assert parse_profile_text("Имя: A").full_name == "A"
 
 
