@@ -2977,6 +2977,7 @@ class PersonRoleTerm {
 class PersonRoleAssignment {
   PersonRoleAssignment({
     required this.id,
+    required this.personId,
     required this.roleTermId,
     required this.roleDisplayText,
     required this.origin,
@@ -2985,6 +2986,7 @@ class PersonRoleAssignment {
   });
 
   final String id;
+  final String personId;
   final String roleTermId;
   final String roleDisplayText;
   final String? context;
@@ -3002,6 +3004,7 @@ class PersonRoleAssignment {
   factory PersonRoleAssignment.fromJson(Map<String, dynamic> json) {
     return PersonRoleAssignment(
       id: json['id'] as String,
+      personId: json['person_id'] as String,
       roleTermId: json['role_term_id'] as String,
       roleDisplayText: json['role_display_text'] as String? ?? '',
       context: json['context'] as String?,

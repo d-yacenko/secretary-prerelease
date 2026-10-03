@@ -346,6 +346,7 @@ def _role_display(service: PersonRoleService, role_term_id: UUID) -> str:
 def _role_out(row, display: str) -> PersonRoleAssignmentOut:
     return PersonRoleAssignmentOut(
         id=row.id,
+        person_id=row.person_object_id,
         role_term_id=row.role_term_id,
         role_display_text=display,
         context=row.context_text,
@@ -399,5 +400,9 @@ def retract_person_role(
     except NotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"{exc.resource} not found"
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
         ) from exc
     return _role_out(row, _role_display(service, row.role_term_id))

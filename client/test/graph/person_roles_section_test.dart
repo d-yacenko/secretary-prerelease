@@ -23,12 +23,14 @@ void main() {
   test('assignment label keeps context and parses the API shape', () {
     final role = PersonRoleAssignment.fromJson({
       'id': 'a1',
+      'person_id': 'p1',
       'role_term_id': 't1',
       'role_display_text': 'Директор',
       'context': 'Arenadata',
       'origin': 'user',
       'state': 'active',
     });
+    expect(role.personId, 'p1');
     expect(role.label, 'Директор · Arenadata');
     final term = PersonRoleTerm.fromJson({'id': 't1', 'display_text': 'Директор'});
     expect(term.displayText, 'Директор');
@@ -44,6 +46,7 @@ void main() {
       'role_assignments': [
         {
           'id': 'a1',
+          'person_id': 'p1',
           'role_term_id': 't1',
           'role_display_text': 'Директор',
           'context': null,
@@ -52,6 +55,7 @@ void main() {
         },
       ],
     });
+    expect(person.roleAssignments.single.personId, 'p1');
     expect(person.roleAssignments.single.roleDisplayText, 'Директор');
   });
 
@@ -75,6 +79,7 @@ void main() {
         posts.add(jsonDecode(request.body) as Map<String, dynamic>);
         return _json({
           'id': 'a-new',
+          'person_id': 'p1',
           'role_term_id': 't-new',
           'role_display_text': 'оппонент',
           'context': null,
@@ -127,6 +132,7 @@ void main() {
       expect(request.url.path, endsWith('/graph/people/p1/roles/a1'));
       return _json({
         'id': 'a1',
+        'person_id': 'p1',
         'role_term_id': 't1',
         'role_display_text': 'директор',
         'context': 'Arenadata',
@@ -159,6 +165,7 @@ void main() {
 PersonRoleAssignment _role({required String id, required String text, String? context}) {
   return PersonRoleAssignment(
     id: id,
+    personId: 'p1',
     roleTermId: 'term-$id',
     roleDisplayText: text,
     context: context,

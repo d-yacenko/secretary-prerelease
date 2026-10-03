@@ -94,6 +94,7 @@ class PersonRoleService:
         row = self._session.get(PersonRoleAssignment, assignment_id)
         if row is None or row.user_id != self._user_id or row.person_object_id != person_id:
             raise NotFoundError("person_role_assignment", assignment_id)
+        self._require_person(person_id)
         if row.state == RETRACTED_STATE:
             return row
         row.state = RETRACTED_STATE
@@ -193,6 +194,7 @@ class PersonRoleService:
 def _assignment_payload(assignment: PersonRoleAssignment, term: PersonRoleTerm) -> dict:
     return {
         "id": assignment.id,
+        "person_id": assignment.person_object_id,
         "role_term_id": term.id,
         "role_display_text": term.display_text,
         "context": assignment.context_text,

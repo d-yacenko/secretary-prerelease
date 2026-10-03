@@ -27,6 +27,7 @@ from app.domain.object_visibility import tombstone_object
 from app.main import app
 from app.services.errors import NotFoundError, ValidationError
 from app.services.graph_service import GraphService
+from app.services.person_consolidation_service import PersonConsolidationService
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
 from app.services.person_role_service import MAX_ACTIVE_ASSIGNMENTS, PersonRoleService
@@ -332,6 +333,7 @@ def test_role_api_search_assign_and_retract(people_client, db_session) -> None:
     )
     assert created.status_code == 200
     body = created.json()
+    assert body["person_id"] == str(person.id)
     assert body["role_display_text"] == "научный руководитель"
     assert body["context"] == "МФТИ"
     assert body["origin"] == "user"
@@ -345,8 +347,15 @@ def test_role_api_search_assign_and_retract(people_client, db_session) -> None:
     found = people_client.get("/graph/person-role-terms", params={"q": "науч"})
     assert found.status_code == 200
     assert found.json()["terms"][0]["display_text"] == "научный руководитель"
+    workspace = people_client.get("/graph/people-workspace", params={"root_id": str(person.id)})
+    assert workspace.status_code == 200
+    visible = next(
+        item for item in workspace.json()["people"] if item["person_id"] == str(person.id)
+    )
+    assert visible["role_assignments"][0]["person_id"] == str(person.id)
     retracted = people_client.delete(f"/graph/people/{person.id}/roles/{body['id']}")
     assert retracted.status_code == 200
+    assert retracted.json()["person_id"] == str(person.id)
     assert retracted.json()["state"] == "retracted"
     repeat = people_client.delete(f"/graph/people/{person.id}/roles/{body['id']}")
     assert repeat.status_code == 200
@@ -357,6 +366,55 @@ def test_role_api_search_assign_and_retract(people_client, db_session) -> None:
         item for item in workspace.json()["people"] if item["person_id"] == str(person.id)
     )
     assert person_row["role_assignments"] == []
+
+
+def test_retract_rejects_hidden_person_and_stays_idempotent_for_active(
+    people_client, db_session
+) -> None:
+    people = _people(db_session)
+    active = people.create_person("Active")
+    rejected = people.create_person("Rejected")
+    hidden = people.create_person("Hidden")
+    merged = people.create_person("Merged away")
+    survivor = people.create_person("Survivor")
+    roles = _roles(db_session)
+    active_row = roles.assign(active.id, "директор")
+    rejected_row = roles.assign(rejected.id, "студент")
+    hidden_row = roles.assign(hidden.id, "оппонент")
+    merged_row = roles.assign(merged.id, "заведующий кафедрой")
+    rejected.state = REJECTED_STATE
+    tombstone_object(hidden)
+    db_session.flush()
+    PersonConsolidationService(db_session, BOOTSTRAP_USER_ID).apply(survivor.id, merged.id)
+    copied_id = merged.metadata_["person_consolidation"]["role_assignments"][0]["id"]
+
+    denied_rejected = people_client.delete(f"/graph/people/{rejected.id}/roles/{rejected_row.id}")
+    denied_hidden = people_client.delete(f"/graph/people/{hidden.id}/roles/{hidden_row.id}")
+    denied_merged = people_client.delete(f"/graph/people/{merged.id}/roles/{merged_row.id}")
+    assert denied_rejected.status_code == 422
+    assert denied_hidden.status_code == 422
+    assert denied_merged.status_code == 422
+    assert db_session.get(PersonRoleAssignment, rejected_row.id).state == "active"
+    assert db_session.get(PersonRoleAssignment, hidden_row.id).state == "active"
+    assert db_session.get(PersonRoleAssignment, merged_row.id).state == "active"
+
+    missing = people_client.delete(f"/graph/people/{active.id}/roles/{uuid.uuid4()}")
+    assert missing.status_code == 404
+    other = User(id=uuid.uuid4(), display_name="Other role user")
+    db_session.add(other)
+    db_session.flush()
+    foreign = _people(db_session, other.id).create_person("Foreign")
+    foreign_row = _roles(db_session, other.id).assign(foreign.id, "директор")
+    cross = people_client.delete(f"/graph/people/{foreign.id}/roles/{foreign_row.id}")
+    assert cross.status_code == 404
+
+    first = people_client.delete(f"/graph/people/{active.id}/roles/{active_row.id}")
+    second = people_client.delete(f"/graph/people/{active.id}/roles/{active_row.id}")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["state"] == "retracted"
+    assert second.json()["id"] == first.json()["id"]
+    assert db_session.get(PersonRoleAssignment, copied_id).state == "active"
 
 
 def _counts(db_session) -> dict[str, int]:

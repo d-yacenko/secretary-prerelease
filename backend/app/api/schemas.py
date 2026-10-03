@@ -665,6 +665,7 @@ class PersonSalienceSummaryOut(BaseModel):
 
 class PersonRoleAssignmentOut(BaseModel):
     id: UUID
+    person_id: UUID
     role_term_id: UUID
     role_display_text: str
     context: str | None = None

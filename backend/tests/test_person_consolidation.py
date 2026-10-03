@@ -7,10 +7,18 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.schemas import EdgeCreate, ObjectCreate
-from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence, User
+from app.db.models import (
+    Edge,
+    Object,
+    PersonIdentity,
+    PersonIdentityEvidence,
+    PersonRoleAssignment,
+    PersonRoleTerm,
+    User,
+)
 from app.domain.object_visibility import is_object_hidden_from_active_reads, tombstone_object
 from app.domain.person_candidate_score import USER_CONFIRMED
 from app.domain.person_identity import normalize_email, normalize_telegram_user_id
@@ -26,6 +34,7 @@ from app.services.person_consolidation_service import (
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 from app.services.person_identity_service import PersonIdentityService
+from app.services.person_role_service import MAX_ACTIVE_ASSIGNMENTS, PersonRoleService
 from app.services.provenance import (
     AGENT_ORIGIN,
     CONFIRMED_STATE,
@@ -94,7 +103,9 @@ def test_identities_evidence_and_actor_roles_move_together(db_session) -> None:
     people.attach(duplicate.id, email)
     people.attach(duplicate.id, telegram)
     evidence = PersonEvidenceService(db_session, BOOTSTRAP_USER_ID)
-    original = evidence.record_confirmation(duplicate.id, email, "ledger-1", explanation="secret body")
+    original = evidence.record_confirmation(
+        duplicate.id, email, "ledger-1", explanation="secret body"
+    )
     relations = TaskRelationService(db_session, BOOTSTRAP_USER_ID)
     roles = {
         REQUESTED_BY: _task(db_session, "Asked"),
@@ -165,9 +176,9 @@ def test_identities_evidence_and_actor_roles_move_together(db_session) -> None:
     assert audit["survivor_id"] == str(survivor.id)
     assert audit["bookmark"] == {"present": True, "color": "blue"}
     assert len(encoded) < 8000
-    counts, _truncated = PersonAssistantService(db_session, BOOTSTRAP_USER_ID).count_attributable_communications(
-        [survivor.id, duplicate.id]
-    )
+    counts, _truncated = PersonAssistantService(
+        db_session, BOOTSTRAP_USER_ID
+    ).count_attributable_communications([survivor.id, duplicate.id])
     assert counts[survivor.id] == 1
     assert counts[duplicate.id] == 0
     visible = {
@@ -218,7 +229,9 @@ def test_undo_restores_only_merge_created_rows(db_session) -> None:
         duplicate.id, email, "ledger-1"
     )
     task = _task(db_session, "Asked")
-    TaskRelationService(db_session, BOOTSTRAP_USER_ID).add_actor(task.id, duplicate.id, REQUESTED_BY)
+    TaskRelationService(db_session, BOOTSTRAP_USER_ID).add_actor(
+        task.id, duplicate.id, REQUESTED_BY
+    )
     kept = _task(db_session, "Kept")
     kept_edge, _created = TaskRelationService(db_session, BOOTSTRAP_USER_ID).add_actor(
         kept.id, survivor.id, DELEGATED_TO
@@ -490,6 +503,121 @@ def test_tombstoned_confirmation_does_not_conflict_survivor(db_session) -> None:
     assert restored["identity_conflict"] is True
 
 
+def test_duplicate_only_role_survives_merge(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
+    original = roles.assign(duplicate.id, "директор", "Arenadata")
+    original.source_object_id = duplicate.id
+    db_session.flush()
+    terms_before = db_session.scalar(select(func.count()).select_from(PersonRoleTerm))
+    _merge(db_session).apply(survivor.id, duplicate.id)
+    assert db_session.scalar(select(func.count()).select_from(PersonRoleTerm)) == terms_before
+    db_session.refresh(original)
+    assert original.person_object_id == duplicate.id
+    assert original.state == "active"
+    assert is_object_hidden_from_active_reads(duplicate)
+    card = _card(PersonGraphWorkspaceService(db_session, BOOTSTRAP_USER_ID), survivor.id)
+    shown = card["role_assignments"]
+    assert len(shown) == 1
+    assert shown[0]["person_id"] == survivor.id
+    assert shown[0]["role_display_text"] == "директор"
+    assert shown[0]["context"] == "Arenadata"
+    copied = db_session.get(PersonRoleAssignment, shown[0]["id"])
+    assert copied.role_term_id == original.role_term_id
+    assert copied.source_object_id == duplicate.id
+    assert copied.origin == original.origin
+    assert copied.provenance_kind == original.provenance_kind
+    assert copied.provenance_key == original.provenance_key
+
+
+def test_overlapping_role_is_not_duplicated_and_contexts_stay_distinct(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
+    kept = roles.assign(survivor.id, "директор", "Arenadata")
+    roles.assign(duplicate.id, "ДИРЕКТОР", " arenadata ")
+    roles.assign(duplicate.id, "директор", "МГУ")
+    before = _active_role_count(db_session, survivor.id)
+    _merge(db_session).apply(survivor.id, duplicate.id)
+    rows = _active_role_rows(db_session, survivor.id)
+    assert len(rows) == before + 1
+    assert kept.id in {row.id for row in rows}
+    assert {(row.role_term_id, row.context_key) for row in rows} == {
+        (kept.role_term_id, kept.context_key),
+        (kept.role_term_id, "мгу"),
+    }
+    audit = duplicate.metadata_[AUDIT_KEY]
+    assert len(audit["role_assignments"]) == 1
+    assert audit["preexisting_role_keys"] == [
+        {"role_term_id": str(kept.role_term_id), "context_key": kept.context_key}
+    ]
+
+
+def test_role_cap_blocks_merge_before_mutation(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
+    for index in range(MAX_ACTIVE_ASSIGNMENTS):
+        roles.assign(survivor.id, f"роль {index}")
+    roles.assign(duplicate.id, "ещё одна роль")
+    owners = _identity_owners(db_session)
+    preview = _merge(db_session).preview(survivor.id, duplicate.id)
+    assert preview["can_merge"] is False
+    assert preview["blockers"] == ["merge would exceed the active role assignment cap"]
+    with pytest.raises(ValidationError, match="active role assignment cap"):
+        _merge(db_session).apply(survivor.id, duplicate.id)
+    assert duplicate.deleted_at is None
+    assert _identity_owners(db_session) == owners
+    assert _active_role_count(db_session, survivor.id) == MAX_ACTIVE_ASSIGNMENTS
+    assert _active_role_count(db_session, duplicate.id) == 1
+
+
+def test_undo_retracts_only_merge_created_roles(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
+    kept = roles.assign(survivor.id, "директор", "Arenadata")
+    original = roles.assign(duplicate.id, "директор", "Arenadata")
+    extra = roles.assign(duplicate.id, "студент")
+    _merge(db_session).apply(survivor.id, duplicate.id)
+    created_id = uuid.UUID(duplicate.metadata_[AUDIT_KEY]["role_assignments"][0]["id"])
+    assert created_id != extra.id
+    _merge(db_session).undo(survivor.id, duplicate.id)
+    created = db_session.get(PersonRoleAssignment, created_id)
+    assert created.state == "retracted"
+    assert created.retracted_at is not None
+    db_session.refresh(kept)
+    db_session.refresh(original)
+    assert kept.state == "active"
+    assert original.state == "active"
+    assert not is_object_hidden_from_active_reads(duplicate)
+    restored = _card(PersonGraphWorkspaceService(db_session, BOOTSTRAP_USER_ID), duplicate.id)
+    assert [item["role_display_text"] for item in restored["role_assignments"]] == [
+        "директор",
+        "студент",
+    ]
+
+
+def test_undo_fails_when_merge_created_role_was_retracted(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
+    roles.assign(duplicate.id, "директор", "Arenadata")
+    _merge(db_session).apply(survivor.id, duplicate.id)
+    created_id = uuid.UUID(duplicate.metadata_[AUDIT_KEY]["role_assignments"][0]["id"])
+    roles.retract(survivor.id, created_id)
+    with pytest.raises(ValidationError, match="cannot be undone"):
+        _merge(db_session).undo(survivor.id, duplicate.id)
+    assert is_object_hidden_from_active_reads(duplicate)
+    assert db_session.get(PersonRoleAssignment, created_id).state == "retracted"
+
+
+def test_repeated_merge_does_not_copy_roles_again(db_session) -> None:
+    survivor, duplicate = _pair(db_session)
+    PersonRoleService(db_session, BOOTSTRAP_USER_ID).assign(duplicate.id, "директор")
+    _merge(db_session).apply(survivor.id, duplicate.id)
+    count = _active_role_count(db_session, survivor.id)
+    again = _merge(db_session).apply(survivor.id, duplicate.id)
+    assert again["idempotent"] is True
+    assert _active_role_count(db_session, survivor.id) == count
+
+
 def _card(workspace: PersonGraphWorkspaceService, person_id) -> dict:
     result = workspace.get_workspace(root_id=person_id)
     return next(item for item in result.people if item["person_id"] == person_id)
@@ -519,10 +647,11 @@ def _evidence(db_session, person_id, identity, source_id, key) -> PersonIdentity
 
 
 def _reject_actor(db_session, task_id, person_id) -> None:
-    edge = _active_edge(db_session, task_id, person_id, INVOLVES) or _active_edge(
-        db_session, task_id, person_id, WAITING_ON
-    ) or _active_edge(db_session, task_id, person_id, DELEGATED_TO) or _active_edge(
-        db_session, task_id, person_id, REQUESTED_BY
+    edge = (
+        _active_edge(db_session, task_id, person_id, INVOLVES)
+        or _active_edge(db_session, task_id, person_id, WAITING_ON)
+        or _active_edge(db_session, task_id, person_id, DELEGATED_TO)
+        or _active_edge(db_session, task_id, person_id, REQUESTED_BY)
     )
     assert edge is not None
     TaskRelationService(db_session, BOOTSTRAP_USER_ID).remove_actor(task_id, edge.id)
@@ -565,10 +694,23 @@ def _email(db_session, sender: str) -> Object:
 
 
 def _identity_owners(db_session) -> set[tuple]:
-    rows = db_session.scalars(
-        select(PersonIdentity).where(PersonIdentity.state != REJECTED_STATE)
-    )
+    rows = db_session.scalars(select(PersonIdentity).where(PersonIdentity.state != REJECTED_STATE))
     return {(row.person_object_id, row.canonical_value) for row in rows}
+
+
+def _active_role_rows(db_session, person_id) -> list[PersonRoleAssignment]:
+    return list(
+        db_session.scalars(
+            select(PersonRoleAssignment).where(
+                PersonRoleAssignment.person_object_id == person_id,
+                PersonRoleAssignment.state == "active",
+            )
+        )
+    )
+
+
+def _active_role_count(db_session, person_id) -> int:
+    return len(_active_role_rows(db_session, person_id))
 
 
 def _active_edge(db_session, task_id, person_id, role) -> Edge | None:
