@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.ai_audit.constants import (
@@ -12,6 +12,9 @@ from app.ai_audit.constants import (
     EVENT_MODEL_ROUND_FAILED,
     EVENT_ROLE_IMPORT_PROPOSAL,
     EVENT_TRACE_FINISHED,
+    EVENT_TRACE_STARTED,
+    WORKLOAD_EMBEDDING,
+    WORKLOAD_ROLE_IMPORT_EXTRACTION,
 )
 from app.ai_audit.trace_service import AITraceService
 from app.db.engine import engine
@@ -48,6 +51,116 @@ from app.users.bootstrap import BOOTSTRAP_USER_ID
 from tests.test_rel1d_role_import_source import PNG, _register_raster, _text_object
 
 _TOKEN = "UNIQUE_ROLE_SOURCE_TOKEN"
+
+
+def _role_import_trace_ids() -> set:
+    session = Session(engine)
+    try:
+        return set(
+            session.scalars(
+                select(AITrace.id).where(
+                    AITrace.user_id == BOOTSTRAP_USER_ID,
+                    AITrace.workload == WORKLOAD_ROLE_IMPORT_EXTRACTION,
+                )
+            ).all()
+        )
+    finally:
+        session.close()
+
+
+def _delete_role_import_traces_created_since(before_ids: set) -> None:
+    """Delete only role-import traces that appeared after `before_ids`.
+
+    A new trace whose object row is still committed is left alone. Those rows
+    belong to a durable source, not to this test's rolled-back fixture.
+    """
+    session = Session(engine)
+    try:
+        created = [
+            trace
+            for trace in session.scalars(
+                select(AITrace).where(
+                    AITrace.user_id == BOOTSTRAP_USER_ID,
+                    AITrace.workload == WORKLOAD_ROLE_IMPORT_EXTRACTION,
+                )
+            ).all()
+            if trace.id not in before_ids
+        ]
+        object_ids = {trace.object_id for trace in created if trace.object_id is not None}
+        committed_object_ids = set()
+        if object_ids:
+            committed_object_ids = set(
+                session.scalars(select(Object.id).where(Object.id.in_(object_ids))).all()
+            )
+        owned_ids = [
+            trace.id
+            for trace in created
+            if trace.object_id is None or trace.object_id not in committed_object_ids
+        ]
+        if not owned_ids:
+            return
+        session.execute(delete(AITraceEvent).where(AITraceEvent.trace_id.in_(owned_ids)))
+        session.execute(
+            delete(AITrace).where(
+                AITrace.id.in_(owned_ids),
+                AITrace.user_id == BOOTSTRAP_USER_ID,
+                AITrace.workload == WORKLOAD_ROLE_IMPORT_EXTRACTION,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
+def _insert_trace(workload: str) -> tuple:
+    session = Session(engine)
+    try:
+        trace = AITrace(
+            user_id=BOOTSTRAP_USER_ID,
+            workload=workload,
+            started_at=datetime.now(UTC),
+            success=True,
+        )
+        session.add(trace)
+        session.flush()
+        event = AITraceEvent(
+            trace_id=trace.id,
+            user_id=BOOTSTRAP_USER_ID,
+            sequence=1,
+            event_type=EVENT_TRACE_STARTED,
+            metadata_={},
+        )
+        session.add(event)
+        session.commit()
+        return trace.id, event.id
+    finally:
+        session.close()
+
+
+def _delete_exact_traces(trace_ids: set) -> None:
+    if not trace_ids:
+        return
+    session = Session(engine)
+    try:
+        session.execute(delete(AITraceEvent).where(AITraceEvent.trace_id.in_(trace_ids)))
+        session.execute(delete(AITrace).where(AITrace.id.in_(trace_ids)))
+        session.commit()
+    finally:
+        session.close()
+
+
+@pytest.fixture(scope="module")
+def preexisting_role_import_trace_id():
+    trace_id, _event_id = _insert_trace(WORKLOAD_ROLE_IMPORT_EXTRACTION)
+    yield trace_id
+    _delete_exact_traces({trace_id})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_durable_role_import_traces():
+    before_ids = _role_import_trace_ids()
+    yield
+    _delete_role_import_traces_created_since(before_ids)
 
 
 class _ScriptedProvider:
@@ -566,6 +679,41 @@ def _event(trace: dict, event_type: str) -> dict:
     matches = [event["metadata"] for event in trace["events"] if event["event_type"] == event_type]
     assert len(matches) == 1
     return matches[0]
+
+
+def test_cleanup_keeps_preexisting_role_import_trace_and_unrelated_workload(
+    preexisting_role_import_trace_id,
+) -> None:
+    before_ids = _role_import_trace_ids()
+    assert preexisting_role_import_trace_id in before_ids
+    unrelated_trace_id, unrelated_event_id = _insert_trace(WORKLOAD_EMBEDDING)
+    created_trace_id, created_event_id = _insert_trace(WORKLOAD_ROLE_IMPORT_EXTRACTION)
+    try:
+        _delete_role_import_traces_created_since(before_ids)
+        assert _trace_row(preexisting_role_import_trace_id) is not None
+        assert _event_row(unrelated_event_id) is not None
+        assert _trace_row(unrelated_trace_id) is not None
+        assert _trace_row(created_trace_id) is None
+        assert _event_row(created_event_id) is None
+        assert preexisting_role_import_trace_id in _role_import_trace_ids()
+    finally:
+        _delete_exact_traces({unrelated_trace_id})
+
+
+def _trace_row(trace_id):
+    session = Session(engine)
+    try:
+        return session.get(AITrace, trace_id)
+    finally:
+        session.close()
+
+
+def _event_row(event_id):
+    session = Session(engine)
+    try:
+        return session.get(AITraceEvent, event_id)
+    finally:
+        session.close()
 
 
 def _assert_audit_private(trace: dict) -> None:
