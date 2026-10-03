@@ -2960,6 +2960,22 @@ class PersonPresentation {
   }
 }
 
+class PersonRoleTermSearch {
+  PersonRoleTermSearch({required this.terms, this.exactMatchTermId});
+
+  final List<PersonRoleTerm> terms;
+  final String? exactMatchTermId;
+
+  factory PersonRoleTermSearch.fromJson(Map<String, dynamic> json) {
+    return PersonRoleTermSearch(
+      terms: (json['terms'] as List<dynamic>? ?? [])
+          .map((item) => PersonRoleTerm.fromJson(item as Map<String, dynamic>))
+          .toList(),
+      exactMatchTermId: json['exact_match_term_id'] as String?,
+    );
+  }
+}
+
 class PersonRoleTerm {
   PersonRoleTerm({required this.id, required this.displayText});
 

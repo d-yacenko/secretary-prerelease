@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../api/api_models.dart';
 import '../api/secretary_api_client.dart';
 
-String normalizePersonRoleText(String value) {
-  return value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+String collapsePersonRoleText(String value) {
+  return value.trim().replaceAll(RegExp(r'\s+'), ' ');
 }
 
 /// First one or two distinct role titles, plus an overflow count. No ids.
@@ -115,6 +115,8 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   final _role = TextEditingController();
   final _contextText = TextEditingController();
   List<PersonRoleTerm> _terms = const [];
+  String? _exactMatchTermId;
+  int _searchGeneration = 0;
 
   @override
   void initState() {
@@ -130,10 +132,15 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   }
 
   Future<void> _load(String value) async {
+    final generation = ++_searchGeneration;
     final next = await widget.apiClient.searchPersonRoleTerms(query: value);
-    if (mounted) {
-      setState(() => _terms = next);
+    if (!mounted || generation != _searchGeneration) {
+      return;
     }
+    setState(() {
+      _terms = next.terms;
+      _exactMatchTermId = next.exactMatchTermId;
+    });
   }
 
   Future<void> _assign(String role) async {
@@ -150,10 +157,7 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final typed = normalizePersonRoleText(_role.text);
-    final exact = _terms.any(
-      (term) => normalizePersonRoleText(term.displayText) == typed && typed.isNotEmpty,
-    );
+    final typed = collapsePersonRoleText(_role.text);
     return AlertDialog(
       title: const Text('Добавить роль'),
       content: SingleChildScrollView(
@@ -173,7 +177,7 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
                 title: Text(term.displayText),
                 onTap: () => _assign(term.displayText),
               ),
-            if (typed.isNotEmpty && !exact)
+            if (typed.isNotEmpty && _exactMatchTermId == null)
               TextButton(
                 key: const ValueKey('person-role-create'),
                 onPressed: () => _assign(_role.text),

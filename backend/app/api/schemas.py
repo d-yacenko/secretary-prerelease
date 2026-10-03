@@ -680,6 +680,7 @@ class PersonRoleTermOut(BaseModel):
 
 class PersonRoleTermSearchOut(BaseModel):
     terms: list[PersonRoleTermOut] = Field(default_factory=list)
+    exact_match_term_id: UUID | None = None
 
 
 class PersonRoleAssignRequest(BaseModel):

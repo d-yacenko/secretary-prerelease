@@ -1638,7 +1638,7 @@ class PersonRoleTerm(Base):
         nullable=False,
     )
     display_text: Mapped[str] = mapped_column(sa.String(120), nullable=False)
-    normalized_key: Mapped[str] = mapped_column(sa.String(120), nullable=False)
+    normalized_key: Mapped[str] = mapped_column(sa.String(360), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -1659,7 +1659,7 @@ class PersonRoleTerm(Base):
             name="ck_person_role_terms_display_text",
         ),
         sa.CheckConstraint(
-            "char_length(normalized_key) BETWEEN 1 AND 120",
+            "char_length(normalized_key) BETWEEN 1 AND 360",
             name="ck_person_role_terms_normalized_key",
         ),
     )
@@ -1682,7 +1682,7 @@ class PersonRoleAssignment(Base):
         nullable=False,
     )
     context_text: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
-    context_key: Mapped[str] = mapped_column(sa.String(200), nullable=False, server_default="")
+    context_key: Mapped[str] = mapped_column(sa.String(600), nullable=False, server_default="")
     origin: Mapped[str] = mapped_column(sa.String(32), nullable=False)
     state: Mapped[str] = mapped_column(sa.String(16), nullable=False)
     provenance_kind: Mapped[str] = mapped_column(sa.String(64), nullable=False)

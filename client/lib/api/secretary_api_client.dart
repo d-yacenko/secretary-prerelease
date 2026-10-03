@@ -860,7 +860,7 @@ class SecretaryApiClient {
     );
   }
 
-  Future<List<PersonRoleTerm>> searchPersonRoleTerms({
+  Future<PersonRoleTermSearch> searchPersonRoleTerms({
     String? query,
     int limit = 8,
   }) async {
@@ -873,9 +873,7 @@ class SecretaryApiClient {
       '/graph/person-role-terms',
       queryParameters: queryParameters,
     );
-    return (body['terms'] as List<dynamic>? ?? [])
-        .map((item) => PersonRoleTerm.fromJson(item as Map<String, dynamic>))
-        .toList();
+    return PersonRoleTermSearch.fromJson(body);
   }
 
   Future<PersonRoleAssignment> assignPersonRole({

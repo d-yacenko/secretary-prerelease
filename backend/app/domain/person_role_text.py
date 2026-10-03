@@ -7,6 +7,8 @@ import re
 _WHITESPACE = re.compile(r"\s+", re.UNICODE)
 ROLE_TEXT_MAX = 120
 CONTEXT_TEXT_MAX = 200
+ROLE_KEY_MAX = 360
+CONTEXT_KEY_MAX = 600
 
 
 class PersonRoleTextError(ValueError):
@@ -27,7 +29,7 @@ def role_term_identity(value: str | None) -> tuple[str, str]:
         raise PersonRoleTextError("role text is empty")
     if len(display) > ROLE_TEXT_MAX:
         raise PersonRoleTextError("role text is too long")
-    return display, display.casefold()
+    return display, _bounded_key(display, ROLE_KEY_MAX, "role key is too long")
 
 
 def role_context_identity(value: str | None) -> tuple[str | None, str]:
@@ -36,7 +38,7 @@ def role_context_identity(value: str | None) -> tuple[str | None, str]:
         return None, ""
     if len(display) > CONTEXT_TEXT_MAX:
         raise PersonRoleTextError("context text is too long")
-    return display, display.casefold()
+    return display, _bounded_key(display, CONTEXT_KEY_MAX, "context key is too long")
 
 
 def role_search_key(value: str | None) -> str | None:
@@ -44,4 +46,15 @@ def role_search_key(value: str | None) -> str | None:
     display = collapse_role_text(value)
     if not display or len(display) > ROLE_TEXT_MAX:
         return None
-    return display.casefold()
+    return _bounded_key(display, ROLE_KEY_MAX, "role key is too long")
+
+
+def _casefold(value: str) -> str:
+    return value.casefold()
+
+
+def _bounded_key(display: str, limit: int, message: str) -> str:
+    key = _casefold(display)
+    if len(key) > limit:
+        raise PersonRoleTextError(message)
+    return key

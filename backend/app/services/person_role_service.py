@@ -32,21 +32,38 @@ SEARCH_DEFAULT_LIMIT = 8
 SEARCH_MAX_LIMIT = 20
 
 
+class PersonRoleSearchResult:
+    def __init__(
+        self,
+        terms: list[PersonRoleTerm],
+        exact_match_term_id: uuid.UUID | None,
+    ) -> None:
+        self.terms = terms
+        self.exact_match_term_id = exact_match_term_id
+
+
 class PersonRoleService:
     def __init__(self, session: Session, user_id: uuid.UUID) -> None:
         self._session = session
         self._user_id = user_id
 
-    def search(self, query: str | None, limit: int = SEARCH_DEFAULT_LIMIT) -> list[PersonRoleTerm]:
+    def search(self, query: str | None, limit: int = SEARCH_DEFAULT_LIMIT) -> PersonRoleSearchResult:
         bounded = min(max(limit, 1), SEARCH_MAX_LIMIT)
-        stmt = select(PersonRoleTerm).where(PersonRoleTerm.user_id == self._user_id)
-        key = role_search_key(query)
+        try:
+            key = role_search_key(query)
+        except PersonRoleTextError as exc:
+            raise ValidationError(exc.message) from exc
+        exact_match_term_id = self._exact_term_id(key)
         if query and collapse_role_text(query) and key is None:
-            return []
+            return PersonRoleSearchResult(terms=[], exact_match_term_id=None)
+        stmt = select(PersonRoleTerm).where(PersonRoleTerm.user_id == self._user_id)
         if key:
             stmt = stmt.where(PersonRoleTerm.normalized_key.contains(key, autoescape=True))
         stmt = stmt.order_by(PersonRoleTerm.normalized_key, PersonRoleTerm.id).limit(bounded)
-        return list(self._session.scalars(stmt))
+        return PersonRoleSearchResult(
+            terms=list(self._session.scalars(stmt)),
+            exact_match_term_id=exact_match_term_id,
+        )
 
     def assign(
         self, person_id: uuid.UUID, role: str, context: str | None = None
@@ -138,6 +155,16 @@ class PersonRoleService:
         ):
             raise ValidationError("person is not an active person")
         return person
+
+    def _exact_term_id(self, key: str | None) -> uuid.UUID | None:
+        if not key:
+            return None
+        return self._session.scalar(
+            select(PersonRoleTerm.id).where(
+                PersonRoleTerm.user_id == self._user_id,
+                PersonRoleTerm.normalized_key == key,
+            )
+        )
 
     def _reuse_or_create_term(self, display: str, key: str) -> PersonRoleTerm:
         term = self._session.scalar(

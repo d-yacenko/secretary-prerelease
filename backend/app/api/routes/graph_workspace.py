@@ -361,9 +361,17 @@ def search_person_role_terms(
     limit: int = Query(default=SEARCH_DEFAULT_LIMIT, ge=1, le=SEARCH_MAX_LIMIT),
     service: PersonRoleService = Depends(_role_service),
 ) -> PersonRoleTermSearchOut:
-    terms = service.search(q, limit)
+    try:
+        found = service.search(q, limit)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message
+        ) from exc
     return PersonRoleTermSearchOut(
-        terms=[PersonRoleTermOut(id=term.id, display_text=term.display_text) for term in terms]
+        terms=[
+            PersonRoleTermOut(id=term.id, display_text=term.display_text) for term in found.terms
+        ],
+        exact_match_term_id=found.exact_match_term_id,
     )
 
 

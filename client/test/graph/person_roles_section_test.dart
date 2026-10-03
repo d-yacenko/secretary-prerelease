@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -34,6 +35,14 @@ void main() {
     expect(role.label, 'Директор · Arenadata');
     final term = PersonRoleTerm.fromJson({'id': 't1', 'display_text': 'Директор'});
     expect(term.displayText, 'Директор');
+    final search = PersonRoleTermSearch.fromJson({
+      'terms': [
+        {'id': 't1', 'display_text': 'Директор'},
+      ],
+      'exact_match_term_id': 't1',
+    });
+    expect(search.exactMatchTermId, 't1');
+    expect(search.terms.single.displayText, 'Директор');
     final person = PersonPresentation.fromJson({
       'person_id': 'p1',
       'title': 'Иван',
@@ -64,7 +73,8 @@ void main() {
     final api = _api((request) async {
       if (request.url.path.endsWith('/graph/person-role-terms')) {
         final query = request.url.queryParameters['q'] ?? '';
-        final terms = switch (normalizePersonRoleText(query)) {
+        final key = query.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+        final terms = switch (key) {
           'ген' => [
             {'id': 't-general', 'display_text': 'генеральный директор'},
           ],
@@ -73,7 +83,10 @@ void main() {
           ],
           _ => <Map<String, String>>[],
         };
-        return _json({'terms': terms});
+        return _json({
+          'terms': terms,
+          'exact_match_term_id': key == 'директор' ? 't-director' : null,
+        });
       }
       if (request.method == 'POST') {
         posts.add(jsonDecode(request.body) as Map<String, dynamic>);
@@ -124,6 +137,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(posts.last['role'], 'оппонент');
     expect(posts.last['context'], 'МГУ');
+  });
+
+  testWidgets('stale search cannot flip a newer exact-match decision', (tester) async {
+    final gates = <String, Completer<void>>{};
+    final api = _api((request) async {
+      final query = request.url.queryParameters['q'] ?? '';
+      final gate = gates[query];
+      if (gate != null) {
+        await gate.future;
+      }
+      if (query == 'Директор') {
+        return _json({
+          'terms': <Map<String, String>>[],
+          'exact_match_term_id': 't-director',
+        });
+      }
+      return _json({'terms': <Map<String, String>>[], 'exact_match_term_id': null});
+    });
+    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    gates['ген'] = Completer<void>();
+    gates['Директор'] = Completer<void>();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.pump();
+    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.pump();
+    gates['Директор']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gates['ген']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
   });
 
   testWidgets('retract refreshes and multiple roles render', (tester) async {

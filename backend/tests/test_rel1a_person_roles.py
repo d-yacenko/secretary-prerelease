@@ -9,6 +9,7 @@ import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, inspect, select, text
+from sqlalchemy.exc import DataError
 from sqlalchemy.orm import Session
 
 from alembic import command
@@ -150,9 +151,9 @@ def test_vocabulary_is_isolated_per_user(db_session) -> None:
     other_person = _people(db_session, other_id).create_person("Other person")
     _roles(db_session).assign(owner_person.id, "студент")
     _roles(db_session, other_id).assign(other_person.id, "студент")
-    assert len(_roles(db_session).search("студент")) == 1
-    assert len(_roles(db_session, other_id).search("студент")) == 1
-    assert _roles(db_session).search("студент")[0].user_id == BOOTSTRAP_USER_ID
+    assert len(_roles(db_session).search("студент").terms) == 1
+    assert len(_roles(db_session, other_id).search("студент").terms) == 1
+    assert _roles(db_session).search("студент").terms[0].user_id == BOOTSTRAP_USER_ID
 
 
 def test_new_term_is_created_with_the_assignment(db_session) -> None:
@@ -278,10 +279,11 @@ def test_search_is_lexical_bounded_and_ordered(db_session) -> None:
     service.assign(person.id, "директор компании")
     service.assign(person.id, "студент")
     found = service.search("ДИР")
-    assert [term.normalized_key for term in found] == ["директор", "директор компании"]
+    assert [term.normalized_key for term in found.terms] == ["директор", "директор компании"]
     page = service.search(None, limit=1)
-    assert len(page) == 1
-    assert service.search("zzzz-no-such-role") == []
+    assert len(page.terms) == 1
+    assert page.exact_match_term_id is None
+    assert service.search("zzzz-no-such-role").terms == []
 
 
 def test_workspace_projects_active_roles_in_one_query(db_session) -> None:
@@ -347,6 +349,12 @@ def test_role_api_search_assign_and_retract(people_client, db_session) -> None:
     found = people_client.get("/graph/person-role-terms", params={"q": "науч"})
     assert found.status_code == 200
     assert found.json()["terms"][0]["display_text"] == "научный руководитель"
+    assert found.json()["exact_match_term_id"] is None
+    exact = people_client.get(
+        "/graph/person-role-terms",
+        params={"q": "НАУЧНЫЙ РУКОВОДИТЕЛЬ", "limit": 1},
+    )
+    assert exact.json()["exact_match_term_id"] == body["role_term_id"]
     workspace = people_client.get("/graph/people-workspace", params={"root_id": str(person.id)})
     assert workspace.status_code == 200
     visible = next(
@@ -415,6 +423,179 @@ def test_retract_rejects_hidden_person_and_stays_idempotent_for_active(
     assert first.json()["state"] == "retracted"
     assert second.json()["id"] == first.json()["id"]
     assert db_session.get(PersonRoleAssignment, copied_id).state == "active"
+
+
+def test_0054_widens_keys_and_downgrade_keeps_compatible_rows() -> None:
+    config = Config(str(ROOT / "alembic.ini"))
+    command.upgrade(config, "head")
+    user_id = uuid.uuid4()
+    with Session(engine) as session:
+        session.add(User(id=user_id, display_name="rel1a2-migration"))
+        session.flush()
+        person = PersonIdentityService(session, user_id).create_person("Width Person")
+        task = GraphService(session, user_id).create_object(
+            ObjectCreate(
+                kind="task",
+                title="Width Task",
+                origin=USER_ORIGIN,
+                state=CONFIRMED_STATE,
+                status="open",
+            )
+        )
+        short = PersonRoleService(session, user_id).assign(person.id, "директор")
+        session.commit()
+        person_id = person.id
+        task_id = task.id
+        short_id = short.role_term_id
+    try:
+        assert _column_length("person_role_terms", "normalized_key") == 360
+        assert _column_length("person_role_assignments", "context_key") == 600
+        assert "360" in _constraint_def("ck_person_role_terms_normalized_key")
+        assert "600" in _constraint_def("ck_person_role_assignments_context_key")
+        indexes = {item["name"] for item in inspect(engine).get_indexes("person_role_terms")}
+        assignment_indexes = {
+            item["name"] for item in inspect(engine).get_indexes("person_role_assignments")
+        }
+        assert "ix_person_role_terms_user_id" in indexes
+        assert "uq_person_role_assignments_active" in assignment_indexes
+        with Session(engine) as session:
+            unique = inspect(engine).get_unique_constraints("person_role_terms")
+            assert any(item["name"] == "uq_person_role_terms_user_key" for item in unique)
+            long_person = PersonIdentityService(session, user_id).create_person("Long")
+            row = PersonRoleService(session, user_id).assign(long_person.id, "ß" * 120, "ß" * 200)
+            session.commit()
+            term = session.get(PersonRoleTerm, row.role_term_id)
+            assert term.normalized_key == "ss" * 120
+            assert len(term.normalized_key) == 240
+            assert row.context_key == "ss" * 200
+            assert len(row.context_key) == 400
+            long_term_id = term.id
+            long_person_id = long_person.id
+        with pytest.raises(DataError):
+            command.downgrade(config, "0053")
+        assert _column_length("person_role_terms", "normalized_key") == 360
+        with Session(engine) as session:
+            session.execute(
+                text("DELETE FROM person_role_assignments WHERE role_term_id = :term_id"),
+                {"term_id": long_term_id},
+            )
+            session.execute(
+                text("DELETE FROM person_role_terms WHERE id = :term_id"),
+                {"term_id": long_term_id},
+            )
+            session.execute(
+                text("DELETE FROM objects WHERE id = :object_id"),
+                {"object_id": long_person_id},
+            )
+            session.commit()
+        command.downgrade(config, "0053")
+        assert _column_length("person_role_terms", "normalized_key") == 120
+        assert _column_length("person_role_assignments", "context_key") == 200
+        assert "120" in _constraint_def("ck_person_role_terms_normalized_key")
+        assert "200" in _constraint_def("ck_person_role_assignments_context_key")
+        with Session(engine) as session:
+            assert session.get(Object, person_id).title == "Width Person"
+            assert session.get(Object, task_id).title == "Width Task"
+            kept = session.get(PersonRoleTerm, short_id)
+            assert kept.display_text == "директор"
+            assert kept.normalized_key == "директор"
+        command.upgrade(config, "head")
+        assert _column_length("person_role_terms", "normalized_key") == 360
+        with Session(engine) as session:
+            assert session.get(Object, person_id).title == "Width Person"
+            assert session.get(Object, task_id).title == "Width Task"
+            assert session.get(PersonRoleTerm, short_id).normalized_key == "директор"
+    finally:
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            session.execute(
+                text("DELETE FROM person_role_assignments WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            session.execute(
+                text("DELETE FROM person_role_terms WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            session.execute(
+                text("DELETE FROM objects WHERE user_id = :user_id"), {"user_id": user_id}
+            )
+            session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
+            session.commit()
+
+
+def test_casefold_expansion_persists_full_role_and_context_keys(db_session) -> None:
+    person = _people(db_session).create_person("Иван")
+    service = _roles(db_session)
+    role = "ß" * 120
+    context = "ß" * 200
+    first = service.assign(person.id, role, context)
+    second = service.assign(person.id, role, context)
+    term = db_session.get(PersonRoleTerm, first.role_term_id)
+    assert first.id == second.id
+    assert term.display_text == role
+    assert term.normalized_key == "ss" * 120
+    assert len(term.normalized_key) == 240
+    assert first.context_text == context
+    assert first.context_key == "ss" * 200
+    assert len(first.context_key) == 400
+
+
+def test_sharp_s_reuses_one_term_and_near_duplicates_stay_distinct(db_session) -> None:
+    person = _people(db_session).create_person("Анна")
+    service = _roles(db_session)
+    first = service.assign(person.id, "Straße", "Straße")
+    second = service.assign(person.id, "STRASSE", "STRASSE")
+    plain = service.assign(person.id, "директор")
+    general = service.assign(person.id, "генеральный директор")
+    assert first.id == second.id
+    assert first.role_term_id != plain.role_term_id
+    assert plain.role_term_id != general.role_term_id
+    term = db_session.get(PersonRoleTerm, first.role_term_id)
+    assert term.display_text == "Straße"
+    assert term.normalized_key == "strasse"
+
+
+def test_search_exact_match_ignores_page_limit_and_other_users(db_session) -> None:
+    person = _people(db_session).create_person("Иван")
+    service = _roles(db_session)
+    earlier = service.assign(person.id, "a Straße")
+    exact = service.assign(person.id, "Straße")
+    found = service.search("STRASSE", limit=1)
+    assert [term.id for term in found.terms] == [earlier.role_term_id]
+    assert found.exact_match_term_id == exact.role_term_id
+    assert service.search(None).exact_match_term_id is None
+    assert service.search("нет такой роли").exact_match_term_id is None
+    other_id = uuid.uuid4()
+    db_session.add(User(id=other_id, display_name="Exact other"))
+    db_session.flush()
+    other_person = _people(db_session, other_id).create_person("Other")
+    _roles(db_session, other_id).assign(other_person.id, "уникальная роль")
+    assert service.search("уникальная роль").exact_match_term_id is None
+
+
+def test_overlong_casefold_is_rejected_before_insert(db_session, monkeypatch) -> None:
+    person = _people(db_session).create_person("Иван")
+    monkeypatch.setattr(
+        "app.domain.person_role_text._casefold",
+        lambda value: value.casefold() + ("x" * 400),
+    )
+    before = db_session.scalar(select(func.count()).select_from(PersonRoleTerm))
+    with pytest.raises(ValidationError, match="role key is too long"):
+        _roles(db_session).assign(person.id, "директор")
+    assert db_session.scalar(select(func.count()).select_from(PersonRoleTerm)) == before
+
+
+def _column_length(table: str, column: str) -> int:
+    match = next(item for item in inspect(engine).get_columns(table) if item["name"] == column)
+    return match["type"].length
+
+
+def _constraint_def(name: str) -> str:
+    with engine.connect() as connection:
+        return connection.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :name"),
+            {"name": name},
+        ).scalar_one()
 
 
 def _counts(db_session) -> dict[str, int]:
