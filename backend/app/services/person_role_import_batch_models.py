@@ -53,6 +53,7 @@ class FrozenRoleImportRow(BaseModel):
     context: str | None = None
     vocabulary_mode: Literal["reuse_existing", "create_if_missing"]
     role_term_id: UUID | None = None
+    evidence_kind: Literal["identity_participant", "name_mentions"] | None = None
 
     @model_validator(mode="after")
     def _frozen_shape(self) -> Self:

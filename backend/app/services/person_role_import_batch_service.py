@@ -15,6 +15,7 @@ from app.domain.person_role_text import (
     role_context_identity,
     role_term_identity,
 )
+from app.domain.role_import_mentions import mention_candidate_key
 from app.services.action_plan_service import ActionPlanService, PendingActionPlanView
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.person_assistant_service import PersonAssistantService
@@ -36,6 +37,7 @@ from app.services.person_role_import_grounding_service import (
     RoleImportGroundRequest,
     _display_key,
 )
+from app.services.person_role_import_mention_service import PersonRoleImportMentionEvidenceService
 from app.services.person_role_import_source_service import PersonRoleImportSourceService
 from app.services.person_role_service import PersonRoleService
 from app.services.user_serialization_gate import lock_user_serialization_row
@@ -104,12 +106,13 @@ class PersonRoleImportBatchService:
         roles = PersonRoleService(self._session, self._user_id)
         identities = PersonIdentityService(self._session, self._user_id)
         contacts = promotion.eligible_role_import_participants()
+        mentions = PersonRoleImportMentionEvidenceService(self._session, self._user_id)
         promoted: dict[str, UUID] = {}
         seen: dict[tuple[UUID, str, str], RoleImportBatchRowResult] = {}
         results: list[RoleImportBatchRowResult] = []
         for row in payload.selected_rows:
             person_id, person_created = _person_target(
-                row, people, promotion, identities, contacts, promoted
+                row, people, promotion, identities, contacts, mentions, promoted
             )
             role_display, role_key = _revalidated_role(self._session, self._user_id, row)
             _context, context_key = role_context_identity(row.context)
@@ -197,6 +200,7 @@ def _freeze_row(item: RoleImportGroundedItem, selection) -> FrozenRoleImportRow:
             raise ValidationError("selected person is not grounded")
         person_id = selection.person_id
         candidate_key = None
+        evidence_kind = None
     else:
         if person.state != "promotion_candidates":
             raise ValidationError("selected promotion candidate is not grounded")
@@ -213,6 +217,7 @@ def _freeze_row(item: RoleImportGroundedItem, selection) -> FrozenRoleImportRow:
         display = match.display_name
         person_id = None
         candidate_key = match.candidate_key
+        evidence_kind = match.evidence_kind
     if role.state == "reuse_existing":
         mode = "reuse_existing"
         role_term_id = role.role_term_id
@@ -229,15 +234,18 @@ def _freeze_row(item: RoleImportGroundedItem, selection) -> FrozenRoleImportRow:
         context=item.context,
         vocabulary_mode=mode,  # type: ignore[arg-type]
         role_term_id=role_term_id,
+        evidence_kind=evidence_kind,  # type: ignore[arg-type]
     )
 
 
-def _person_target(row, people, promotion, identities, contacts, promoted):
+def _person_target(row, people, promotion, identities, contacts, mentions, promoted):
     resolved = people.resolve(row.extracted_person_name)
     if row.person_id is not None:
         if not _person_still_grounded(resolved, row.person_id):
             raise ValidationError(GROUNDING_CHANGED)
         return row.person_id, False
+    if row.evidence_kind == "name_mentions":
+        return _mention_person(row, resolved, contacts, mentions, identities, promoted)
     key = row.promotion_candidate_key
     cached = promoted.get(key)
     if cached is not None:
@@ -268,6 +276,29 @@ def _person_target(row, people, promotion, identities, contacts, promoted):
     created = owner_before is None
     promoted[key] = person.id
     return person.id, created
+
+
+def _mention_person(row, resolved, contacts, mentions, identities, promoted):
+    key = row.promotion_candidate_key
+    cached = promoted.get(key)
+    if cached is not None:
+        return cached, False
+    if resolved.state != "none":
+        raise ValidationError(GROUNDING_CHANGED)
+    wanted = _display_key(row.extracted_person_name)
+    if any(_display_key(item.display_value) == wanted for item in contacts):
+        raise ValidationError(GROUNDING_CHANGED)
+    evidence = mentions.evidence_for([row.extracted_person_name]).get(row.extracted_person_name)
+    if (
+        evidence is None
+        or evidence.candidate_key != key
+        or evidence.candidate_key != mention_candidate_key(row.extracted_person_name)
+        or _display_key(row.target_display) != wanted
+    ):
+        raise ValidationError(GROUNDING_CHANGED)
+    person = identities.create_person(row.extracted_person_name)
+    promoted[key] = person.id
+    return person.id, True
 
 
 def _person_still_grounded(resolved: ResolvePersonOutput, person_id: UUID) -> bool:

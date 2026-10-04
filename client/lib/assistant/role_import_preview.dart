@@ -165,12 +165,12 @@ class RoleImportPreviewPanel extends StatelessWidget {
               ),
             if (grounded != null && !sourceStale && !groundingStale) ...[
               const Text(
-                'Показаны только люди с подтверждённой перепиской',
+                'Показаны только люди с подтверждением в сохранённой переписке',
                 key: Key('role_import_communication_note'),
               ),
               if (grounded!.items.isEmpty)
                 const Text(
-                  'Среди извлечённых строк нет контактов с подтверждённой перепиской',
+                  'Среди извлечённых строк нет людей с подтверждением в сохранённой переписке',
                   key: Key('role_import_no_communication'),
                 ),
               for (final item in grounded!.items)
@@ -302,23 +302,50 @@ class _GroundedRow extends StatelessWidget {
             ),
         ],
         if (person.state == 'promotion_candidates') ...[
-          const Text(
-            'После подтверждения будет создан новый Person',
-            key: Key('role_person_promotion'),
-          ),
-          for (final candidate in person.promotionCandidates)
-            TextButton(
-              key: Key('role_import_choose_promotion_${candidate.candidateKey}'),
-              onPressed: frozen || onChoosePromotion == null
-                  ? null
-                  : () => onChoosePromotion!(
-                        item.rowIndex,
-                        candidate.candidateKey,
-                      ),
-              child: Text(
-                '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount} в переписке',
-              ),
+          if (person.promotionCandidates.any(
+            (candidate) => candidate.evidenceKind != 'name_mentions',
+          ))
+            const Text(
+              'После подтверждения будет создан новый Person',
+              key: Key('role_person_promotion'),
             ),
+          for (final candidate in person.promotionCandidates)
+            if (candidate.evidenceKind == 'name_mentions') ...[
+              Text(
+                'Упомянут в переписке: ${candidate.communicationCount} сообщений',
+                key: Key('role_import_mention_count_${item.rowIndex}'),
+              ),
+              const Text(
+                'Контактная личность не установлена',
+                key: Key('role_import_mention_unknown'),
+              ),
+              const Text(
+                'После подтверждения будет создан новый Person без привязки контакта',
+                key: Key('role_import_mention_create'),
+              ),
+              TextButton(
+                key: Key('role_import_choose_promotion_${candidate.candidateKey}'),
+                onPressed: frozen || onChoosePromotion == null
+                    ? null
+                    : () => onChoosePromotion!(
+                          item.rowIndex,
+                          candidate.candidateKey,
+                        ),
+                child: Text(candidate.displayName),
+              ),
+            ] else
+              TextButton(
+                key: Key('role_import_choose_promotion_${candidate.candidateKey}'),
+                onPressed: frozen || onChoosePromotion == null
+                    ? null
+                    : () => onChoosePromotion!(
+                          item.rowIndex,
+                          candidate.candidateKey,
+                        ),
+                child: Text(
+                  '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount} в переписке',
+                ),
+              ),
           if (onToggle != null)
             Checkbox(
               key: Key('role_import_select_${item.rowIndex}'),
@@ -434,6 +461,9 @@ class _RoleImportPlanCard extends StatelessWidget {
   }
 
   static String _targetMode(Object? mode) {
+    if (mode == 'name_mentions') {
+      return 'новый Person без привязки контакта';
+    }
     if (mode == 'promote_person') {
       return 'новый Person';
     }

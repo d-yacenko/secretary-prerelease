@@ -159,6 +159,14 @@ def _remove(session: Session, user_id: UUID, arguments: dict[str, Any]) -> dict[
     return snapshot
 
 
+def _role_import_target_mode(row: dict[str, Any]) -> str:
+    if row.get("person_id"):
+        return "existing_person"
+    if row.get("evidence_kind") == "name_mentions":
+        return "name_mentions"
+    return "promote_person"
+
+
 def _apply_role_import_batch(
     session: Session, user_id: UUID, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -176,7 +184,7 @@ def _apply_role_import_batch(
             {
                 "row_index": row.get("row_index"),
                 "target_display": (_scalar(row.get("target_display")) or "")[:TITLE_MAX_CHARS],
-                "target_mode": "existing_person" if row.get("person_id") else "promote_person",
+                "target_mode": _role_import_target_mode(row),
                 "role": _scalar(row.get("role")),
                 "context": row.get("context") if isinstance(row.get("context"), str) else None,
                 "vocabulary_mode": row.get("vocabulary_mode"),

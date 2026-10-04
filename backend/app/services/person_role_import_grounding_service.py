@@ -27,6 +27,10 @@ from app.services.person_role_import_extraction_service import (
     _ROLE_MAX,
     RoleImportItem,
 )
+from app.services.person_role_import_mention_service import (
+    NameMentionEvidence,
+    PersonRoleImportMentionEvidenceService,
+)
 from app.services.person_role_import_source_service import PersonRoleImportSourceService
 from app.tools.schemas import ResolvePersonOutput
 
@@ -79,8 +83,10 @@ class RoleImportPromotionCandidate(BaseModel):
     display_name: str
     provider: str
     direct_hit_count: int
+    evidence_kind: Literal["identity_participant", "name_mentions"] = "identity_participant"
+    communication_object_count: int | None = None
     latest_occurred_at: datetime | None = None
-    sources: list[RoleImportPromotionSource]
+    sources: list[RoleImportPromotionSource] = []
 
 
 class RoleImportPersonResolution(BaseModel):
@@ -135,6 +141,7 @@ class PersonRoleImportGroundingService:
         self._sources = PersonRoleImportSourceService(session, user_id, upload_root)
         self._people = PersonAssistantService(session, user_id)
         self._promotion = PersonPromotionService(session, user_id)
+        self._mentions = PersonRoleImportMentionEvidenceService(session, user_id)
 
     def ground(self, request: RoleImportGroundRequest) -> RoleImportGroundedProposal:
         source = self._sources.load(request.source_object_id)
@@ -143,6 +150,7 @@ class PersonRoleImportGroundingService:
         rows = [_strict_item(item) for item in request.items]
         people = _memoized_people(self._people, rows)
         promotions = self._promotion.eligible_role_import_participants() if rows else []
+        mentions = self._mentions.evidence_for([row.person_name for row in rows]) if rows else {}
         roles = _role_resolutions(self._session, self._user_id, rows)
         resolutions = [
             _person_resolution(row.person_name, people[row.person_name], promotions)
@@ -152,7 +160,11 @@ class PersonRoleImportGroundingService:
         items = []
         for index, row in enumerate(rows):
             resolution = _communication_gate(
-                resolutions[index], counts, scan_stopped_early=scan_stopped_early
+                resolutions[index],
+                counts,
+                scan_stopped_early=scan_stopped_early,
+                extracted_name=row.person_name,
+                mention=mentions.get(row.person_name),
             )
             if resolution is None:
                 continue
@@ -209,6 +221,8 @@ def _communication_gate(
     counts: dict[UUID, int],
     *,
     scan_stopped_early: bool,
+    extracted_name: str,
+    mention: NameMentionEvidence | None,
 ) -> RoleImportPersonResolution | None:
     if resolution.state == "promotion_candidates":
         return resolution
@@ -216,6 +230,8 @@ def _communication_gate(
         count = counts.get(resolution.person_id, 0)
         excluded = count <= 0 or (scan_stopped_early and count == 0)
         if excluded:
+            if mention is not None and _display_key(resolution.title or "") == _display_key(extracted_name):
+                return resolution
             return None
         return resolution
     if resolution.state == "ambiguous":
@@ -224,10 +240,26 @@ def _communication_gate(
             for candidate in resolution.candidates
             if counts.get(candidate.person_id, 0) > 0
         ]
-        if not kept:
+        if kept:
+            return resolution.model_copy(
+                update={"state": "ambiguous", "person_id": None, "candidates": kept}
+            )
+        if mention is None:
+            return None
+        exact = [
+            candidate
+            for candidate in resolution.candidates
+            if _display_key(candidate.title) == _display_key(extracted_name)
+        ]
+        if not exact:
             return None
         return resolution.model_copy(
-            update={"state": "ambiguous", "person_id": None, "candidates": kept}
+            update={"state": "ambiguous", "person_id": None, "candidates": exact}
+        )
+    if resolution.state == "unresolved" and mention is not None:
+        return RoleImportPersonResolution(
+            state="promotion_candidates",
+            promotion_candidates=[_mention_candidate(mention)],
         )
     return None
 
@@ -298,6 +330,8 @@ def _promotion_out(item: PromotionCandidate) -> RoleImportPromotionCandidate:
         display_name=item.display_value,
         provider=identity.provider,
         direct_hit_count=item.direct_hit_count,
+        evidence_kind="identity_participant",
+        communication_object_count=item.direct_hit_count,
         latest_occurred_at=item.latest_occurred_at,
         sources=[
             RoleImportPromotionSource(
@@ -404,6 +438,19 @@ def _collapse(value: str | None) -> str | None:
         return None
     collapsed = " ".join(value.split())
     return collapsed or None
+
+
+def _mention_candidate(mention: NameMentionEvidence) -> RoleImportPromotionCandidate:
+    return RoleImportPromotionCandidate(
+        candidate_key=mention.candidate_key,
+        display_name=mention.display_name,
+        provider=mention.provider_label,
+        direct_hit_count=mention.object_count,
+        evidence_kind="name_mentions",
+        communication_object_count=mention.object_count,
+        latest_occurred_at=mention.latest_occurred_at,
+        sources=[],
+    )
 
 
 def _display_key(value: str) -> str:

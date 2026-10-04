@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:path/path.dart' as p;
 import 'package:personal_secretary/api/api_models.dart';
+import 'package:personal_secretary/api/role_import_models.dart';
 import 'package:personal_secretary/api/secretary_api_client.dart';
 import 'package:personal_secretary/assistant/assistant_controller.dart';
 import 'package:personal_secretary/assistant/role_import_preview.dart';
@@ -583,7 +584,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
     expect(
-      find.text('Показаны только люди с подтверждённой перепиской'),
+      find.text('Показаны только люди с подтверждением в сохранённой переписке'),
       findsOneWidget,
     );
     expect(find.byType(Checkbox), findsOneWidget);
@@ -595,11 +596,205 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
     expect(
-      find.text('Среди извлечённых строк нет контактов с подтверждённой перепиской'),
+      find.text(
+        'Среди извлечённых строк нет людей с подтверждением в сохранённой переписке',
+      ),
       findsOneWidget,
     );
     expect(find.byType(Checkbox), findsNothing);
     expect(find.byKey(const Key('prepare_role_import_button')), findsNothing);
+  });
+
+  testWidgets('mention candidate is explicit and the plan names it safely', (
+    tester,
+  ) async {
+    const mentionKey = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    var selected = false;
+    String? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RoleImportPreviewPanel(
+            loading: false,
+            error: null,
+            preview: RoleImportPreview(
+              sourceObjectId: 'source-a',
+              sourceRevision: 'rev-1',
+              sourceKind: 'image',
+              sourceTruncated: false,
+              itemsTruncated: false,
+              items: [
+                RoleImportPreviewItem(
+                  personName: 'Шабаршина Ирина Сергеевна',
+                  role: 'директор',
+                  evidenceText: 'цитата',
+                ),
+              ],
+            ),
+            onExtract: () {},
+            grounded: RoleImportGroundedPreview(
+              sourceObjectId: 'source-a',
+              sourceRevision: 'rev-1',
+              sourceKind: 'image',
+              sourceTruncated: false,
+              itemsTruncated: false,
+              groundingRevision: 'ground-1',
+              items: [
+                RoleImportGroundedItem(
+                  rowIndex: 0,
+                  personName: 'Шабаршина Ирина Сергеевна',
+                  role: 'директор',
+                  evidenceText: 'цитата',
+                  personResolution: RoleImportPersonResolution(
+                    state: 'promotion_candidates',
+                    promotionCandidates: [
+                      RoleImportPromotionCandidate(
+                        candidateKey: mentionKey,
+                        displayName: 'Шабаршина Ирина Сергеевна',
+                        provider: 'gmail',
+                        directHitCount: 12,
+                        evidenceKind: 'name_mentions',
+                        communicationObjectCount: 12,
+                      ),
+                    ],
+                  ),
+                  roleResolution: RoleImportRoleResolution(
+                    state: 'propose_new',
+                    displayText: 'директор',
+                  ),
+                ),
+              ],
+            ),
+            choices: {
+              0: RoleImportRowChoice()
+                ..promotionCandidateKey = chosen
+                ..selected = selected,
+            },
+            canPrepare: false,
+            onChoosePromotion: (row, key) {
+              chosen = key;
+              selected = false;
+            },
+            onToggleRow: (row, value) {
+              selected = value;
+            },
+            onPrepare: () {},
+            phase: RoleImportFlowPhase.editing,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Упомянут в переписке: 12 сообщений'), findsOneWidget);
+    expect(find.text('Контактная личность не установлена'), findsOneWidget);
+    expect(
+      find.text('После подтверждения будет создан новый Person без привязки контакта'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('в переписке'), findsOneWidget);
+    expect(find.textContaining('прямых'), findsNothing);
+    expect(find.textContaining(mentionKey), findsNothing);
+    expect(find.textContaining('@'), findsNothing);
+    expect(find.textContaining('gmail'), findsNothing);
+    expect(
+      tester.widget<Checkbox>(find.byKey(const Key('role_import_select_0'))).onChanged,
+      isNull,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RoleImportPreviewPanel(
+            loading: false,
+            error: null,
+            preview: RoleImportPreview(
+              sourceObjectId: 'source-a',
+              sourceRevision: 'rev-1',
+              sourceKind: 'image',
+              sourceTruncated: false,
+              itemsTruncated: false,
+              items: const [],
+            ),
+            onExtract: () {},
+            grounded: RoleImportGroundedPreview(
+              sourceObjectId: 'source-a',
+              sourceRevision: 'rev-1',
+              sourceKind: 'image',
+              sourceTruncated: false,
+              itemsTruncated: false,
+              groundingRevision: 'ground-1',
+              items: [
+                RoleImportGroundedItem(
+                  rowIndex: 0,
+                  personName: 'Шабаршина Ирина Сергеевна',
+                  role: 'директор',
+                  evidenceText: 'цитата',
+                  personResolution: RoleImportPersonResolution(
+                    state: 'promotion_candidates',
+                    promotionCandidates: [
+                      RoleImportPromotionCandidate(
+                        candidateKey: mentionKey,
+                        displayName: 'Шабаршина Ирина Сергеевна',
+                        provider: 'gmail',
+                        directHitCount: 12,
+                        evidenceKind: 'name_mentions',
+                        communicationObjectCount: 12,
+                      ),
+                    ],
+                  ),
+                  roleResolution: RoleImportRoleResolution(
+                    state: 'propose_new',
+                    displayText: 'директор',
+                  ),
+                ),
+              ],
+            ),
+            choices: {
+              0: RoleImportRowChoice()
+                ..promotionCandidateKey = chosen
+                ..selected = false,
+            },
+            onToggleRow: (row, value) {},
+            phase: RoleImportFlowPhase.pending,
+            plan: ActionPlanResponse.fromJson({
+              'id': 'plan-mention',
+              'status': 'pending',
+              'expires_at': '2099-01-01T00:00:00Z',
+              'actions': [
+                {
+                  'tool_name': 'apply_role_import_batch',
+                  'arguments': const <String, dynamic>{},
+                  'presentation': {
+                    'source_title': 'Снимок',
+                    'selected_count': 1,
+                    'total_extracted_rows': 1,
+                    'source_truncated': false,
+                    'items_truncated': false,
+                    'rows': [
+                      {
+                        'target_display': 'Шабаршина Ирина Сергеевна',
+                        'target_mode': 'name_mentions',
+                        'role': 'директор',
+                        'context': null,
+                        'vocabulary_mode': 'create_if_missing',
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(find.textContaining(mentionKey), findsNothing);
+    expect(
+      find.textContaining(
+        'Шабаршина Ирина Сергеевна · новый Person без привязки контакта · директор',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('новый Person ·'), findsNothing);
   });
 }
 

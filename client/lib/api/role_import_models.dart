@@ -137,12 +137,18 @@ class RoleImportPromotionCandidate {
     required this.displayName,
     required this.provider,
     required this.directHitCount,
+    this.evidenceKind = 'identity_participant',
+    this.communicationObjectCount,
   });
 
   final String candidateKey;
   final String displayName;
   final String provider;
   final int directHitCount;
+  final String evidenceKind;
+  final int? communicationObjectCount;
+
+  int get communicationCount => communicationObjectCount ?? directHitCount;
 
   factory RoleImportPromotionCandidate.fromJson(Map<String, dynamic> json) {
     return RoleImportPromotionCandidate(
@@ -150,6 +156,8 @@ class RoleImportPromotionCandidate {
       displayName: json['display_name'] as String? ?? '',
       provider: json['provider'] as String? ?? '',
       directHitCount: json['direct_hit_count'] as int? ?? 0,
+      evidenceKind: json['evidence_kind'] as String? ?? 'identity_participant',
+      communicationObjectCount: json['communication_object_count'] as int?,
     );
   }
 }
