@@ -8,6 +8,10 @@ from pydantic import BaseModel
 
 from app.proactive.constants import PROACTIVE_READ_TOOL_NAMES
 from app.services.domain_tool_service import DomainToolService
+from app.services.person_role_import_batch_models import (
+    ApplyRoleImportBatchCanonicalInput,
+    ApplyRoleImportBatchInput,
+)
 from app.tools.assistant_contracts import ASSISTANT_FUNCTION_SCHEMAS
 from app.tools.policy import ToolPermission
 from app.tools.schemas import (
@@ -258,6 +262,16 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         assistant_definition=_assistant_definition("assign_person_role"),
         prepare_method="prepare_assign_person_role",
         execution_input_model=AssignPersonRoleCanonicalInput,
+    ),
+    ToolSpec(
+        name="apply_role_import_batch",
+        permission=ToolPermission.INTERNAL_WRITE,
+        input_model=ApplyRoleImportBatchInput,
+        service_method="apply_role_import_batch",
+        assistant_exposed=False,
+        mcp_exposed=False,
+        prepare_method="prepare_apply_role_import_batch",
+        execution_input_model=ApplyRoleImportBatchCanonicalInput,
     ),
     ToolSpec(
         name="retract_person_role",

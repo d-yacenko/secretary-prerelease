@@ -89,6 +89,7 @@ def test_registry_tool_names_are_unique():
 def test_registry_covers_executor_dispatch_tools():
     expected = {
         "search_objects",
+        "apply_role_import_batch",
         "retrieve",
         "query_objects",
         "get_object",
@@ -196,6 +197,7 @@ def test_permission_classifications():
         "create_label",
         "rename_label",
         "assign_person_role",
+        "apply_role_import_batch",
     }
     destructive = {"delete_task", "remove_relation", "delete_label", "retract_person_role"}
     annotate = {

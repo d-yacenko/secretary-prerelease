@@ -41,6 +41,44 @@ class PersonRoleImportSourceService:
         self._user_id = user_id
         self._upload_root = upload_root
 
+    def lock_for_execution(self, object_id: UUID) -> None:
+        obj = self._session.execute(
+            select(Object)
+            .where(Object.id == object_id, Object.user_id == self._user_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if (
+            obj is None
+            or is_object_hidden_from_active_reads(obj)
+            or obj.state == REJECTED_STATE
+        ):
+            raise NotFoundError("object", object_id)
+        if not self._is_raster_upload(obj):
+            self._lock_used_representations(obj)
+
+    def _lock_used_representations(self, obj: Object) -> None:
+        full_ids = self._representation_ids(obj.id, KIND_FULL)
+        full_rows = [self._session.get(Representation, row_id) for row_id in full_ids]
+        if any(row is not None and row.text for row in full_rows):
+            self._lock_representation_ids(full_ids)
+            return
+        self._lock_representation_ids(self._representation_ids(obj.id, KIND_CHUNK))
+
+    def _representation_ids(self, object_id: UUID, kind: str) -> list[UUID]:
+        return list(
+            self._session.scalars(
+                select(Representation.id)
+                .where(Representation.object_id == object_id, Representation.kind == kind)
+                .order_by(Representation.part_index.asc().nulls_last(), Representation.id.asc())
+            )
+        )
+
+    def _lock_representation_ids(self, row_ids: list[UUID]) -> None:
+        for row_id in row_ids:
+            self._session.execute(
+                select(Representation).where(Representation.id == row_id).with_for_update()
+            )
+
     def load(self, object_id: UUID) -> RoleImportSource:
         obj = self._session.scalar(
             select(Object).where(Object.id == object_id, Object.user_id == self._user_id)

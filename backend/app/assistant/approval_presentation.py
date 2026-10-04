@@ -27,6 +27,7 @@ _INTERNAL_TOOLS = frozenset(
         "create_scheduled_activity",
         "assign_person_role",
         "retract_person_role",
+        "apply_role_import_batch",
     }
 )
 _UPDATE_FIELDS = (
@@ -78,6 +79,8 @@ def build_approval_presentation(
         return _scheduled(arguments)
     if tool_name == "assign_person_role":
         return _assign_person_role(session, user_id, arguments)
+    if tool_name == "apply_role_import_batch":
+        return _apply_role_import_batch(session, user_id, arguments)
     if tool_name == "retract_person_role":
         return _retract_person_role(session, user_id, arguments)
     return None
@@ -154,6 +157,54 @@ def _remove(session: Session, user_id: UUID, arguments: dict[str, Any]) -> dict[
     if relation:
         snapshot["relation_type"] = relation
     return snapshot
+
+
+def _apply_role_import_batch(
+    session: Session, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    source_id = arguments.get("source_object_id")
+    source = _owned_object(session, user_id, source_id)
+    title = ""
+    if source is not None and source.title:
+        title = source.title[:TITLE_MAX_CHARS]
+    rows = arguments.get("selected_rows") if isinstance(arguments.get("selected_rows"), list) else []
+    visible = []
+    for row in rows[:32]:
+        if not isinstance(row, dict):
+            continue
+        visible.append(
+            {
+                "row_index": row.get("row_index"),
+                "target_display": (_scalar(row.get("target_display")) or "")[:TITLE_MAX_CHARS],
+                "target_mode": "existing_person" if row.get("person_id") else "promote_person",
+                "role": _scalar(row.get("role")),
+                "context": row.get("context") if isinstance(row.get("context"), str) else None,
+                "vocabulary_mode": row.get("vocabulary_mode"),
+            }
+        )
+    return {
+        "operation": "apply_role_import_batch",
+        "source_object_id": str(source_id) if source_id else None,
+        "source_title": title,
+        "selected_count": len(rows),
+        "total_extracted_rows": arguments.get("total_extracted_rows"),
+        "source_truncated": arguments.get("source_truncated"),
+        "items_truncated": arguments.get("items_truncated"),
+        "rows": visible,
+    }
+
+
+def _owned_object(session: Session, user_id: UUID, raw: object) -> Object | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        object_id = UUID(raw)
+    except ValueError:
+        return None
+    obj = session.get(Object, object_id)
+    if obj is None or obj.user_id != user_id:
+        return None
+    return obj
 
 
 def _assign_person_role(

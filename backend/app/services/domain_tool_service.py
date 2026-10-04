@@ -774,6 +774,38 @@ class DomainToolService:
         except (ValidationError, NotFoundError) as exc:
             raise ToolError(getattr(exc, "message", str(exc))) from exc
 
+    def prepare_apply_role_import_batch(self, payload):
+        from pathlib import Path
+
+        from app.core.config import settings
+        from app.services.person_role_import_batch_service import PersonRoleImportBatchService
+
+        try:
+            return PersonRoleImportBatchService(
+                self._session,
+                self._user_id,
+                Path(settings.resource_upload_root),
+            ).prepare(payload)
+        except (ValidationError, NotFoundError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
+    def apply_role_import_batch(self, payload):
+        from pathlib import Path
+
+        from app.core.config import settings
+        from app.services.person_role_import_batch_service import PersonRoleImportBatchService
+
+        if self._write_mode != DomainWriteMode.APPROVED_CONFIRMED:
+            raise ToolError("tool execution requires approval")
+        try:
+            return PersonRoleImportBatchService(
+                self._session,
+                self._user_id,
+                Path(settings.resource_upload_root),
+            ).execute(payload)
+        except (ValidationError, NotFoundError, ConflictError) as exc:
+            raise ToolError(getattr(exc, "message", str(exc))) from exc
+
     def prepare_assign_person_role(
         self, payload: AssignPersonRoleInput
     ) -> AssignPersonRoleCanonicalInput:

@@ -81,6 +81,7 @@ class PersonRoleService:
         origin: str = MANUAL_ORIGIN,
         provenance_kind: str = MANUAL_PROVENANCE_KIND,
         provenance_key: str = MANUAL_PROVENANCE_KEY,
+        source_object_id: uuid.UUID | None = None,
     ) -> tuple[PersonRoleAssignment, bool]:
         try:
             display, key = role_term_identity(role)
@@ -94,6 +95,8 @@ class PersonRoleService:
             return existing, False
         if self._active_count(person_id) >= MAX_ACTIVE_ASSIGNMENTS:
             raise ValidationError("active role assignment cap reached")
+        if source_object_id is not None:
+            self._require_import_source(source_object_id)
         nested = self._session.begin_nested()
         try:
             term = self._reuse_or_create_term(display, key)
@@ -107,6 +110,7 @@ class PersonRoleService:
                 state=ACTIVE_STATE,
                 provenance_kind=provenance_kind,
                 provenance_key=provenance_key[:128],
+                source_object_id=source_object_id,
             )
             self._session.add(row)
             self._session.flush()
@@ -170,6 +174,13 @@ class PersonRoleService:
         row = lock_user_serialization_row(self._session, self._user_id)
         if row is None:
             raise NotFoundError("user", self._user_id)
+
+    def _require_import_source(self, source_object_id: uuid.UUID) -> None:
+        source = self._session.get(Object, source_object_id)
+        if source is None or source.user_id != self._user_id:
+            raise NotFoundError("object", source_object_id)
+        if source.state == REJECTED_STATE or is_object_hidden_from_active_reads(source):
+            raise ValidationError("role import source is not active")
 
     def _require_person(self, person_id: uuid.UUID) -> Object:
         person = self._session.get(Object, person_id)
