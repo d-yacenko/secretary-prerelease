@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -148,6 +149,8 @@ class TelegramMtprotoHistoryEntry:
     is_service: bool
     outgoing: bool = False
     media: tuple[TelegramMtprotoMediaHint, ...] = ()
+    sender_display_name: str | None = None
+    sender_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -783,6 +786,8 @@ class TelethonMtprotoTransport:
                 "edited_at": entry.edited_at,
                 "reply_to_message_id": entry.reply_to_message_id,
                 "sender_peer_id": entry.sender_peer_id,
+                "sender_display_name": entry.sender_display_name,
+                "sender_kind": entry.sender_kind,
                 "outgoing": entry.outgoing,
                 "topic_id": entry.topic_id,
                 "service": entry.is_service,
@@ -1292,6 +1297,7 @@ def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry 
     occurred_at = _history_datetime(getattr(message, "date", None))
     edited_at = _history_datetime(getattr(message, "edit_date", None))
     sender_peer_id = _peer_id_from_message(message)
+    sender_kind, sender_display_name = _cached_sender_identity(getattr(message, "sender", None))
     reply_header = getattr(message, "reply_to", None)
     reply_to_message_id = _positive_int(getattr(message, "reply_to_msg_id", None))
     if reply_to_message_id is None:
@@ -1312,6 +1318,8 @@ def _history_entry_from_message(message: object) -> TelegramMtprotoHistoryEntry 
         is_service=getattr(message, "action", None) is not None,
         outgoing=bool(getattr(message, "out", False)),
         media=_media_hints(message),
+        sender_display_name=sender_display_name,
+        sender_kind=sender_kind,
     )
 
 
@@ -1409,6 +1417,37 @@ def _bounded_duration(value: object) -> int | None:
     if value < 0 or value > 86_400:
         return None
     return value
+
+
+_SENDER_WHITESPACE = re.compile(r"\s+")
+
+
+def _collapse_sender_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _SENDER_WHITESPACE.sub(" ", value.strip())
+
+
+def _cached_user_display(user: object) -> str | None:
+    first_name = _collapse_sender_text(getattr(user, "first_name", None))
+    last_name = _collapse_sender_text(getattr(user, "last_name", None))
+    if first_name and last_name:
+        return f"{first_name} {last_name}"
+    return first_name or last_name or None
+
+
+def _cached_sender_identity(sender: object) -> tuple[str | None, str | None]:
+    """Classify a sender already attached to the message. No provider lookup."""
+    if isinstance(sender, types.User):
+        kind = "bot" if sender.bot else "user"
+        return kind, _cached_user_display(sender)
+    if isinstance(sender, types.Channel):
+        title = _collapse_sender_text(getattr(sender, "title", None))
+        return "channel", title or None
+    if isinstance(sender, types.Chat):
+        title = _collapse_sender_text(getattr(sender, "title", None))
+        return "chat", title or None
+    return None, None
 
 
 def _peer_id_from_message(message: object) -> int | None:

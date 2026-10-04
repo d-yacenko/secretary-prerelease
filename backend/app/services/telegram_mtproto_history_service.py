@@ -360,6 +360,8 @@ class TelegramMtprotoHistoryService:
                         occurred_at=result.get("occurred_at") or obj.occurred_at,
                         text=result.get("text"),
                         sender_peer_id=result.get("sender_peer_id"),
+                        sender_display_name=result.get("sender_display_name"),
+                        sender_kind=result.get("sender_kind"),
                         reply_to_message_id=result.get("reply_to_message_id"),
                         topic_id=result.get("topic_id"),
                         edited_at=result.get("edited_at"),
@@ -626,6 +628,10 @@ def _normalize_entry(
         "topic_id": entry.topic_id,
         "edited_at": entry.edited_at.isoformat() if entry.edited_at else None,
     }
+    if entry.sender_display_name:
+        metadata["sender_display_name"] = entry.sender_display_name
+    if entry.sender_kind in {"user", "bot", "channel", "chat"}:
+        metadata["sender_kind"] = entry.sender_kind
     if media:
         metadata["media_descriptors"] = media
     return {

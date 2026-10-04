@@ -198,6 +198,7 @@ def test_telegram_sender_follows_the_ai_gate_and_channel_title_does_not(
             "peer_title": "REL1DHG14 Канал",
             "direction": "inbound",
             "sender_peer_id": 88002,
+            "sender_kind": "user",
             "sender_display_name": "REL1DHG14 Телеграм",
         },
     )
@@ -572,6 +573,7 @@ def test_telegram_own_user_id_stays_excluded(db_session, monkeypatch) -> None:
             "peer_kind": "private",
             "direction": "inbound",
             "sender_peer_id": 880_141_141,
+            "sender_kind": "user",
             "sender_display_name": "REL1DHG141 СебяТелеграм",
         },
     )
@@ -586,6 +588,7 @@ def test_telegram_own_user_id_stays_excluded(db_session, monkeypatch) -> None:
             "peer_kind": "private",
             "direction": "inbound",
             "sender_peer_id": 880_141_142,
+            "sender_kind": "user",
             "sender_display_name": "REL1DHG141 ДругойТелеграм",
         },
     )

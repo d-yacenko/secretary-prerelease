@@ -168,10 +168,12 @@ def _telegram_participant(metadata: Mapping[str, Any]) -> list[NormalizedPersonI
             metadata.get("peer_id"),
             _text(metadata.get("peer_title")) or _text(metadata.get("peer_display_name")),
         )
+    if metadata.get("sender_kind") != "user":
+        return []
     return _telegram_user(
         account_id,
         metadata.get("sender_peer_id"),
-        _text(metadata.get("sender_display_name")),
+        _display(metadata.get("sender_display_name")),
     )
 
 
