@@ -579,8 +579,8 @@ def test_mtproto_external_id_is_namespaced_from_business_id(db_session):
     ) == 2
 
 
-def test_migration_0044_is_the_single_alembic_head():
+def test_migration_0054_is_the_single_alembic_head():
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["0046"]
+    assert script.get_heads() == ["0054"]

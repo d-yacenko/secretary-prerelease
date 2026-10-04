@@ -325,9 +325,9 @@ def test_scoped_unavailable_peer_is_sanitized_409(monkeypatch):
     assert raised.value.detail == "Telegram peer is no longer available"
 
 
-def test_migration_0046_is_single_head():
+def test_migration_0054_is_single_head():
     config = Config("alembic.ini")
-    assert ScriptDirectory.from_config(config).get_heads() == ["0046"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0054"]
 
 
 def _db_account(db_session, name="A4.2 acceptance"):
