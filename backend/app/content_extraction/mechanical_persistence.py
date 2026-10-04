@@ -13,7 +13,10 @@ from app.content_extraction.constants import (
 from app.content_extraction.metadata_keys import MECHANICAL_REPRESENTATION_KINDS
 from app.db.models import Representation
 from app.services.errors import ValidationError
-from app.services.representation_service import KIND_SUMMARY
+from app.services.representation_service import (
+    KIND_SUMMARY,
+    lock_object_for_representation_write,
+)
 
 
 def _utf8_byte_len(text: str) -> int:
@@ -21,8 +24,9 @@ def _utf8_byte_len(text: str) -> int:
 
 
 class MechanicalRepresentationPersistence:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, user_id: UUID | None = None) -> None:
         self._session = session
+        self._user_id = user_id
 
     def validate_representations(self, reps: list[Representation]) -> list[Representation]:
         if len(reps) > MAX_REPRESENTATION_PARTS:
@@ -38,6 +42,7 @@ class MechanicalRepresentationPersistence:
         return reps
 
     def replace_mechanical_for_object(self, object_id: UUID, reps: list[Representation]) -> int:
+        lock_object_for_representation_write(self._session, object_id, self._user_id)
         validated = self.validate_representations(reps)
         kinds_to_clear = set(MECHANICAL_REPRESENTATION_KINDS) | {KIND_SUMMARY, "summary"}
         self._session.execute(
@@ -52,6 +57,7 @@ class MechanicalRepresentationPersistence:
         return len(validated)
 
     def clear_mechanical_for_object(self, object_id: UUID) -> None:
+        lock_object_for_representation_write(self._session, object_id, self._user_id)
         kinds_to_clear = set(MECHANICAL_REPRESENTATION_KINDS) | {KIND_SUMMARY, "summary"}
         self._session.execute(
             delete(Representation).where(

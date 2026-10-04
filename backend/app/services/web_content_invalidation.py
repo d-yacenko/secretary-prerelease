@@ -10,7 +10,7 @@ from app.services.semantic_summary_service import invalidate_semantic_summary_me
 
 def invalidate_web_page_content_immediately(session: Session, obj: Object) -> None:
     """Clear stale indexed content before a new web revision is persisted."""
-    MechanicalRepresentationPersistence(session).clear_mechanical_for_object(obj.id)
+    MechanicalRepresentationPersistence(session, obj.user_id).clear_mechanical_for_object(obj.id)
     clear_object_embedding(obj)
     obj.metadata_ = invalidate_semantic_summary_metadata(dict(obj.metadata_ or {}))
     session.flush()

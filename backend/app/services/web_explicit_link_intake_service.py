@@ -167,7 +167,9 @@ class WebExplicitLinkIntakeService:
                 fetched.text,
                 MAX_REPRESENTATION_PARTS,
             )
-            count = MechanicalRepresentationPersistence(self.session).replace_mechanical_for_object(
+            count = MechanicalRepresentationPersistence(
+                self.session, self.user_id
+            ).replace_mechanical_for_object(
                 obj.id, reps
             )
             meta = dict(obj.metadata_ or {})

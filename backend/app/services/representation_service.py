@@ -45,6 +45,18 @@ KIND_CONVERSATION_STACK_SUMMARY = "conversation_stack_summary"
 _PRESERVED_REPRESENTATION_KINDS = frozenset({KIND_CONVERSATION_STACK_SUMMARY})
 
 
+def lock_object_for_representation_write(
+    session: Session, object_id: UUID, user_id: UUID | None = None
+) -> None:
+    """Serialize representation mutations on the owning Object row."""
+    stmt = select(Object.id).where(Object.id == object_id)
+    if user_id is not None:
+        stmt = stmt.where(Object.user_id == user_id)
+    found = session.execute(stmt.with_for_update()).scalar_one_or_none()
+    if user_id is not None and found is None:
+        raise NotFoundError("object", object_id)
+
+
 class RepresentationService:
     def __init__(
         self,
@@ -112,6 +124,7 @@ class RepresentationService:
     def _replace_representations(
         self, object_id: UUID, reps: list[Representation]
     ) -> list[Representation]:
+        lock_object_for_representation_write(self._session, object_id, self._user_id)
         self._session.execute(
             delete(Representation).where(
                 Representation.object_id == object_id,

@@ -18,7 +18,7 @@ STATUS_PENDING = "pending"
 
 def invalidate_object_content_immediately(session: Session, obj: Object) -> None:
     """Clear stale indexed content before a new revision is extracted."""
-    MechanicalRepresentationPersistence(session).clear_mechanical_for_object(obj.id)
+    MechanicalRepresentationPersistence(session, obj.user_id).clear_mechanical_for_object(obj.id)
     clear_object_embedding(obj)
     merged = invalidate_semantic_summary_metadata(dict(obj.metadata_ or {}))
     merged[CONTENT_EXTRACTION_STATUS] = STATUS_PENDING

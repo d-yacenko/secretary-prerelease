@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Representation
 from app.services.client_intake_constants import (
+    ALLOWED_DATASET_SAMPLING_MODES,
     CLIENT_REP_METADATA_ALLOWLIST,
     CLIENT_REPRESENTATION_KINDS,
     DATASET_FILE_SUFFIXES,
@@ -19,11 +20,13 @@ from app.services.client_intake_constants import (
     MAX_CLIENT_REPRESENTATION_PARTS,
     MAX_CLIENT_REPRESENTATION_TOTAL_BYTES,
     MAX_SAMPLED_ROW_INDICES,
-    ALLOWED_DATASET_SAMPLING_MODES,
     UNSUPPORTED_INDEX_SUFFIXES,
 )
 from app.services.errors import ValidationError
-from app.services.representation_service import RepresentationService
+from app.services.representation_service import (
+    RepresentationService,
+    lock_object_for_representation_write,
+)
 
 
 def _utf8_byte_len(text: str) -> int:
@@ -192,7 +195,7 @@ class ClientRepresentationPersistence:
         metadata_only: bool,
     ) -> int:
         validated = self._validator.validate_payload(filename, representations, metadata_only)
-        self._representations._get_object(object_id)
+        lock_object_for_representation_write(self._session, object_id, self._user_id)
         reps: list[Representation] = []
         for item in validated:
             reps.append(
@@ -211,5 +214,6 @@ class ClientRepresentationPersistence:
         return len(reps)
 
     def delete_all_for_object(self, object_id: UUID) -> None:
+        lock_object_for_representation_write(self._session, object_id, self._user_id)
         self._session.execute(delete(Representation).where(Representation.object_id == object_id))
         self._session.flush()

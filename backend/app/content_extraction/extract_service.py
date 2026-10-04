@@ -71,7 +71,7 @@ class ExplicitResourceContentExtractor:
         self._yandex_transport = yandex_transport
         self._account_store = account_store
         self._token_manager = token_manager
-        self._persistence = MechanicalRepresentationPersistence(session)
+        self._persistence = MechanicalRepresentationPersistence(session, user_id)
 
     def close(self) -> None:
         if self._drive_transport is not None:

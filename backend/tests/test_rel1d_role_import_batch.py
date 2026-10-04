@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import engine
 from app.services.action_plan_service import ActionPlanService
+from app.services.client_representation_service import ClientRepresentationPersistence
 from app.services.domain_tool_service import DomainToolService
 from app.services.domain_write_mode import DomainWriteMode
 from app.services.errors import ConflictError, ValidationError
@@ -48,12 +49,17 @@ from app.services.person_role_service import (
     MANUAL_PROVENANCE_KIND,
     PersonRoleService,
 )
-from app.services.representation_service import KIND_FULL
+from app.services.representation_service import KIND_FULL, RepresentationService
 from app.services.user_serialization_gate import lock_user_serialization_row
 from app.tools.execution_context import ExecutionContext
 from app.tools.gateway import ToolExecutionGateway
 from app.tools.policy import PolicyDecision, evaluate_policy
-from app.tools.registry import ASSISTANT_TOOL_DEFINITIONS, MCP_TOOL_NAMES, get_tool_spec
+from app.tools.registry import (
+    ASSISTANT_TOOL_DEFINITIONS,
+    MCP_TOOL_NAMES,
+    TOOL_REGISTRY,
+    get_tool_spec,
+)
 from app.users.bootstrap import BOOTSTRAP_USER_ID
 from tests.test_rel1d_role_import_grounding import _ground, _mail, _row
 from tests.test_rel1d_role_import_source import _text_object
@@ -82,6 +88,38 @@ def test_prepare_creates_one_pending_plan_without_person_or_role_writes(db_sessi
     assert after["terms"] == before["terms"]
     assert after["identities"] == before["identities"]
     assert after["plans"] == before["plans"] + 1
+
+
+def test_batch_tool_has_no_generic_prepare_path() -> None:
+    spec = TOOL_REGISTRY["apply_role_import_batch"]
+    assert spec.prepare_method is None
+    assert not hasattr(DomainToolService, "prepare_apply_role_import_batch")
+    assert spec.permission.value == "INTERNAL_WRITE"
+    assert spec.assistant_exposed is False
+    assert spec.mcp_exposed is False
+    assert spec.assistant_definition is None
+    assert spec.execution_input_model.__name__ == "ApplyRoleImportBatchCanonicalInput"
+
+
+def test_specialized_endpoint_prepares_one_frozen_plan(auth_client, db_session, tmp_path) -> None:
+    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_NAME)
+    source, revision, proposal = _proposal(db_session, tmp_path, [_row(_NAME, _ROLE)])
+    response = auth_client.post(
+        "/people/role-import/action-plan",
+        json=_body(
+            source.id,
+            revision,
+            proposal.grounding_revision,
+            [_row(_NAME, _ROLE)],
+            [{"row_index": 0, "person_id": str(person.id)}],
+        ),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "pending"
+    assert len(payload["actions"]) == 1
+    assert payload["actions"][0]["tool_name"] == "apply_role_import_batch"
+    assert payload["actions"][0]["arguments"]["selected_rows"][0]["person_id"] == str(person.id)
 
 
 def test_tool_is_internal_and_baseline_execute_does_not_persist(db_session) -> None:
@@ -659,6 +697,66 @@ def test_source_object_row_is_locked(monkeypatch) -> None:
     _during_held_batch(monkeypatch, _probe)
 
 
+def test_body_fallback_blocks_first_client_representation_insert(monkeypatch) -> None:
+    def _probe(source_id, _person, _rep, _original) -> None:
+        _expect_representation_timeout(
+            lambda other: ClientRepresentationPersistence(other, BOOTSTRAP_USER_ID).replace_for_object(
+                source_id,
+                "notes.txt",
+                [{"kind": "full", "text": "inserted over body"}],
+                False,
+            )
+        )
+
+    _during_held_body_batch(monkeypatch, _probe)
+
+
+def test_body_fallback_blocks_ingest_text_content(monkeypatch) -> None:
+    def _probe(source_id, _person, _rep, _original) -> None:
+        _expect_representation_timeout(
+            lambda other: RepresentationService(other, BOOTSTRAP_USER_ID).ingest_text_content(
+                source_id, "inserted over body"
+            )
+        )
+
+    _during_held_body_batch(monkeypatch, _probe)
+
+
+def test_body_fallback_blocks_representation_delete(monkeypatch) -> None:
+    def _probe(source_id, _person, _rep, _original) -> None:
+        _expect_representation_timeout(
+            lambda other: ClientRepresentationPersistence(other, BOOTSTRAP_USER_ID).delete_all_for_object(
+                source_id
+            )
+        )
+
+    _during_held_body_batch(monkeypatch, _probe)
+
+
+def test_representation_write_succeeds_after_batch_releases(monkeypatch) -> None:
+    def _probe(source_id, _person, _rep, _original) -> None:
+        _expect_representation_timeout(
+            lambda other: RepresentationService(other, BOOTSTRAP_USER_ID).ingest_text_content(
+                source_id, "still blocked"
+            )
+        )
+
+    def _after(source_id) -> None:
+        with Session(engine) as other:
+            RepresentationService(other, BOOTSTRAP_USER_ID).ingest_text_content(source_id, "released text")
+            other.commit()
+            stored = other.scalar(
+                select(Representation).where(
+                    Representation.object_id == source_id,
+                    Representation.kind == KIND_FULL,
+                )
+            )
+            assert stored is not None
+            assert stored.text == "released text"
+
+    _during_held_body_batch(monkeypatch, _probe, _after)
+
+
 def test_used_representation_rows_are_locked(monkeypatch) -> None:
     def _probe(_source, _person, rep_id, _original) -> None:
         with Session(engine) as other:
@@ -693,6 +791,67 @@ def _during_held_batch(monkeypatch, probe) -> None:
         holder.rollback()
         holder.close()
         _cleanup_lock_fixture(source_id, person_id)
+
+
+def _during_held_body_batch(monkeypatch, probe, after_release=None) -> None:
+    source_id, person_id = _commit_body_fixture()
+    holder = Session(engine)
+    original = PersonRoleService.assign_outcome
+
+    def _wrapped(self, *args, **kwargs):
+        probe(source_id, person_id, None, original)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(PersonRoleService, "assign_outcome", _wrapped)
+    try:
+        source = _sources(holder, _unused_root()).load(source_id)
+        assert source.source_kind == "text"
+        proposal = _ground(
+            holder, _unused_root(), source_id, source.source_revision, [_row("REL1DC Тело", _ROLE)]
+        )
+        plan = _service(holder, _unused_root()).prepare_plan(
+            _input(
+                source_id,
+                source.source_revision,
+                proposal.grounding_revision,
+                [_row("REL1DC Тело", _ROLE)],
+                [{"row_index": 0, "person_id": person_id}],
+            )
+        )
+        view = ActionPlanService(holder, BOOTSTRAP_USER_ID).approve(plan.id)
+        assert view.status == "executed"
+    finally:
+        holder.rollback()
+        holder.close()
+        try:
+            if after_release is not None:
+                after_release(source_id)
+        finally:
+            _cleanup_lock_fixture(source_id, person_id)
+
+
+def _commit_body_fixture():
+    with Session(engine) as session:
+        person = PersonIdentityService(session, BOOTSTRAP_USER_ID).create_person("REL1DC Тело")
+        source = Object(
+            user_id=BOOTSTRAP_USER_ID,
+            kind="document",
+            title="body notes",
+            body="body fallback role import source",
+            origin="user",
+            state="confirmed",
+            metadata_={},
+        )
+        session.add(source)
+        session.commit()
+        return source.id, person.id
+
+
+def _expect_representation_timeout(call) -> None:
+    with Session(engine) as other:
+        other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(OperationalError):
+            call(other)
 
 
 def _commit_lock_fixture():

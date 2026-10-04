@@ -270,7 +270,6 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         service_method="apply_role_import_batch",
         assistant_exposed=False,
         mcp_exposed=False,
-        prepare_method="prepare_apply_role_import_batch",
         execution_input_model=ApplyRoleImportBatchCanonicalInput,
     ),
     ToolSpec(
