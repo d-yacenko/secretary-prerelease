@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -27,6 +28,7 @@ from app.db.models import (
     Representation,
 )
 from app.db.session import engine
+from app.domain.person_identity import normalize_email
 from app.services.action_plan_service import ActionPlanService
 from app.services.client_representation_service import ClientRepresentationPersistence
 from app.services.domain_tool_service import DomainToolService
@@ -71,6 +73,34 @@ _PROMO_B = "REL1DC Вторая"
 _ROLE = "rel1dcдиректор"
 _ROLE_B = "rel1dcсекретарь"
 _FORBIDDEN = ("evidence_text", "source_locator", "canonical_value", "salience", "normalized_key")
+
+
+@pytest.fixture(autouse=True)
+def _graph_people_have_stored_mail(monkeypatch) -> None:
+    original = PersonIdentityService.create_person
+
+    def _create(self, title: str):
+        person = original(self, title)
+        if sys._getframe(1).f_globals.get("__name__") != __name__:
+            return person
+        address = f"batch-{person.id.hex[:12]}@example.com"
+        PersonIdentityService(self._session, self._user_id).attach(person.id, normalize_email(address))
+        self._session.add(
+            Object(
+                user_id=self._user_id,
+                kind="email",
+                provider="yandex_mail",
+                title="note",
+                origin="source",
+                state="observed",
+                occurred_at=datetime.now(UTC),
+                metadata_={"folder": "inbox", "sender": address, "to": "me@example.com"},
+            )
+        )
+        self._session.flush()
+        return person
+
+    monkeypatch.setattr(PersonIdentityService, "create_person", _create)
 
 
 def test_prepare_creates_one_pending_plan_without_person_or_role_writes(db_session, tmp_path) -> None:
@@ -199,7 +229,7 @@ def test_selection_rules_follow_grounded_state(db_session, tmp_path) -> None:
     ]
     source, revision, proposal = _proposal(db_session, tmp_path, items)
     states = [item.person_resolution.state for item in proposal.items]
-    assert states == ["resolved", "ambiguous", "promotion_candidates", "unresolved"]
+    assert states == ["resolved", "ambiguous", "promotion_candidates"]
     frozen = _service(db_session, tmp_path).prepare(
         _input(
             source.id,
@@ -216,7 +246,7 @@ def test_selection_rules_follow_grounded_state(db_session, tmp_path) -> None:
     assert frozen.selected_rows[0].person_id == resolved.id
     assert frozen.selected_rows[1].person_id == first.id
     assert frozen.selected_rows[2].promotion_candidate_key
-    with pytest.raises(ValidationError, match="unresolved role import row cannot be selected"):
+    with pytest.raises(ValidationError, match="role import row is not in the grounded proposal"):
         _service(db_session, tmp_path).prepare(
             _input(source.id, revision, proposal.grounding_revision, items, [{"row_index": 3, "person_id": resolved.id}])
         )
@@ -1053,7 +1083,10 @@ def _commit_lock_fixture():
 def _cleanup_lock_fixture(source_id, person_id) -> None:
     with Session(engine) as session:
         session.query(PersonRoleAssignment).filter(PersonRoleAssignment.person_object_id == person_id).delete()
+        session.query(PersonIdentity).filter(PersonIdentity.person_object_id == person_id).delete()
         session.query(Representation).filter(Representation.object_id == source_id).delete()
+        address = f"batch-{person_id.hex[:12]}@example.com"
+        session.query(Object).filter(Object.metadata_["sender"].astext == address).delete(synchronize_session=False)
         session.query(Object).filter(Object.id.in_([source_id, person_id])).delete(synchronize_session=False)
         session.commit()
 

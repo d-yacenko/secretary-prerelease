@@ -144,21 +144,30 @@ class PersonRoleImportGroundingService:
         people = _memoized_people(self._people, rows)
         promotions = self._promotion.eligible_direct_contacts() if rows else []
         roles = _role_resolutions(self._session, self._user_id, rows)
-        items = [
-            RoleImportGroundedItem(
-                row_index=index,
-                person_name=row.person_name,
-                role=row.role,
-                context=row.context,
-                evidence_text=row.evidence_text,
-                source_locator=row.source_locator,
-                person_resolution=_person_resolution(
-                    row.person_name, people[row.person_name], promotions
-                ),
-                role_resolution=roles[index],
-            )
-            for index, row in enumerate(rows)
+        resolutions = [
+            _person_resolution(row.person_name, people[row.person_name], promotions)
+            for row in rows
         ]
+        counts, scan_stopped_early = _communication_counts(self._people, resolutions)
+        items = []
+        for index, row in enumerate(rows):
+            resolution = _communication_gate(
+                resolutions[index], counts, scan_stopped_early=scan_stopped_early
+            )
+            if resolution is None:
+                continue
+            items.append(
+                RoleImportGroundedItem(
+                    row_index=index,
+                    person_name=row.person_name,
+                    role=row.role,
+                    context=row.context,
+                    evidence_text=row.evidence_text,
+                    source_locator=row.source_locator,
+                    person_resolution=resolution,
+                    role_resolution=roles[index],
+                )
+            )
         proposal = RoleImportGroundedProposal(
             source_object_id=source.object_id,
             source_revision=source.source_revision,
@@ -170,6 +179,57 @@ class PersonRoleImportGroundingService:
         )
         proposal.grounding_revision = _grounding_revision(proposal)
         return proposal
+
+
+def _communication_counts(
+    people: PersonAssistantService, resolutions: list[RoleImportPersonResolution]
+) -> tuple[dict[UUID, int], bool]:
+    person_ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for resolution in resolutions:
+        for person_id in _graph_person_ids(resolution):
+            if person_id not in seen:
+                seen.add(person_id)
+                person_ids.append(person_id)
+    if not person_ids:
+        return {}, False
+    return people.count_attributable_communications(person_ids)
+
+
+def _graph_person_ids(resolution: RoleImportPersonResolution) -> list[UUID]:
+    if resolution.state == "resolved" and resolution.person_id is not None:
+        return [resolution.person_id]
+    if resolution.state == "ambiguous":
+        return [candidate.person_id for candidate in resolution.candidates]
+    return []
+
+
+def _communication_gate(
+    resolution: RoleImportPersonResolution,
+    counts: dict[UUID, int],
+    *,
+    scan_stopped_early: bool,
+) -> RoleImportPersonResolution | None:
+    if resolution.state == "promotion_candidates":
+        return resolution
+    if resolution.state == "resolved" and resolution.person_id is not None:
+        count = counts.get(resolution.person_id, 0)
+        excluded = count <= 0 or (scan_stopped_early and count == 0)
+        if excluded:
+            return None
+        return resolution
+    if resolution.state == "ambiguous":
+        kept = [
+            candidate
+            for candidate in resolution.candidates
+            if counts.get(candidate.person_id, 0) > 0
+        ]
+        if not kept:
+            return None
+        return resolution.model_copy(
+            update={"state": "ambiguous", "person_id": None, "candidates": kept}
+        )
+    return None
 
 
 def _memoized_people(

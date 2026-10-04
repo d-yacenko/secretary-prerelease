@@ -64,7 +64,7 @@ def test_unchanged_source_revision_grounds(db_session, tmp_path) -> None:
     assert proposal.source_object_id == obj.id
     assert proposal.source_revision == revision
     assert proposal.source_kind == "image"
-    assert proposal.items[0].row_index == 0
+    assert proposal.items == []
     assert proposal.grounding_revision
 
 
@@ -110,7 +110,7 @@ def test_request_rejects_injected_ids(auth_client, monkeypatch, tmp_path) -> Non
 
 
 def test_unique_person_resolves_without_salience(db_session, tmp_path) -> None:
-    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_NAME)
+    person = _known_person(db_session, _NAME)
     obj, revision = _image(db_session, tmp_path)
     item = _ground(db_session, tmp_path, obj.id, revision, [_row(_NAME, _ROLE)]).items[0]
     assert item.person_resolution.state == "resolved"
@@ -122,8 +122,8 @@ def test_unique_person_resolves_without_salience(db_session, tmp_path) -> None:
 
 
 def test_ambiguous_people_stay_ambiguous_and_sort_neutrally(db_session, tmp_path) -> None:
-    second = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_AMBIGUOUS)
-    first = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_AMBIGUOUS)
+    second = _known_person(db_session, _AMBIGUOUS)
+    first = _known_person(db_session, _AMBIGUOUS)
     obj, revision = _image(db_session, tmp_path)
     item = _ground(db_session, tmp_path, obj.id, revision, [_row(_AMBIGUOUS, _ROLE)]).items[0]
     assert item.person_resolution.state == "ambiguous"
@@ -135,7 +135,7 @@ def test_ambiguous_people_stay_ambiguous_and_sort_neutrally(db_session, tmp_path
 
 
 def test_name_variant_stays_ambiguous(db_session, tmp_path) -> None:
-    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_VARIANT_CANON)
+    person = _known_person(db_session, _VARIANT_CANON)
     obj, revision = _image(db_session, tmp_path)
     item = _ground(db_session, tmp_path, obj.id, revision, [_row(_VARIANT_QUERY, _ROLE)]).items[0]
     assert item.person_resolution.state == "ambiguous"
@@ -145,12 +145,10 @@ def test_name_variant_stays_ambiguous(db_session, tmp_path) -> None:
     assert item.person_resolution.promotion_candidates == []
 
 
-def test_no_match_is_unresolved(db_session, tmp_path) -> None:
+def test_no_match_is_omitted(db_session, tmp_path) -> None:
     obj, revision = _image(db_session, tmp_path)
-    item = _ground(db_session, tmp_path, obj.id, revision, [_row("Никого Нет Гроунд", _ROLE)]).items[0]
-    assert item.person_resolution.state == "unresolved"
-    assert item.person_resolution.person_id is None
-    assert item.person_resolution.promotion_candidates == []
+    proposal = _ground(db_session, tmp_path, obj.id, revision, [_row("Никого Нет Гроунд", _ROLE)])
+    assert proposal.items == []
 
 
 def test_promotion_comes_only_from_repeated_direct_contact(db_session, tmp_path) -> None:
@@ -173,10 +171,10 @@ def test_promotion_comes_only_from_repeated_direct_contact(db_session, tmp_path)
 def test_document_name_alone_is_not_a_promotion(db_session, tmp_path) -> None:
     obj = _text_object(db_session, "Только Документ Гроунд")
     revision = _sources(db_session, tmp_path).load(obj.id).source_revision
-    item = _ground(
+    proposal = _ground(
         db_session, tmp_path, obj.id, revision, [_row("Только Документ Гроунд", _ROLE)]
-    ).items[0]
-    assert item.person_resolution.state == "unresolved"
+    )
+    assert proposal.items == []
 
 
 def test_promotion_bridge_is_exact_display_only(db_session, tmp_path) -> None:
@@ -195,7 +193,7 @@ def test_promotion_bridge_is_exact_display_only(db_session, tmp_path) -> None:
     )
     assert exact.person_resolution.state == "promotion_candidates"
     assert exact.person_name == _PROMO.lower()
-    assert [item.person_resolution.state for item in near.items] == ["unresolved", "unresolved"]
+    assert near.items == []
 
 
 def test_two_promotion_identities_are_not_auto_chosen(db_session, tmp_path) -> None:
@@ -229,15 +227,15 @@ def test_suppressed_and_owned_promotions_are_absent(db_session, tmp_path) -> Non
         revision,
         [_row(_PROMO, _ROLE), _row("REL1DB Скрытый", _ROLE)],
     )
-    owned_row, hidden_row = states.items
+    assert len(states.items) == 1
+    owned_row = states.items[0]
     assert owned_row.person_resolution.state == "resolved"
     assert owned_row.person_resolution.person_id == person.id
     assert owned_row.person_resolution.promotion_candidates == []
-    assert hidden_row.person_resolution.state == "unresolved"
-    assert hidden_row.person_resolution.promotion_candidates == []
 
 
 def test_exact_role_is_reused_including_case_and_space(db_session, tmp_path) -> None:
+    _known_person(db_session, _NAME)
     person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Роль Гроунд")
     assigned = PersonRoleService(db_session, BOOTSTRAP_USER_ID).assign(person.id, _ROLE)
     obj, revision = _image(db_session, tmp_path)
@@ -252,6 +250,7 @@ def test_exact_role_is_reused_including_case_and_space(db_session, tmp_path) -> 
 
 
 def test_semantic_near_role_stays_new_and_caps_suggestions(db_session, tmp_path) -> None:
+    _known_person(db_session, _NAME)
     person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person("Подсказки Гроунд")
     roles = PersonRoleService(db_session, BOOTSTRAP_USER_ID)
     roles.assign(person.id, _NEAR)
@@ -306,12 +305,7 @@ def test_input_order_and_query_discipline(db_session, tmp_path, monkeypatch) -> 
         _row("Второй Гроунд", "новая роль гроунд а"),
     ]
     proposal = _ground(db_session, tmp_path, obj.id, revision, rows)
-    assert [item.person_name for item in proposal.items] == [
-        "Первый Гроунд",
-        "Первый Гроунд",
-        "Второй Гроунд",
-    ]
-    assert [item.row_index for item in proposal.items] == [0, 1, 2]
+    assert proposal.items == []
     assert calls == {"resolve": 2, "promotion": 1, "exact": 1, "suggest": 2}
 
 
@@ -321,7 +315,7 @@ def test_grounding_revision_tracks_facts(db_session, tmp_path) -> None:
     first = _ground(db_session, tmp_path, obj.id, revision, rows)
     second = _ground(db_session, tmp_path, obj.id, revision, rows)
     assert first.grounding_revision == second.grounding_revision
-    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_NAME)
+    person = _known_person(db_session, _NAME)
     resolved = _ground(db_session, tmp_path, obj.id, revision, rows)
     assert resolved.grounding_revision != first.grounding_revision
     PersonRoleService(db_session, BOOTSTRAP_USER_ID).assign(person.id, _ROLE)
@@ -377,8 +371,8 @@ def test_items_truncated_is_required_and_changes_grounding_revision(db_session, 
     rows = [_row(f"REL1DB Строка {index}", _ROLE) for index in range(32)]
     complete = _ground(db_session, tmp_path, obj.id, revision, rows, items_truncated=False)
     truncated = _ground(db_session, tmp_path, obj.id, revision, rows, items_truncated=True)
-    assert len(complete.items) == 32
-    assert len(truncated.items) == 32
+    assert complete.items == []
+    assert truncated.items == []
     assert complete.items_truncated is False
     assert truncated.items_truncated is True
     assert complete.grounding_revision != truncated.grounding_revision
@@ -430,6 +424,70 @@ def test_http_source_conflict_detail(auth_client, db_session, tmp_path, monkeypa
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "role_import_source_changed"
+
+
+def _known_person(db_session, title: str):
+    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(title)
+    address = f"known-{person.id.hex[:12]}@example.com"
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).attach(
+        person.id, normalize_email(f"{title} <{address}>")
+    )
+    _mail(db_session, f"{title} <{address}>")
+    return person
+
+
+def test_resolved_person_without_communication_is_omitted(db_session, tmp_path) -> None:
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_NAME)
+    obj, revision = _image(db_session, tmp_path)
+    proposal = _ground(db_session, tmp_path, obj.id, revision, [_row(_NAME, _ROLE)])
+    assert proposal.items == []
+
+
+def test_ambiguous_keeps_only_communication_backed_candidates(db_session, tmp_path) -> None:
+    backed = _known_person(db_session, _AMBIGUOUS)
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_AMBIGUOUS)
+    obj, revision = _image(db_session, tmp_path)
+    item = _ground(db_session, tmp_path, obj.id, revision, [_row(_AMBIGUOUS, _ROLE)]).items[0]
+    assert item.person_resolution.state == "ambiguous"
+    assert item.person_resolution.person_id is None
+    assert [candidate.person_id for candidate in item.person_resolution.candidates] == [backed.id]
+
+
+def test_filtered_ambiguous_people_do_not_fall_through_to_promotion(db_session, tmp_path) -> None:
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_PROMO)
+    PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_PROMO)
+    _mail(db_session, f"{_PROMO} <promo-only-ground@example.com>")
+    _mail(db_session, f"{_PROMO} <promo-only-ground@example.com>")
+    obj, revision = _image(db_session, tmp_path)
+    proposal = _ground(db_session, tmp_path, obj.id, revision, [_row(_PROMO, _ROLE)])
+    assert proposal.items == []
+
+
+def test_filtered_rows_keep_original_indexes(db_session, tmp_path) -> None:
+    _known_person(db_session, _NAME)
+    obj, revision = _image(db_session, tmp_path)
+    proposal = _ground(
+        db_session,
+        tmp_path,
+        obj.id,
+        revision,
+        [_row("Никого Нет Гроунд", _ROLE), _row(_NAME, _ROLE), _row("Ещё Никого", _NEAR)],
+    )
+    assert [item.row_index for item in proposal.items] == [1]
+    assert proposal.items[0].role_resolution.state == "propose_new"
+
+
+def test_truncated_zero_count_stays_omitted(db_session, tmp_path, monkeypatch) -> None:
+    person = PersonIdentityService(db_session, BOOTSTRAP_USER_ID).create_person(_NAME)
+
+    def _count(self, person_ids, **_kwargs):
+        return {person_id: 0 for person_id in person_ids}, True
+
+    monkeypatch.setattr(PersonAssistantService, "count_attributable_communications", _count)
+    obj, revision = _image(db_session, tmp_path)
+    proposal = _ground(db_session, tmp_path, obj.id, revision, [_row(_NAME, _ROLE)])
+    assert proposal.items == []
+    assert person.id
 
 
 def _ground(

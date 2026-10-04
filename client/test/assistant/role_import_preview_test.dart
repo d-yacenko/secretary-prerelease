@@ -474,6 +474,130 @@ void main() {
     expect(sent['message'], 'обычный вопрос');
     expect(sent['context_object_id'], 'source-b');
   });
+
+  testWidgets('grounding explains the communication subset and an empty result', (
+    tester,
+  ) async {
+    var groundCalls = 0;
+    final mock = MockClient((request) async {
+      if (request.url.path == '/people/role-import/extract') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        return _json(
+          _proposal(
+            sourceId: body['source_object_id'] as String,
+            revision: 'rev-1',
+            items: [
+              _item(name: 'Анна', role: 'директор'),
+              _item(name: 'Только Источник', role: 'гость'),
+            ],
+          ),
+        );
+      }
+      if (request.url.path == '/people/role-import/ground') {
+        groundCalls += 1;
+        if (groundCalls == 1) {
+          return _json({
+            'source_object_id': 'source-a',
+            'source_revision': 'rev-1',
+            'source_kind': 'image',
+            'source_truncated': false,
+            'items_truncated': false,
+            'grounding_revision': 'ground-1',
+            'items': [
+              {
+                'row_index': 0,
+                'person_name': 'Анна',
+                'role': 'директор',
+                'context': null,
+                'evidence_text': 'цитата',
+                'source_locator': null,
+                'person_resolution': {
+                  'state': 'resolved',
+                  'person_id': 'p1',
+                  'title': 'Анна',
+                  'reasons': [],
+                  'candidates': [],
+                  'promotion_candidates': [],
+                },
+                'role_resolution': {
+                  'state': 'reuse_existing',
+                  'role_term_id': 't1',
+                  'display_text': 'директор',
+                  'suggestions': [],
+                },
+              },
+            ],
+          });
+        }
+        return _json({
+          'source_object_id': 'source-a',
+          'source_revision': 'rev-1',
+          'source_kind': 'image',
+          'source_truncated': false,
+          'items_truncated': false,
+          'grounding_revision': 'ground-empty',
+          'items': [],
+        });
+      }
+      return http.Response('{}', 404);
+    });
+    final apiClient = testSecretaryApiClient(mock);
+    apiClient.configure(baseUrl: 'https://example.com', token: 'secret-token');
+    final assistant = AssistantController(
+      apiClient: apiClient,
+      authController: _auth(apiClient),
+    );
+    assistant.setObjectContext(_secretaryObject('source-a', 'a.png'));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListenableBuilder(
+            listenable: assistant,
+            builder: (context, _) => RoleImportPreviewPanel(
+              loading: assistant.roleImportLoading,
+              error: assistant.roleImportError,
+              preview: assistant.roleImportPreview,
+              onExtract: assistant.extractRoles,
+              grounded: assistant.roleGrounding,
+              onGround: assistant.groundRoles,
+              onPrepare: assistant.prepareRoleImportPlan,
+              onToggleRow: assistant.setRoleImportRowSelected,
+              canPrepare: assistant.canPrepareRoleImport,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('extract_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(find.text('Анна'), findsOneWidget);
+    expect(find.text('Только Источник'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ground_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(
+      find.text('Показаны только люди с подтверждённой перепиской'),
+      findsOneWidget,
+    );
+    expect(find.byType(Checkbox), findsOneWidget);
+    expect(find.text('Person: Анна'), findsOneWidget);
+    expect(find.text('Только Источник'), findsOneWidget);
+    expect(find.byKey(const Key('role_import_no_communication')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('ground_roles_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(
+      find.text('Среди извлечённых строк нет контактов с подтверждённой перепиской'),
+      findsOneWidget,
+    );
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.byKey(const Key('prepare_role_import_button')), findsNothing);
+  });
 }
 
 Widget _panel(AssistantController assistant) {

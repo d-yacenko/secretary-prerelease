@@ -163,7 +163,16 @@ class RoleImportPreviewPanel extends StatelessWidget {
                 'Сопоставление изменилось — сопоставьте роли заново',
                 key: Key('role_import_grounding_stale'),
               ),
-            if (grounded != null && !sourceStale && !groundingStale)
+            if (grounded != null && !sourceStale && !groundingStale) ...[
+              const Text(
+                'Показаны только люди с подтверждённой перепиской',
+                key: Key('role_import_communication_note'),
+              ),
+              if (grounded!.items.isEmpty)
+                const Text(
+                  'Среди извлечённых строк нет контактов с подтверждённой перепиской',
+                  key: Key('role_import_no_communication'),
+                ),
               for (final item in grounded!.items)
                 _GroundedRow(
                   item: item,
@@ -173,7 +182,9 @@ class RoleImportPreviewPanel extends StatelessWidget {
                   onChoosePerson: onChoosePerson,
                   onChoosePromotion: onChoosePromotion,
                 ),
+            ],
             if (grounded != null &&
+                grounded!.items.isNotEmpty &&
                 !sourceStale &&
                 !groundingStale &&
                 onPrepare != null &&
