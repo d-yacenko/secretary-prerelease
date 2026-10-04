@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -199,6 +200,32 @@ class _AssistantScreenState extends State<AssistantScreen> {
     return 'Контекст: Уведомление — ${contextRef.title}';
   }
 
+  double _roleImportMaxHeight(double available) {
+    final controller = widget.controller;
+    var chrome = 0.0;
+    if (controller.objectContext != null) {
+      chrome += 96;
+    }
+    if (controller.notificationContext != null) {
+      chrome += 96;
+    }
+    if (controller.voiceState != AssistantVoiceState.idle) {
+      chrome += 72;
+    }
+    if (controller.hasOlderMessages) {
+      chrome += 56;
+    }
+    final messageFloor = math.min(
+      96.0,
+      math.max(0.0, available - chrome) * 0.35,
+    );
+    final room = available - chrome - messageFloor;
+    if (room > 0) {
+      return room;
+    }
+    return math.max(0.0, available - chrome);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -238,12 +265,24 @@ class _AssistantScreenState extends State<AssistantScreen> {
               ),
           ],
         ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Column(
+                children: [
         if (controller.objectContext != null) ...[
           _ContextBanner(
             label: _objectContextLabel(controller.objectContext!),
             onClear: controller.clearObjectContext,
           ),
-          RoleImportPreviewPanel(
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: _roleImportMaxHeight(constraints.maxHeight),
+            ),
+            child: SingleChildScrollView(
+              key: const Key('role_import_scroll'),
+              primary: false,
+              child: RoleImportPreviewPanel(
             loading: controller.roleImportLoading,
             error: controller.roleImportError,
             preview: controller.roleImportPreview,
@@ -269,6 +308,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
             onReject: controller.rejectRoleImportPlan,
             onEditSelection: controller.editRoleImportSelection,
           ),
+              ),
+            ),
         ],
         if (controller.notificationContext != null)
           _ContextBanner(
@@ -491,6 +532,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
                 );
               },
             ),
+          ),
+        ),
+                ],
+              );
+            },
           ),
         ),
         if (controller.sendState == AssistantSendState.error &&
