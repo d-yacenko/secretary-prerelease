@@ -316,7 +316,7 @@ class _GroundedRow extends StatelessWidget {
                         candidate.candidateKey,
                       ),
               child: Text(
-                '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount}',
+                '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount} в переписке',
               ),
             ),
           if (onToggle != null)

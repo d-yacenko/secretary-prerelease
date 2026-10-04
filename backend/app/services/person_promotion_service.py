@@ -20,6 +20,7 @@ from app.db.models import (
     PersonIdentity,
     PersonIdentityEvidence,
     PersonPromotionFeedback,
+    TelegramMtprotoAccount,
 )
 from app.domain.object_visibility import object_is_active
 from app.domain.person_assistant import (
@@ -37,6 +38,8 @@ from app.domain.person_promotion import (
     direct_promotion_identity,
     mattermost_remote_identity,
 )
+from app.domain.role_import_participants import participant_identities
+from app.domain.telegram_mtproto_ai import telegram_mtproto_ai_predicate
 from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.person_evidence_service import PersonEvidenceService
 from app.services.person_identity_service import PERSON_KIND, PersonIdentityService
@@ -105,6 +108,22 @@ class PersonPromotionService:
             self._candidate(item)
             for item in hits.values()
             if item.count >= MIN_DIRECT_HITS
+            and self._key(item.identity) not in owned
+            and self._key(item.identity) not in suppressed
+        ]
+
+    def eligible_role_import_participants(self) -> list[PromotionCandidate]:
+        """Role-import scan: one stored participant hit is enough.
+
+        Generic ``eligible_direct_contacts`` and ``MIN_DIRECT_HITS`` are not used.
+        """
+        hits, _truncated = self._participant_hits()
+        owned = self._owned_keys()
+        suppressed = {self._key(row) for row in self._active_feedback()}
+        return [
+            self._candidate(item)
+            for item in hits.values()
+            if item.count >= 1
             and self._key(item.identity) not in owned
             and self._key(item.identity) not in suppressed
         ]
@@ -190,6 +209,42 @@ class PersonPromotionService:
                 return owner
             raise ConflictError("person identity is already bound") from None
 
+    def approve_role_import_participant(
+        self, identity: NormalizedPersonIdentity, *, display_name: str
+    ) -> Object:
+        """Create one Person for a role-import participant identity.
+
+        Revalidates the role-import scan. A bound identity is a conflict and is
+        not attached to a differently named Person.
+        """
+        owner = self._people.resolve(identity)
+        if owner is not None or self._confirmation_people(identity):
+            raise ConflictError("person identity is already bound")
+        hit = self._participant_hit(identity, display_name)
+        if hit is None:
+            raise ValidationError("role import participant is no longer eligible")
+        label = hit.display_value
+        frozen = replace(
+            identity,
+            display_value=None if label == identity.canonical_value else label,
+        )
+        try:
+            with self._session.begin_nested():
+                person = self._people.create_person(label)
+                attached = self._people.attach(person.id, frozen)
+                evidence = self._evidence.record_confirmation(
+                    person.id,
+                    identity,
+                    _provenance(identity),
+                    explanation=_PROMOTION_EXPLANATION,
+                )
+                if evidence.person_identity_id is None:
+                    evidence.person_identity_id = attached.id
+                    self._session.flush()
+                return person
+        except ConflictError:
+            raise ConflictError("person identity is already bound") from None
+
     def _eligible_hit(self, identity: NormalizedPersonIdentity) -> _Hit | None:
         if self._key(identity) in self._owned_keys() or self._active_for(identity) is not None:
             return None
@@ -251,6 +306,79 @@ class PersonPromotionService:
             if current.display_value == identity.canonical_value and identity.display_value:
                 current.display_value = _label(identity.display_value, identity.canonical_value)
         return found, truncated
+
+    def _participant_hits(self) -> tuple[dict[tuple[str, str, str, str], _Hit], bool]:
+        stamp = func.coalesce(Object.occurred_at, Object.created_at)
+        cutoff = self._now - timedelta(days=PERSON_LOOKBACK_DAYS)
+        rows = list(
+            self._session.scalars(
+                select(Object)
+                .where(
+                    Object.user_id == self._user_id,
+                    Object.kind.in_(_COMMUNICATION_KINDS),
+                    Object.state != REJECTED_STATE,
+                    object_is_active(),
+                    stamp >= cutoff,
+                    telegram_mtproto_ai_predicate(),
+                )
+                .order_by(stamp.desc(), Object.id)
+                .limit(MAX_PERSON_SCAN_ROWS + 1)
+            )
+        )
+        truncated = len(rows) > MAX_PERSON_SCAN_ROWS
+        mattermost_self = {
+            account.remote_user_id.strip()
+            for account in self._mattermost_accounts().values()
+            if isinstance(account.remote_user_id, str) and account.remote_user_id.strip()
+        }
+        telegram_self = self._telegram_self_ids()
+        found: dict[tuple[str, str, str, str], _Hit] = {}
+        displays: dict[tuple[str, str, str, str], str] = {}
+        for source in rows[:MAX_PERSON_SCAN_ROWS]:
+            for identity in participant_identities(
+                source,
+                mattermost_self_user_ids=mattermost_self,
+                telegram_self_user_ids=telegram_self,
+            ):
+                key = self._key(identity)
+                display_key = _participant_display_key(identity.display_value or "")
+                if not display_key:
+                    continue
+                when = source.occurred_at or source.created_at
+                current = found.get(key)
+                if current is None:
+                    found[key] = _Hit(identity, identity.display_value or "", 1, when, [source])
+                    displays[key] = display_key
+                    continue
+                if displays[key] != display_key:
+                    continue
+                current.count += 1
+                if when is not None and (current.latest is None or when > current.latest):
+                    current.latest = when
+                if len(current.sources) < MAX_SOURCE_PREVIEWS:
+                    current.sources.append(source)
+        return found, truncated
+
+    def _participant_hit(
+        self, identity: NormalizedPersonIdentity, display_name: str
+    ) -> _Hit | None:
+        if self._key(identity) in self._owned_keys() or self._active_for(identity) is not None:
+            return None
+        hits, _truncated = self._participant_hits()
+        item = hits.get(self._key(identity))
+        if item is None or item.count < 1:
+            return None
+        if _participant_display_key(item.display_value) != _participant_display_key(display_name):
+            return None
+        return item
+
+    def _telegram_self_ids(self) -> set[str]:
+        rows = self._session.scalars(
+            select(TelegramMtprotoAccount.telegram_user_id).where(
+                TelegramMtprotoAccount.user_id == self._user_id
+            )
+        )
+        return {str(row) for row in rows if row is not None}
 
     def _mattermost_accounts(self) -> dict[UUID, MattermostAccount]:
         rows = self._session.scalars(
@@ -384,6 +512,10 @@ class PersonPromotionService:
         identity: NormalizedPersonIdentity | PersonPromotionFeedback,
     ) -> tuple[str, str, str, str]:
         return (identity.provider, identity.identity_type, identity.realm, identity.canonical_value)
+
+
+def _participant_display_key(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
 def parse_promotion_identity(

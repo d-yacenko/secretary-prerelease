@@ -142,7 +142,7 @@ class PersonRoleImportGroundingService:
             raise ValidationError(SOURCE_CHANGED)
         rows = [_strict_item(item) for item in request.items]
         people = _memoized_people(self._people, rows)
-        promotions = self._promotion.eligible_direct_contacts() if rows else []
+        promotions = self._promotion.eligible_role_import_participants() if rows else []
         roles = _role_resolutions(self._session, self._user_id, rows)
         resolutions = [
             _person_resolution(row.person_name, people[row.person_name], promotions)

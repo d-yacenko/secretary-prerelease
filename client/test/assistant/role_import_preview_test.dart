@@ -431,7 +431,10 @@ void main() {
       find.text('После подтверждения будет создан новый Person'),
       findsOneWidget,
     );
-    expect(find.text('Ада · email · 2'), findsOneWidget);
+    expect(find.text('Ада · email · 2 в переписке'), findsOneWidget);
+    expect(find.textContaining('прямых'), findsNothing);
+    expect(find.text('k'), findsNothing);
+    expect(find.textContaining('@'), findsNothing);
     expect(find.text('Person не найден'), findsOneWidget);
     expect(find.text('Новая роль: директор'), findsOneWidget);
     expect(find.text('Похожие термины'), findsOneWidget);

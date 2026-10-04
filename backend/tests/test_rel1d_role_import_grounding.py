@@ -287,11 +287,11 @@ def test_input_order_and_query_discipline(db_session, tmp_path, monkeypatch) -> 
         return _original_suggest(session, user_id, key)
 
     _original_resolve = PersonAssistantService.resolve
-    _original_eligible = PersonPromotionService.eligible_direct_contacts
+    _original_eligible = PersonPromotionService.eligible_role_import_participants
     _original_exact = _exact_terms
     _original_suggest = _suggestion_texts
     monkeypatch.setattr(PersonAssistantService, "resolve", _resolve)
-    monkeypatch.setattr(PersonPromotionService, "eligible_direct_contacts", _eligible)
+    monkeypatch.setattr(PersonPromotionService, "eligible_role_import_participants", _eligible)
     monkeypatch.setattr(
         "app.services.person_role_import_grounding_service._exact_terms", _exact
     )
@@ -389,13 +389,13 @@ def test_items_truncated_is_required_and_changes_grounding_revision(db_session, 
 
 def test_zero_rows_skip_promotion_scan(db_session, tmp_path, monkeypatch) -> None:
     calls = {"promotion": 0}
-    original = PersonPromotionService.eligible_direct_contacts
+    original = PersonPromotionService.eligible_role_import_participants
 
     def _eligible(self):
         calls["promotion"] += 1
         return original(self)
 
-    monkeypatch.setattr(PersonPromotionService, "eligible_direct_contacts", _eligible)
+    monkeypatch.setattr(PersonPromotionService, "eligible_role_import_participants", _eligible)
     obj, revision = _image(db_session, tmp_path)
     proposal = _service(db_session, tmp_path).ground(
         RoleImportGroundRequest(

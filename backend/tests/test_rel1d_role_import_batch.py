@@ -722,8 +722,15 @@ def test_source_person_and_promotion_drift_fail_the_plan(db_session, tmp_path) -
             {"row_index": 0, "promotion_candidate_key": key}
         ])
     )
-    mail = db_session.scalar(select(Object).where(Object.metadata_["sender"].astext == f"{_PROMO_B} <second-c1@example.com>"))
-    db_session.delete(mail)
+    mails = list(
+        db_session.scalars(
+            select(Object).where(
+                Object.metadata_["sender"].astext == f"{_PROMO_B} <second-c1@example.com>"
+            )
+        )
+    )
+    for mail in mails:
+        db_session.delete(mail)
     db_session.flush()
     promo_view = _approve(db_session, promo_plan.id)
     assert promo_view.status == "failed"
@@ -744,10 +751,10 @@ def test_identity_conflict_fails_the_plan(db_session, tmp_path, monkeypatch) -> 
     )
     before = _fact_counts(db_session)
 
-    def _conflict(self, identity):
+    def _conflict(self, identity, *, display_name: str):
         raise ConflictError("person identity is already bound")
 
-    monkeypatch.setattr(PersonPromotionService, "approve", _conflict)
+    monkeypatch.setattr(PersonPromotionService, "approve_role_import_participant", _conflict)
     view = _approve(db_session, plan.id)
     assert view.status == "failed"
     assert "role import identity conflict" in view.failure
@@ -773,17 +780,17 @@ def test_later_row_failure_rolls_back_earlier_promotion_and_role(db_session, tmp
         ])
     )
     before = _fact_counts(db_session)
-    real = PersonPromotionService.approve
+    real = PersonPromotionService.approve_role_import_participant
 
-    def _second_conflicts(self, identity):
+    def _second_conflicts(self, identity, *, display_name: str):
         if not hasattr(_second_conflicts, "calls"):
             _second_conflicts.calls = 0
         _second_conflicts.calls += 1
         if _second_conflicts.calls > 1:
             raise ConflictError("person identity is already bound")
-        return real(self, identity)
+        return real(self, identity, display_name=display_name)
 
-    monkeypatch.setattr(PersonPromotionService, "approve", _second_conflicts)
+    monkeypatch.setattr(PersonPromotionService, "approve_role_import_participant", _second_conflicts)
     view = _approve(db_session, plan.id)
     assert view.status == "failed"
     after = _fact_counts(db_session)

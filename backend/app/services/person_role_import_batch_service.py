@@ -103,7 +103,7 @@ class PersonRoleImportBatchService:
         promotion = PersonPromotionService(self._session, self._user_id)
         roles = PersonRoleService(self._session, self._user_id)
         identities = PersonIdentityService(self._session, self._user_id)
-        contacts = promotion.eligible_direct_contacts()
+        contacts = promotion.eligible_role_import_participants()
         promoted: dict[str, UUID] = {}
         seen: dict[tuple[UUID, str, str], RoleImportBatchRowResult] = {}
         results: list[RoleImportBatchRowResult] = []
@@ -257,9 +257,14 @@ def _person_target(row, people, promotion, identities, contacts, promoted):
         raise ValidationError(GROUNDING_CHANGED)
     owner_before = identities.resolve(match.identity)
     try:
-        person = promotion.approve(match.identity)
+        person = promotion.approve_role_import_participant(
+            match.identity,
+            display_name=row.extracted_person_name,
+        )
     except ConflictError as exc:
         raise ValidationError("role import identity conflict") from exc
+    except ValidationError as exc:
+        raise ValidationError(GROUNDING_CHANGED) from exc
     created = owner_before is None
     promoted[key] = person.id
     return person.id, created
