@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from email import message_from_bytes, policy
 from email.utils import getaddresses, parsedate_to_datetime
@@ -23,10 +24,26 @@ def _header_value(msg: Any, name: str) -> str | None:
     return str(value)
 
 
+_DISPLAY_WHITESPACE = re.compile(r"\s+")
+
+
 def _parse_addresses(value: str | None) -> list[str]:
     if not value:
         return []
     return [addr for _, addr in getaddresses([value]) if addr]
+
+
+def _named_participants(value: str | None) -> list[dict[str, str]]:
+    if not value:
+        return []
+    participants: list[dict[str, str]] = []
+    for display_name, address in getaddresses([value]):
+        address = address.strip()
+        display_name = _DISPLAY_WHITESPACE.sub(" ", str(display_name or "").strip())
+        if not address or not display_name:
+            continue
+        participants.append({"address": address, "display_name": display_name})
+    return participants
 
 
 def _compact_headers(msg: Any) -> dict[str, str]:
@@ -111,8 +128,12 @@ def normalize_imap_message(
     msg = message_from_bytes(raw_bytes, policy=policy.default)
     subject = _header_value(msg, "Subject")
     sender = _header_value(msg, "From")
-    recipients = _parse_addresses(_header_value(msg, "To"))
-    cc = _parse_addresses(_header_value(msg, "Cc"))
+    to_header = _header_value(msg, "To")
+    cc_header = _header_value(msg, "Cc")
+    recipients = _parse_addresses(to_header)
+    cc = _parse_addresses(cc_header)
+    to_participants = _named_participants(to_header)
+    cc_participants = _named_participants(cc_header)
     timestamp = _parse_timestamp(msg)
     body_text = _extract_body(msg)
     message_id_header = _header_value(msg, "Message-ID")
@@ -125,6 +146,8 @@ def normalize_imap_message(
         "sender": sender,
         "recipients": recipients,
         "cc": cc,
+        **({"to_participants": to_participants} if to_participants else {}),
+        **({"cc_participants": cc_participants} if cc_participants else {}),
         "subject": subject,
         "timestamp": timestamp.isoformat(),
         "headers": _compact_headers(msg),

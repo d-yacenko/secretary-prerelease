@@ -77,6 +77,29 @@ def _email_participants(metadata: Mapping[str, Any]) -> list[NormalizedPersonIde
             results.append(normalize_email(value, display_value=display))
         except PersonIdentityInputError:
             continue
+    results.extend(_structured_email_participants(metadata.get("to_participants")))
+    results.extend(_structured_email_participants(metadata.get("cc_participants")))
+    return results
+
+
+def _structured_email_participants(items: object) -> list[NormalizedPersonIdentity]:
+    if not isinstance(items, list):
+        return []
+    results: list[NormalizedPersonIdentity] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        address = item.get("address")
+        display_name = item.get("display_name")
+        if not isinstance(address, str) or not isinstance(display_name, str):
+            continue
+        display = " ".join(display_name.split())
+        if not address.strip() or not display:
+            continue
+        try:
+            results.append(normalize_email(address, display_value=display))
+        except PersonIdentityInputError:
+            continue
     return results
 
 

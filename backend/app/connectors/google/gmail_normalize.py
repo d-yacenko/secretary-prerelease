@@ -1,6 +1,7 @@
 import base64
+import re
 from datetime import UTC, datetime
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from typing import Any
 
 from app.connectors.email_html_text import html_email_to_plain_text, normalize_plain_email_text
@@ -18,6 +19,9 @@ def _header_value(headers: list[dict[str, Any]], name: str) -> str | None:
     return None
 
 
+_DISPLAY_WHITESPACE = re.compile(r"\s+")
+
+
 def _parse_addresses(value: str | None) -> list[str]:
     if not value:
         return []
@@ -28,6 +32,19 @@ def _parse_addresses(value: str | None) -> list[str]:
         if addr:
             addresses.append(addr)
     return addresses
+
+
+def _named_participants(value: str | None) -> list[dict[str, str]]:
+    if not value:
+        return []
+    participants: list[dict[str, str]] = []
+    for display_name, address in getaddresses([value]):
+        address = address.strip()
+        display_name = _DISPLAY_WHITESPACE.sub(" ", str(display_name or "").strip())
+        if not address or not display_name:
+            continue
+        participants.append({"address": address, "display_name": display_name})
+    return participants
 
 
 def _decode_body_data(data: str) -> str:
@@ -165,8 +182,12 @@ def normalize_gmail_message(message: dict[str, Any]) -> dict[str, Any]:
 
     subject = _header_value(headers, "Subject")
     sender = _header_value(headers, "From")
-    recipients = _parse_addresses(_header_value(headers, "To"))
-    cc = _parse_addresses(_header_value(headers, "Cc"))
+    to_header = _header_value(headers, "To")
+    cc_header = _header_value(headers, "Cc")
+    recipients = _parse_addresses(to_header)
+    cc = _parse_addresses(cc_header)
+    to_participants = _named_participants(to_header)
+    cc_participants = _named_participants(cc_header)
     body_text = _extract_body(payload)
     labels = [str(label) for label in message.get("labelIds", [])]
 
@@ -176,6 +197,8 @@ def normalize_gmail_message(message: dict[str, Any]) -> dict[str, Any]:
         "sender": sender,
         "recipients": recipients,
         "cc": cc,
+        **({"to_participants": to_participants} if to_participants else {}),
+        **({"cc_participants": cc_participants} if cc_participants else {}),
         "subject": subject,
         "timestamp": timestamp.isoformat(),
         "headers": _compact_headers(headers),
