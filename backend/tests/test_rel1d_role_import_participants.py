@@ -687,7 +687,10 @@ def test_account_added_before_approve_fails_closed(db_session, tmp_path) -> None
 
 
 def test_truncated_scan_keeps_a_seen_hit_and_omits_an_unseen_name(db_session, tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.services.person_promotion_service.MAX_PERSON_SCAN_ROWS", 1)
+    monkeypatch.setattr(
+        "app.services.person_promotion_service.MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS",
+        1,
+    )
     seen = "REL1DHG14 Видно"
     missed = "REL1DHG14 Невидно"
     _mail(

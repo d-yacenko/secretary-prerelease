@@ -362,7 +362,7 @@ def test_different_title_variant_is_not_blessed_by_mentions(db_session, tmp_path
 
 def test_one_mention_inside_a_truncated_scan_fails_closed(db_session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.services.person_role_import_mention_service.MAX_PERSON_SCAN_ROWS",
+        "app.services.person_role_import_mention_service.MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS",
         1,
     )
     _mention(db_session, body=_NAME, when=datetime.now(UTC))

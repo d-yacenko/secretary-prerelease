@@ -28,6 +28,7 @@ from app.db.models import (
 from app.domain.object_visibility import object_is_active
 from app.domain.person_assistant import (
     MAX_PERSON_SCAN_ROWS,
+    MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS,
     PERSON_LOOKBACK_DAYS,
     parse_feedback_identity,
 )
@@ -333,14 +334,14 @@ class PersonPromotionService:
                     telegram_mtproto_ai_predicate(),
                 )
                 .order_by(stamp.desc(), Object.id)
-                .limit(MAX_PERSON_SCAN_ROWS + 1)
+                .limit(MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS + 1)
             )
         )
-        truncated = len(rows) > MAX_PERSON_SCAN_ROWS
+        truncated = len(rows) > MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS
         self_keys = self._self_identity_keys()
         found: dict[tuple[str, str, str, str], _Hit] = {}
         displays: dict[tuple[str, str, str, str], str] = {}
-        for source in rows[:MAX_PERSON_SCAN_ROWS]:
+        for source in rows[:MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS]:
             for identity in participant_identities(source, self_identity_keys=self_keys):
                 key = self._key(identity)
                 display_key = _participant_display_key(identity.display_value or "")

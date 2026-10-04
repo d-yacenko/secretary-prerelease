@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import PersonRoleTerm
+from app.domain.person_assistant import MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS
 from app.domain.person_promotion import promotion_candidate_key
 from app.domain.person_role_text import PersonRoleTextError, role_term_identity
 from app.services.errors import ValidationError
@@ -205,7 +206,10 @@ def _communication_counts(
                 person_ids.append(person_id)
     if not person_ids:
         return {}, False
-    return people.count_attributable_communications(person_ids)
+    return people.count_attributable_communications(
+        person_ids,
+        max_scan_rows=MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS,
+    )
 
 
 def _graph_person_ids(resolution: RoleImportPersonResolution) -> list[UUID]:

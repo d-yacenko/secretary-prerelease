@@ -257,9 +257,14 @@ def test_overview_attributes_people_from_one_shared_scan(
     calls = {"n": 0}
     original = assistant_module.PersonAssistantService._message_chunks
 
-    def wrapped(self, payload, *, apply_telegram_ai_gate=True):
+    def wrapped(self, payload, *, apply_telegram_ai_gate=True, max_scan_rows=None):
         calls["n"] += 1
-        yield from original(self, payload, apply_telegram_ai_gate=apply_telegram_ai_gate)
+        yield from original(
+            self,
+            payload,
+            apply_telegram_ai_gate=apply_telegram_ai_gate,
+            max_scan_rows=max_scan_rows,
+        )
 
     monkeypatch.setattr(assistant_module.PersonAssistantService, "_message_chunks", wrapped)
     people = _people(db_session)

@@ -132,20 +132,23 @@ class PersonAssistantService:
         person_ids: list[UUID],
         *,
         include_quarantined_telegram: bool = False,
+        max_scan_rows: int | None = None,
     ) -> tuple[dict[UUID, int], bool]:
         """Count stored communications attributed by effective identity keys.
 
-        One scan covers at most MAX_PERSON_SCAN_ROWS active messages inside
-        PERSON_LOOKBACK_DAYS. A truncated scan counts only examined rows and
-        reports that the global scan stopped early. This is not an edge count,
-        a lifetime total, or live provider data. The model-facing Telegram gate
-        stays on unless the caller is the first-party People surface.
+        The default scan covers at most MAX_PERSON_SCAN_ROWS active messages
+        inside PERSON_LOOKBACK_DAYS. Role import passes its own ceiling.
+        A truncated scan counts only examined rows and reports that the scan
+        stopped early. This is not an edge count, a lifetime total, or live
+        provider data. The model-facing Telegram gate stays on unless the
+        caller is the first-party People surface.
         """
         keys_by_person = {person_id: self._effective_keys(person_id) for person_id in person_ids}
         if not any(keys_by_person.values()):
             return {person_id: 0 for person_id in person_ids}, False
         messages, truncated = self._bounded_messages(
             apply_telegram_ai_gate=not include_quarantined_telegram,
+            max_scan_rows=max_scan_rows,
         )
         return (
             {
@@ -155,13 +158,19 @@ class PersonAssistantService:
             truncated,
         )
 
-    def _bounded_messages(self, *, apply_telegram_ai_gate: bool) -> tuple[list[Object], bool]:
+    def _bounded_messages(
+        self,
+        *,
+        apply_telegram_ai_gate: bool,
+        max_scan_rows: int | None = None,
+    ) -> tuple[list[Object], bool]:
         messages: list[Object] = []
         complete = True
         yielded = False
         for chunk, scope_complete in self._message_chunks(
             None,
             apply_telegram_ai_gate=apply_telegram_ai_gate,
+            max_scan_rows=max_scan_rows,
         ):
             yielded = True
             messages.extend(chunk)
@@ -738,14 +747,16 @@ class PersonAssistantService:
         payload: FindPersonCommunicationsInput | None,
         *,
         apply_telegram_ai_gate: bool = True,
+        max_scan_rows: int | None = None,
     ):
+        row_limit = MAX_PERSON_SCAN_ROWS if max_scan_rows is None else max_scan_rows
         cutoff = self._now - timedelta(days=PERSON_LOOKBACK_DAYS)
         stamp = func.coalesce(Object.occurred_at, Object.created_at)
         examined = 0
         cursor_stamp = None
         cursor_id = None
-        while examined < MAX_PERSON_SCAN_ROWS:
-            page_limit = min(PERSON_SCAN_CHUNK, MAX_PERSON_SCAN_ROWS - examined)
+        while examined < row_limit:
+            page_limit = min(PERSON_SCAN_CHUNK, row_limit - examined)
             query = select(Object).where(
                 Object.user_id == self._user_id,
                 Object.kind.in_(_COMMUNICATION_KINDS),
@@ -775,7 +786,7 @@ class PersonAssistantService:
                 return
             examined += len(rows)
             scope_complete = len(rows) < page_limit
-            if not scope_complete and examined < MAX_PERSON_SCAN_ROWS:
+            if not scope_complete and examined < row_limit:
                 last = rows[-1]
                 cursor_stamp = last.occurred_at or last.created_at
                 cursor_id = last.id
@@ -788,7 +799,7 @@ class PersonAssistantService:
                 follower = self._session.scalar(continue_query.order_by(stamp.desc(), Object.id).limit(1))
                 scope_complete = follower is None
             yield rows, scope_complete
-            if scope_complete or examined >= MAX_PERSON_SCAN_ROWS:
+            if scope_complete or examined >= row_limit:
                 return
             last = rows[-1]
             cursor_stamp = last.occurred_at or last.created_at

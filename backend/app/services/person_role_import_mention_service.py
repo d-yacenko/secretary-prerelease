@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Object
 from app.domain.object_visibility import object_is_active
-from app.domain.person_assistant import MAX_PERSON_SCAN_ROWS, PERSON_LOOKBACK_DAYS
+from app.domain.person_assistant import (
+    MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS,
+    PERSON_LOOKBACK_DAYS,
+)
 from app.domain.role_import_mentions import (
     MIN_ROLE_IMPORT_NAME_MENTION_OBJECTS,
     mention_candidate_key,
@@ -88,11 +91,11 @@ class PersonRoleImportMentionEvidenceService:
                     telegram_mtproto_ai_predicate(),
                 )
                 .order_by(stamp.desc(), Object.id)
-                .limit(MAX_PERSON_SCAN_ROWS + 1)
+                .limit(MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS + 1)
             )
         )
-        truncated = len(rows) > MAX_PERSON_SCAN_ROWS
-        return rows[:MAX_PERSON_SCAN_ROWS], truncated
+        truncated = len(rows) > MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS
+        return rows[:MAX_ROLE_IMPORT_COMMUNICATION_SCAN_ROWS], truncated
 
 
 def _row_mentions(pattern, source: Object) -> bool:
