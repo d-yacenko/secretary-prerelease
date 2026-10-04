@@ -117,6 +117,6 @@ Bootstrap failure should be a single sanitized blocker plus confirmation that no
 
 Every final Executor report must end with exactly:
 
-`REPORT_TIME_UTC=HH:MM`
+`REPORT_TIME_MSK=HH:MM`
 
-Use current UTC in 24-hour hours/minutes form, obtained immediately before sending the report. This applies to success, HOLD/no-op, blocker, and production/runtime reports. Do not substitute task start time or commit time.
+Use current Moscow time (Europe/Moscow, UTC+3) in 24-hour hours/minutes form, obtained immediately before sending the report. This applies to success, HOLD/no-op, blocker, and production/runtime reports. Do not substitute task start time or commit time.
