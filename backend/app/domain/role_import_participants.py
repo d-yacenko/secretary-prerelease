@@ -29,18 +29,17 @@ _HEADER_EMAIL_KEYS = ("from", "reply-to", "sender")
 def participant_identities(
     source: Object,
     *,
-    mattermost_self_user_ids: set[str],
-    telegram_self_user_ids: set[str],
+    self_identity_keys: set[tuple[str, str, str, str]],
 ) -> tuple[NormalizedPersonIdentity, ...]:
     metadata = source.metadata_ if isinstance(source.metadata_, Mapping) else {}
     if source.provider in {"gmail", "yandex_mail"} and source.kind == "email":
         identities = _email_participants(metadata)
     elif source.provider == "mattermost" and source.kind == "chat_message":
-        identities = _mattermost_participant(metadata, mattermost_self_user_ids)
+        identities = _mattermost_participant(metadata)
     elif source.provider == "teams" and source.kind == "chat_message":
         identities = _teams_participant(metadata)
     elif source.provider == "telegram" and source.kind == "chat_message":
-        identities = _telegram_participant(metadata, telegram_self_user_ids)
+        identities = _telegram_participant(metadata)
     else:
         identities = []
     found: list[NormalizedPersonIdentity] = []
@@ -49,7 +48,7 @@ def participant_identities(
         if not _display(identity.display_value):
             continue
         key = (identity.provider, identity.identity_type, identity.realm, identity.canonical_value)
-        if key in seen:
+        if key in seen or key in self_identity_keys:
             continue
         seen.add(key)
         found.append(identity)
@@ -96,9 +95,7 @@ def _envelope_display(value: str) -> str | None:
     return name or None
 
 
-def _mattermost_participant(
-    metadata: Mapping[str, Any], self_user_ids: set[str]
-) -> list[NormalizedPersonIdentity]:
+def _mattermost_participant(metadata: Mapping[str, Any]) -> list[NormalizedPersonIdentity]:
     server_url = metadata.get("server_url")
     if not isinstance(server_url, str) or not server_url.strip():
         return []
@@ -107,16 +104,12 @@ def _mattermost_participant(
         return []
     author = _text(metadata.get("author_user_id"))
     if author is not None:
-        if author in self_user_ids:
-            return []
         try:
-            return [
-                normalize_mattermost_user_id(server_url, author, display_value=display)
-            ]
+            return [normalize_mattermost_user_id(server_url, author, display_value=display)]
         except PersonIdentityInputError:
             return []
     username = _text(metadata.get("author_username"))
-    if username is None or username in self_user_ids:
+    if username is None:
         return []
     try:
         return [normalize_mattermost_username(server_url, username, display_value=display)]
@@ -138,9 +131,7 @@ def _teams_participant(metadata: Mapping[str, Any]) -> list[NormalizedPersonIden
         return []
 
 
-def _telegram_participant(
-    metadata: Mapping[str, Any], self_user_ids: set[str]
-) -> list[NormalizedPersonIdentity]:
+def _telegram_participant(metadata: Mapping[str, Any]) -> list[NormalizedPersonIdentity]:
     if metadata.get("transport") != "mtproto":
         return []
     account_id = metadata.get("account_id")
@@ -153,13 +144,11 @@ def _telegram_participant(
             account_id,
             metadata.get("peer_id"),
             _text(metadata.get("peer_title")) or _text(metadata.get("peer_display_name")),
-            self_user_ids,
         )
     return _telegram_user(
         account_id,
         metadata.get("sender_peer_id"),
         _text(metadata.get("sender_display_name")),
-        self_user_ids,
     )
 
 
@@ -167,17 +156,13 @@ def _telegram_user(
     account_id: str,
     raw_id: object,
     display: str | None,
-    self_user_ids: set[str],
 ) -> list[NormalizedPersonIdentity]:
     if display is None:
         return []
     try:
-        identity = normalize_telegram_user_id(account_id, raw_id, display_value=display)
+        return [normalize_telegram_user_id(account_id, raw_id, display_value=display)]
     except PersonIdentityInputError:
         return []
-    if identity.canonical_value in self_user_ids:
-        return []
-    return [identity]
 
 
 def _display(value: str | None) -> str | None:

@@ -10,13 +10,16 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.db.models import (
     AITrace,
+    GoogleAccount,
     MattermostAccount,
     Object,
     PersonIdentity,
     PersonRoleAssignment,
+    TeamsAccount,
     TelegramMtprotoAccount,
     TelegramMtprotoChatSelection,
     User,
+    YandexMailAccount,
 )
 from app.domain.person_identity import normalize_email
 from app.domain.person_promotion import MIN_DIRECT_HITS
@@ -380,6 +383,309 @@ def test_participant_discovery_does_not_call_a_provider(db_session, tmp_path, mo
     assert _count(db_session, AITrace) == before
 
 
+def test_google_account_email_is_not_a_participant_as_sender_or_recipient(db_session) -> None:
+    user = _user(db_session)
+    db_session.add(
+        GoogleAccount(user_id=user.id, email="rel1dhg141-self@gmail.example", scopes=["gmail"])
+    )
+    db_session.flush()
+    name = "REL1DHG141 Себя"
+    _mail(
+        db_session,
+        user_id=user.id,
+        provider="gmail",
+        sender=f"{name} <rel1dhg141-self@gmail.example>",
+        metadata={
+            "sender": f"{name} <rel1dhg141-self@gmail.example>",
+            "to": "other@example.com",
+        },
+    )
+    _mail(
+        db_session,
+        user_id=user.id,
+        provider="gmail",
+        sender="other@example.com",
+        metadata={
+            "sender": "other@example.com",
+            "to": f"{name} <rel1dhg141-self@gmail.example>",
+        },
+    )
+    assert PersonPromotionService(db_session, user.id).eligible_role_import_participants() == []
+
+
+def test_yandex_account_email_is_not_a_participant(db_session) -> None:
+    user = _user(db_session)
+    db_session.add(
+        YandexMailAccount(
+            user_id=user.id,
+            email="rel1dhg141-self@yandex.example",
+            app_password_encrypted="enc",
+        )
+    )
+    db_session.flush()
+    _mail(
+        db_session,
+        user_id=user.id,
+        sender="REL1DHG141 Яндекс <rel1dhg141-self@yandex.example>",
+    )
+    assert PersonPromotionService(db_session, user.id).eligible_role_import_participants() == []
+
+
+def test_teams_own_identity_is_tenant_scoped(db_session) -> None:
+    user = _user(db_session)
+    own_tenant = "44444444-4444-4444-8444-444444444444"
+    own_user = "55555555-5555-4555-8555-555555555555"
+    other_tenant = "66666666-6666-4666-8666-666666666666"
+    db_session.add(
+        TeamsAccount(
+            user_id=user.id,
+            tenant_id=own_tenant,
+            microsoft_user_id=own_user,
+            access_token_encrypted="enc",
+            refresh_token_encrypted="enc",
+        )
+    )
+    db_session.flush()
+    _chat(
+        db_session,
+        user.id,
+        provider="teams",
+        metadata={
+            "sender_kind": "user",
+            "chat_type": "group",
+            "tenant_id": own_tenant,
+            "sender_id": own_user,
+            "sender_display_name": "REL1DHG141 Команды",
+        },
+    )
+    _chat(
+        db_session,
+        user.id,
+        provider="teams",
+        metadata={
+            "sender_kind": "user",
+            "chat_type": "group",
+            "tenant_id": other_tenant,
+            "sender_id": own_user,
+            "sender_display_name": "REL1DHG141 ДругойТенант",
+        },
+    )
+    names = [
+        item.display_value
+        for item in PersonPromotionService(db_session, user.id).eligible_role_import_participants()
+    ]
+    assert names == ["REL1DHG141 ДругойТенант"]
+
+
+def test_mattermost_own_user_and_username_are_server_scoped(db_session) -> None:
+    user = _user(db_session)
+    account = MattermostAccount(
+        user_id=user.id,
+        server_url="https://chat.example.com",
+        remote_user_id="self-hg141",
+        username="self.hg141",
+        access_token_encrypted="token",
+    )
+    db_session.add(account)
+    db_session.flush()
+    _chat(
+        db_session,
+        user.id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://chat.example.com",
+            "channel_type": "O",
+            "author_user_id": "self-hg141",
+            "author_display_name": "REL1DHG141 СвойИд",
+        },
+    )
+    _chat(
+        db_session,
+        user.id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://chat.example.com",
+            "channel_type": "O",
+            "author_username": "self.hg141",
+            "author_display_name": "REL1DHG141 СвойЛогин",
+        },
+    )
+    _chat(
+        db_session,
+        user.id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://other.example.com",
+            "channel_type": "O",
+            "author_user_id": "self-hg141",
+            "author_display_name": "REL1DHG141 ЧужойИд",
+        },
+    )
+    _chat(
+        db_session,
+        user.id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://other.example.com",
+            "channel_type": "O",
+            "author_username": "self.hg141",
+            "author_display_name": "REL1DHG141 ЧужойЛогин",
+        },
+    )
+    names = sorted(
+        item.display_value
+        for item in PersonPromotionService(db_session, user.id).eligible_role_import_participants()
+    )
+    assert names == ["REL1DHG141 ЧужойИд", "REL1DHG141 ЧужойЛогин"]
+
+
+def test_telegram_own_user_id_stays_excluded(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "telegram_mtproto_ai_enabled", True)
+    user = _user(db_session)
+    account = TelegramMtprotoAccount(
+        user_id=user.id,
+        telegram_user_id=880_141_141,
+        session_encrypted="encrypted",
+    )
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(
+        TelegramMtprotoChatSelection(
+            account_id=account.id,
+            peer_id=88141,
+            peer_kind="private",
+            provider_peer_reference_encrypted="encrypted",
+            title="peer",
+            scope_active=True,
+            manual_selected=False,
+        )
+    )
+    db_session.flush()
+    _chat(
+        db_session,
+        user.id,
+        provider="telegram",
+        metadata={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": "88141",
+            "peer_kind": "private",
+            "direction": "inbound",
+            "sender_peer_id": 880_141_141,
+            "sender_display_name": "REL1DHG141 СебяТелеграм",
+        },
+    )
+    _chat(
+        db_session,
+        user.id,
+        provider="telegram",
+        metadata={
+            "transport": "mtproto",
+            "account_id": str(account.id),
+            "peer_id": "88141",
+            "peer_kind": "private",
+            "direction": "inbound",
+            "sender_peer_id": 880_141_142,
+            "sender_display_name": "REL1DHG141 ДругойТелеграм",
+        },
+    )
+    names = [
+        item.display_value
+        for item in PersonPromotionService(db_session, user.id).eligible_role_import_participants()
+    ]
+    assert names == ["REL1DHG141 ДругойТелеграм"]
+
+
+def test_same_display_name_with_a_different_identity_stays_eligible(db_session) -> None:
+    user = _user(db_session)
+    db_session.add(GoogleAccount(user_id=user.id, email="rel1dhg141-me@gmail.example", scopes=["gmail"]))
+    db_session.flush()
+    name = "REL1DHG141 Общее"
+    _mail(
+        db_session,
+        user_id=user.id,
+        provider="gmail",
+        sender=f"{name} <rel1dhg141-me@gmail.example>",
+    )
+    _mail(
+        db_session,
+        user_id=user.id,
+        provider="gmail",
+        sender=f"{name} <rel1dhg141-other@gmail.example>",
+    )
+    participants = PersonPromotionService(db_session, user.id).eligible_role_import_participants()
+    assert [item.display_value for item in participants] == [name]
+    assert participants[0].identity.canonical_value == "rel1dhg141-other@gmail.example"
+
+
+def test_ordinary_non_self_participants_remain_eligible(db_session) -> None:
+    user = _user(db_session)
+    _mail(db_session, user_id=user.id, sender="REL1DHG141 Почта <rel1dhg141-mail@example.com>")
+    _chat(
+        db_session,
+        user.id,
+        provider="teams",
+        metadata={
+            "sender_kind": "user",
+            "chat_type": "oneOnOne",
+            "tenant_id": "77777777-7777-4777-8777-777777777777",
+            "sender_id": "88888888-8888-4888-8888-888888888888",
+            "sender_display_name": "REL1DHG141 Команда",
+        },
+    )
+    account = _mattermost_account(db_session, user.id)
+    _chat(
+        db_session,
+        user.id,
+        provider="mattermost",
+        metadata={
+            "server_url": "https://chat.example.com",
+            "channel_type": "O",
+            "account_id": str(account.id),
+            "author_user_id": "user-hg141",
+            "author_display_name": "REL1DHG141 Канал",
+        },
+    )
+    names = sorted(
+        item.display_value
+        for item in PersonPromotionService(db_session, user.id).eligible_role_import_participants()
+    )
+    assert names == ["REL1DHG141 Канал", "REL1DHG141 Команда", "REL1DHG141 Почта"]
+
+
+def test_account_added_before_approve_fails_closed(db_session, tmp_path) -> None:
+    name = "REL1DHG141 Позже"
+    address = "rel1dhg141-later@example.com"
+    _mail(db_session, sender=f"{name} <{address}>")
+    items = [_row(name, _ROLE)]
+    source, revision, proposal = _proposal(db_session, tmp_path, items)
+    key = proposal.items[0].person_resolution.promotion_candidates[0].candidate_key
+    plan = _prepare(
+        db_session,
+        tmp_path,
+        source,
+        revision,
+        proposal,
+        items,
+        [{"row_index": 0, "promotion_candidate_key": key}],
+    )
+    db_session.add(
+        YandexMailAccount(
+            user_id=BOOTSTRAP_USER_ID,
+            email=address,
+            app_password_encrypted="enc",
+        )
+    )
+    db_session.flush()
+    before_people = _count_people(db_session)
+    before_assignments = _count(db_session, PersonRoleAssignment)
+    view = ActionPlanService(db_session, BOOTSTRAP_USER_ID).approve(plan.id)
+    assert view.status == "failed"
+    assert "role_import_grounding_changed" in view.failure
+    assert _count_people(db_session) == before_people
+    assert _count(db_session, PersonRoleAssignment) == before_assignments
+
+
 def test_truncated_scan_keeps_a_seen_hit_and_omits_an_unseen_name(db_session, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("app.services.person_promotion_service.MAX_PERSON_SCAN_ROWS", 1)
     seen = "REL1DHG14 Видно"
@@ -466,6 +772,7 @@ def _mail(
     *,
     sender: str,
     user_id=BOOTSTRAP_USER_ID,
+    provider: str = "yandex_mail",
     metadata: dict | None = None,
     title: str = "note",
     body: str = "",
@@ -475,7 +782,7 @@ def _mail(
         Object(
             user_id=user_id,
             kind="email",
-            provider="yandex_mail",
+            provider=provider,
             title=title,
             body=body,
             origin="source",

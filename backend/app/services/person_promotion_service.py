@@ -15,12 +15,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    GoogleAccount,
     MattermostAccount,
     Object,
     PersonIdentity,
     PersonIdentityEvidence,
     PersonPromotionFeedback,
+    TeamsAccount,
     TelegramMtprotoAccount,
+    YandexMailAccount,
 )
 from app.domain.object_visibility import object_is_active
 from app.domain.person_assistant import (
@@ -28,7 +31,15 @@ from app.domain.person_assistant import (
     PERSON_LOOKBACK_DAYS,
     parse_feedback_identity,
 )
-from app.domain.person_identity import NormalizedPersonIdentity, PersonIdentityInputError
+from app.domain.person_identity import (
+    NormalizedPersonIdentity,
+    PersonIdentityInputError,
+    normalize_email,
+    normalize_mattermost_user_id,
+    normalize_mattermost_username,
+    normalize_teams_user_id,
+    normalize_telegram_user_id,
+)
 from app.domain.person_promotion import (
     MAX_DIRECT_HITS,
     MAX_PROMOTION_CANDIDATES,
@@ -326,20 +337,11 @@ class PersonPromotionService:
             )
         )
         truncated = len(rows) > MAX_PERSON_SCAN_ROWS
-        mattermost_self = {
-            account.remote_user_id.strip()
-            for account in self._mattermost_accounts().values()
-            if isinstance(account.remote_user_id, str) and account.remote_user_id.strip()
-        }
-        telegram_self = self._telegram_self_ids()
+        self_keys = self._self_identity_keys()
         found: dict[tuple[str, str, str, str], _Hit] = {}
         displays: dict[tuple[str, str, str, str], str] = {}
         for source in rows[:MAX_PERSON_SCAN_ROWS]:
-            for identity in participant_identities(
-                source,
-                mattermost_self_user_ids=mattermost_self,
-                telegram_self_user_ids=telegram_self,
-            ):
+            for identity in participant_identities(source, self_identity_keys=self_keys):
                 key = self._key(identity)
                 display_key = _participant_display_key(identity.display_value or "")
                 if not display_key:
@@ -372,13 +374,62 @@ class PersonPromotionService:
             return None
         return item
 
-    def _telegram_self_ids(self) -> set[str]:
-        rows = self._session.scalars(
-            select(TelegramMtprotoAccount.telegram_user_id).where(
-                TelegramMtprotoAccount.user_id == self._user_id
+    def _self_identity_keys(self) -> set[tuple[str, str, str, str]]:
+        """Exact account identities of this Secretary user, scoped by provider and realm."""
+        keys: set[tuple[str, str, str, str]] = set()
+        emails = list(
+            self._session.scalars(
+                select(GoogleAccount.email).where(GoogleAccount.user_id == self._user_id)
             )
         )
-        return {str(row) for row in rows if row is not None}
+        emails.extend(
+            self._session.scalars(
+                select(YandexMailAccount.email).where(YandexMailAccount.user_id == self._user_id)
+            )
+        )
+        for email in emails:
+            try:
+                keys.add(self._key(normalize_email(email)))
+            except PersonIdentityInputError:
+                continue
+        for account in self._session.scalars(
+            select(TeamsAccount).where(TeamsAccount.user_id == self._user_id)
+        ):
+            try:
+                keys.add(
+                    self._key(
+                        normalize_teams_user_id(account.tenant_id, account.microsoft_user_id)
+                    )
+                )
+            except PersonIdentityInputError:
+                continue
+        for account in self._mattermost_accounts().values():
+            try:
+                keys.add(
+                    self._key(
+                        normalize_mattermost_user_id(account.server_url, account.remote_user_id)
+                    )
+                )
+            except PersonIdentityInputError:
+                pass
+            try:
+                keys.add(
+                    self._key(normalize_mattermost_username(account.server_url, account.username))
+                )
+            except PersonIdentityInputError:
+                pass
+        for account in self._session.scalars(
+            select(TelegramMtprotoAccount).where(TelegramMtprotoAccount.user_id == self._user_id)
+        ):
+            try:
+                keys.add(
+                    self._key(
+                        normalize_telegram_user_id(str(account.id), account.telegram_user_id)
+                    )
+                )
+            except PersonIdentityInputError:
+                continue
+        return keys
 
     def _mattermost_accounts(self) -> dict[UUID, MattermostAccount]:
         rows = self._session.scalars(
