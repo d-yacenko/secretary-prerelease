@@ -197,6 +197,7 @@ def _to_view(plan: PendingActionPlan) -> PendingActionPlanView:
 _PUBLIC_ARGUMENT_HIDDEN_KEYS = frozenset(
     {"operation_id", "rfc822_message_id", "calendar_href"}
 )
+_ROLE_IMPORT_BATCH_TOOL = "apply_role_import_batch"
 _IRREVERSIBLE_PERMISSIONS = frozenset(
     {ToolPermission.EXTERNAL_WRITE, ToolPermission.COMMUNICATE}
 )
@@ -226,7 +227,9 @@ def _permission_for_tool(tool_name: object) -> ToolPermission | None:
     return spec.permission
 
 
-def _public_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _public_arguments(tool_name: object, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == _ROLE_IMPORT_BATCH_TOOL:
+        return {}
     return {
         key: value
         for key, value in arguments.items()
@@ -239,7 +242,7 @@ def _public_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for action in actions:
         item = {
             "tool_name": action["tool_name"],
-            "arguments": _public_arguments(action["arguments"]),
+            "arguments": _public_arguments(action["tool_name"], action["arguments"]),
         }
         presentation = action.get("presentation")
         if isinstance(presentation, dict):

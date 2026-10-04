@@ -367,7 +367,13 @@ def _serialize_action_plan_response(plan: PendingActionPlanView) -> ActionPlanRe
         status=plan.status,
         expires_at=plan.expires_at.isoformat(),
         actions=[
-            PendingActionOut(tool_name=action["tool_name"], arguments=action["arguments"])
+            PendingActionOut(
+                tool_name=action["tool_name"],
+                arguments=action["arguments"],
+                presentation=action.get("presentation")
+                if isinstance(action.get("presentation"), dict)
+                else None,
+            )
             for action in plan.actions
         ],
         result=plan.result,

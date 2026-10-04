@@ -119,7 +119,9 @@ def test_specialized_endpoint_prepares_one_frozen_plan(auth_client, db_session, 
     assert payload["status"] == "pending"
     assert len(payload["actions"]) == 1
     assert payload["actions"][0]["tool_name"] == "apply_role_import_batch"
-    assert payload["actions"][0]["arguments"]["selected_rows"][0]["person_id"] == str(person.id)
+    assert payload["actions"][0]["arguments"] == {}
+    stored = db_session.get(PendingActionPlan, payload["id"])
+    assert stored.actions[0]["arguments"]["selected_rows"][0]["person_id"] == str(person.id)
 
 
 def test_tool_is_internal_and_baseline_execute_does_not_persist(db_session) -> None:
@@ -287,6 +289,175 @@ def test_presentation_is_bounded_and_omits_private_keys(db_session, tmp_path) ->
     assert key not in blob
     assert "uniquada-c1-card@example.com" not in blob
     for token in _FORBIDDEN:
+        assert token not in blob
+
+
+def test_public_role_import_plan_redacts_arguments_and_keeps_presentation(
+    auth_client, db_session, tmp_path
+) -> None:
+    _mail(db_session, f"{_PROMO} <uniquada-c12-privacy@example.com>")
+    _mail(db_session, f"{_PROMO} <uniquada-c12-privacy@example.com>")
+    items = [_row(_PROMO, _ROLE, context="совет")]
+    source, revision, proposal = _proposal(db_session, tmp_path, items)
+    key = proposal.items[0].person_resolution.promotion_candidates[0].candidate_key
+    prepared = auth_client.post(
+        "/people/role-import/action-plan",
+        json=_body(
+            source.id,
+            revision,
+            proposal.grounding_revision,
+            items,
+            [{"row_index": 0, "promotion_candidate_key": key}],
+        ),
+    )
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    stored = db_session.get(PendingActionPlan, payload["id"])
+    frozen = stored.actions[0]["arguments"]
+    assert frozen["selected_rows"][0]["promotion_candidate_key"] == key
+    assert frozen["source_revision"] == revision
+    assert frozen["grounding_revision"] == proposal.grounding_revision
+    public = payload["actions"][0]
+    assert public["arguments"] == {}
+    presentation = public["presentation"]
+    assert presentation["source_object_id"] == str(source.id)
+    assert presentation["source_title"] == "notes"
+    assert presentation["selected_count"] == 1
+    assert presentation["total_extracted_rows"] == 1
+    assert presentation["rows"][0]["row_index"] == 0
+    assert presentation["rows"][0]["target_display"] == _PROMO
+    assert presentation["rows"][0]["target_mode"] == "promote_person"
+    assert presentation["rows"][0]["role"] == _ROLE
+    assert presentation["rows"][0]["context"] == "совет"
+    assert presentation["rows"][0]["vocabulary_mode"] == "create_if_missing"
+    _assert_role_import_public_action_is_redacted(public, key)
+
+    rejected_source, rejected_revision, rejected_proposal = _proposal(db_session, tmp_path, items)
+    rejected_key = rejected_proposal.items[0].person_resolution.promotion_candidates[0].candidate_key
+    rejected = auth_client.post(
+        "/people/role-import/action-plan",
+        json=_body(
+            rejected_source.id,
+            rejected_revision,
+            rejected_proposal.grounding_revision,
+            items,
+            [{"row_index": 0, "promotion_candidate_key": rejected_key}],
+        ),
+    )
+    assert rejected.status_code == 200
+    rejected_presentation = rejected.json()["actions"][0]["presentation"]
+
+    expired_source, expired_revision, expired_proposal = _proposal(db_session, tmp_path, items)
+    expired_key = expired_proposal.items[0].person_resolution.promotion_candidates[0].candidate_key
+    expired_plan = _service(db_session, tmp_path).prepare_plan(
+        _input(
+            expired_source.id,
+            expired_revision,
+            expired_proposal.grounding_revision,
+            items,
+            [{"row_index": 0, "promotion_candidate_key": expired_key}],
+        )
+    )
+    failed_source, failed_revision, failed_proposal = _proposal(db_session, tmp_path, items)
+    failed_key = failed_proposal.items[0].person_resolution.promotion_candidates[0].candidate_key
+    failed_plan = _service(db_session, tmp_path).prepare_plan(
+        _input(
+            failed_source.id,
+            failed_revision,
+            failed_proposal.grounding_revision,
+            items,
+            [{"row_index": 0, "promotion_candidate_key": failed_key}],
+        )
+    )
+
+    approved = auth_client.post(f"/assistant/action-plans/{payload['id']}/approve")
+    assert approved.status_code == 200
+    approved_body = approved.json()
+    assert approved_body["status"] == "executed"
+    assert approved_body["actions"][0]["arguments"] == {}
+    assert approved_body["actions"][0]["presentation"] == presentation
+    assert approved_body["result"]["actions"][0]["output"]["people_created"] == 1
+    _assert_role_import_public_action_is_redacted(approved_body["actions"][0], key)
+    again = auth_client.post(f"/assistant/action-plans/{payload['id']}/approve")
+    assert again.status_code == 200
+    assert again.json()["status"] == "executed"
+    assert again.json()["actions"][0]["arguments"] == {}
+    assert again.json()["actions"][0]["presentation"] == presentation
+    resumed = ActionPlanService(db_session, BOOTSTRAP_USER_ID).get_for_resume(stored.id)
+    assert resumed.actions[0]["arguments"] == {}
+    assert resumed.actions[0]["presentation"] == presentation
+    assert db_session.get(PendingActionPlan, stored.id).actions[0]["arguments"]["selected_rows"][0][
+        "promotion_candidate_key"
+    ] == key
+
+    reject_response = auth_client.post(
+        f"/assistant/action-plans/{rejected.json()['id']}/reject"
+    )
+    assert reject_response.status_code == 200
+    assert reject_response.json()["status"] == "rejected"
+    assert reject_response.json()["actions"][0]["arguments"] == {}
+    assert reject_response.json()["actions"][0]["presentation"] == rejected_presentation
+    _assert_role_import_public_action_is_redacted(reject_response.json()["actions"][0], rejected_key)
+
+    expired_row = db_session.get(PendingActionPlan, expired_plan.id)
+    expired_row.expires_at = datetime.now(UTC) - timedelta(seconds=5)
+    expired_view = ActionPlanService(db_session, BOOTSTRAP_USER_ID).approve(expired_plan.id)
+    assert expired_view.status == "expired"
+    assert expired_view.actions[0]["arguments"] == {}
+    assert expired_key not in str(expired_view.actions[0])
+
+    failed_row = db_session.get(PendingActionPlan, failed_plan.id)
+    failed_row.status = "failed"
+    failed_row.failure = "action plan execution failed"
+    failed_view = ActionPlanService(db_session, BOOTSTRAP_USER_ID).approve(failed_plan.id)
+    assert failed_view.status == "failed"
+    assert failed_view.actions[0]["arguments"] == {}
+    assert failed_key not in str(failed_view.actions[0])
+
+    listed = ActionPlanService(db_session, BOOTSTRAP_USER_ID).list_recent_terminal_plans()
+    listed_ids = {item.id for item in listed}
+    assert stored.id in listed_ids
+    assert expired_plan.id in listed_ids
+    assert failed_plan.id in listed_ids
+    for item in listed:
+        if item.actions and item.actions[0]["tool_name"] == "apply_role_import_batch":
+            assert item.actions[0]["arguments"] == {}
+            assert key not in str(item.actions[0]["arguments"])
+
+    ordinary = ActionPlanService(db_session, BOOTSTRAP_USER_ID).create_plan(
+        [
+            {
+                "tool_name": "create_task",
+                "arguments": {
+                    "title": "Обычная задача",
+                    "operation_id": "secret-op",
+                    "rfc822_message_id": "<hidden@example.com>",
+                    "calendar_href": "/cal/hidden",
+                },
+            }
+        ]
+    )
+    assert ordinary.actions[0]["arguments"]["title"] == "Обычная задача"
+    assert "operation_id" not in ordinary.actions[0]["arguments"]
+    assert "rfc822_message_id" not in ordinary.actions[0]["arguments"]
+    assert "calendar_href" not in ordinary.actions[0]["arguments"]
+    ordinary_stored = db_session.get(PendingActionPlan, ordinary.id)
+    assert ordinary_stored.actions[0]["arguments"]["operation_id"] == "secret-op"
+    assert ordinary_stored.actions[0]["arguments"]["title"] == "Обычная задача"
+
+
+def _assert_role_import_public_action_is_redacted(action: dict, candidate_key: str) -> None:
+    blob = str(action)
+    assert candidate_key not in blob
+    for token in (
+        "promotion_candidate_key",
+        "selected_rows",
+        "grounding_revision",
+        "source_revision",
+        "role_term_id",
+        "extracted_person_name",
+        "uniquada-c12-privacy@example.com",
+    ):
         assert token not in blob
 
 
