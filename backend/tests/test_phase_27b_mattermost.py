@@ -7,9 +7,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.api.deps import get_db
+from app.connectors.mattermost.constants import MAX_TITLE_CHARS
 from app.connectors.mattermost.credentials import MattermostAccountStore
 from app.connectors.mattermost.errors import MattermostSecurityError
 from app.connectors.mattermost.normalize import (
+    MattermostChannelContext,
     build_external_id,
     normalize_mattermost_post,
     normalize_server_url,
@@ -18,6 +20,7 @@ from app.connectors.mattermost.normalize import (
 from app.connectors.mattermost.sync import build_mattermost_sync_service
 from app.connectors.mattermost.transport import FakeMattermostTransport, MattermostHttpTransport
 from app.db.models import Job, MattermostAccount, Object, User
+from app.domain.role_import_participants import participant_identities
 from app.jobs.constants import JOB_TYPE_EMBED_OBJECT, JOB_TYPE_SYNC_MATTERMOST
 from app.main import app
 from app.users.bootstrap import BOOTSTRAP_USER_ID
@@ -1322,3 +1325,236 @@ def test_truncated_edit_sweep_does_not_advance_watermark_when_budget_exhausted(
     assert result["synchronized"] == 1
     account = db_session.scalar(select(MattermostAccount).where(MattermostAccount.id == account.id))
     assert account.sync_state["channels"]["ch-1"].get("edit_sweep_watermark_ms") == watermark_before
+
+
+def _author_channel() -> MattermostChannelContext:
+    return MattermostChannelContext(
+        channel_id="ch",
+        channel_name="general",
+        channel_display_name="General",
+        channel_type="O",
+        team_id="team-1",
+        team_name="team",
+        team_display_name="Team",
+    )
+
+
+def _normalized_author(author: dict, message: str = "hello") -> dict:
+    normalized = normalize_mattermost_post(
+        post=_post("post-1", "ch", message, utcnow(), user_id="author-1"),
+        normalized_server_url=ALLOWED_URL,
+        account_id=uuid.uuid4(),
+        channel=_author_channel(),
+        author=author,
+    )
+    assert normalized is not None
+    return normalized
+
+
+def _participant_source(normalized: dict) -> Object:
+    return Object(
+        user_id=BOOTSTRAP_USER_ID,
+        kind="chat_message",
+        provider="mattermost",
+        title=normalized["title"],
+        origin="source",
+        state="observed",
+        metadata_=normalized["metadata"],
+    )
+
+
+def test_explicit_human_display_name_is_kept() -> None:
+    normalized = _normalized_author(
+        {
+            "id": "author-1",
+            "username": "ishabarshina",
+            "display_name": "  Ирина   Сергеевна  ",
+            "first_name": "Other",
+            "last_name": "Name",
+            "nickname": "ira",
+            "email": "ira@example.com",
+        }
+    )
+    assert normalized["metadata"]["author_display_name"] == "Ирина Сергеевна"
+    assert normalized["metadata"]["author_username"] == "ishabarshina"
+    assert "author_first_name" not in normalized["metadata"]
+    assert normalized["title"].startswith("Ирина Сергеевна: ")
+
+
+def test_first_and_last_name_fill_a_missing_display_name() -> None:
+    normalized = _normalized_author(
+        {
+            "id": "author-1",
+            "username": "ishabarshina",
+            "first_name": "  Ирина  ",
+            "last_name": " Сергеевна\t",
+        }
+    )
+    assert normalized["metadata"]["author_display_name"] == "Ирина Сергеевна"
+    assert normalized["title"].startswith("Ирина Сергеевна: ")
+
+
+def test_display_name_equal_to_username_falls_through_to_full_name() -> None:
+    normalized = _normalized_author(
+        {
+            "id": "author-1",
+            "username": "Bob",
+            "display_name": "  bob ",
+            "first_name": "Robert",
+            "last_name": "Brown",
+        }
+    )
+    assert normalized["metadata"]["author_display_name"] == "Robert Brown"
+    assert normalized["title"].startswith("Robert Brown: ")
+
+
+def test_username_only_profile_does_not_invent_a_human_display() -> None:
+    normalized = _normalized_author({"id": "author-1", "username": "ishabarshina"})
+    assert normalized["metadata"]["author_username"] == "ishabarshina"
+    assert "author_display_name" not in normalized["metadata"]
+    assert normalized["title"].startswith("ishabarshina: ")
+    assert participant_identities(_participant_source(normalized), self_identity_keys=set()) == ()
+
+
+def test_single_name_or_nickname_does_not_invent_a_human_display() -> None:
+    for author in (
+        {"id": "author-1", "username": "ishabarshina", "first_name": "Ирина"},
+        {"id": "author-1", "username": "ishabarshina", "last_name": "Сергеевна"},
+        {"id": "author-1", "username": "ishabarshina", "nickname": "Ирина Сергеевна"},
+    ):
+        normalized = _normalized_author(author)
+        assert "author_display_name" not in normalized["metadata"]
+        assert normalized["title"].startswith("ishabarshina: ")
+
+
+def test_missing_author_label_uses_the_generic_title() -> None:
+    normalized = normalize_mattermost_post(
+        post=_post("post-1", "ch", "hello", utcnow(), user_id="author-1"),
+        normalized_server_url=ALLOWED_URL,
+        account_id=uuid.uuid4(),
+        channel=_author_channel(),
+        author=None,
+    )
+    assert normalized is not None
+    assert normalized["title"].startswith("Mattermost: ")
+    assert "author_display_name" not in normalized["metadata"]
+
+
+def test_human_display_is_bounded_to_the_title_limit() -> None:
+    normalized = _normalized_author(
+        {
+            "id": "author-1",
+            "username": "ishabarshina",
+            "first_name": "И" * 200,
+            "last_name": "С" * 200,
+        }
+    )
+    assert len(normalized["metadata"]["author_display_name"]) == MAX_TITLE_CHARS
+
+
+def test_derived_human_display_is_a_mattermost_participant_and_self_id_is_excluded() -> None:
+    normalized = _normalized_author(
+        {
+            "id": "author-1",
+            "username": "ishabarshina",
+            "first_name": "Ирина",
+            "last_name": "Сергеевна",
+        }
+    )
+    source = _participant_source(normalized)
+    identities = participant_identities(source, self_identity_keys=set())
+    assert len(identities) == 1
+    assert identities[0].canonical_value == "author-1"
+    assert identities[0].display_value == "Ирина Сергеевна"
+    key = (
+        identities[0].provider,
+        identities[0].identity_type,
+        identities[0].realm,
+        identities[0].canonical_value,
+    )
+    assert participant_identities(source, self_identity_keys={key}) == ()
+
+
+def test_author_batch_uses_one_users_by_ids_call(
+    db_session,
+    credential_key: str,
+    mattermost_settings,
+) -> None:
+    now = utcnow()
+    transport = FakeMattermostTransport(
+        channels=[_channel("ch-1", "general", "General", "O", now)],
+        teams=[{"id": "team-1", "name": "team", "display_name": "Team"}],
+        users_by_id={
+            "author-1": {"id": "author-1", "username": "bob", "first_name": "Robert", "last_name": "Brown"},
+            "author-2": {"id": "author-2", "username": "carol", "display_name": "Carol Smith"},
+        },
+        posts_by_channel={
+            "ch-1": [
+                _post("p1", "ch-1", "one", now - timedelta(hours=2), user_id="author-1"),
+                _post("p2", "ch-1", "two", now - timedelta(hours=1), user_id="author-2"),
+            ],
+        },
+    )
+    account = _connect_account(db_session, credential_key)
+    service = _build_sync_service(db_session, credential_key, transport, now)
+    service.sync_account(account.id, BOOTSTRAP_USER_ID)
+    batches = [call for call in transport.calls if call[1] == "/api/v4/users/ids"]
+    assert batches
+    assert all(set(call[2]["ids"]) == {"author-1", "author-2"} for call in batches)
+
+
+def test_reprocessing_enriched_profile_updates_the_same_object(
+    db_session,
+    credential_key: str,
+    mattermost_settings,
+) -> None:
+    now = utcnow()
+    transport = FakeMattermostTransport(
+        channels=[_channel("ch-1", "general", "General", "O", now)],
+        teams=[{"id": "team-1", "name": "team", "display_name": "Team"}],
+        users_by_id={"author-1": {"id": "author-1", "username": "ishabarshina", "nickname": "ira"}},
+        posts_by_channel={
+            "ch-1": [_post("same", "ch-1", "hello", now - timedelta(hours=1))],
+        },
+    )
+    account = _connect_account(db_session, credential_key)
+    service = _build_sync_service(db_session, credential_key, transport, now)
+    service.sync_account(account.id, BOOTSTRAP_USER_ID)
+    stored = list(
+        db_session.scalars(
+            select(Object).where(
+                Object.user_id == BOOTSTRAP_USER_ID,
+                Object.provider == "mattermost",
+                Object.external_id == build_external_id(ALLOWED_URL, "same"),
+            )
+        )
+    )
+    assert len(stored) == 1
+    assert "author_display_name" not in stored[0].metadata_
+    assert stored[0].title.startswith("ishabarshina: ")
+
+    transport.users_by_id["author-1"]["first_name"] = "Ирина"
+    transport.users_by_id["author-1"]["last_name"] = "Сергеевна"
+    service.sync_account(account.id, BOOTSTRAP_USER_ID)
+    refreshed = list(
+        db_session.scalars(
+            select(Object).where(
+                Object.user_id == BOOTSTRAP_USER_ID,
+                Object.provider == "mattermost",
+                Object.external_id == build_external_id(ALLOWED_URL, "same"),
+            )
+        )
+    )
+    assert len(refreshed) == 1
+    assert refreshed[0].id == stored[0].id
+    meta = refreshed[0].metadata_
+    assert meta["author_display_name"] == "Ирина Сергеевна"
+    assert meta["author_user_id"] == "author-1"
+    assert meta["author_username"] == "ishabarshina"
+    assert meta["server_url"] == ALLOWED_URL
+    assert meta["account_id"] == str(account.id)
+    assert refreshed[0].title.startswith("Ирина Сергеевна: ")
+    identities = participant_identities(refreshed[0], self_identity_keys=set())
+    assert len(identities) == 1
+    assert identities[0].canonical_value == "author-1"
+    assert identities[0].display_value == "Ирина Сергеевна"

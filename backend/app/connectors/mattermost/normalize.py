@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -96,16 +97,35 @@ def _bounded_body(message: str) -> str | None:
     return stripped[:MAX_MESSAGE_BODY_CHARS]
 
 
-def _author_label(author: dict[str, Any] | None) -> str | None:
+_PROFILE_WHITESPACE = re.compile(r"\s+")
+
+
+def _collapse_profile_text(value: object) -> str:
+    return _PROFILE_WHITESPACE.sub(" ", str(value or "").strip())
+
+
+def _author_human_display(author: dict[str, Any] | None) -> str | None:
     if not author:
         return None
-    display_name = str(author.get("display_name") or "").strip()
-    if display_name:
-        return display_name
-    username = str(author.get("username") or "").strip()
-    if username:
-        return username
+    username = _collapse_profile_text(author.get("username"))
+    display_name = _collapse_profile_text(author.get("display_name"))
+    if display_name and display_name.casefold() != username.casefold():
+        return display_name[:MAX_TITLE_CHARS]
+    first_name = _collapse_profile_text(author.get("first_name"))
+    last_name = _collapse_profile_text(author.get("last_name"))
+    if first_name and last_name:
+        return f"{first_name} {last_name}"[:MAX_TITLE_CHARS]
     return None
+
+
+def _author_label(author: dict[str, Any] | None) -> str | None:
+    human = _author_human_display(author)
+    if human:
+        return human
+    if not author:
+        return None
+    username = str(author.get("username") or "").strip()
+    return username or None
 
 
 def _build_title(message: str, author: dict[str, Any] | None) -> str:
@@ -361,9 +381,9 @@ def normalize_mattermost_post(
         username = str(author.get("username") or "").strip()
         if username:
             metadata["author_username"] = username
-        display_name = str(author.get("display_name") or "").strip()
-        if display_name:
-            metadata["author_display_name"] = display_name
+        human_display = _author_human_display(author)
+        if human_display:
+            metadata["author_display_name"] = human_display
     pending_post_id = str(post.get("pending_post_id") or "").strip()
     if pending_post_id:
         metadata["pending_post_id"] = pending_post_id
