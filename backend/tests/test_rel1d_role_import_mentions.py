@@ -31,7 +31,7 @@ from tests.test_rel1d_role_import_batch import (
     _proposal,
     _service,
 )
-from tests.test_rel1d_role_import_grounding import _ground, _image
+from tests.test_rel1d_role_import_grounding import _ground, _image, _known_person
 from tests.test_rel1d_role_import_source import _text_object
 
 _NAME = "Шабаршина HG15 Тест"
@@ -137,6 +137,62 @@ def test_mention_scan_runs_once_for_the_batch(db_session, tmp_path, monkeypatch)
     )
     assert calls["n"] == 1
     assert len(proposal.items) == 3
+
+
+def test_execute_scans_two_mention_names_once(db_session, tmp_path, monkeypatch) -> None:
+    _mention(db_session, body=_NAME)
+    _mention(db_session, body=_NAME)
+    _mention(db_session, body=_OTHER)
+    _mention(db_session, body=_OTHER)
+    calls: list[list[str]] = []
+    original = PersonRoleImportMentionEvidenceService.evidence_for
+
+    def _spy(self, names):
+        calls.append(list(names))
+        return original(self, names)
+
+    monkeypatch.setattr(PersonRoleImportMentionEvidenceService, "evidence_for", _spy)
+    plan, _key = _plan(db_session, tmp_path, [_row(_NAME), _row(_OTHER, _ROLE_B)], [0, 1])
+    calls.clear()
+    output = _approve(db_session, plan.id).result["actions"][0]["output"]
+    assert calls == [[_NAME, _OTHER]]
+    assert output["people_created"] == 2
+    assert {row["person_id"] for row in output["rows"]} == {
+        output["rows"][0]["person_id"],
+        output["rows"][1]["person_id"],
+    }
+    assert output["rows"][0]["person_id"] != output["rows"][1]["person_id"]
+    for row in output["rows"]:
+        assert _identity_count(db_session, row["person_id"]) == 0
+        assert _evidence_count(db_session, row["person_id"]) == 0
+
+
+def test_execute_without_mention_rows_does_not_scan(db_session, tmp_path, monkeypatch) -> None:
+    name = "HG151 Известный Человек"
+    person = _known_person(db_session, name)
+    calls: list[list[str]] = []
+    original = PersonRoleImportMentionEvidenceService.evidence_for
+
+    def _spy(self, names):
+        calls.append(list(names))
+        return original(self, names)
+
+    monkeypatch.setattr(PersonRoleImportMentionEvidenceService, "evidence_for", _spy)
+    source, revision, proposal = _proposal(db_session, tmp_path, [_row(name)])
+    assert proposal.items[0].person_resolution.state == "resolved"
+    plan = _service(db_session, tmp_path).prepare_plan(
+        _input(
+            source.id,
+            revision,
+            proposal.grounding_revision,
+            [_row(name)],
+            [{"row_index": 0, "person_id": str(person.id)}],
+        )
+    )
+    calls.clear()
+    view = _approve(db_session, plan.id)
+    assert view.status == "executed"
+    assert calls == []
 
 
 def test_prepare_needs_an_explicit_candidate_and_writes_no_person(db_session, tmp_path) -> None:

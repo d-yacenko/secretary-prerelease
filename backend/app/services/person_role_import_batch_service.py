@@ -106,13 +106,13 @@ class PersonRoleImportBatchService:
         roles = PersonRoleService(self._session, self._user_id)
         identities = PersonIdentityService(self._session, self._user_id)
         contacts = promotion.eligible_role_import_participants()
-        mentions = PersonRoleImportMentionEvidenceService(self._session, self._user_id)
+        mention_evidence = _mention_evidence(self._session, self._user_id, payload.selected_rows)
         promoted: dict[str, UUID] = {}
         seen: dict[tuple[UUID, str, str], RoleImportBatchRowResult] = {}
         results: list[RoleImportBatchRowResult] = []
         for row in payload.selected_rows:
             person_id, person_created = _person_target(
-                row, people, promotion, identities, contacts, mentions, promoted
+                row, people, promotion, identities, contacts, mention_evidence, promoted
             )
             role_display, role_key = _revalidated_role(self._session, self._user_id, row)
             _context, context_key = role_context_identity(row.context)
@@ -238,14 +238,27 @@ def _freeze_row(item: RoleImportGroundedItem, selection) -> FrozenRoleImportRow:
     )
 
 
-def _person_target(row, people, promotion, identities, contacts, mentions, promoted):
+def _mention_evidence(session: Session, user_id: UUID, rows: list[FrozenRoleImportRow]) -> dict:
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.evidence_kind != "name_mentions" or row.extracted_person_name in seen:
+            continue
+        seen.add(row.extracted_person_name)
+        names.append(row.extracted_person_name)
+    if not names:
+        return {}
+    return PersonRoleImportMentionEvidenceService(session, user_id).evidence_for(names)
+
+
+def _person_target(row, people, promotion, identities, contacts, mention_evidence, promoted):
     resolved = people.resolve(row.extracted_person_name)
     if row.person_id is not None:
         if not _person_still_grounded(resolved, row.person_id):
             raise ValidationError(GROUNDING_CHANGED)
         return row.person_id, False
     if row.evidence_kind == "name_mentions":
-        return _mention_person(row, resolved, contacts, mentions, identities, promoted)
+        return _mention_person(row, resolved, contacts, mention_evidence, identities, promoted)
     key = row.promotion_candidate_key
     cached = promoted.get(key)
     if cached is not None:
@@ -278,7 +291,7 @@ def _person_target(row, people, promotion, identities, contacts, mentions, promo
     return person.id, created
 
 
-def _mention_person(row, resolved, contacts, mentions, identities, promoted):
+def _mention_person(row, resolved, contacts, mention_evidence, identities, promoted):
     key = row.promotion_candidate_key
     cached = promoted.get(key)
     if cached is not None:
@@ -288,7 +301,7 @@ def _mention_person(row, resolved, contacts, mentions, identities, promoted):
     wanted = _display_key(row.extracted_person_name)
     if any(_display_key(item.display_value) == wanted for item in contacts):
         raise ValidationError(GROUNDING_CHANGED)
-    evidence = mentions.evidence_for([row.extracted_person_name]).get(row.extracted_person_name)
+    evidence = mention_evidence.get(row.extracted_person_name)
     if (
         evidence is None
         or evidence.candidate_key != key
