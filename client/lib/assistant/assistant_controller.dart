@@ -276,6 +276,14 @@ class AssistantController extends ChangeNotifier {
   String? roleGroundingError;
   RoleImportGroundedPreview? roleGrounding;
   bool roleImportStale = false;
+  int _rolePlanEpoch = 0;
+  final Map<int, RoleImportRowChoice> roleImportChoices = {};
+  ActionPlanResponse? roleImportPlan;
+  RoleImportFlowPhase roleImportPhase = RoleImportFlowPhase.editing;
+  String? roleImportPlanError;
+  bool roleImportGroundingStale = false;
+  bool _rolePlanInFlight = false;
+  Object? _rolePlanFlight;
   AssistantContextRef? _notificationContext;
   AssistantSendState sendState = AssistantSendState.idle;
   AssistantActionPlanOperationState actionPlanOperationState =
@@ -444,10 +452,449 @@ class AssistantController extends ChangeNotifier {
   }
 
   void _clearRoleGrounding() {
+    _rolePlanEpoch += 1;
     roleGroundingLoading = false;
     roleGroundingError = null;
     roleGrounding = null;
     roleImportStale = false;
+    roleImportGroundingStale = false;
+    roleImportChoices.clear();
+    roleImportPlan = null;
+    roleImportPlanError = null;
+    roleImportPhase = RoleImportFlowPhase.editing;
+    _rolePlanInFlight = false;
+  }
+
+  bool get roleImportBlockedByChatPlan {
+    if (actionPlanOperationState != AssistantActionPlanOperationState.idle) {
+      return true;
+    }
+    return _messages.any(
+      (message) =>
+          message.actionPlan?.cardState == ActionPlanCardState.pending,
+    );
+  }
+
+  bool get roleImportSelectionFrozen =>
+      roleImportPhase != RoleImportFlowPhase.editing || roleImportPlan != null;
+
+  bool get canPrepareRoleImport {
+    if (roleImportBlockedByChatPlan || _rolePlanInFlight) {
+      return false;
+    }
+    if (roleImportPhase != RoleImportFlowPhase.editing || roleImportPlan != null) {
+      return false;
+    }
+    if (roleImportStale ||
+        roleImportGroundingStale ||
+        roleGroundingLoading ||
+        roleImportLoading) {
+      return false;
+    }
+    final grounded = roleGrounding;
+    if (grounded == null || roleImportPreview == null) {
+      return false;
+    }
+    var selected = 0;
+    for (final item in grounded.items) {
+      final choice = roleImportChoices[item.rowIndex];
+      if (choice == null || !choice.selected) {
+        continue;
+      }
+      if (!_roleImportChoiceMatches(item, choice)) {
+        return false;
+      }
+      selected += 1;
+    }
+    return selected > 0;
+  }
+
+  RoleImportRowChoice _choiceFor(int rowIndex) {
+    return roleImportChoices.putIfAbsent(rowIndex, RoleImportRowChoice.new);
+  }
+
+  void setRoleImportRowSelected(int rowIndex, bool selected) {
+    if (roleImportSelectionFrozen || roleGrounding == null) {
+      return;
+    }
+    final item = _groundedItem(rowIndex);
+    if (item == null || item.personResolution.state == 'unresolved') {
+      return;
+    }
+    final choice = _choiceFor(rowIndex);
+    if (item.personResolution.state == 'resolved') {
+      choice.personId = item.personResolution.personId;
+      choice.promotionCandidateKey = null;
+      choice.selected = selected && choice.personId != null;
+    } else if (item.personResolution.state == 'ambiguous') {
+      final allowed = item.personResolution.candidates.any(
+        (candidate) => candidate.personId == choice.personId,
+      );
+      choice.selected = selected && allowed;
+    } else if (item.personResolution.state == 'promotion_candidates') {
+      final allowed = item.personResolution.promotionCandidates.any(
+        (candidate) => candidate.candidateKey == choice.promotionCandidateKey,
+      );
+      choice.selected = selected && allowed;
+    } else {
+      return;
+    }
+    notifyListeners();
+  }
+
+  void chooseRoleImportPerson(int rowIndex, String personId) {
+    if (roleImportSelectionFrozen) {
+      return;
+    }
+    final item = _groundedItem(rowIndex);
+    if (item == null || item.personResolution.state != 'ambiguous') {
+      return;
+    }
+    if (!item.personResolution.candidates.any(
+      (candidate) => candidate.personId == personId,
+    )) {
+      return;
+    }
+    final choice = _choiceFor(rowIndex);
+    choice.personId = personId;
+    choice.promotionCandidateKey = null;
+    notifyListeners();
+  }
+
+  void chooseRoleImportPromotion(int rowIndex, String candidateKey) {
+    if (roleImportSelectionFrozen) {
+      return;
+    }
+    final item = _groundedItem(rowIndex);
+    if (item == null ||
+        item.personResolution.state != 'promotion_candidates') {
+      return;
+    }
+    if (!item.personResolution.promotionCandidates.any(
+      (candidate) => candidate.candidateKey == candidateKey,
+    )) {
+      return;
+    }
+    final choice = _choiceFor(rowIndex);
+    choice.promotionCandidateKey = candidateKey;
+    choice.personId = null;
+    notifyListeners();
+  }
+
+  RoleImportGroundedItem? _groundedItem(int rowIndex) {
+    final items = roleGrounding?.items;
+    if (items == null) {
+      return null;
+    }
+    for (final item in items) {
+      if (item.rowIndex == rowIndex) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  bool _roleImportChoiceMatches(
+    RoleImportGroundedItem item,
+    RoleImportRowChoice choice,
+  ) {
+    final person = item.personResolution;
+    if (person.state == 'resolved') {
+      return choice.personId != null && choice.personId == person.personId;
+    }
+    if (person.state == 'ambiguous') {
+      return person.candidates.any(
+        (candidate) => candidate.personId == choice.personId,
+      );
+    }
+    if (person.state == 'promotion_candidates') {
+      return person.promotionCandidates.any(
+        (candidate) => candidate.candidateKey == choice.promotionCandidateKey,
+      );
+    }
+    return false;
+  }
+
+  Future<void> prepareRoleImportPlan() async {
+    if (!canPrepareRoleImport) {
+      return;
+    }
+    final preview = roleImportPreview!;
+    final grounded = roleGrounding!;
+    final epoch = _rolePlanEpoch;
+    final sourceId = _objectContext?.id;
+    final sourceRevision = preview.sourceRevision;
+    final groundingRevision = grounded.groundingRevision;
+    final selections = <RoleImportBatchSelection>[];
+    for (final item in grounded.items) {
+      final choice = roleImportChoices[item.rowIndex];
+      if (choice == null ||
+          !choice.selected ||
+          !_roleImportChoiceMatches(item, choice)) {
+        continue;
+      }
+      selections.add(
+        RoleImportBatchSelection(
+          rowIndex: item.rowIndex,
+          personId: item.personResolution.state == 'promotion_candidates'
+              ? null
+              : choice.personId,
+          promotionCandidateKey:
+              item.personResolution.state == 'promotion_candidates'
+                  ? choice.promotionCandidateKey
+                  : null,
+        ),
+      );
+    }
+    final flight = Object();
+    _rolePlanFlight = flight;
+    _rolePlanInFlight = true;
+    roleImportPhase = RoleImportFlowPhase.preparing;
+    roleImportPlanError = null;
+    notifyListeners();
+    try {
+      final plan = await _apiClient.prepareRoleImportActionPlan(
+        preview: preview,
+        groundingRevision: groundingRevision,
+        selections: selections,
+      );
+      if (!_rolePlanStillCurrent(
+        epoch: epoch,
+        sourceId: sourceId,
+        sourceRevision: sourceRevision,
+        groundingRevision: groundingRevision,
+      )) {
+        return;
+      }
+      roleImportPlan = plan;
+      roleImportPhase = _phaseForPlanStatus(plan.status);
+    } on AuthenticationException catch (error) {
+      if (!_rolePlanStillCurrent(
+        epoch: epoch,
+        sourceId: sourceId,
+        sourceRevision: sourceRevision,
+        groundingRevision: groundingRevision,
+      )) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = error.message;
+      _authController.handleAuthenticationFailure();
+    } on NetworkException catch (error) {
+      if (!_rolePlanStillCurrent(
+        epoch: epoch,
+        sourceId: sourceId,
+        sourceRevision: sourceRevision,
+        groundingRevision: groundingRevision,
+      )) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = error.message;
+    } on ApiException catch (error) {
+      if (!_rolePlanStillCurrent(
+        epoch: epoch,
+        sourceId: sourceId,
+        sourceRevision: sourceRevision,
+        groundingRevision: groundingRevision,
+      )) {
+        return;
+      }
+      _applyRoleImportDrift(error.message, fromPrepare: true);
+    } catch (_) {
+      if (!_rolePlanStillCurrent(
+        epoch: epoch,
+        sourceId: sourceId,
+        sourceRevision: sourceRevision,
+        groundingRevision: groundingRevision,
+      )) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = 'Не удалось подготовить изменения';
+    } finally {
+      if (identical(_rolePlanFlight, flight)) {
+        _rolePlanInFlight = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> approveRoleImportPlan() async {
+    final plan = roleImportPlan;
+    if (plan == null ||
+        roleImportPhase != RoleImportFlowPhase.pending ||
+        _rolePlanInFlight ||
+        roleImportBlockedByChatPlan) {
+      return;
+    }
+    final epoch = _rolePlanEpoch;
+    final planId = plan.id;
+    final flight = Object();
+    _rolePlanFlight = flight;
+    _rolePlanInFlight = true;
+    roleImportPhase = RoleImportFlowPhase.approving;
+    roleImportPlanError = null;
+    notifyListeners();
+    try {
+      final response = await _apiClient.approveActionPlan(planId);
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPlan = response;
+      roleImportPhase = _phaseForPlanStatus(response.status);
+      if (response.status == 'failed') {
+        _applyRoleImportDrift(response.failure, fromPrepare: false);
+      }
+    } on AuthenticationException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+      _authController.handleAuthenticationFailure();
+    } on NetworkException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+    } on ApiException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+    } finally {
+      if (identical(_rolePlanFlight, flight)) {
+        _rolePlanInFlight = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> rejectRoleImportPlan() async {
+    final plan = roleImportPlan;
+    if (plan == null ||
+        roleImportPhase != RoleImportFlowPhase.pending ||
+        _rolePlanInFlight ||
+        roleImportBlockedByChatPlan) {
+      return;
+    }
+    final epoch = _rolePlanEpoch;
+    final planId = plan.id;
+    final flight = Object();
+    _rolePlanFlight = flight;
+    _rolePlanInFlight = true;
+    roleImportPhase = RoleImportFlowPhase.rejecting;
+    roleImportPlanError = null;
+    notifyListeners();
+    try {
+      final response = await _apiClient.rejectActionPlan(planId);
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPlan = response;
+      roleImportPhase = response.status == 'expired'
+          ? RoleImportFlowPhase.expired
+          : RoleImportFlowPhase.rejected;
+    } on AuthenticationException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+      _authController.handleAuthenticationFailure();
+    } on NetworkException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+    } on ApiException catch (error) {
+      if (epoch != _rolePlanEpoch) {
+        return;
+      }
+      roleImportPhase = RoleImportFlowPhase.pending;
+      roleImportPlanError = error.message;
+    } finally {
+      if (identical(_rolePlanFlight, flight)) {
+        _rolePlanInFlight = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void editRoleImportSelection() {
+    final drift = roleImportStale || roleImportGroundingStale;
+    final editable = roleImportPhase == RoleImportFlowPhase.rejected ||
+        roleImportPhase == RoleImportFlowPhase.expired ||
+        (roleImportPhase == RoleImportFlowPhase.failed && !drift);
+    if (!editable || roleGrounding == null) {
+      return;
+    }
+    roleImportPlan = null;
+    roleImportPlanError = null;
+    roleImportPhase = RoleImportFlowPhase.editing;
+    notifyListeners();
+  }
+
+  bool _rolePlanStillCurrent({
+    required int epoch,
+    required String? sourceId,
+    required String sourceRevision,
+    required String groundingRevision,
+  }) {
+    return epoch == _rolePlanEpoch &&
+        _objectContext?.id == sourceId &&
+        roleImportPreview?.sourceRevision == sourceRevision &&
+        roleGrounding?.groundingRevision == groundingRevision;
+  }
+
+  RoleImportFlowPhase _phaseForPlanStatus(String status) {
+    switch (status) {
+      case 'pending':
+        return RoleImportFlowPhase.pending;
+      case 'executed':
+        return RoleImportFlowPhase.executed;
+      case 'rejected':
+        return RoleImportFlowPhase.rejected;
+      case 'expired':
+        return RoleImportFlowPhase.expired;
+      case 'failed':
+        return RoleImportFlowPhase.failed;
+      default:
+        return RoleImportFlowPhase.failed;
+    }
+  }
+
+  void _applyRoleImportDrift(String? message, {required bool fromPrepare}) {
+    if (message == 'role_import_source_changed') {
+      roleImportStale = true;
+      roleImportGroundingStale = false;
+      roleImportChoices.clear();
+      roleImportPlan = null;
+      roleGrounding = null;
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = null;
+      return;
+    }
+    if (message == 'role_import_grounding_changed') {
+      roleImportGroundingStale = true;
+      roleImportChoices.clear();
+      roleImportPlan = null;
+      roleGrounding = null;
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = null;
+      return;
+    }
+    if (fromPrepare) {
+      roleImportPhase = RoleImportFlowPhase.editing;
+      roleImportPlanError = message ?? 'Не удалось подготовить изменения';
+      return;
+    }
+    roleImportPhase = RoleImportFlowPhase.failed;
+    roleImportPlanError = message;
   }
 
   Future<void> extractRoles() async {
@@ -500,6 +947,12 @@ class AssistantController extends ChangeNotifier {
     final epoch = _roleGroundEpoch;
     final sourceId = source.id;
     final revision = preview.sourceRevision;
+    _rolePlanEpoch += 1;
+    roleImportChoices.clear();
+    roleImportPlan = null;
+    roleImportPlanError = null;
+    roleImportPhase = RoleImportFlowPhase.editing;
+    roleImportGroundingStale = false;
     roleGroundingLoading = true;
     roleGroundingError = null;
     roleGrounding = null;

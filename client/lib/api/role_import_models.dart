@@ -1,3 +1,42 @@
+enum RoleImportFlowPhase {
+  editing,
+  preparing,
+  pending,
+  approving,
+  rejecting,
+  executed,
+  rejected,
+  expired,
+  failed,
+}
+
+class RoleImportRowChoice {
+  bool selected = false;
+  String? personId;
+  String? promotionCandidateKey;
+}
+
+class RoleImportBatchSelection {
+  RoleImportBatchSelection({
+    required this.rowIndex,
+    this.personId,
+    this.promotionCandidateKey,
+  });
+
+  final int rowIndex;
+  final String? personId;
+  final String? promotionCandidateKey;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'row_index': rowIndex,
+      if (personId != null) 'person_id': personId,
+      if (promotionCandidateKey != null)
+        'promotion_candidate_key': promotionCandidateKey,
+    };
+  }
+}
+
 class RoleImportPreviewItem {
   RoleImportPreviewItem({
     required this.personName,

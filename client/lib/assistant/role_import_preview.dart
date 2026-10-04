@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_models.dart';
 import '../api/role_import_models.dart';
 
 class RoleImportPreviewPanel extends StatelessWidget {
@@ -14,6 +15,21 @@ class RoleImportPreviewPanel extends StatelessWidget {
     this.grounded,
     this.sourceStale = false,
     this.onGround,
+    this.choices = const {},
+    this.phase = RoleImportFlowPhase.editing,
+    this.plan,
+    this.planError,
+    this.groundingStale = false,
+    this.selectionFrozen = false,
+    this.canPrepare = false,
+    this.operationsEnabled = true,
+    this.onToggleRow,
+    this.onChoosePerson,
+    this.onChoosePromotion,
+    this.onPrepare,
+    this.onApprove,
+    this.onReject,
+    this.onEditSelection,
   });
 
   final bool loading;
@@ -25,6 +41,21 @@ class RoleImportPreviewPanel extends StatelessWidget {
   final RoleImportGroundedPreview? grounded;
   final bool sourceStale;
   final VoidCallback? onGround;
+  final Map<int, RoleImportRowChoice> choices;
+  final RoleImportFlowPhase phase;
+  final ActionPlanResponse? plan;
+  final String? planError;
+  final bool groundingStale;
+  final bool selectionFrozen;
+  final bool canPrepare;
+  final bool operationsEnabled;
+  final void Function(int rowIndex, bool selected)? onToggleRow;
+  final void Function(int rowIndex, String personId)? onChoosePerson;
+  final void Function(int rowIndex, String candidateKey)? onChoosePromotion;
+  final VoidCallback? onPrepare;
+  final VoidCallback? onApprove;
+  final VoidCallback? onReject;
+  final VoidCallback? onEditSelection;
 
   @override
   Widget build(BuildContext context) {
@@ -65,10 +96,21 @@ class RoleImportPreviewPanel extends StatelessWidget {
               'Черновик извлечения ролей',
               key: const Key('role_import_heading'),
             ),
-            const Text(
-              'Ничего не сохранено',
-              key: Key('role_import_nothing_saved'),
-            ),
+            if (_showsNothingSaved)
+              const Text(
+                'Ничего не сохранено',
+                key: Key('role_import_nothing_saved'),
+              ),
+            if (_executedChanged)
+              const Text(
+                'Изменения сохранены',
+                key: Key('role_import_saved'),
+              ),
+            if (_executedUnchanged)
+              const Text(
+                'Изменений нет',
+                key: Key('role_import_no_changes'),
+              ),
             if (preview!.items.isEmpty)
               const Text(
                 'Роли не найдены',
@@ -116,19 +158,98 @@ class RoleImportPreviewPanel extends StatelessWidget {
                   key: const Key('role_grounding_error'),
                 ),
               ),
-            if (grounded != null)
-              for (final item in grounded!.items) _GroundedRow(item: item),
+            if (groundingStale)
+              const Text(
+                'Сопоставление изменилось — сопоставьте роли заново',
+                key: Key('role_import_grounding_stale'),
+              ),
+            if (grounded != null && !sourceStale && !groundingStale)
+              for (final item in grounded!.items)
+                _GroundedRow(
+                  item: item,
+                  choice: choices[item.rowIndex],
+                  frozen: selectionFrozen,
+                  onToggle: onToggleRow,
+                  onChoosePerson: onChoosePerson,
+                  onChoosePromotion: onChoosePromotion,
+                ),
+            if (grounded != null &&
+                !sourceStale &&
+                !groundingStale &&
+                onPrepare != null &&
+                phase == RoleImportFlowPhase.editing)
+              TextButton(
+                key: const Key('prepare_role_import_button'),
+                onPressed: canPrepare && operationsEnabled ? onPrepare : null,
+                child: const Text('Подготовить изменения'),
+              ),
+            if (planError != null)
+              Text(planError!, key: const Key('role_import_plan_error')),
+            if (plan != null) _RoleImportPlanCard(plan: plan!, phase: phase),
+            if (phase == RoleImportFlowPhase.pending && operationsEnabled) ...[
+              TextButton(
+                key: const Key('role_import_confirm'),
+                onPressed: onApprove,
+                child: const Text('Подтвердить'),
+              ),
+              TextButton(
+                key: const Key('role_import_reject'),
+                onPressed: onReject,
+                child: const Text('Отклонить'),
+              ),
+            ],
+            if (_canEditSelection)
+              TextButton(
+                key: const Key('role_import_edit_selection'),
+                onPressed: onEditSelection,
+                child: const Text('Изменить выбор'),
+              ),
           ],
         ],
       ),
     );
   }
+
+  bool get _executedChanged =>
+      phase == RoleImportFlowPhase.executed && _batchChanged == true;
+
+  bool get _executedUnchanged =>
+      phase == RoleImportFlowPhase.executed && _batchChanged == false;
+
+  bool get _showsNothingSaved =>
+      phase != RoleImportFlowPhase.executed;
+
+  bool? get _batchChanged {
+    final changed = roleImportBatchOutput(plan)?['changed'];
+    return changed is bool ? changed : null;
+  }
+
+  bool get _canEditSelection =>
+      onEditSelection != null &&
+      !sourceStale &&
+      !groundingStale &&
+      grounded != null &&
+      (phase == RoleImportFlowPhase.rejected ||
+          phase == RoleImportFlowPhase.expired ||
+          phase == RoleImportFlowPhase.failed);
 }
 
 class _GroundedRow extends StatelessWidget {
-  const _GroundedRow({required this.item});
+  const _GroundedRow({
+    required this.item,
+    required this.choice,
+    required this.frozen,
+    this.onToggle,
+    this.onChoosePerson,
+    this.onChoosePromotion,
+  });
 
   final RoleImportGroundedItem item;
+  final RoleImportRowChoice? choice;
+  final bool frozen;
+  final void Function(int rowIndex, bool selected)? onToggle;
+  final void Function(int rowIndex, String personId)? onChoosePerson;
+  final void Function(int rowIndex, String candidateKey)? onChoosePromotion;
 
   @override
   Widget build(BuildContext context) {
@@ -137,20 +258,63 @@ class _GroundedRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (person.state == 'resolved')
+        if (person.state == 'resolved') ...[
           Text('Person: ${person.title}', key: const Key('role_person_resolved')),
+          if (onToggle != null)
+            Checkbox(
+              key: Key('role_import_select_${item.rowIndex}'),
+              value: choice?.selected ?? false,
+              onChanged: frozen
+                  ? null
+                  : (value) => onToggle!(item.rowIndex, value ?? false),
+            ),
+        ],
         if (person.state == 'ambiguous') ...[
           const Text('Нужно выбрать Person', key: Key('role_person_ambiguous')),
-          for (final candidate in person.candidates) Text(candidate.title),
+          for (final candidate in person.candidates)
+            TextButton(
+              key: Key('role_import_choose_person_${candidate.personId}'),
+              onPressed: frozen || onChoosePerson == null
+                  ? null
+                  : () => onChoosePerson!(item.rowIndex, candidate.personId),
+              child: Text(candidate.title),
+            ),
+          if (onToggle != null)
+            Checkbox(
+              key: Key('role_import_select_${item.rowIndex}'),
+              value: choice?.selected ?? false,
+              onChanged: frozen ||
+                      choice?.personId == null ||
+                      onToggle == null
+                  ? null
+                  : (value) => onToggle!(item.rowIndex, value ?? false),
+            ),
         ],
         if (person.state == 'promotion_candidates') ...[
           const Text(
-            'Можно предложить нового Person',
+            'После подтверждения будет создан новый Person',
             key: Key('role_person_promotion'),
           ),
           for (final candidate in person.promotionCandidates)
-            Text(
-              '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount}',
+            TextButton(
+              key: Key('role_import_choose_promotion_${candidate.candidateKey}'),
+              onPressed: frozen || onChoosePromotion == null
+                  ? null
+                  : () => onChoosePromotion!(
+                        item.rowIndex,
+                        candidate.candidateKey,
+                      ),
+              child: Text(
+                '${candidate.displayName} · ${candidate.provider} · ${candidate.directHitCount}',
+              ),
+            ),
+          if (onToggle != null)
+            Checkbox(
+              key: Key('role_import_select_${item.rowIndex}'),
+              value: choice?.selected ?? false,
+              onChanged: frozen || choice?.promotionCandidateKey == null
+                  ? null
+                  : (value) => onToggle!(item.rowIndex, value ?? false),
             ),
         ],
         if (person.state == 'unresolved')
@@ -164,10 +328,132 @@ class _GroundedRow extends StatelessWidget {
           Text('Новая роль: ${role.displayText}', key: const Key('role_new')),
           if (role.suggestions.isNotEmpty) ...[
             const Text('Похожие термины', key: Key('role_suggestions')),
-            for (final suggestion in role.suggestions) Text(suggestion),
+            for (final suggestion in role.suggestions)
+              Text(suggestion, key: Key('role_suggestion_$suggestion')),
           ],
         ],
       ],
     );
+  }
+}
+
+Map<String, dynamic>? roleImportBatchOutput(ActionPlanResponse? plan) {
+  final result = plan?.result;
+  if (result == null) {
+    return null;
+  }
+  final actions = result['actions'];
+  if (actions is! List || actions.isEmpty || actions.first is! Map) {
+    return null;
+  }
+  final output = (actions.first as Map)['output'];
+  if (output is! Map) {
+    return null;
+  }
+  return Map<String, dynamic>.from(output);
+}
+
+class _RoleImportPlanCard extends StatelessWidget {
+  const _RoleImportPlanCard({required this.plan, required this.phase});
+
+  final ActionPlanResponse plan;
+  final RoleImportFlowPhase phase;
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = plan.actions.isEmpty
+        ? null
+        : plan.actions.first.presentation;
+    final output = roleImportBatchOutput(plan);
+    final rows = presentation?['rows'];
+    return Column(
+      key: const Key('role_import_plan_card'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (phase == RoleImportFlowPhase.pending ||
+            phase == RoleImportFlowPhase.approving ||
+            phase == RoleImportFlowPhase.rejecting)
+          const Text(
+            'Требует подтверждения',
+            key: Key('role_import_pending'),
+          ),
+        if (presentation != null) ...[
+          Text(
+            '${presentation['source_title'] ?? ''}',
+            key: const Key('role_import_source_title'),
+          ),
+          Text(
+            'Выбрано ${presentation['selected_count']} из ${presentation['total_extracted_rows']}',
+            key: const Key('role_import_plan_counts'),
+          ),
+          if (presentation['source_truncated'] == true ||
+              presentation['items_truncated'] == true)
+            const Text(
+              'Источник или список строк обрезан',
+              key: Key('role_import_plan_truncation'),
+            ),
+          if (rows is List)
+            for (final row in rows.whereType<Map>())
+              Text(
+                '${row['target_display']} · ${_targetMode(row['target_mode'])} · ${row['role']}'
+                '${row['context'] == null ? '' : ' · ${row['context']}'} · ${_vocabularyMode(row['vocabulary_mode'])}',
+              ),
+        ],
+        if (phase == RoleImportFlowPhase.rejected)
+          const Text('Отклонено', key: Key('role_import_rejected')),
+        if (phase == RoleImportFlowPhase.expired)
+          const Text(
+            'Подтверждение истекло',
+            key: Key('role_import_expired'),
+          ),
+        if (phase == RoleImportFlowPhase.failed) ...[
+          const Text('Ошибка применения', key: Key('role_import_failed')),
+          if (plan.failure != null) Text(plan.failure!),
+        ],
+        if (output != null && phase == RoleImportFlowPhase.executed) ...[
+          Text('Создано людей: ${output['people_created']}'),
+          Text('Назначений изменено: ${output['assignments_changed']}'),
+          Text('Без изменений: ${output['assignments_no_op']}'),
+          Text('Дубликаты: ${output['duplicate_rows']}'),
+          for (final row in _outputRows(output))
+            Text(_statusLabel(row['status'])),
+        ],
+      ],
+    );
+  }
+
+  static String _targetMode(Object? mode) {
+    if (mode == 'promote_person') {
+      return 'новый Person';
+    }
+    return 'existing Person';
+  }
+
+  static String _vocabularyMode(Object? mode) {
+    if (mode == 'create_if_missing') {
+      return 'новая роль';
+    }
+    return 'существующая роль';
+  }
+
+  static String _statusLabel(Object? status) {
+    switch (status) {
+      case 'applied':
+        return 'Применено';
+      case 'already_active':
+        return 'Уже было';
+      case 'duplicate_selected_row':
+        return 'Дубликат выбранной строки';
+      default:
+        return '';
+    }
+  }
+
+  static List<Map> _outputRows(Map<String, dynamic> output) {
+    final rows = output['rows'];
+    if (rows is! List) {
+      return const [];
+    }
+    return rows.whereType<Map>().toList();
   }
 }
