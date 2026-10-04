@@ -81,10 +81,10 @@ Manual GUI interaction is **not** normal Executor work.
 
 Every user-visible Executor final report must end with exactly one final line:
 
-`REPORT_TIME_UTC=HH:MM`
+`REPORT_TIME_MSK=HH:MM`
 
 Rules:
-- use current UTC time at the moment the final report is sent;
+- use current Moscow time (Europe/Moscow, UTC+3) at the moment the final report is sent;
 - 24-hour format, hours and minutes only;
 - obtain it immediately before the final output; do not reuse task start time, commit time, or a cached timestamp;
 - apply this to successful completion reports, HOLD/no-op reports, blockers, and production/runtime reports;
