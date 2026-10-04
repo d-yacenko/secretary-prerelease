@@ -111,3 +111,12 @@ Bootstrap success should be summarized compactly:
 Then continue directly into the actual authorized task.
 
 Bootstrap failure should be a single sanitized blocker plus confirmation that no product/provider/production action occurred.
+
+
+### Final report coordination timestamp
+
+Every final Executor report must end with exactly:
+
+`REPORT_TIME_UTC=HH:MM`
+
+Use current UTC in 24-hour hours/minutes form, obtained immediately before sending the report. This applies to success, HOLD/no-op, blocker, and production/runtime reports. Do not substitute task start time or commit time.
