@@ -46,6 +46,24 @@ def people_client(db_session, fake_embedding_service, auth_headers):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def isolated_people(db_session, fake_embedding_service, issue_bearer):
+    user = User(id=uuid.uuid4(), display_name="c3 budget isolation")
+    db_session.add(user)
+    db_session.flush()
+    from app.api.deps import get_db
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    apply_embedding_service_overrides(fake_embedding_service)
+    headers = {"Authorization": f"Bearer {issue_bearer(user.id, label='c3-budget')}"}
+    with TestClient(app) as test_client:
+        yield user.id, AuthTestClient(test_client, headers)
+    app.dependency_overrides.clear()
+
+
 def test_effective_email_counts_matching_mail_once_without_an_edge(
     people_client, db_session
 ) -> None:
@@ -220,31 +238,33 @@ def test_first_party_telegram_counts_while_assistant_stays_gated(
 
 
 def test_count_stops_at_the_communication_scan_budget(
-    people_client, db_session, monkeypatch
+    isolated_people, db_session, monkeypatch
 ) -> None:
     import app.services.person_assistant_service as assistant_module
 
+    user_id, client = isolated_people
     monkeypatch.setattr(assistant_module, "MAX_PERSON_SCAN_ROWS", 1)
-    person = _people(db_session).create_person("Ada Lovelace")
-    _people(db_session).attach(person.id, normalize_email("ada@example.com"))
-    _email(db_session, "ada@example.com", when=NOW)
-    _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1))
-    body = _workspace(people_client, person.id)["people"][0]
+    person = _people(db_session, user_id).create_person("Ada Lovelace")
+    _people(db_session, user_id).attach(person.id, normalize_email("ada@example.com"))
+    _email(db_session, "ada@example.com", when=NOW, user_id=user_id)
+    _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1), user_id=user_id)
+    body = _workspace(client, person.id)["people"][0]
     assert body["recent_communication_count"] == 1
     assert body["recent_communication_count_truncated"] is True
 
 
 def test_truncated_scan_does_not_report_a_missing_older_message_as_complete_zero(
-    people_client, db_session, monkeypatch
+    isolated_people, db_session, monkeypatch
 ) -> None:
     import app.services.person_assistant_service as assistant_module
 
+    user_id, client = isolated_people
     monkeypatch.setattr(assistant_module, "MAX_PERSON_SCAN_ROWS", 1)
-    person = _people(db_session).create_person("Ada Lovelace")
-    _people(db_session).attach(person.id, normalize_email("ada@example.com"))
-    _email(db_session, "other@example.com", when=NOW)
-    _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1))
-    body = _workspace(people_client, person.id)["people"][0]
+    person = _people(db_session, user_id).create_person("Ada Lovelace")
+    _people(db_session, user_id).attach(person.id, normalize_email("ada@example.com"))
+    _email(db_session, "other@example.com", when=NOW, user_id=user_id)
+    _email(db_session, "ada@example.com", when=NOW - timedelta(hours=1), user_id=user_id)
+    body = _workspace(client, person.id)["people"][0]
     assert body["recent_communication_count"] == 0
     assert body["recent_communication_count_truncated"] is True
 
@@ -285,8 +305,8 @@ def test_overview_attributes_people_from_one_shared_scan(
     assert calls["n"] == 1
 
 
-def _people(db_session) -> PersonIdentityService:
-    return PersonIdentityService(db_session, BOOTSTRAP_USER_ID)
+def _people(db_session, user_id=BOOTSTRAP_USER_ID) -> PersonIdentityService:
+    return PersonIdentityService(db_session, user_id)
 
 
 def _workspace(people_client, person_id):
@@ -315,9 +335,11 @@ def _payload(identity) -> dict:
     }
 
 
-def _email(db_session, sender: str, *, when: datetime | None = None) -> Object:
+def _email(
+    db_session, sender: str, *, when: datetime | None = None, user_id=BOOTSTRAP_USER_ID
+) -> Object:
     message = Object(
-        user_id=BOOTSTRAP_USER_ID,
+        user_id=user_id,
         kind="email",
         provider="gmail",
         title="Hello",
