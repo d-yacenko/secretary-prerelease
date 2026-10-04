@@ -75,3 +75,19 @@ Manual GUI interaction is **not** normal Executor work.
 - Do not spend Executor time reproducing by hand what the user can verify immediately in the UI.
 - A human visual gate is not satisfied by Executor screenshots or Executor judgment unless the task explicitly says the Executor is the visual tester.
 - If the task text includes visual observations or screenshots as acceptance criteria but does not explicitly authorize Executor-driven GUI work, interpret those steps as **human-only** and STOP after technical readiness.
+
+
+## Final report timestamp
+
+Every user-visible Executor final report must end with exactly one final line:
+
+`REPORT_TIME_UTC=HH:MM`
+
+Rules:
+- use current UTC time at the moment the final report is sent;
+- 24-hour format, hours and minutes only;
+- obtain it immediately before the final output; do not reuse task start time, commit time, or a cached timestamp;
+- apply this to successful completion reports, HOLD/no-op reports, blockers, and production/runtime reports;
+- this line is coordination metadata only and never authorizes work.
+
+The Architect uses the same final-line format in project chat so the user can immediately see which window reported last.
