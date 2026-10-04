@@ -222,6 +222,9 @@ void main() {
   late String prepareDetail;
   late Completer<http.Response>? prepareGate;
   late Completer<http.Response>? approveGate;
+  late Completer<http.Response>? rejectGate;
+  late int conversationCreates;
+  late bool conversationsAvailable;
   late bool approveChanged;
   late String approveStatus;
   late String? approveFailure;
@@ -297,8 +300,38 @@ void main() {
           }
           if (request.url.path.endsWith('/reject')) {
             rejectCalls += 1;
-            return http.Response(
+            final response = http.Response(
               jsonEncode(_plan(status: 'rejected')),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+            final gate = rejectGate;
+            if (gate != null) {
+              return gate.future;
+            }
+            return response;
+          }
+          if (conversationsAvailable &&
+              request.method == 'POST' &&
+              request.url.path == '/assistant/conversations') {
+            conversationCreates += 1;
+            return http.Response(
+              jsonEncode({
+                'id': 'conv-$conversationCreates',
+                'title': 'Новый',
+                'is_current': true,
+                'created_at': '2026-10-04T00:00:00Z',
+                'updated_at': '2026-10-04T00:00:00Z',
+              }),
+              201,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          if (conversationsAvailable &&
+              request.method == 'GET' &&
+              request.url.path == '/assistant/conversations') {
+            return http.Response(
+              jsonEncode({'conversations': []}),
               200,
               headers: {'content-type': 'application/json'},
             );
@@ -344,6 +377,9 @@ void main() {
     prepareDetail = 'role_import_source_changed';
     prepareGate = null;
     approveGate = null;
+    rejectGate = null;
+    conversationCreates = 0;
+    conversationsAvailable = false;
     approveChanged = true;
     approveStatus = 'executed';
     approveFailure = null;
@@ -732,5 +768,194 @@ void main() {
     expect(controller.roleImportPlan, isNull);
     expect(controller.roleImportChoices, isEmpty);
     expect(resumeCalls, 0);
+  });
+
+  testWidgets('conversation and session fences clear role import', (tester) async {
+    conversationsAvailable = true;
+    final controller = start();
+    await show(tester, controller);
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+
+    expect(controller.canSwitchConversation, isTrue);
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 1);
+    expect(controller.roleImportPreview, isNull);
+    expect(controller.roleGrounding, isNull);
+    expect(controller.roleImportChoices, isEmpty);
+    expect(controller.roleImportPlan, isNull);
+    expect(controller.roleImportError, isNull);
+    expect(controller.roleImportPlanError, isNull);
+    expect(controller.roleImportStale, isFalse);
+    expect(controller.roleImportGroundingStale, isFalse);
+
+    controller.setObjectContext(_source('obj-1'));
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+    prepareGate = Completer<http.Response>();
+    final preparing = controller.prepareRoleImportPlan();
+    await tester.pump();
+    expect(controller.roleImportPhase, RoleImportFlowPhase.preparing);
+    expect(controller.canSwitchConversation, isFalse);
+    expect(controller.conversationSwitchNotice, conversationSwitchWaitMessage);
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 1);
+    prepareGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'pending')),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    prepareGate = null;
+    await tester.runAsync(() => preparing);
+    await tester.pump();
+    expect(controller.roleImportPhase, RoleImportFlowPhase.pending);
+    expect(controller.canSwitchConversation, isFalse);
+    final callsAtPending = prepareCalls;
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 1);
+    expect(prepareCalls, callsAtPending);
+
+    approveGate = Completer<http.Response>();
+    final approving = controller.approveRoleImportPlan();
+    await tester.pump();
+    expect(controller.roleImportPhase, RoleImportFlowPhase.approving);
+    expect(controller.canSwitchConversation, isFalse);
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 1);
+    expect(approveCalls, 1);
+    approveGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'executed', result: _executed(changed: true))),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    approveGate = null;
+    await tester.runAsync(() => approving);
+    await tester.pump();
+    expect(controller.canSwitchConversation, isTrue);
+    controller.roleImportPlanError = 'локальная ошибка';
+    controller.roleImportStale = true;
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 2);
+    expect(controller.roleImportPlan, isNull);
+    expect(controller.roleImportPlanError, isNull);
+    expect(controller.roleImportStale, isFalse);
+    expect(controller.roleImportPreview, isNull);
+
+    controller.setObjectContext(_source('obj-1'));
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+    await tester.runAsync(controller.prepareRoleImportPlan);
+    rejectGate = Completer<http.Response>();
+    final rejecting = controller.rejectRoleImportPlan();
+    await tester.pump();
+    expect(controller.roleImportPhase, RoleImportFlowPhase.rejecting);
+    expect(controller.canSwitchConversation, isFalse);
+    await tester.runAsync(controller.startNewConversation);
+    expect(conversationCreates, 2);
+    expect(rejectCalls, 1);
+    rejectGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'rejected')),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    rejectGate = null;
+    await tester.runAsync(() => rejecting);
+    await tester.pump();
+    expect(controller.canSwitchConversation, isTrue);
+
+    controller.resetSession();
+    expect(controller.roleImportPreview, isNull);
+    expect(controller.roleGrounding, isNull);
+    expect(controller.roleImportChoices, isEmpty);
+    expect(controller.roleImportPlan, isNull);
+    expect(controller.roleImportPhase, RoleImportFlowPhase.editing);
+
+    controller.setObjectContext(_source('obj-1'));
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+    prepareGate = Completer<http.Response>();
+    final latePrepare = controller.prepareRoleImportPlan();
+    await tester.pump();
+    final preparesBeforeReset = prepareCalls;
+    controller.resetSession();
+    prepareGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'pending')),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    await tester.runAsync(() => latePrepare);
+    expect(controller.roleImportPlan, isNull);
+    expect(controller.roleImportPreview, isNull);
+    expect(prepareCalls, preparesBeforeReset);
+
+    controller.setObjectContext(_source('obj-1'));
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+    await tester.runAsync(controller.prepareRoleImportPlan);
+    approveGate = Completer<http.Response>();
+    final lateApprove = controller.approveRoleImportPlan();
+    await tester.pump();
+    final approvesBeforeReset = approveCalls;
+    controller.resetSession();
+    approveGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'executed', result: _executed(changed: true))),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    await tester.runAsync(() => lateApprove);
+    expect(controller.roleImportPlan, isNull);
+    expect(approveCalls, approvesBeforeReset);
+
+    controller.setObjectContext(_source('obj-1'));
+    await ground(tester, controller);
+    controller.setRoleImportRowSelected(0, true);
+    await tester.runAsync(controller.prepareRoleImportPlan);
+    rejectGate = Completer<http.Response>();
+    final lateReject = controller.rejectRoleImportPlan();
+    await tester.pump();
+    final rejectsBeforeReset = rejectCalls;
+    controller.resetSession();
+    rejectGate!.complete(
+      http.Response(
+        jsonEncode(_plan(status: 'rejected')),
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    await tester.runAsync(() => lateReject);
+    expect(controller.roleImportPlan, isNull);
+    expect(rejectCalls, rejectsBeforeReset);
+    expect(resumeCalls, 0);
+  });
+}
+
+SecretaryObject _source(String id) {
+  return SecretaryObject.fromJson({
+    'id': id,
+    'kind': 'file',
+    'title': 'Договор',
+    'body': null,
+    'provider': 'upload',
+    'external_id': null,
+    'canonical_uri': null,
+    'status': null,
+    'start_at': null,
+    'due_at': null,
+    'metadata': {},
+    'origin': 'user',
+    'state': 'confirmed',
+    'confidence': null,
+    'created_at': '2026-01-01T00:00:00Z',
+    'updated_at': '2026-01-01T00:00:00Z',
   });
 }

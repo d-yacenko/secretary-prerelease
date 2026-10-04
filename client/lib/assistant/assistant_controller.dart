@@ -358,7 +358,27 @@ class AssistantController extends ChangeNotifier {
 
   bool get canSwitchConversation =>
       actionPlanOperationState == AssistantActionPlanOperationState.idle &&
-      sendState != AssistantSendState.sending;
+      sendState != AssistantSendState.sending &&
+      !_roleImportBlocksConversation;
+
+  bool get _roleImportBlocksConversation {
+    if (_rolePlanInFlight) {
+      return true;
+    }
+    switch (roleImportPhase) {
+      case RoleImportFlowPhase.preparing:
+      case RoleImportFlowPhase.pending:
+      case RoleImportFlowPhase.approving:
+      case RoleImportFlowPhase.rejecting:
+        return true;
+      case RoleImportFlowPhase.editing:
+      case RoleImportFlowPhase.executed:
+      case RoleImportFlowPhase.rejected:
+      case RoleImportFlowPhase.expired:
+      case RoleImportFlowPhase.failed:
+        return false;
+    }
+  }
 
   String? get conversationSwitchNotice {
     if (!canSwitchConversation) {
@@ -463,6 +483,7 @@ class AssistantController extends ChangeNotifier {
     roleImportPlanError = null;
     roleImportPhase = RoleImportFlowPhase.editing;
     _rolePlanInFlight = false;
+    _rolePlanFlight = null;
   }
 
   bool get roleImportBlockedByChatPlan {
@@ -2018,6 +2039,7 @@ class AssistantController extends ChangeNotifier {
   }
 
   void _clearTransientTurnState() {
+    _clearRoleImportPreview();
     _cancelDrivingSilenceMonitor();
     _voice.reset();
     _speech.stop();
@@ -2079,6 +2101,7 @@ class AssistantController extends ChangeNotifier {
     _voice.reset();
     _speech.stop();
     _messages.clear();
+    _clearRoleImportPreview();
     _objectContext = null;
     _notificationContext = null;
     sendState = AssistantSendState.idle;
