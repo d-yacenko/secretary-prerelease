@@ -1,5 +1,4 @@
 import 'dart:io' show Platform;
-import 'dart:math' as math;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -43,6 +42,7 @@ class AssistantScreen extends StatefulWidget {
 class _AssistantScreenState extends State<AssistantScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  final _roleImportScrollController = ScrollController();
   AssistantSendState? _lastSendState;
   late final LocalIntakeActions _intakeActions;
 
@@ -72,6 +72,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     widget.controller.removeListener(_onControllerChanged);
     _inputController.dispose();
     _scrollController.dispose();
+    _roleImportScrollController.dispose();
     super.dispose();
   }
 
@@ -200,30 +201,153 @@ class _AssistantScreenState extends State<AssistantScreen> {
     return 'Контекст: Уведомление — ${contextRef.title}';
   }
 
-  double _roleImportMaxHeight(double available) {
+  void _scheduleRoleImportFollow() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_roleImportScrollController.hasClients) {
+        return;
+      }
+      final target = _roleImportScrollController.position.maxScrollExtent;
+      if (!target.isFinite) {
+        return;
+      }
+      if ((_roleImportScrollController.offset - target).abs() < 1) {
+        return;
+      }
+      _roleImportScrollController.jumpTo(target);
+    });
+  }
+
+  void _startRoleImport(Future<void> Function() action) {
+    final future = action();
+    _scheduleRoleImportFollow();
+    future.whenComplete(_scheduleRoleImportFollow);
+  }
+
+  Widget _assistantMessageList(
+    BuildContext context, {
+    required bool padded,
+  }) {
     final controller = widget.controller;
-    var chrome = 0.0;
-    if (controller.objectContext != null) {
-      chrome += 96;
-    }
-    if (controller.notificationContext != null) {
-      chrome += 96;
-    }
-    if (controller.voiceState != AssistantVoiceState.idle) {
-      chrome += 72;
-    }
-    if (controller.hasOlderMessages) {
-      chrome += 56;
-    }
-    final messageFloor = math.min(
-      96.0,
-      math.max(0.0, available - chrome) * 0.35,
+    return SelectionArea(
+      child: ListView.builder(
+        key: const Key('assistant_message_list'),
+        controller: _scrollController,
+        padding: padded ? const EdgeInsets.all(16) : EdgeInsets.zero,
+        itemCount: controller.messages.length,
+        itemBuilder: (context, index) {
+          final message = controller.messages[index];
+          final isUser = message.role == 'user';
+          final actionPlan = message.actionPlan;
+          final showProse = isUser || message.content.trim().isNotEmpty;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: isUser
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              children: [
+                if (showProse)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isUser
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: isUser
+                        ? Text(message.content)
+                        : AssistantMessageBody(
+                            content: message.content,
+                            openableObjectIds: {
+                              for (final ref in message.references) ref.objectId,
+                            },
+                            onOpenObject: (objectId) => openObjectDetail(
+                              context,
+                              objectId: objectId,
+                              apiClient: widget.apiClient,
+                              authController: widget.authController,
+                              captureController: widget.captureController,
+                              assistantController: widget.controller,
+                              onAskSecretary: (object) {
+                                widget.controller.setObjectContext(object);
+                              },
+                              bookmarkController: widget.bookmarkController,
+                            ),
+                          ),
+                  ),
+                if (showProse && !isUser)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      key: Key('assistant_copy_$index'),
+                      tooltip: 'Скопировать ответ',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.copy_outlined, size: 18),
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          ClipboardData(text: message.content),
+                        );
+                        if (!context.mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Ответ скопирован')),
+                        );
+                      },
+                    ),
+                  ),
+                if (!isUser && actionPlan != null)
+                  _ActionPlanCard(
+                    actionPlan: actionPlan,
+                    messageIndex: index,
+                    controller: controller,
+                    operationState: controller.actionPlanOperationState,
+                  ),
+                if (!isUser && message.references.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: message.references
+                          .map(
+                            (ref) => AssistantReferenceChip(
+                              reference: ref,
+                              onPressed: () => _openReference(ref),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                if (!isUser && message.affectedObjects.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Затронутые объекты:',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        ...message.affectedObjects.map(
+                          (affected) => ActionChip(
+                            label: Text(affectedObjectDisplayLabel(affected)),
+                            onPressed: () => _openAffectedObject(affected),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
     );
-    final room = available - chrome - messageFloor;
-    if (room > 0) {
-      return room;
-    }
-    return math.max(0.0, available - chrome);
   }
 
   @override
@@ -266,50 +390,57 @@ class _AssistantScreenState extends State<AssistantScreen> {
           ],
         ),
         Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return Column(
-                children: [
+          child: Column(
+            children: [
         if (controller.objectContext != null) ...[
           _ContextBanner(
             label: _objectContextLabel(controller.objectContext!),
             onClear: controller.clearObjectContext,
           ),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: _roleImportMaxHeight(constraints.maxHeight),
-            ),
-            child: SingleChildScrollView(
-              key: const Key('role_import_scroll'),
-              primary: false,
-              child: RoleImportPreviewPanel(
-            loading: controller.roleImportLoading,
-            error: controller.roleImportError,
-            preview: controller.roleImportPreview,
-            onExtract: controller.extractRoles,
-            groundingLoading: controller.roleGroundingLoading,
-            groundingError: controller.roleGroundingError,
-            grounded: controller.roleGrounding,
-            sourceStale: controller.roleImportStale,
-            onGround: controller.groundRoles,
-            choices: controller.roleImportChoices,
-            phase: controller.roleImportPhase,
-            plan: controller.roleImportPlan,
-            planError: controller.roleImportPlanError,
-            groundingStale: controller.roleImportGroundingStale,
-            selectionFrozen: controller.roleImportSelectionFrozen,
-            canPrepare: controller.canPrepareRoleImport,
-            operationsEnabled: !controller.roleImportBlockedByChatPlan,
-            onToggleRow: controller.setRoleImportRowSelected,
-            onChoosePerson: controller.chooseRoleImportPerson,
-            onChoosePromotion: controller.chooseRoleImportPromotion,
-            onPrepare: controller.prepareRoleImportPlan,
-            onApprove: controller.approveRoleImportPlan,
-            onReject: controller.rejectRoleImportPlan,
-            onEditSelection: controller.editRoleImportSelection,
-          ),
+          Expanded(
+            flex: controller.messages.isEmpty ? 1 : 2,
+            child: Scrollbar(
+              controller: _roleImportScrollController,
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                key: const Key('role_import_scroll'),
+                controller: _roleImportScrollController,
+                primary: false,
+                child: RoleImportPreviewPanel(
+                  loading: controller.roleImportLoading,
+                  error: controller.roleImportError,
+                  preview: controller.roleImportPreview,
+                  onExtract: () => _startRoleImport(controller.extractRoles),
+                  groundingLoading: controller.roleGroundingLoading,
+                  groundingError: controller.roleGroundingError,
+                  grounded: controller.roleGrounding,
+                  sourceStale: controller.roleImportStale,
+                  onGround: () => _startRoleImport(controller.groundRoles),
+                  choices: controller.roleImportChoices,
+                  phase: controller.roleImportPhase,
+                  plan: controller.roleImportPlan,
+                  planError: controller.roleImportPlanError,
+                  groundingStale: controller.roleImportGroundingStale,
+                  selectionFrozen: controller.roleImportSelectionFrozen,
+                  canPrepare: controller.canPrepareRoleImport,
+                  operationsEnabled: !controller.roleImportBlockedByChatPlan,
+                  onToggleRow: controller.setRoleImportRowSelected,
+                  onChoosePerson: controller.chooseRoleImportPerson,
+                  onChoosePromotion: controller.chooseRoleImportPromotion,
+                  onPrepare: () =>
+                      _startRoleImport(controller.prepareRoleImportPlan),
+                  onApprove: () =>
+                      _startRoleImport(controller.approveRoleImportPlan),
+                  onReject: () =>
+                      _startRoleImport(controller.rejectRoleImportPlan),
+                  onEditSelection: () {
+                    controller.editRoleImportSelection();
+                    _scheduleRoleImportFollow();
+                  },
+                ),
               ),
             ),
+          ),
         ],
         if (controller.notificationContext != null)
           _ContextBanner(
@@ -406,139 +537,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
               ),
             ),
           ),
-        Expanded(
-          child: SelectionArea(
-            child: ListView.builder(
-              key: const Key('assistant_message_list'),
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount: controller.messages.length,
-              itemBuilder: (context, index) {
-                final message = controller.messages[index];
-                final isUser = message.role == 'user';
-                final actionPlan = message.actionPlan;
-                final showProse = isUser || message.content.trim().isNotEmpty;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: isUser
-                        ? CrossAxisAlignment.end
-                        : CrossAxisAlignment.start,
-                    children: [
-                      if (showProse)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isUser
-                                ? Theme.of(context).colorScheme.primaryContainer
-                                : Theme.of(
-                                    context,
-                                  ).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: isUser
-                              ? Text(message.content)
-                              : AssistantMessageBody(
-                                  content: message.content,
-                                  openableObjectIds: {
-                                    for (final ref in message.references)
-                                      ref.objectId,
-                                  },
-                                  onOpenObject: (objectId) => openObjectDetail(
-                                    context,
-                                    objectId: objectId,
-                                    apiClient: widget.apiClient,
-                                    authController: widget.authController,
-                                    captureController: widget.captureController,
-                                    assistantController: widget.controller,
-                                    onAskSecretary: (object) {
-                                      widget.controller.setObjectContext(object);
-                                    },
-                                    bookmarkController: widget.bookmarkController,
-                                  ),
-                                ),
-                        ),
-                      if (showProse && !isUser)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: IconButton(
-                            key: Key('assistant_copy_$index'),
-                            tooltip: 'Скопировать ответ',
-                            visualDensity: VisualDensity.compact,
-                            icon: const Icon(Icons.copy_outlined, size: 18),
-                            onPressed: () async {
-                              await Clipboard.setData(
-                                ClipboardData(text: message.content),
-                              );
-                              if (!context.mounted) {
-                                return;
-                              }
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Ответ скопирован'),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      if (!isUser && actionPlan != null)
-                        _ActionPlanCard(
-                          actionPlan: actionPlan,
-                          messageIndex: index,
-                          controller: controller,
-                          operationState: controller.actionPlanOperationState,
-                        ),
-                      if (!isUser && message.references.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: message.references
-                                .map(
-                                  (ref) => AssistantReferenceChip(
-                                    reference: ref,
-                                    onPressed: () => _openReference(ref),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                        ),
-                      if (!isUser && message.affectedObjects.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Затронутые объекты:',
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                              ...message.affectedObjects.map(
-                                (affected) => ActionChip(
-                                  label: Text(
-                                    affectedObjectDisplayLabel(affected),
-                                  ),
-                                  onPressed: () =>
-                                      _openAffectedObject(affected),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            ),
+        if (controller.objectContext != null && controller.messages.isEmpty)
+          SizedBox(
+            height: 0,
+            child: _assistantMessageList(context, padded: false),
+          )
+        else
+          Expanded(
+            child: _assistantMessageList(context, padded: true),
           ),
-        ),
                 ],
-              );
-            },
-          ),
-        ),
+              ),
+            ),
         if (controller.sendState == AssistantSendState.error &&
             controller.errorMessage != null)
           Padding(
