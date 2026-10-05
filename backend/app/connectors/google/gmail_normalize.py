@@ -47,6 +47,18 @@ def _named_participants(value: str | None) -> list[dict[str, str]]:
     return participants
 
 
+def gmail_structured_recipients(
+    message: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return HG2B2 named To and Cc participants for one Gmail provider message."""
+    payload = message.get("payload", {})
+    headers = payload.get("headers", [])
+    return (
+        _named_participants(_header_value(headers, "To")),
+        _named_participants(_header_value(headers, "Cc")),
+    )
+
+
 def _decode_body_data(data: str) -> str:
     padded = data + "=" * (-len(data) % 4)
     raw = base64.urlsafe_b64decode(padded.encode("ascii"))
@@ -186,8 +198,7 @@ def normalize_gmail_message(message: dict[str, Any]) -> dict[str, Any]:
     cc_header = _header_value(headers, "Cc")
     recipients = _parse_addresses(to_header)
     cc = _parse_addresses(cc_header)
-    to_participants = _named_participants(to_header)
-    cc_participants = _named_participants(cc_header)
+    to_participants, cc_participants = gmail_structured_recipients(message)
     body_text = _extract_body(payload)
     labels = [str(label) for label in message.get("labelIds", [])]
 
