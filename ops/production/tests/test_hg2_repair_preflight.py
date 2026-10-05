@@ -745,6 +745,77 @@ class Hg2RepairPreflightTests(unittest.TestCase):
         self.assertEqual(facts["TEAMS_ALREADY_ENRICHED"], 0)
         self.assertNotIn('"user"', remote.CLASSIFIER_SOURCE.split("def _classify_teams", 1)[1].split("def _teams_target", 1)[0])
 
+    def test_alembic_requires_exact_single_head(self) -> None:
+        remote.require_alembic_output("0054 (head)")
+        remote.require_alembic_output("0054 (head)\n")
+        remote.require_alembic_output("  0054 (head)  \n")
+        rejected = (
+            "0054",
+            "0053 (head)",
+            "0054 (head)\n0055 (head)",
+            "0055 (head)\n0054 (head)",
+            "0054 (head) extra",
+            "",
+        )
+        for sample in rejected:
+            with self.assertRaises(remote.RemotePreflightError) as caught:
+                remote.require_alembic_output(sample)
+            self.assertEqual(caught.exception.stage, "alembic")
+
+    def test_yandex_presence_follows_absent_key_semantics(self) -> None:
+        accounts = [
+            {
+                "id": YANDEX_ACCOUNT,
+                "user_id": USER,
+                "email": YANDEX_EMAIL,
+                "sync_state": {"inbox_uidvalidity": 50},
+            }
+        ]
+
+        def yandex_row(metadata: dict):
+            return _row(
+                provider="yandex_mail",
+                kind="email",
+                external_id="inbox:50:4",
+                metadata={
+                    "source_account_email": YANDEX_EMAIL,
+                    "folder": "INBOX",
+                    "imap_uid": 4,
+                    "imap_uidvalidity": 50,
+                    **metadata,
+                },
+            )
+
+        def classify(metadata: dict):
+            return remote.census(
+                [yandex_row(metadata)],
+                [],
+                [],
+                [],
+                [],
+                [],
+                accounts,
+            )
+
+        preserved = classify({"to_participants": None, "cc_participants": None})
+        self.assertEqual(preserved["YANDEX_ALREADY_ENRICHED"], 1)
+        self.assertEqual(preserved["YANDEX_COARSE_CANDIDATES"], 0)
+        self.assertEqual(preserved["YANDEX_LOCAL_REPAIRABLE"], 0)
+        empty_lists = classify({"to_participants": [], "cc_participants": []})
+        self.assertEqual(empty_lists["YANDEX_ALREADY_ENRICHED"], 1)
+        self.assertEqual(empty_lists["YANDEX_COARSE_CANDIDATES"], 0)
+        one_null = classify({"to_participants": None})
+        self.assertEqual(one_null["YANDEX_ALREADY_ENRICHED"], 0)
+        self.assertEqual(one_null["YANDEX_COARSE_CANDIDATES"], 1)
+        self.assertEqual(one_null["YANDEX_LOCAL_REPAIRABLE"], 1)
+        self.assertEqual(one_null["YANDEX_STORED_UIDVALIDITY_MATCH"], 1)
+        self.assertEqual(one_null["YANDEX_INVALID_PROVENANCE"], 0)
+        both_absent = classify({})
+        self.assertEqual(both_absent["YANDEX_COARSE_CANDIDATES"], 1)
+        self.assertEqual(both_absent["YANDEX_LOCAL_REPAIRABLE"], 1)
+        self.assertEqual(both_absent["YANDEX_STORED_UIDVALIDITY_MATCH"], 1)
+        self.assertEqual(both_absent["YANDEX_ALREADY_ENRICHED"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

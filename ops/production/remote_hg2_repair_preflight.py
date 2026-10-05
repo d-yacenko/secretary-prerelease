@@ -162,7 +162,7 @@ def _gmail_key_present(metadata, key):
 
 
 def _yandex_key_present(metadata, key):
-    return key in metadata and metadata.get(key) is not None
+    return key in metadata
 
 
 def _teams_external(tenant_id, microsoft_user_id, chat_id, message_id):
@@ -688,7 +688,8 @@ def require_repository(expected_sha: str) -> None:
 
 
 def require_alembic_output(text: str) -> None:
-    if f"{EXPECTED_ALEMBIC} (head)" not in text:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines != [f"{EXPECTED_ALEMBIC} (head)"]:
         raise RemotePreflightError("alembic")
 
 
