@@ -112,10 +112,10 @@ def configured_mtproto(monkeypatch):
     monkeypatch.setattr(settings, "secretary_credential_key", KEY)
 
 
-def test_migration_0046_is_single_head():
+def test_migration_0054_is_single_head():
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0046"]
+    assert script.get_heads() == ["0054"]
 
 
 def _filter(filter_id=7, name="Team", **kwargs):
@@ -247,7 +247,7 @@ async def test_transport_uses_unfiltered_bounded_dialog_scan_and_raw_facts(monke
 
     monkeypatch.setattr("app.connectors.telegram.mtproto_transport.TelegramClient", lambda *args: FakeClient())
     result = await TelethonMtprotoTransport(123, "hash").fetch_dialog_universe(StringSession().save(), 500)
-    assert calls == [{"limit": 500}]
+    assert calls == [{"limit": 501}]
     assert result.dialogs[0].is_muted is True
     assert result.dialogs[0].is_archived is True
     assert result.dialogs[0].is_contact is True
