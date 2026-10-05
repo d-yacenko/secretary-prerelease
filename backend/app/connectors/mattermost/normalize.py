@@ -104,7 +104,7 @@ def _collapse_profile_text(value: object) -> str:
     return _PROFILE_WHITESPACE.sub(" ", str(value or "").strip())
 
 
-def _author_human_display(author: dict[str, Any] | None) -> str | None:
+def author_human_display(author: dict[str, Any] | None) -> str | None:
     if not author:
         return None
     username = _collapse_profile_text(author.get("username"))
@@ -119,7 +119,7 @@ def _author_human_display(author: dict[str, Any] | None) -> str | None:
 
 
 def _author_label(author: dict[str, Any] | None) -> str | None:
-    human = _author_human_display(author)
+    human = author_human_display(author)
     if human:
         return human
     if not author:
@@ -381,7 +381,7 @@ def normalize_mattermost_post(
         username = str(author.get("username") or "").strip()
         if username:
             metadata["author_username"] = username
-        human_display = _author_human_display(author)
+        human_display = author_human_display(author)
         if human_display:
             metadata["author_display_name"] = human_display
     pending_post_id = str(post.get("pending_post_id") or "").strip()
