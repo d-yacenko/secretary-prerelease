@@ -46,6 +46,14 @@ def _named_participants(value: str | None) -> list[dict[str, str]]:
     return participants
 
 
+def yandex_structured_recipients(message: Any) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return HG2B2 named To and Cc participants for one parsed Yandex message."""
+    return (
+        _named_participants(_header_value(message, "To")),
+        _named_participants(_header_value(message, "Cc")),
+    )
+
+
 def _compact_headers(msg: Any) -> dict[str, str]:
     keep = ("message-id", "in-reply-to", "references", "reply-to", "list-id")
     compact: dict[str, str] = {}
@@ -132,8 +140,7 @@ def normalize_imap_message(
     cc_header = _header_value(msg, "Cc")
     recipients = _parse_addresses(to_header)
     cc = _parse_addresses(cc_header)
-    to_participants = _named_participants(to_header)
-    cc_participants = _named_participants(cc_header)
+    to_participants, cc_participants = yandex_structured_recipients(msg)
     timestamp = _parse_timestamp(msg)
     body_text = _extract_body(msg)
     message_id_header = _header_value(msg, "Message-ID")
