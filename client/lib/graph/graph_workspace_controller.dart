@@ -207,6 +207,36 @@ class GraphWorkspaceController extends ChangeNotifier {
     await _refreshRooted(rootId!);
   }
 
+  /// Applies one already-fetched People workspace without a second request
+  /// and without blanking the canvas. No-op when the rooted Person changed.
+  void installRootedPeopleWorkspace(
+    GraphWorkspaceOut workspace, {
+    required String rootId,
+  }) {
+    if (mode != GraphWorkspaceMode.people || this.rootId != rootId) {
+      return;
+    }
+    final rooted = workspace.nodes.any((node) => node.id == rootId);
+    if (!rooted) {
+      return;
+    }
+    final preservedSelection = selectedObjectId;
+    _replaceWorkspaceState(
+      workspace: workspace,
+      layoutRoot: rootId,
+      freshRoot: false,
+      rootIdAfter: rootId,
+      selectObjectId: preservedSelection != null &&
+              workspace.nodes.any((node) => node.id == preservedSelection)
+          ? preservedSelection
+          : rootId,
+      fitAfterLayout: false,
+    );
+    loadState = GraphWorkspaceLoadState.ready;
+    errorMessage = null;
+    notifyListeners();
+  }
+
   Future<void> loadOverview() async {
     if (loadState == GraphWorkspaceLoadState.loading) {
       return;

@@ -2958,6 +2958,35 @@ class PersonPresentation {
           .toList(),
     );
   }
+
+  PersonPresentation withTaskInvolvement(
+    List<PersonTaskInvolvement> taskInvolvement, {
+    required int openTaskCount,
+  }) {
+    return PersonPresentation(
+      personId: personId,
+      title: title,
+      salienceScore: salienceScore,
+      identities: identities,
+      routes: routes,
+      identityConflict: identityConflict,
+      openTaskCount: openTaskCount,
+      landscapeTaskIds: landscapeTaskIds,
+      landscapeTaskIdsComplete: landscapeTaskIdsComplete,
+      recentCommunicationCount: recentCommunicationCount,
+      recentCommunicationCountTruncated: recentCommunicationCountTruncated,
+      taskInvolvement: taskInvolvement,
+      taskInvolvementTruncated: taskInvolvementTruncated,
+      recentCommunications: recentCommunications,
+      recentCommunicationsTruncated: recentCommunicationsTruncated,
+      salience: salience,
+      identityCandidates: identityCandidates,
+      identityCandidatesTruncated: identityCandidatesTruncated,
+      rejectedIdentityCandidates: rejectedIdentityCandidates,
+      consolidations: consolidations,
+      roleAssignments: roleAssignments,
+    );
+  }
 }
 
 class PersonRoleTermSearch {

@@ -239,6 +239,180 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
   });
 
+  testWidgets('a successful add is visible before people workspace reconciliation', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
+    await tester.tap(find.byKey(const ValueKey('person-task-link')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-role-waiting_on')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'Ship');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ship')));
+    await tester.pumpAndSettle();
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await tester.tap(find.byKey(const ValueKey('person-task-add')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
+  testWidgets('a successful remove is visible before people workspace reconciliation', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
+  testWidgets('proposal confirm applies before people workspace reconciliation', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-confirm-edge-join')));
+    await tester.tap(find.byKey(const ValueKey('person-task-confirm-edge-join')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('Предложено секретарём'), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-remove-edge-join')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    hold.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('proposal reject removes the row before reconciliation', (tester) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-reject-edge-join')));
+    await tester.tap(find.byKey(const ValueKey('person-task-reject-edge-join')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    hold.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('an older people workspace response cannot restore a newer removal', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+    final first = Completer<void>();
+    final second = Completer<void>();
+    state.holdPeopleWorkspace = first;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+
+    state.holdPeopleWorkspace = second;
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-wait')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    first.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(state.peopleWorkspaceGets, before + 2);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    second.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsOneWidget);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+  });
+
+  testWidgets('a failed people workspace refresh keeps the saved removal', (tester) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    state.failNextPeopleWorkspace = true;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsNothing);
+    expect(find.text('Изменение сохранено, обзор обновится позже'), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-wait'))).onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('leaving the person ignores a late people workspace response', (tester) async {
+    final state = _BridgeState();
+    final harness = await _open(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+
+    await _reveal(tester, find.text('Join'));
+    await tester.tap(find.text('Join'));
+    await tester.pumpAndSettle();
+    expect(harness.graph.mode, GraphWorkspaceMode.tasks);
+    expect(harness.graph.rootId, 'task-join');
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.mode, GraphWorkspaceMode.tasks);
+    expect(harness.graph.rootId, 'task-join');
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+  });
+
   testWidgets('task tile still opens the task', (tester) async {
     final state = _BridgeState();
     final harness = await _open(tester, _client(state));
@@ -254,7 +428,12 @@ class _BridgeState {
   final calls = <String>[];
   final profilePaths = <String>[];
   Completer<void>? holdActorMutation;
+  Completer<void>? holdPeopleWorkspace;
   bool failNextActorMutation = false;
+  bool failNextPeopleWorkspace = false;
+  int peopleWorkspaceGets = 0;
+  int peopleWorkspaceInFlight = 0;
+  int maxPeopleWorkspaceInFlight = 0;
   final rows = <Map<String, dynamic>>[
     _row('edge-ask', 'task-ask', 'Ask', 'requested_by'),
     _row('edge-wait', 'task-ask', 'Ask', 'waiting_on'),
@@ -441,7 +620,27 @@ MockClient _client(_BridgeState state) {
     }
     if (request.url.path == '/graph/people-workspace') {
       final root = request.url.queryParameters['root_id'];
-      return jsonUtf8Response(_workspace(state, root));
+      state.peopleWorkspaceGets += 1;
+      state.peopleWorkspaceInFlight += 1;
+      if (state.peopleWorkspaceInFlight > state.maxPeopleWorkspaceInFlight) {
+        state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+      }
+      if (state.failNextPeopleWorkspace) {
+        state.failNextPeopleWorkspace = false;
+        state.peopleWorkspaceInFlight -= 1;
+        return jsonUtf8Response({'detail': 'later'}, statusCode: 500);
+      }
+      final hold = state.holdPeopleWorkspace;
+      final body = _workspace(state, root);
+      if (hold != null) {
+        state.holdPeopleWorkspace = null;
+        final frozen = jsonDecode(jsonEncode(body)) as Map<String, dynamic>;
+        await hold.future;
+        state.peopleWorkspaceInFlight -= 1;
+        return jsonUtf8Response(frozen);
+      }
+      state.peopleWorkspaceInFlight -= 1;
+      return jsonUtf8Response(body);
     }
     return http.Response('{}', 404);
   });

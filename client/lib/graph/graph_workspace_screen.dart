@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -103,6 +104,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _rootedPersonAuthoritative = false;
   bool _personTaskMutationBusy = false;
   String? _personTaskMutationError;
+  String? _personTaskReconcileWarning;
+  int _personTaskGeneration = 0;
+  bool _personReconcileActive = false;
+  bool _personReconcileAgain = false;
   String? _trackedPersonId;
   final ScrollController _promotionScroll = ScrollController();
 
@@ -192,6 +197,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _rootedPersonAuthoritative = false;
       _personTaskMutationBusy = false;
       _personTaskMutationError = null;
+      _personTaskReconcileWarning = null;
+      _personTaskGeneration += 1;
+      _personReconcileAgain = false;
       return;
     }
     _peopleInspectorOpen = true;
@@ -283,9 +291,16 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
   }
 
+  bool _personSurfaceStill(String personId) {
+    return mounted &&
+        widget.controller.mode == GraphWorkspaceMode.people &&
+        widget.controller.rootId == personId &&
+        _trackedPersonId == personId;
+  }
+
   Future<void> _mutatePersonTaskRole(
     String personId,
-    Future<Object?> Function() action,
+    Future<_ActorEdgeResult> Function() action,
   ) async {
     if (_personTaskMutationBusy) {
       return;
@@ -294,16 +309,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _personTaskMutationBusy = true;
       _personTaskMutationError = null;
     });
+    var applied = false;
     try {
-      await action();
-      if (!mounted) {
+      final result = await action();
+      if (!_personSurfaceStill(personId)) {
         return;
       }
-      await widget.controller.refreshCurrentWorkspace();
-      if (!mounted) {
-        return;
-      }
-      await _loadRootedPerson(personId, preserveVisible: true);
+      _personTaskGeneration += 1;
+      _applyActorEdge(personId, result);
+      applied = true;
     } on ApiException catch (error) {
       if (!mounted) {
         return;
@@ -319,6 +333,100 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     } finally {
       if (mounted) {
         setState(() => _personTaskMutationBusy = false);
+      }
+    }
+    if (applied && _personSurfaceStill(personId)) {
+      _kickPersonReconcile(personId);
+    }
+  }
+
+  void _applyActorEdge(String personId, _ActorEdgeResult result) {
+    final person = _rootedPerson;
+    if (person == null || person.personId != personId) {
+      return;
+    }
+    final edge = result.edge;
+    final rows = [...person.taskInvolvement];
+    if (edge.state == 'rejected') {
+      rows.removeWhere((row) => row.edgeId == edge.id);
+    } else {
+      final index = rows.indexWhere((row) => row.edgeId == edge.id);
+      final previous = index >= 0 ? rows[index] : null;
+      final task = result.task;
+      final next = PersonTaskInvolvement(
+        edgeId: edge.id,
+        taskId: edge.sourceId.isNotEmpty ? edge.sourceId : (task?.id ?? previous?.taskId ?? ''),
+        title: task?.title ?? previous?.title ?? '',
+        status: task?.status ?? previous?.status,
+        completionMode: task?.completionMode ?? previous?.completionMode,
+        dueAt: task?.dueAt ?? previous?.dueAt,
+        role: edge.type,
+        edgeState: edge.state,
+        edgeOrigin: edge.origin,
+      );
+      if (index >= 0) {
+        rows[index] = next;
+      } else {
+        rows.add(next);
+      }
+    }
+    final openTaskCount = rows.map((row) => row.taskId).toSet().length;
+    _rootedPerson = person.withTaskInvolvement(rows, openTaskCount: openTaskCount);
+    _rootedPersonId = personId;
+    _rootedPersonAuthoritative = true;
+    _personTaskMutationError = null;
+    _personTaskReconcileWarning = null;
+    if (edge.state == 'rejected') {
+      widget.controller.removeEdge(edge.id);
+    } else {
+      widget.controller.upsertEdge(edge);
+    }
+  }
+
+  void _kickPersonReconcile(String personId) {
+    if (_personReconcileActive) {
+      _personReconcileAgain = true;
+      return;
+    }
+    unawaited(_reconcilePersonWorkspace(personId));
+  }
+
+  Future<void> _reconcilePersonWorkspace(String personId) async {
+    final generation = _personTaskGeneration;
+    _personReconcileActive = true;
+    try {
+      final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
+      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+        return;
+      }
+      widget.controller.installRootedPeopleWorkspace(workspace, rootId: personId);
+      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+        return;
+      }
+      final person = widget.controller.personFor(personId);
+      if (person == null || !mounted) {
+        return;
+      }
+      setState(() {
+        _rootedPerson = person;
+        _rootedPersonId = personId;
+        _rootedPersonAuthoritative = true;
+        _personTaskReconcileWarning = null;
+      });
+    } catch (_) {
+      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+        return;
+      }
+      setState(() {
+        _personTaskReconcileWarning = 'Изменение сохранено, обзор обновится позже';
+      });
+    } finally {
+      _personReconcileActive = false;
+      if (_personReconcileAgain) {
+        _personReconcileAgain = false;
+        if (_personSurfaceStill(personId)) {
+          unawaited(_reconcilePersonWorkspace(personId));
+        }
       }
     }
   }
@@ -949,6 +1057,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       apiClient: widget.apiClient,
       taskMutationBusy: _personTaskMutationBusy,
       taskMutationError: _personTaskMutationError,
+      taskReconcileWarning: _personTaskReconcileWarning,
       onTaskMutation: (action) => _mutatePersonTaskRole(personId, action),
       onChanged: () async {
         await widget.controller.refreshCurrentWorkspace();
@@ -2756,6 +2865,7 @@ class _PersonDetailSection extends StatelessWidget {
     required this.apiClient,
     required this.taskMutationBusy,
     required this.taskMutationError,
+    required this.taskReconcileWarning,
     required this.onTaskMutation,
     required this.onChanged,
     required this.onRename,
@@ -2768,7 +2878,8 @@ class _PersonDetailSection extends StatelessWidget {
   final SecretaryApiClient apiClient;
   final bool taskMutationBusy;
   final String? taskMutationError;
-  final Future<void> Function(Future<Object?> Function() action) onTaskMutation;
+  final String? taskReconcileWarning;
+  final Future<void> Function(Future<_ActorEdgeResult> Function() action) onTaskMutation;
   final Future<void> Function() onChanged;
   final Future<void> Function() onRename;
   final Future<void> Function(String survivorId) onMerged;
@@ -2906,6 +3017,11 @@ class _PersonDetailSection extends StatelessWidget {
           Text(
             taskMutationError!,
             key: const ValueKey('person-task-mutation-error'),
+          ),
+        if (taskReconcileWarning != null)
+          Text(
+            taskReconcileWarning!,
+            key: const ValueKey('person-task-reconcile-warning'),
           ),
         if (person.taskInvolvement.isEmpty)
           const Text(
@@ -3217,9 +3333,13 @@ class _PersonDetailSection extends StatelessWidget {
                     icon: const Icon(Icons.check_circle_outline, size: 18),
                     onPressed: taskMutationBusy
                         ? null
-                        : () => _changeTaskLink(
-                            () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'confirm'),
-                          ),
+                        : () => _changeTaskLink(() async {
+                            final response = await apiClient.decideRelation(
+                              edgeId: row.edgeId,
+                              decision: 'confirm',
+                            );
+                            return _ActorEdgeResult(edge: response.edge);
+                          }),
                   ),
                   IconButton(
                     key: ValueKey('person-task-reject-${row.edgeId}'),
@@ -3228,9 +3348,13 @@ class _PersonDetailSection extends StatelessWidget {
                     icon: const Icon(Icons.cancel_outlined, size: 18),
                     onPressed: taskMutationBusy
                         ? null
-                        : () => _changeTaskLink(
-                            () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'reject'),
-                          ),
+                        : () => _changeTaskLink(() async {
+                            final response = await apiClient.decideRelation(
+                              edgeId: row.edgeId,
+                              decision: 'reject',
+                            );
+                            return _ActorEdgeResult(edge: response.edge);
+                          }),
                   ),
                 ],
               ),
@@ -3242,9 +3366,13 @@ class _PersonDetailSection extends StatelessWidget {
                 icon: const Icon(Icons.close, size: 18),
                 onPressed: taskMutationBusy
                     ? null
-                    : () => _changeTaskLink(
-                        () => apiClient.removeTaskActor(taskId: row.taskId, edgeId: row.edgeId),
-                      ),
+                    : () => _changeTaskLink(() async {
+                        final response = await apiClient.removeTaskActor(
+                          taskId: row.taskId,
+                          edgeId: row.edgeId,
+                        );
+                        return _ActorEdgeResult(edge: response.edge);
+                      }),
               ),
           ],
         ),
@@ -3253,7 +3381,7 @@ class _PersonDetailSection extends StatelessWidget {
   }
 
   Future<void> _linkTask(BuildContext context) async {
-    final selected = await showDialog<(String, String)>(
+    final selected = await showDialog<_PersonTaskChoice>(
       context: context,
       builder: (context) => _LinkPersonTaskDialog(
         apiClient: apiClient,
@@ -3263,16 +3391,17 @@ class _PersonDetailSection extends StatelessWidget {
     if (selected == null) {
       return;
     }
-    await onTaskMutation(
-      () => apiClient.addTaskActor(
-        taskId: selected.$2,
+    await onTaskMutation(() async {
+      final response = await apiClient.addTaskActor(
+        taskId: selected.task.id,
         personId: person.personId,
-        role: selected.$1,
-      ),
-    );
+        role: selected.role,
+      );
+      return _ActorEdgeResult(edge: response.edge, task: selected.task);
+    });
   }
 
-  Future<void> _changeTaskLink(Future<Object?> Function() action) async {
+  Future<void> _changeTaskLink(Future<_ActorEdgeResult> Function() action) async {
     await onTaskMutation(action);
   }
 
@@ -4300,6 +4429,20 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
   }
 }
 
+class _ActorEdgeResult {
+  const _ActorEdgeResult({required this.edge, this.task});
+
+  final SecretaryEdge edge;
+  final SecretaryObject? task;
+}
+
+class _PersonTaskChoice {
+  const _PersonTaskChoice({required this.role, required this.task});
+
+  final String role;
+  final SecretaryObject task;
+}
+
 class _LinkPersonTaskDialog extends StatefulWidget {
   const _LinkPersonTaskDialog({required this.apiClient, required this.personTitle});
 
@@ -4437,7 +4580,9 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
           key: const ValueKey('person-task-add'),
           onPressed: _role == null || _task == null
               ? null
-              : () => Navigator.of(context).pop((_role!, _task!.id)),
+              : () => Navigator.of(context).pop(
+                  _PersonTaskChoice(role: _role!, task: _task!),
+                ),
           child: const Text('Добавить'),
         ),
       ],
