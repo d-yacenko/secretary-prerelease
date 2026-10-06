@@ -57,6 +57,29 @@ List<SecretaryObject> tasksWithDuplicatedTitles(List<SecretaryObject> results) {
   ];
 }
 
+/// Loads confirmed `part_of` parents only for Tasks with a duplicated title.
+/// A failed lookup is an absent parent, not a second display rule.
+Future<Map<String, String?>> confirmedParentTitlesForDuplicateTasks({
+  required List<SecretaryObject> results,
+  required Future<TaskLinkItem?> Function(String taskId) loadParent,
+}) async {
+  final duplicated = tasksWithDuplicatedTitles(results);
+  if (duplicated.isEmpty) {
+    return {};
+  }
+  final entries = await Future.wait(
+    duplicated.map((task) async {
+      try {
+        final parent = await loadParent(task.id);
+        return MapEntry(task.id, confirmedPartOfParentTitle(parent));
+      } catch (_) {
+        return MapEntry(task.id, null);
+      }
+    }),
+  );
+  return Map.fromEntries(entries);
+}
+
 /// Confirmed current `part_of` parent title. Proposed, rejected, and blank
 /// parents are not established context.
 String? confirmedPartOfParentTitle(TaskLinkItem? parent) {

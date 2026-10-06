@@ -100,6 +100,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _rootedLoading = false;
   String? _rootedError;
   int _rootedToken = 0;
+  bool _rootedPersonAuthoritative = false;
+  bool _personTaskMutationBusy = false;
+  String? _personTaskMutationError;
   String? _trackedPersonId;
   final ScrollController _promotionScroll = ScrollController();
 
@@ -186,6 +189,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _rootedPersonId = null;
       _rootedLoading = false;
       _rootedError = null;
+      _rootedPersonAuthoritative = false;
+      _personTaskMutationBusy = false;
+      _personTaskMutationError = null;
       return;
     }
     _peopleInspectorOpen = true;
@@ -198,6 +204,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     if (id == null || widget.controller.rootId != id) {
       return;
     }
+    if (_rootedPersonAuthoritative &&
+        _rootedPerson != null &&
+        _rootedPersonId == id) {
+      return;
+    }
     final person = widget.controller.personFor(id);
     if (person == null) {
       return;
@@ -208,19 +219,28 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     _rootedError = null;
   }
 
-  Future<void> _loadRootedPerson(String personId) async {
+  Future<void> _loadRootedPerson(
+    String personId, {
+    bool preserveVisible = false,
+  }) async {
     final token = ++_rootedToken;
-    if (mounted) {
-      setState(() {
-        _rootedLoading = true;
-        _rootedError = null;
-        _rootedPerson = null;
-        _rootedPersonId = personId;
-      });
+    if (!preserveVisible) {
+      _rootedPersonAuthoritative = false;
+      if (mounted) {
+        setState(() {
+          _rootedLoading = true;
+          _rootedError = null;
+          _rootedPerson = null;
+          _rootedPersonId = personId;
+        });
+      }
     }
     try {
       final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
       if (!mounted || token != _rootedToken) {
+        if (preserveVisible) {
+          throw StateError('rooted person reload superseded');
+        }
         return;
       }
       PersonPresentation? match;
@@ -230,12 +250,28 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           break;
         }
       }
+      if (match == null) {
+        if (preserveVisible) {
+          throw StateError('rooted person missing');
+        }
+        setState(() {
+          _rootedLoading = false;
+          _rootedPerson = null;
+          _rootedError = 'Не удалось загрузить карточку человека';
+        });
+        return;
+      }
       setState(() {
         _rootedLoading = false;
         _rootedPerson = match;
-        _rootedError = match == null ? 'Не удалось загрузить карточку человека' : null;
+        _rootedPersonId = personId;
+        _rootedPersonAuthoritative = true;
+        _rootedError = null;
       });
     } catch (_) {
+      if (preserveVisible) {
+        rethrow;
+      }
       if (!mounted || token != _rootedToken) {
         return;
       }
@@ -244,6 +280,46 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         _rootedPerson = null;
         _rootedError = 'Не удалось загрузить карточку человека';
       });
+    }
+  }
+
+  Future<void> _mutatePersonTaskRole(
+    String personId,
+    Future<Object?> Function() action,
+  ) async {
+    if (_personTaskMutationBusy) {
+      return;
+    }
+    setState(() {
+      _personTaskMutationBusy = true;
+      _personTaskMutationError = null;
+    });
+    try {
+      await action();
+      if (!mounted) {
+        return;
+      }
+      await widget.controller.refreshCurrentWorkspace();
+      if (!mounted) {
+        return;
+      }
+      await _loadRootedPerson(personId, preserveVisible: true);
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _personTaskMutationError = error.message);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _personTaskMutationError = 'Не удалось обновить участие в задачах';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _personTaskMutationBusy = false);
+      }
     }
   }
 
@@ -871,6 +947,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     return _PersonDetailSection(
       person: person,
       apiClient: widget.apiClient,
+      taskMutationBusy: _personTaskMutationBusy,
+      taskMutationError: _personTaskMutationError,
+      onTaskMutation: (action) => _mutatePersonTaskRole(personId, action),
       onChanged: () async {
         await widget.controller.refreshCurrentWorkspace();
         await _loadRootedPerson(personId);
@@ -2199,25 +2278,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   Future<Map<String, String?>> _confirmedParentsForDuplicateTasks(
     List<SecretaryObject> results,
-  ) async {
-    final duplicated = tasksWithDuplicatedTitles(results);
-    if (duplicated.isEmpty) {
-      return {};
-    }
-    final entries = await Future.wait(
-      duplicated.map((task) async {
-        try {
-          final profile = await widget.apiClient.getTaskProfile(task.id);
-          return MapEntry(
-            task.id,
-            confirmedPartOfParentTitle(profile.parentTask),
-          );
-        } catch (_) {
-          return MapEntry(task.id, null);
-        }
-      }),
+  ) {
+    return confirmedParentTitlesForDuplicateTasks(
+      results: results,
+      loadParent: (taskId) async {
+        final profile = await widget.apiClient.getTaskProfile(taskId);
+        return profile.parentTask;
+      },
     );
-    return Map.fromEntries(entries);
   }
 
   Future<void> _addRelation(
@@ -2686,6 +2754,9 @@ class _PersonDetailSection extends StatelessWidget {
   const _PersonDetailSection({
     required this.person,
     required this.apiClient,
+    required this.taskMutationBusy,
+    required this.taskMutationError,
+    required this.onTaskMutation,
     required this.onChanged,
     required this.onRename,
     required this.onMerged,
@@ -2695,6 +2766,9 @@ class _PersonDetailSection extends StatelessWidget {
 
   final PersonPresentation person;
   final SecretaryApiClient apiClient;
+  final bool taskMutationBusy;
+  final String? taskMutationError;
+  final Future<void> Function(Future<Object?> Function() action) onTaskMutation;
   final Future<void> Function() onChanged;
   final Future<void> Function() onRename;
   final Future<void> Function(String survivorId) onMerged;
@@ -2819,10 +2893,20 @@ class _PersonDetailSection extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: TextButton(
             key: const ValueKey('person-task-link'),
-            onPressed: () => _linkTask(context),
+            onPressed: taskMutationBusy ? null : () => _linkTask(context),
             child: const Text('Связать с задачей / направлением'),
           ),
         ),
+        if (taskMutationBusy)
+          const Text(
+            'Обновляем участие в задачах',
+            key: ValueKey('person-task-mutation-pending'),
+          ),
+        if (taskMutationError != null)
+          Text(
+            taskMutationError!,
+            key: const ValueKey('person-task-mutation-error'),
+          ),
         if (person.taskInvolvement.isEmpty)
           const Text(
             'Нет участия в текущих задачах',
@@ -3131,18 +3215,22 @@ class _PersonDetailSection extends StatelessWidget {
                     tooltip: 'Подтвердить',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.check_circle_outline, size: 18),
-                    onPressed: () => _changeTaskLink(
-                      () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'confirm'),
-                    ),
+                    onPressed: taskMutationBusy
+                        ? null
+                        : () => _changeTaskLink(
+                            () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'confirm'),
+                          ),
                   ),
                   IconButton(
                     key: ValueKey('person-task-reject-${row.edgeId}'),
                     tooltip: 'Отклонить',
                     visualDensity: VisualDensity.compact,
                     icon: const Icon(Icons.cancel_outlined, size: 18),
-                    onPressed: () => _changeTaskLink(
-                      () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'reject'),
-                    ),
+                    onPressed: taskMutationBusy
+                        ? null
+                        : () => _changeTaskLink(
+                            () => apiClient.decideRelation(edgeId: row.edgeId, decision: 'reject'),
+                          ),
                   ),
                 ],
               ),
@@ -3152,9 +3240,11 @@ class _PersonDetailSection extends StatelessWidget {
                 tooltip: 'Убрать роль',
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.close, size: 18),
-                onPressed: () => _changeTaskLink(
-                  () => apiClient.removeTaskActor(taskId: row.taskId, edgeId: row.edgeId),
-                ),
+                onPressed: taskMutationBusy
+                    ? null
+                    : () => _changeTaskLink(
+                        () => apiClient.removeTaskActor(taskId: row.taskId, edgeId: row.edgeId),
+                      ),
               ),
           ],
         ),
@@ -3173,17 +3263,17 @@ class _PersonDetailSection extends StatelessWidget {
     if (selected == null) {
       return;
     }
-    await apiClient.addTaskActor(
-      taskId: selected.$2,
-      personId: person.personId,
-      role: selected.$1,
+    await onTaskMutation(
+      () => apiClient.addTaskActor(
+        taskId: selected.$2,
+        personId: person.personId,
+        role: selected.$1,
+      ),
     );
-    await onChanged();
   }
 
   Future<void> _changeTaskLink(Future<Object?> Function() action) async {
-    await action();
-    await onChanged();
+    await onTaskMutation(action);
   }
 
   Widget _flowTile(BuildContext context, PersonFlowPreview row) {
@@ -4232,6 +4322,8 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
   String? _role;
   SecretaryObject? _task;
   List<SecretaryObject> _results = const [];
+  Map<String, String?> _parentTitles = const {};
+  var _searchToken = 0;
 
   @override
   void dispose() {
@@ -4240,24 +4332,40 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
   }
 
   Future<void> _search(String value) async {
+    final token = ++_searchToken;
     final cleaned = value.trim();
     if (cleaned.isEmpty) {
-      setState(() => _results = const []);
+      setState(() {
+        _results = const [];
+        _parentTitles = const {};
+      });
       return;
     }
     final found = await widget.apiClient.searchObjects(query: cleaned, kind: 'task');
-    if (!mounted) {
+    if (!mounted || token != _searchToken) {
+      return;
+    }
+    final filtered = found
+        .where(
+          (item) =>
+              item.kind == 'task' &&
+              item.deletedAt == null &&
+              !isTerminalTaskStatusForReads(item.status),
+        )
+        .toList();
+    final parents = await confirmedParentTitlesForDuplicateTasks(
+      results: filtered,
+      loadParent: (taskId) async {
+        final profile = await widget.apiClient.getTaskProfile(taskId);
+        return profile.parentTask;
+      },
+    );
+    if (!mounted || token != _searchToken) {
       return;
     }
     setState(() {
-      _results = found
-          .where(
-            (item) =>
-                item.kind == 'task' &&
-                item.deletedAt == null &&
-                !isTerminalTaskStatusForReads(item.status),
-          )
-          .toList();
+      _results = filtered;
+      _parentTitles = parents;
     });
   }
 
@@ -4292,7 +4400,13 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
             for (final item in _results)
               ListTile(
                 key: ValueKey('person-task-option-${item.id}'),
-                title: Text(item.title),
+                title: Text(
+                  relationTargetLabel(
+                    object: item,
+                    results: _results,
+                    confirmedParentTitleByTaskId: _parentTitles,
+                  ),
+                ),
                 subtitle: Text(
                   [
                     taskStatusLabel(item.status),

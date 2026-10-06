@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -38,6 +39,8 @@ void main() {
 
     expect(state.calls, contains('POST /tasks/task-ship/actors waiting_on'));
     expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
     expect(find.text('Связанные задачи · 3'), findsWidgets);
 
     await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
@@ -146,6 +149,96 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsNothing);
   });
 
+  testWidgets('duplicate task titles show confirmed parents and a unique title stays plain', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    await _open(tester, _client(state));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
+    await tester.tap(find.byKey(const ValueKey('person-task-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'dup');
+    await tester.pumpAndSettle();
+
+    expect(state.profilePaths, [
+      '/tasks/course-work/profile',
+      '/tasks/course-academic/profile',
+      '/tasks/course-orphan/profile',
+      '/tasks/course-direction/profile',
+    ]);
+    expect(state.profilePaths, isNot(contains('/tasks/course-unique/profile')));
+    expect(find.text('Обучение (Основная работа)'), findsOneWidget);
+    expect(find.text('обучение (Академическая деятельность)'), findsOneWidget);
+    expect(find.text('  Обучение (без родителя)'), findsOneWidget);
+    expect(find.text('Обучение (Направление)'), findsOneWidget);
+    expect(find.text('Уникальная'), findsOneWidget);
+    expect(find.textContaining('Уникальная ('), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('person-task-role-involves')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-course-direction')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<FilledButton>(find.byKey(const ValueKey('person-task-add'))).onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('a delayed actor removal blocks other task-role mutations', (tester) async {
+    final state = _BridgeState()..holdActorMutation = Completer<void>();
+    await _open(tester, _client(state));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-wait'))).onPressed,
+      isNull,
+    );
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-confirm-edge-join'))).onPressed,
+      isNull,
+    );
+    expect(
+      tester.widget<TextButton>(find.byKey(const ValueKey('person-task-link'))).onPressed,
+      isNull,
+    );
+
+    state.holdActorMutation!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsOneWidget);
+  });
+
+  testWidgets('a failed actor removal stays visible and can be retried', (tester) async {
+    final state = _BridgeState()..failNextActorMutation = true;
+    await _open(tester, _client(state));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsOneWidget);
+    expect(find.text('Не удалось изменить участие'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-ask'))).onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
   testWidgets('task tile still opens the task', (tester) async {
     final state = _BridgeState();
     final harness = await _open(tester, _client(state));
@@ -159,6 +252,9 @@ void main() {
 
 class _BridgeState {
   final calls = <String>[];
+  final profilePaths = <String>[];
+  Completer<void>? holdActorMutation;
+  bool failNextActorMutation = false;
   final rows = <Map<String, dynamic>>[
     _row('edge-ask', 'task-ask', 'Ask', 'requested_by'),
     _row('edge-wait', 'task-ask', 'Ask', 'waiting_on'),
@@ -240,6 +336,21 @@ MockClient _client(_BridgeState state) {
       );
     }
     if (request.url.path == '/search') {
+      if (request.url.queryParameters['q'] == 'dup') {
+        return jsonUtf8Response([
+          graphObjectJson(id: 'course-work', title: 'Обучение', kind: 'task', status: 'open'),
+          graphObjectJson(id: 'course-academic', title: 'обучение', kind: 'task', status: 'open'),
+          graphObjectJson(id: 'course-orphan', title: '  Обучение', kind: 'task', status: 'open'),
+          graphObjectJson(
+            id: 'course-direction',
+            title: 'Обучение',
+            kind: 'task',
+            status: 'open',
+            completionMode: 'ongoing',
+          ),
+          graphObjectJson(id: 'course-unique', title: 'Уникальная', kind: 'task', status: 'open'),
+        ]);
+      }
       return jsonUtf8Response([
         graphObjectJson(id: 'task-ship', title: 'Ship report', kind: 'task', status: 'open', dueAt: '2026-10-01T09:00:00Z'),
         graphObjectJson(id: 'task-ask', title: 'Ask', kind: 'task', status: 'open'),
@@ -270,7 +381,39 @@ MockClient _client(_BridgeState state) {
         'changed': created,
       });
     }
+    if (request.url.path == '/tasks/course-work/profile') {
+      state.profilePaths.add(request.url.path);
+      return jsonUtf8Response(_profile('course-work', _parent('main', 'Основная работа', 'confirmed')));
+    }
+    if (request.url.path == '/tasks/course-academic/profile') {
+      state.profilePaths.add(request.url.path);
+      return jsonUtf8Response(
+        _profile('course-academic', _parent('study', 'Академическая деятельность', 'confirmed')),
+      );
+    }
+    if (request.url.path == '/tasks/course-orphan/profile') {
+      state.profilePaths.add(request.url.path);
+      return jsonUtf8Response(_profile('course-orphan', _parent('hidden', 'Нельзя', 'proposed')));
+    }
+    if (request.url.path == '/tasks/course-direction/profile') {
+      state.profilePaths.add(request.url.path);
+      return jsonUtf8Response(
+        _profile('course-direction', _parent('direction', 'Направление', 'confirmed')),
+      );
+    }
     if (request.method == 'DELETE' && request.url.path.startsWith('/tasks/') && request.url.path.contains('/actors/')) {
+      if (state.failNextActorMutation) {
+        state.failNextActorMutation = false;
+        state.calls.add('DELETE ${request.url.path} failed');
+        return jsonUtf8Response(
+          {'detail': 'Не удалось изменить участие'},
+          statusCode: 500,
+        );
+      }
+      final hold = state.holdActorMutation;
+      if (hold != null) {
+        await hold.future;
+      }
       state.calls.add('DELETE ${request.url.path}');
       final edgeId = request.url.path.split('/').last;
       state.rows.removeWhere((row) => row['edge_id'] == edgeId);
@@ -344,5 +487,31 @@ Map<String, dynamic> _workspace(_BridgeState state, String? root) {
     'promotion_candidates': <Map<String, dynamic>>[],
     'promotion_candidates_truncated': false,
     'promotion_suppressions': <Map<String, dynamic>>[],
+  };
+}
+
+Map<String, dynamic> _profile(String taskId, Map<String, dynamic>? parent) {
+  return {
+    'task': graphObjectJson(id: taskId, title: 'Обучение'),
+    'requested_by': const [],
+    'delegated_to': const [],
+    'waiting_on': const [],
+    'involves': const [],
+    'depends_on': const [],
+    'dependent_tasks': const [],
+    if (parent != null) 'parent_task': parent,
+    'child_tasks': const [],
+    'evidence': const [],
+  };
+}
+
+Map<String, dynamic> _parent(String id, String title, String state) {
+  return {
+    'edge_id': 'edge-$id',
+    'object_id': id,
+    'title': title,
+    'kind': 'task',
+    'edge_state': state,
+    'edge_origin': 'user',
   };
 }
