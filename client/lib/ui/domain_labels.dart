@@ -99,21 +99,6 @@ String personCandidateExplanation(List<String> reasons) {
 String personActorRoleLabel(String role) {
   switch (role) {
     case 'requested_by':
-      return 'Просит выполнить';
-    case 'delegated_to':
-      return 'Поручена этому человеку';
-    case 'waiting_on':
-      return 'Ждём от этого человека';
-    case 'involves':
-      return 'Участвует';
-    default:
-      return role;
-  }
-}
-
-String personTaskLinkChoiceLabel(String role) {
-  switch (role) {
-    case 'requested_by':
       return 'Этот человек попросил выполнить';
     case 'delegated_to':
       return 'Задача поручена этому человеку';
@@ -122,9 +107,11 @@ String personTaskLinkChoiceLabel(String role) {
     case 'involves':
       return 'Этот человек участвует';
     default:
-      return personActorRoleLabel(role);
+      return role;
   }
 }
+
+String personTaskLinkChoiceLabel(String role) => personActorRoleLabel(role);
 
 String personTaskLinkFact({
   required String role,

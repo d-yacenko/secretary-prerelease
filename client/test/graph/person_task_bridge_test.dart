@@ -12,12 +12,14 @@ void main() {
   testWidgets('person can link a task role and a repeat stays one row', (tester) async {
     final state = _BridgeState();
     final harness = await _open(tester, _client(state));
-    expect(find.textContaining('Просит выполнить'), findsOneWidget);
+    expect(find.text('Добавить связь'), findsNothing);
+    expect(find.text('Связать с задачей / направлением'), findsOneWidget);
+    expect(find.textContaining('Этот человек попросил выполнить'), findsOneWidget);
     expect(find.textContaining('Ждём от этого человека'), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
 
-    await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
     await tester.tap(find.byKey(const ValueKey('person-task-link')));
     await tester.pumpAndSettle();
     final add = tester.widget<FilledButton>(find.byKey(const ValueKey('person-task-add')));
@@ -38,7 +40,7 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
     expect(find.text('Связанные задачи · 3'), findsWidgets);
 
-    await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
     await tester.tap(find.byKey(const ValueKey('person-task-link')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('person-task-role-waiting_on')));
@@ -59,13 +61,16 @@ void main() {
     await _open(tester, _client(state));
     expect(find.text('Связанные задачи · 2'), findsWidgets);
 
-    await tester.ensureVisible(find.byKey(const ValueKey('person-task-link')));
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
     await tester.tap(find.byKey(const ValueKey('person-task-link')));
     await tester.pumpAndSettle();
-    expect(find.text('Этот человек попросил выполнить'), findsOneWidget);
+    expect(find.text('Связано с'), findsNothing);
+    expect(find.text('Ссылается на'), findsNothing);
+    expect(find.text('Зависит от'), findsNothing);
+    expect(find.text('Этот человек попросил выполнить'), findsWidgets);
     expect(find.text('Задача поручена этому человеку'), findsOneWidget);
-    expect(find.text('Ждём от этого человека'), findsOneWidget);
-    expect(find.text('Этот человек участвует'), findsOneWidget);
+    expect(find.text('Ждём от этого человека'), findsWidgets);
+    expect(find.text('Этот человек участвует'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('person-task-role-requested_by')));
     await tester.pumpAndSettle();
@@ -93,6 +98,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-task-option-task-ship')), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-option-task-progress')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-option-task-direction')), findsOneWidget);
     expect(find.byKey(const ValueKey('person-task-option-task-legacy')), findsOneWidget);
     for (final status in ['done', 'completed', 'cancelled', 'archived', 'deleted']) {
       expect(find.byKey(ValueKey('person-task-option-task-$status')), findsNothing);
@@ -102,9 +108,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.calls, contains('POST /tasks/task-ask/actors delegated_to'));
     expect(find.text('Связанные задачи · 2'), findsWidgets);
-    expect(find.textContaining('Поручена этому человеку'), findsOneWidget);
+    expect(find.textContaining('Задача поручена этому человеку'), findsOneWidget);
     expect(find.textContaining('Делегировано'), findsNothing);
-    expect(find.textContaining('Просит выполнить'), findsOneWidget);
+    expect(find.textContaining('Этот человек попросил выполнить'), findsWidgets);
   });
 
   testWidgets('confirmed actor is removed through the task actor endpoint', (tester) async {
@@ -238,6 +244,7 @@ MockClient _client(_BridgeState state) {
         graphObjectJson(id: 'task-ship', title: 'Ship report', kind: 'task', status: 'open', dueAt: '2026-10-01T09:00:00Z'),
         graphObjectJson(id: 'task-ask', title: 'Ask', kind: 'task', status: 'open'),
         graphObjectJson(id: 'task-progress', title: 'Moving', kind: 'task', status: 'in_progress'),
+        graphObjectJson(id: 'task-direction', title: 'Weekly direction', kind: 'task', status: 'open', completionMode: 'ongoing'),
         {...graphObjectJson(id: 'task-legacy', title: 'Legacy active', kind: 'task'), 'status': null},
         for (final status in ['done', 'completed', 'cancelled', 'archived', 'deleted'])
           graphObjectJson(id: 'task-$status', title: 'Terminal $status', kind: 'task', status: status),

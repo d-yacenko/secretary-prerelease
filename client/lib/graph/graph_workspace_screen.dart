@@ -2129,14 +2129,15 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 label: const Text('В центр'),
               ),
             ),
-            Tooltip(
-              message: 'Добавить связь',
-              child: OutlinedButton.icon(
-                onPressed: () => _addRelation(context, object),
-                icon: const Icon(Icons.link, size: 18),
-                label: const Text('Добавить связь'),
+            if (object.kind != 'person')
+              Tooltip(
+                message: 'Добавить связь',
+                child: OutlinedButton.icon(
+                  onPressed: () => _addRelation(context, object),
+                  icon: const Icon(Icons.link, size: 18),
+                  label: const Text('Добавить связь'),
+                ),
               ),
-            ),
           ],
         ),
         TaskManagementActions(
@@ -2819,7 +2820,7 @@ class _PersonDetailSection extends StatelessWidget {
           child: TextButton(
             key: const ValueKey('person-task-link'),
             onPressed: () => _linkTask(context),
-            child: const Text('Связать с задачей'),
+            child: const Text('Связать с задачей / направлением'),
           ),
         ),
         if (person.taskInvolvement.isEmpty)
@@ -4263,7 +4264,7 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Связать с задачей'),
+      title: const Text('Связать с задачей / направлением'),
       content: SizedBox(
         width: 360,
         child: Column(
@@ -4285,7 +4286,7 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
             TextField(
               key: const ValueKey('person-task-search'),
               controller: _query,
-              decoration: const InputDecoration(labelText: 'Найти задачу'),
+              decoration: const InputDecoration(labelText: 'Найти задачу или направление'),
               onChanged: _search,
             ),
             for (final item in _results)
