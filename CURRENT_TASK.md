@@ -1,69 +1,126 @@
 # CURRENT_TASK
 
-HOLD
+ACTIVE
 
-## REL1D-HG2 — historical repair deferred; forward-path Person Refining acceptance unpaused
+## REL1D-HG3 — Person relation UX cleanup
 
-Architect decision: historical inbox repair/backfill is no longer on the active delivery path.
+### Context / Architect decision
 
-The previously authorized source-only task:
+The current Person detail surface mixes two different relation vocabularies:
 
-`REL1D-HG2D5 — Mattermost one-batch repair canary harness`
+1. generic graph relations:
+   `related_to`, `references`, `depends_on` (and `part_of` for Task sources);
+2. canonical Task actor roles:
+   `requested_by`, `delegated_to`, `waiting_on`, `involves`.
 
-is CANCELLED before implementation.
+For Person↔Task/Direction interaction, the second vocabulary is canonical.
+Task actor edges remain stored in the existing direction `Task -> Person`.
+A Direction is still a Task with ongoing completion semantics and does not get a separate actor vocabulary.
 
-Reason:
+The Person detail UI must therefore stop presenting generic graph relation creation as the normal way to relate a Person to work.
 
-- production backend already runs the accepted HG2 forward-path release:
-  `f766cf9e9ed7aa3a56896e61cf370a9a25e6a0c6`;
-- fresh/current messages now carry human display names where provider evidence supports a person;
-- automated/service sources remain non-personal;
-- the product is entering use now and does not require broad legacy inbox recovery;
-- completing historical repair would still require separate provider-specific production mutation harnesses/canaries and is not justified by launch value.
+This task is UX/semantic cleanup only. It does NOT authorize a new Person social graph.
 
-Existing repair primitives and census tooling remain in the repository as dormant maintenance capability. Do not delete or execute them.
+### Goal
 
-## Current product state
+Make the Person detail relation workflow expose one clear, domain-specific action for linking a Person to a Task/Direction through the four existing Task actor roles, while keeping generic relation creation unchanged for non-Person objects.
 
-Production/backend:
+### Required behavior
 
-`f766cf9e9ed7aa3a56896e61cf370a9a25e6a0c6`
+1. On a selected/rooted `person`, the relation action must NOT open the generic relation picker containing:
+   - `Связано с` / `related_to`;
+   - `Ссылается на` / `references`;
+   - `Зависит от` / `depends_on`.
 
-Alembic:
+2. Instead, the Person surface must expose a clearly named action equivalent to:
+   `Связать с задачей / направлением`
+   and reuse the existing specialized Person↔Task dialog/flow.
 
-`0054 / 0054`
+3. That Person↔Task/Direction flow must offer exactly the existing canonical actor roles:
+   - `requested_by`;
+   - `delegated_to`;
+   - `waiting_on`;
+   - `involves`.
 
-Installed client remains unchanged from the previously recorded installed SHA.
+4. User-facing wording must be consistent between:
+   - the role chooser;
+   - the Person detail list of existing task involvement;
+   - the confirmation/fact summary.
+   Preserve the existing role semantics. Do not broaden `delegated_to` into a new generic "responsible" concept.
 
-The forward identity path is deployed. `role_import_participants` consumes stored communication participants only when a human display name and exact attachable identity are present, and filters exact self identities.
+5. The specialized flow must continue to:
+   - search only active `task` objects;
+   - include ongoing Tasks/Directions;
+   - exclude terminal/deleted tasks using the existing status rules;
+   - write through the existing Task actor API;
+   - preserve canonical storage direction `Task -> Person`.
 
-## Next action
+6. Generic relation creation for non-Person objects must remain unchanged.
 
-No Executor coding task is active.
+7. Existing stored edges must not be migrated, deleted, reversed, rewritten, or silently reclassified by this task. If legacy generic Person edges are encountered, leave their stored data untouched.
 
-Human acceptance is now UNPAUSED.
-
-The next step is a practical end-to-end Person Refining / role-import acceptance pass using only current/recent communication data.
-
-Acceptance should verify at minimum:
-
-1. recent human correspondents appear by human names rather than technical ids;
-2. automated/service/organizational sources do not become Person candidates solely because they sent a message;
-3. Person Refining / role-import grounding can use the fresh communication identities for known people;
-4. exact self identity is excluded;
-5. approving one or more grounded rows creates/reuses the intended Person + role/context without unrelated people;
-6. no legacy-history repair is required for this acceptance.
-
-After the human acceptance result, Architect will decide the next product task.
+### Explicitly out of scope
 
 Do NOT:
-- run historical repair/backfill;
-- execute Mattermost D5 canary work;
-- call providers for repair;
-- run sync/reconcile solely to enrich old rows;
-- mutate production data for legacy enrichment;
-- start a new coding phase without fresh Architect authorization.
 
-Every Executor final report, if an Executor is invoked despite HOLD, must stop without implementation and end with exactly one final line:
+- add new relation/edge types;
+- add Person→Person relations such as `manager_of`, `colleague`, `friend`, `works_with`, etc.;
+- add Organization ontology or `member_of` / `role_at`;
+- change `PersonRoleTerm` / `PersonRoleAssignment` semantics;
+- change backend Task actor semantics or direction;
+- change `requested_by`, `delegated_to`, `waiting_on`, `involves` storage contracts;
+- change generic relation semantics for other object kinds;
+- add schema/Alembic migrations;
+- modify production data;
+- deploy/install anything;
+- run provider/model calls;
+- resume historical HG2 repair/backfill.
+
+### Expected implementation scope
+
+Prefer a client-only change.
+
+Likely relevant existing surfaces include:
+
+- `client/lib/graph/graph_workspace_screen.dart`;
+- `client/lib/ui/domain_labels.dart`;
+- existing Person↔Task bridge tests;
+- existing generic relation picker tests.
+
+Do not broaden scope merely because nearby graph/relation code could be refactored.
+
+### Required tests
+
+At minimum add/update focused tests proving:
+
+1. Person detail does not offer the generic `related_to/references/depends_on` creation choices.
+2. Person detail opens the specialized Task/Direction link flow.
+3. The specialized flow exposes exactly the four canonical actor roles.
+4. An ongoing Task/Direction remains selectable.
+5. A terminal Task remains excluded.
+6. Creating a Person↔Task role still calls the existing Task actor endpoint with the selected role and Person.
+7. Existing Person task-role presentation uses the same user-facing vocabulary as the chooser.
+8. A non-Person object still receives the existing generic relation picker unchanged.
+
+Run the smallest focused Flutter test set that covers these contracts, including the existing Person task bridge and relation-picker coverage. Run formatting/analyzer checks appropriate for the touched Dart files and `git diff --check`.
+
+### Completion protocol
+
+When implementation and required checks are green:
+
+1. update `PROJECT_STATE.md` with a concise factual HG3 implementation/test entry;
+2. replace this file with `HOLD`, recording the implementation commit SHA and test result;
+3. commit + push to canonical `main`;
+4. STOP.
+
+Do not choose or start the next phase.
+
+Production/backend must remain:
+`f766cf9e9ed7aa3a56896e61cf370a9a25e6a0c6`
+
+Alembic must remain:
+`0054 / 0054`
+
+Every Executor final report must end with exactly one final line:
 
 `REPORT_TIME_MSK=HH:MM`
