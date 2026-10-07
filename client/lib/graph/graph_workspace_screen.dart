@@ -208,7 +208,29 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     _peopleInspectorOpen = true;
     _peopleInspectorCandidates = false;
+    if (_adoptRootedControllerPerson(id)) {
+      return;
+    }
     _loadRootedPerson(id);
+  }
+
+  /// When the controller is already rooted on [personId] with People-workspace
+  /// truth, reuse it for the detail card instead of a duplicate GET.
+  bool _adoptRootedControllerPerson(String personId) {
+    if (widget.controller.rootId != personId) {
+      return false;
+    }
+    final person = widget.controller.personFor(personId);
+    if (person == null) {
+      return false;
+    }
+    _rootedToken += 1;
+    _rootedPerson = person;
+    _rootedPersonId = personId;
+    _rootedLoading = false;
+    _rootedError = null;
+    _rootedPersonAuthoritative = true;
+    return true;
   }
 
   void _adoptCenteredPerson() {
@@ -236,6 +258,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     bool preserveVisible = false,
   }) async {
     final token = ++_rootedToken;
+    final generation = _personTaskGeneration;
     if (!preserveVisible) {
       _rootedPersonAuthoritative = false;
       if (mounted) {
@@ -249,7 +272,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     try {
       final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
-      if (!mounted || token != _rootedToken) {
+      if (!_rootedDetailResponseCurrent(
+        personId: personId,
+        token: token,
+        generation: generation,
+      )) {
         if (preserveVisible) {
           throw StateError('rooted person reload superseded');
         }
@@ -284,7 +311,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       if (preserveVisible) {
         rethrow;
       }
-      if (!mounted || token != _rootedToken) {
+      if (!_rootedDetailResponseCurrent(
+        personId: personId,
+        token: token,
+        generation: generation,
+      )) {
         return;
       }
       setState(() {
@@ -293,6 +324,17 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         _rootedError = 'Не удалось загрузить карточку человека';
       });
     }
+  }
+
+  bool _rootedDetailResponseCurrent({
+    required String personId,
+    required int token,
+    required int generation,
+  }) {
+    return mounted &&
+        token == _rootedToken &&
+        generation == _personTaskGeneration &&
+        _trackedPersonId == personId;
   }
 
   bool _personSurfaceStill(String personId) {

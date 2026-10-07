@@ -489,8 +489,97 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
   });
 
+  testWidgets('re-rooting adopts controller person truth without a duplicate detail fetch', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _open(tester, _client(state));
+    final bobGetsBefore = state.peopleWorkspaceRoots
+        .where((root) => root == 'person-bob')
+        .length;
+
+    await harness.graph.reRoot('person-bob');
+    await tester.pumpAndSettle();
+
+    expect(harness.graph.rootId, 'person-bob');
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGetsBefore + 1,
+    );
+  });
+
+  testWidgets('non-root person selection still fetches rooted person truth', (tester) async {
+    final state = _BridgeState();
+    await _openOverview(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+
+    await tester.tap(find.text('Ada').first);
+    await tester.pumpAndSettle();
+
+    expect(state.peopleWorkspaceGets, greaterThan(before));
+    expect(state.peopleWorkspaceRoots, contains('person-ada'));
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+  });
+
+  testWidgets('a delayed detail load cannot restore rows after a newer actor mutation', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openOverview(tester, _client(state));
+    final holdDetail = Completer<void>();
+    state.holdPeopleWorkspace = holdDetail;
+
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    await tester.pump();
+    expect(state.peopleWorkspaceInFlight, 1);
+
+    await harness.graph.reRoot('person-bob');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+
+    holdDetail.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+    expect(harness.graph.rootId, 'person-bob');
+  });
+
+  testWidgets('a delayed detail load for another person cannot alter the current card', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openOverview(tester, _client(state));
+    final holdAda = Completer<void>();
+    state.holdPeopleWorkspace = holdAda;
+
+    await tester.tap(find.text('Ada').first);
+    await tester.pump();
+    await tester.pump();
+    expect(state.peopleWorkspaceInFlight, 1);
+
+    await harness.graph.reRoot('person-bob');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+
+    holdAda.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, 'person-bob');
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+  });
+
   testWidgets('local actor patch keeps the authoritative linked-task count', (tester) async {
-    final state = _BridgeState()..linkedTaskCountOverride = 9;
+    final state = _BridgeState()
+      ..linkedTaskCountOverride = 9
+      ..rebuildPeopleWorkspaceAfterHold = true;
     await _open(tester, _client(state));
     expect(find.text('Связанные задачи · 9'), findsWidgets);
 
@@ -535,6 +624,7 @@ class _BridgeState {
   int maxPeopleWorkspaceInFlight = 0;
   final peopleWorkspaceRoots = <String?>[];
   int? linkedTaskCountOverride;
+  bool rebuildPeopleWorkspaceAfterHold = false;
   final rows = <Map<String, dynamic>>[
     _row('edge-ask', 'task-ask', 'Ask', 'requested_by'),
     _row('edge-wait', 'task-ask', 'Ask', 'waiting_on'),
@@ -587,7 +677,7 @@ Future<void> _reveal(WidgetTester tester, Finder target) async {
   await tester.pumpAndSettle();
 }
 
-Future<GraphTestHarness> _open(WidgetTester tester, MockClient client) async {
+Future<GraphTestHarness> _openOverview(WidgetTester tester, MockClient client) async {
   tester.view.physicalSize = const Size(1280, 900);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -597,6 +687,11 @@ Future<GraphTestHarness> _open(WidgetTester tester, MockClient client) async {
   await openGraph(tester, harness);
   await tester.tap(find.text('Люди'));
   await tester.pumpAndSettle();
+  return harness;
+}
+
+Future<GraphTestHarness> _open(WidgetTester tester, MockClient client) async {
+  final harness = await _openOverview(tester, client);
   await tester.tap(find.text('Ada').first);
   await tester.pumpAndSettle();
   await tester.tap(find.text('В центр'));
@@ -778,9 +873,14 @@ MockClient _client(_BridgeState state) {
       final hold = state.holdPeopleWorkspace;
       if (hold != null) {
         state.holdPeopleWorkspace = null;
+        final body = state.rebuildPeopleWorkspaceAfterHold
+            ? null
+            : jsonDecode(jsonEncode(_workspace(state, root))) as Map<String, dynamic>;
         await hold.future;
         state.peopleWorkspaceInFlight -= 1;
-        return jsonUtf8Response(_workspace(state, root));
+        return jsonUtf8Response(
+          body ?? _workspace(state, root),
+        );
       }
       state.peopleWorkspaceInFlight -= 1;
       return jsonUtf8Response(_workspace(state, root));
