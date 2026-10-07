@@ -2959,10 +2959,7 @@ class PersonPresentation {
     );
   }
 
-  PersonPresentation withTaskInvolvement(
-    List<PersonTaskInvolvement> taskInvolvement, {
-    required int openTaskCount,
-  }) {
+  PersonPresentation withTaskInvolvement(List<PersonTaskInvolvement> taskInvolvement) {
     return PersonPresentation(
       personId: personId,
       title: title,

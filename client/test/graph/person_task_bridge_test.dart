@@ -413,6 +413,105 @@ void main() {
     expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
   });
 
+  testWidgets('a pending reconciliation follows the latest person after a switch', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _open(tester, _client(state));
+    final holdA = Completer<void>();
+    state.holdPeopleWorkspace = holdA;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(state.peopleWorkspaceInFlight, 1);
+
+    await harness.graph.reRoot('person-bob');
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, 'person-bob');
+    expect(find.text('Bob'), findsWidgets);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+    expect(state.peopleWorkspaceInFlight, 1);
+    state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+
+    final bobGetsBeforeMutation = state.peopleWorkspaceRoots
+        .where((root) => root == 'person-bob')
+        .length;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(state.peopleWorkspaceInFlight, 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGetsBeforeMutation,
+    );
+
+    holdA.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGetsBeforeMutation + 1,
+    );
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+  });
+
+  testWidgets('switching person without a newer mutation skips follow-up reconciliation', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _open(tester, _client(state));
+    final holdA = Completer<void>();
+    state.holdPeopleWorkspace = holdA;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+
+    await harness.graph.reRoot('person-bob');
+    await tester.pumpAndSettle();
+    final bobGets = state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length;
+    final totalGets = state.peopleWorkspaceGets;
+
+    holdA.complete();
+    await tester.pumpAndSettle();
+    expect(state.peopleWorkspaceGets, totalGets);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGets,
+    );
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+  });
+
+  testWidgets('local actor patch keeps the authoritative linked-task count', (tester) async {
+    final state = _BridgeState()..linkedTaskCountOverride = 9;
+    await _open(tester, _client(state));
+    expect(find.text('Связанные задачи · 9'), findsWidgets);
+
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.text('Связанные задачи · 9'), findsWidgets);
+    expect(find.text('Связанные задачи · 2'), findsNothing);
+    expect(find.text('Связанные задачи · 1'), findsNothing);
+
+    state.linkedTaskCountOverride = 8;
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Связанные задачи · 8'), findsWidgets);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
   testWidgets('task tile still opens the task', (tester) async {
     final state = _BridgeState();
     final harness = await _open(tester, _client(state));
@@ -434,11 +533,28 @@ class _BridgeState {
   int peopleWorkspaceGets = 0;
   int peopleWorkspaceInFlight = 0;
   int maxPeopleWorkspaceInFlight = 0;
+  final peopleWorkspaceRoots = <String?>[];
+  int? linkedTaskCountOverride;
   final rows = <Map<String, dynamic>>[
     _row('edge-ask', 'task-ask', 'Ask', 'requested_by'),
     _row('edge-wait', 'task-ask', 'Ask', 'waiting_on'),
     _row('edge-join', 'task-join', 'Join', 'involves', state: 'proposed', origin: 'agent'),
   ];
+  final bobRows = <Map<String, dynamic>>[
+    _row('edge-bob-ship', 'task-ship', 'Ship report', 'involves'),
+  ];
+
+  List<Map<String, dynamic>> rowsFor(String? root) {
+    return root == 'person-bob' ? bobRows : rows;
+  }
+
+  int linkedTaskCount(String? root) {
+    if (root == 'person-bob') {
+      return bobRows.map((row) => row['task_id']).toSet().length;
+    }
+    return linkedTaskCountOverride ??
+        rows.map((row) => row['task_id']).toSet().length;
+  }
 }
 
 Map<String, dynamic> _row(
@@ -544,18 +660,22 @@ MockClient _client(_BridgeState state) {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
       final taskId = request.url.path.split('/')[2];
       final role = body['role'] as String;
+      final personId = body['person_id'] as String? ?? 'person-ada';
+      final list = personId == 'person-bob' ? state.bobRows : state.rows;
       state.calls.add('POST ${request.url.path} $role');
-      final existing = state.rows.where((row) => row['task_id'] == taskId && row['role'] == role);
+      final existing = list.where((row) => row['task_id'] == taskId && row['role'] == role);
       final created = existing.isEmpty;
       final edgeId = created
-          ? (taskId == 'task-ship' ? 'edge-ship' : 'edge-$taskId-$role')
+          ? (taskId == 'task-ship'
+              ? (personId == 'person-bob' ? 'edge-bob-ship' : 'edge-ship')
+              : 'edge-$taskId-$role')
           : existing.first['edge_id'] as String;
       if (created) {
         final title = taskId == 'task-ship' ? 'Ship report' : 'Ask';
-        state.rows.add(_row(edgeId, taskId, title, role));
+        list.add(_row(edgeId, taskId, title, role));
       }
       return jsonUtf8Response({
-        'edge': _edge(edgeId, taskId, role),
+        'edge': _edge(edgeId, taskId, role, personId: personId),
         'created': created,
         'changed': created,
       });
@@ -595,9 +715,33 @@ MockClient _client(_BridgeState state) {
       }
       state.calls.add('DELETE ${request.url.path}');
       final edgeId = request.url.path.split('/').last;
-      state.rows.removeWhere((row) => row['edge_id'] == edgeId);
+      Map<String, dynamic>? row;
+      var personId = 'person-ada';
+      for (final item in state.rows) {
+        if (item['edge_id'] == edgeId) {
+          row = item;
+          break;
+        }
+      }
+      if (row == null) {
+        for (final item in state.bobRows) {
+          if (item['edge_id'] == edgeId) {
+            row = item;
+            personId = 'person-bob';
+            break;
+          }
+        }
+      }
+      state.rows.removeWhere((item) => item['edge_id'] == edgeId);
+      state.bobRows.removeWhere((item) => item['edge_id'] == edgeId);
       return jsonUtf8Response({
-        'edge': _edge(edgeId, 'task-ask', 'requested_by', state: 'rejected'),
+        'edge': _edge(
+          edgeId,
+          row?['task_id'] as String? ?? 'task-ask',
+          row?['role'] as String? ?? 'requested_by',
+          state: 'rejected',
+          personId: personId,
+        ),
         'created': false,
         'changed': true,
       });
@@ -621,6 +765,7 @@ MockClient _client(_BridgeState state) {
     if (request.url.path == '/graph/people-workspace') {
       final root = request.url.queryParameters['root_id'];
       state.peopleWorkspaceGets += 1;
+      state.peopleWorkspaceRoots.add(root);
       state.peopleWorkspaceInFlight += 1;
       if (state.peopleWorkspaceInFlight > state.maxPeopleWorkspaceInFlight) {
         state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
@@ -631,26 +776,30 @@ MockClient _client(_BridgeState state) {
         return jsonUtf8Response({'detail': 'later'}, statusCode: 500);
       }
       final hold = state.holdPeopleWorkspace;
-      final body = _workspace(state, root);
       if (hold != null) {
         state.holdPeopleWorkspace = null;
-        final frozen = jsonDecode(jsonEncode(body)) as Map<String, dynamic>;
         await hold.future;
         state.peopleWorkspaceInFlight -= 1;
-        return jsonUtf8Response(frozen);
+        return jsonUtf8Response(_workspace(state, root));
       }
       state.peopleWorkspaceInFlight -= 1;
-      return jsonUtf8Response(body);
+      return jsonUtf8Response(_workspace(state, root));
     }
     return http.Response('{}', 404);
   });
 }
 
-Map<String, dynamic> _edge(String id, String taskId, String role, {String state = 'confirmed'}) {
+Map<String, dynamic> _edge(
+  String id,
+  String taskId,
+  String role, {
+  String state = 'confirmed',
+  String personId = 'person-ada',
+}) {
   return {
     'id': id,
     'source_id': taskId,
-    'target_id': 'person-ada',
+    'target_id': personId,
     'type': role,
     'origin': 'user',
     'state': state,
@@ -660,28 +809,76 @@ Map<String, dynamic> _edge(String id, String taskId, String role, {String state 
   };
 }
 
+Map<String, dynamic> _personJson(
+  String personId,
+  String title,
+  List<Map<String, dynamic>> involvement,
+  int openTaskCount, {
+  required bool includeInvolvement,
+}) {
+  return {
+    'person_id': personId,
+    'title': title,
+    'salience_score': 1,
+    'identities': const [],
+    'routes': const [],
+    'identity_conflict': false,
+    'open_task_count': openTaskCount,
+    'recent_communication_count': 0,
+    'task_involvement': includeInvolvement ? involvement : <Map<String, dynamic>>[],
+    'recent_communications': const [],
+    'salience': null,
+    'consolidations': const [],
+  };
+}
+
 Map<String, dynamic> _workspace(_BridgeState state, String? root) {
+  if (root == 'person-bob') {
+    return {
+      'root_id': root,
+      'seed_ids': ['person-bob'],
+      'nodes': [graphObjectJson(id: 'person-bob', title: 'Bob', kind: 'person')],
+      'edges': [],
+      'truncated': false,
+      'people': [
+        _personJson(
+          'person-bob',
+          'Bob',
+          state.bobRows,
+          state.linkedTaskCount(root),
+          includeInvolvement: true,
+        ),
+      ],
+      'promotion_candidates': <Map<String, dynamic>>[],
+      'promotion_candidates_truncated': false,
+      'promotion_suppressions': <Map<String, dynamic>>[],
+    };
+  }
   return {
     'root_id': root,
-    'seed_ids': ['person-ada'],
-    'nodes': [graphObjectJson(id: 'person-ada', title: 'Ada', kind: 'person')],
+    'seed_ids': root == null ? ['person-ada', 'person-bob'] : ['person-ada'],
+    'nodes': [
+      graphObjectJson(id: 'person-ada', title: 'Ada', kind: 'person'),
+      if (root == null) graphObjectJson(id: 'person-bob', title: 'Bob', kind: 'person'),
+    ],
     'edges': [],
     'truncated': false,
     'people': [
-      {
-        'person_id': 'person-ada',
-        'title': 'Ada',
-        'salience_score': 1,
-        'identities': const [],
-        'routes': const [],
-        'identity_conflict': false,
-        'open_task_count': state.rows.map((row) => row['task_id']).toSet().length,
-        'recent_communication_count': 0,
-        'task_involvement': root == null ? <Map<String, dynamic>>[] : state.rows,
-        'recent_communications': const [],
-        'salience': null,
-        'consolidations': const [],
-      },
+      _personJson(
+        'person-ada',
+        'Ada',
+        state.rows,
+        state.linkedTaskCount('person-ada'),
+        includeInvolvement: root != null,
+      ),
+      if (root == null)
+        _personJson(
+          'person-bob',
+          'Bob',
+          state.bobRows,
+          state.linkedTaskCount('person-bob'),
+          includeInvolvement: false,
+        ),
     ],
     'promotion_candidates': <Map<String, dynamic>>[],
     'promotion_candidates_truncated': false,

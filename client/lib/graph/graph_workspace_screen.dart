@@ -107,7 +107,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   String? _personTaskReconcileWarning;
   int _personTaskGeneration = 0;
   bool _personReconcileActive = false;
-  bool _personReconcileAgain = false;
+  _PersonReconcileTarget? _personReconcilePending;
   String? _trackedPersonId;
   final ScrollController _promotionScroll = ScrollController();
 
@@ -199,8 +199,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _personTaskMutationError = null;
       _personTaskReconcileWarning = null;
       _personTaskGeneration += 1;
-      _personReconcileAgain = false;
+      _personReconcilePending = null;
       return;
+    }
+    if (_personReconcilePending != null &&
+        _personReconcilePending!.personId != id) {
+      _personReconcilePending = null;
     }
     _peopleInspectorOpen = true;
     _peopleInspectorCandidates = false;
@@ -370,8 +374,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         rows.add(next);
       }
     }
-    final openTaskCount = rows.map((row) => row.taskId).toSet().length;
-    _rootedPerson = person.withTaskInvolvement(rows, openTaskCount: openTaskCount);
+    // Keep the prior authoritative linked-task count; actor rows are only a subset.
+    _rootedPerson = person.withTaskInvolvement(rows);
     _rootedPersonId = personId;
     _rootedPersonAuthoritative = true;
     _personTaskMutationError = null;
@@ -384,37 +388,48 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   void _kickPersonReconcile(String personId) {
+    final target = _PersonReconcileTarget(
+      personId: personId,
+      generation: _personTaskGeneration,
+    );
     if (_personReconcileActive) {
-      _personReconcileAgain = true;
+      _personReconcilePending = target;
       return;
     }
-    unawaited(_reconcilePersonWorkspace(personId));
+    unawaited(_reconcilePersonWorkspace(target));
   }
 
-  Future<void> _reconcilePersonWorkspace(String personId) async {
-    final generation = _personTaskGeneration;
+  Future<void> _reconcilePersonWorkspace(_PersonReconcileTarget target) async {
     _personReconcileActive = true;
     try {
-      final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
-      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+      final workspace = await widget.apiClient.getPeopleWorkspace(
+        rootId: target.personId,
+      );
+      if (!_personSurfaceStill(target.personId) ||
+          target.generation != _personTaskGeneration) {
         return;
       }
-      widget.controller.installRootedPeopleWorkspace(workspace, rootId: personId);
-      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+      widget.controller.installRootedPeopleWorkspace(
+        workspace,
+        rootId: target.personId,
+      );
+      if (!_personSurfaceStill(target.personId) ||
+          target.generation != _personTaskGeneration) {
         return;
       }
-      final person = widget.controller.personFor(personId);
+      final person = widget.controller.personFor(target.personId);
       if (person == null || !mounted) {
         return;
       }
       setState(() {
         _rootedPerson = person;
-        _rootedPersonId = personId;
+        _rootedPersonId = target.personId;
         _rootedPersonAuthoritative = true;
         _personTaskReconcileWarning = null;
       });
     } catch (_) {
-      if (!_personSurfaceStill(personId) || generation != _personTaskGeneration) {
+      if (!_personSurfaceStill(target.personId) ||
+          target.generation != _personTaskGeneration) {
         return;
       }
       setState(() {
@@ -422,10 +437,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       });
     } finally {
       _personReconcileActive = false;
-      if (_personReconcileAgain) {
-        _personReconcileAgain = false;
-        if (_personSurfaceStill(personId)) {
-          unawaited(_reconcilePersonWorkspace(personId));
+      final pending = _personReconcilePending;
+      if (pending != null) {
+        _personReconcilePending = null;
+        if (_personSurfaceStill(pending.personId)) {
+          unawaited(_reconcilePersonWorkspace(pending));
         }
       }
     }
@@ -4427,6 +4443,16 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
       ],
     );
   }
+}
+
+class _PersonReconcileTarget {
+  const _PersonReconcileTarget({
+    required this.personId,
+    required this.generation,
+  });
+
+  final String personId;
+  final int generation;
 }
 
 class _ActorEdgeResult {
