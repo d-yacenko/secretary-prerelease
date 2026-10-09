@@ -31,6 +31,8 @@ Architect comparison confirms the release is a fast-forward from production and 
 
 Roll the accepted schema-neutral release to canonical production using the committed production deployment contract, verify health/revision, record the exact runtime result, and stop.
 
+A separate Person-rename issue was observed after this rollout task was authorized: rename currently uses the generic object PATCH/embedding path and may fail silently in the client. That issue is **not** part of this deploy. Do not investigate, fix, test, or include any rename code in the release. The release SHA remains exactly pinned below.
+
 ### Authorization
 
 This task explicitly authorizes only:
@@ -139,6 +141,7 @@ Do not authenticate as the user, read Person records, or run another People DB c
 Do NOT:
 
 - change backend/client product code;
+- investigate or fix Person rename / generic object PATCH / embedding behavior;
 - change People paging semantics;
 - change salience;
 - change Task actor semantics;
