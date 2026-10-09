@@ -610,6 +610,321 @@ void main() {
     expect(harness.graph.mode, GraphWorkspaceMode.tasks);
     expect(harness.graph.rootId, 'task-join');
   });
+
+  testWidgets('unrooted selected person shows busy cue while actor delete is pending', (
+    tester,
+  ) async {
+    final state = _BridgeState()..holdActorMutation = Completer<void>();
+    final harness = await _openUnrooted(tester, _client(state));
+    expect(harness.graph.rootId, isNull);
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-wait'))).onPressed,
+      isNull,
+    );
+
+    state.holdActorMutation!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+  });
+
+  testWidgets('unrooted selected person removes an actor immediately without re-rooting', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-pending')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(find.text('Bob'), findsWidgets);
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+    expect(find.text('Bob'), findsWidgets);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
+  testWidgets('unrooted selected person adds an actor immediately without re-rooting', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-link')));
+    await tester.tap(find.byKey(const ValueKey('person-task-link')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-role-waiting_on')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('person-task-search')), 'Ship');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-option-task-ship')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-task-add')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(find.text('Bob'), findsWidgets);
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ship')), findsOneWidget);
+  });
+
+  testWidgets('unrooted selected person confirms a proposal immediately', (tester) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-confirm-edge-join')));
+    await tester.tap(find.byKey(const ValueKey('person-task-confirm-edge-join')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('Предложено секретарём'), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-remove-edge-join')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+  });
+
+  testWidgets('unrooted selected person rejects a proposal immediately', (tester) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-reject-edge-join')));
+    await tester.tap(find.byKey(const ValueKey('person-task-reject-edge-join')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+  });
+
+  testWidgets('unrooted reconciliation refreshes detail without installing a rooted overview', (
+    tester,
+  ) async {
+    final state = _BridgeState()
+      ..linkedTaskCountOverride = 9
+      ..rebuildPeopleWorkspaceAfterHold = true;
+    final harness = await _openUnrooted(tester, _client(state));
+    expect(find.text('Связанные задачи · 9'), findsWidgets);
+
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.text('Связанные задачи · 9'), findsWidgets);
+    expect(harness.graph.rootId, isNull);
+
+    state.linkedTaskCountOverride = 8;
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+    expect(find.text('Bob'), findsWidgets);
+    expect(find.text('Связанные задачи · 8'), findsWidgets);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+  });
+
+  testWidgets('unrooted stale reconciliation cannot restore a newer removal', (tester) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final before = state.peopleWorkspaceGets;
+    final first = Completer<void>();
+    final second = Completer<void>();
+    state.holdPeopleWorkspace = first;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+
+    state.holdPeopleWorkspace = second;
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-wait')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(state.peopleWorkspaceGets, before + 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+
+    first.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(state.peopleWorkspaceGets, before + 2);
+    expect(harness.graph.rootId, isNull);
+
+    second.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-join')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+  });
+
+  testWidgets('unrooted pending reconciliation follows the latest selected person', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final holdA = Completer<void>();
+    state.holdPeopleWorkspace = holdA;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(state.peopleWorkspaceInFlight, 1);
+
+    harness.graph.selectObject('person-bob');
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+    expect(harness.graph.selectedObjectId, 'person-bob');
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsOneWidget);
+    expect(state.peopleWorkspaceInFlight, 1);
+    state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+
+    final bobGetsBeforeMutation = state.peopleWorkspaceRoots
+        .where((root) => root == 'person-bob')
+        .length;
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-bob-ship')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+    expect(state.peopleWorkspaceInFlight, 1);
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGetsBeforeMutation,
+    );
+
+    holdA.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-bob-ship')), findsNothing);
+    expect(harness.graph.rootId, isNull);
+    expect(
+      state.peopleWorkspaceRoots.where((root) => root == 'person-bob').length,
+      bobGetsBeforeMutation + 1,
+    );
+    expect(state.maxPeopleWorkspaceInFlight, 1);
+  });
+
+  testWidgets('leaving an unrooted person ignores a late reconciliation response', (
+    tester,
+  ) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    final hold = Completer<void>();
+    state.holdPeopleWorkspace = hold;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+
+    await tester.tap(find.text('Задачи'));
+    await tester.pumpAndSettle();
+    expect(harness.graph.mode, GraphWorkspaceMode.tasks);
+
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(harness.graph.mode, GraphWorkspaceMode.tasks);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsNothing);
+  });
+
+  testWidgets('unrooted reconciliation failure keeps the local actor mutation', (tester) async {
+    final state = _BridgeState();
+    final harness = await _openUnrooted(tester, _client(state));
+    state.failNextPeopleWorkspace = true;
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsNothing);
+    expect(find.text('Изменение сохранено, обзор обновится позже'), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-wait'))).onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('unrooted foreground actor failure preserves prior rows and stays retryable', (
+    tester,
+  ) async {
+    final state = _BridgeState()..failNextActorMutation = true;
+    final harness = await _openUnrooted(tester, _client(state));
+
+    await _reveal(tester, find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsOneWidget);
+    expect(find.text('Не удалось изменить участие'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-wait')), findsOneWidget);
+    expect(harness.graph.rootId, isNull);
+    expect(
+      tester.widget<IconButton>(find.byKey(const ValueKey('person-task-remove-edge-ask'))).onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('person-task-remove-edge-ask')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('person-task-mutation-error')), findsNothing);
+    expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsNothing);
+    expect(harness.graph.rootId, isNull);
+  });
 }
 
 class _BridgeState {
@@ -690,10 +1005,17 @@ Future<GraphTestHarness> _openOverview(WidgetTester tester, MockClient client) a
   return harness;
 }
 
-Future<GraphTestHarness> _open(WidgetTester tester, MockClient client) async {
+Future<GraphTestHarness> _openUnrooted(WidgetTester tester, MockClient client) async {
   final harness = await _openOverview(tester, client);
   await tester.tap(find.text('Ada').first);
   await tester.pumpAndSettle();
+  expect(harness.graph.rootId, isNull);
+  expect(find.byKey(const ValueKey('person-task-tile-edge-ask')), findsOneWidget);
+  return harness;
+}
+
+Future<GraphTestHarness> _open(WidgetTester tester, MockClient client) async {
+  final harness = await _openUnrooted(tester, client);
   await tester.tap(find.text('В центр'));
   await tester.pumpAndSettle();
   return harness;

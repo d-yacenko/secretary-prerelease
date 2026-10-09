@@ -337,11 +337,16 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         _trackedPersonId == personId;
   }
 
-  bool _personSurfaceStill(String personId) {
+  /// True while the People detail card for [personId] is still the visible surface.
+  /// Does not require the controller to be rooted on that Person (overview selection).
+  bool _personDetailStillCurrent(String personId) {
     return mounted &&
         widget.controller.mode == GraphWorkspaceMode.people &&
-        widget.controller.rootId == personId &&
         _trackedPersonId == personId;
+  }
+
+  bool _personControllerRootedOn(String personId) {
+    return widget.controller.rootId == personId;
   }
 
   Future<void> _mutatePersonTaskRole(
@@ -358,7 +363,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     var applied = false;
     try {
       final result = await action();
-      if (!_personSurfaceStill(personId)) {
+      if (!_personDetailStillCurrent(personId)) {
         return;
       }
       _personTaskGeneration += 1;
@@ -381,7 +386,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         setState(() => _personTaskMutationBusy = false);
       }
     }
-    if (applied && _personSurfaceStill(personId)) {
+    if (applied && _personDetailStillCurrent(personId)) {
       _kickPersonReconcile(personId);
     }
   }
@@ -447,30 +452,48 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       final workspace = await widget.apiClient.getPeopleWorkspace(
         rootId: target.personId,
       );
-      if (!_personSurfaceStill(target.personId) ||
+      if (!_personDetailStillCurrent(target.personId) ||
           target.generation != _personTaskGeneration) {
         return;
       }
-      widget.controller.installRootedPeopleWorkspace(
-        workspace,
-        rootId: target.personId,
-      );
-      if (!_personSurfaceStill(target.personId) ||
-          target.generation != _personTaskGeneration) {
+      if (_personControllerRootedOn(target.personId)) {
+        widget.controller.installRootedPeopleWorkspace(
+          workspace,
+          rootId: target.personId,
+        );
+        if (!_personDetailStillCurrent(target.personId) ||
+            target.generation != _personTaskGeneration ||
+            !_personControllerRootedOn(target.personId)) {
+          return;
+        }
+        final person = widget.controller.personFor(target.personId);
+        if (person == null || !mounted) {
+          return;
+        }
+        setState(() {
+          _rootedPerson = person;
+          _rootedPersonId = target.personId;
+          _rootedPersonAuthoritative = true;
+          _personTaskReconcileWarning = null;
+        });
         return;
       }
-      final person = widget.controller.personFor(target.personId);
-      if (person == null || !mounted) {
+      // Unrooted overview selection: refresh only the detail card, keep overview.
+      final match = _personFromWorkspace(workspace, target.personId);
+      if (match == null ||
+          !_personDetailStillCurrent(target.personId) ||
+          target.generation != _personTaskGeneration ||
+          _personControllerRootedOn(target.personId)) {
         return;
       }
       setState(() {
-        _rootedPerson = person;
+        _rootedPerson = match;
         _rootedPersonId = target.personId;
         _rootedPersonAuthoritative = true;
         _personTaskReconcileWarning = null;
       });
     } catch (_) {
-      if (!_personSurfaceStill(target.personId) ||
+      if (!_personDetailStillCurrent(target.personId) ||
           target.generation != _personTaskGeneration) {
         return;
       }
@@ -482,11 +505,23 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       final pending = _personReconcilePending;
       if (pending != null) {
         _personReconcilePending = null;
-        if (_personSurfaceStill(pending.personId)) {
+        if (_personDetailStillCurrent(pending.personId)) {
           unawaited(_reconcilePersonWorkspace(pending));
         }
       }
     }
+  }
+
+  PersonPresentation? _personFromWorkspace(
+    GraphWorkspaceOut workspace,
+    String personId,
+  ) {
+    for (final person in workspace.people) {
+      if (person.personId == personId) {
+        return person;
+      }
+    }
+    return null;
   }
 
   void _togglePeopleInspector() {
