@@ -749,6 +749,10 @@ class PeopleWorkspaceOut(BaseModel):
     landscape_tasks: list[ObjectOut] = Field(default_factory=list)
     landscape_task_edges: list[EdgeOut] = Field(default_factory=list)
     landscape_task_context_complete: bool = True
+    window_index: int = 0
+    window_count: int = 1
+    has_previous_window: bool = False
+    has_next_window: bool = False
 
 
 class PersonCreateRequest(BaseModel):

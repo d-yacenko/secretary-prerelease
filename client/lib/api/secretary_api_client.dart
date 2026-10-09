@@ -773,6 +773,7 @@ class SecretaryApiClient {
     String? query,
     int? seedLimit,
     int? neighborLimit,
+    int? windowIndex,
   }) async {
     final queryParameters = <String, String>{};
     if (rootId != null) {
@@ -780,6 +781,9 @@ class SecretaryApiClient {
     }
     if (query != null && query.isNotEmpty) {
       queryParameters['q'] = query;
+    }
+    if (windowIndex != null) {
+      queryParameters['window_index'] = '$windowIndex';
     }
     if (seedLimit != null) {
       queryParameters['seed_limit'] = '$seedLimit';

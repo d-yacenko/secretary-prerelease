@@ -75,6 +75,10 @@ class PeopleWorkspaceResult:
     promotion_candidates: list[dict]
     promotion_candidates_truncated: bool
     promotion_suppressions: list[dict]
+    window_index: int = 0
+    window_count: int = 1
+    has_previous_window: bool = False
+    has_next_window: bool = False
 
 
 class PersonGraphWorkspaceService:
@@ -92,14 +96,19 @@ class PersonGraphWorkspaceService:
         query: str | None = None,
         seed_limit: int = DEFAULT_SEED_LIMIT,
         neighbor_limit: int = DEFAULT_NEIGHBOR_LIMIT,
+        window_index: int = 0,
     ) -> PeopleWorkspaceResult:
         seed_limit = min(max(1, seed_limit), MAX_SEED_LIMIT)
         neighbor_limit = min(max(1, neighbor_limit), MAX_NEIGHBOR_LIMIT)
         if root_id is not None:
+            if window_index != 0:
+                raise ValidationError("people window index is out of range")
             return self._rooted(root_id, neighbor_limit)
         if query and query.strip():
+            if window_index != 0:
+                raise ValidationError("people window index is out of range")
             return self._search(query.strip(), seed_limit)
-        return self._overview(seed_limit)
+        return self._overview(seed_limit, window_index)
 
     def correct_identity(
         self,
@@ -214,22 +223,69 @@ class PersonGraphWorkspaceService:
             promotion_suppressions=suppressions,
         )
 
-    def _overview(self, seed_limit: int) -> PeopleWorkspaceResult:
+    def _overview(self, seed_limit: int, window_index: int) -> PeopleWorkspaceResult:
         scores, ranked = self._ranked_people()
         positive = [person for person in ranked if scores.get(person.id, 0) > 0]
-        positive.sort(key=lambda person: (-scores[person.id], person.title.casefold(), str(person.id)))
-        if len(positive) >= seed_limit:
-            visible = positive[:seed_limit]
-            shown = {person.id for person in visible}
-            truncated = len(positive) > seed_limit or self._other_person_exists(shown)
-            return self._with_promotions(
-                self._result(None, visible, [], [], truncated, include_details=False, scores=scores)
+        positive.sort(
+            key=lambda person: (-scores[person.id], person.title.casefold(), str(person.id))
+        )
+        ranked_ids = {person.id for person in positive}
+        total = int(
+            self._session.scalar(
+                select(func.count()).select_from(Object).where(*self._active_filters())
             )
-        fill = seed_limit - len(positive)
-        rest = self._people_page(exclude={person.id for person in positive}, limit=fill + 1)
-        visible = [*positive, *rest[:fill]]
+            or 0
+        )
+        if total == 0:
+            if window_index != 0:
+                raise ValidationError("people window index is out of range")
+            return self._with_promotions(
+                self._result(
+                    None,
+                    [],
+                    [],
+                    [],
+                    False,
+                    include_details=False,
+                    scores=scores,
+                    window_index=0,
+                    window_count=1,
+                    has_previous_window=False,
+                    has_next_window=False,
+                )
+            )
+        window_count = (total + seed_limit - 1) // seed_limit
+        if window_index < 0 or window_index >= window_count:
+            raise ValidationError("people window index is out of range")
+        start = window_index * seed_limit
+        end = min(start + seed_limit, total)
+        from_ranked: list[Object] = []
+        if start < len(positive):
+            from_ranked = positive[start : min(end, len(positive))]
+        need = (end - start) - len(from_ranked)
+        rest: list[Object] = []
+        if need > 0:
+            rest = self._people_page(
+                exclude=ranked_ids,
+                limit=need,
+                offset=max(0, start - len(positive)),
+            )
+        visible = [*from_ranked, *rest]
+        truncated = window_count > 1
         return self._with_promotions(
-            self._result(None, visible, [], [], len(rest) > fill, include_details=False, scores=scores)
+            self._result(
+                None,
+                visible,
+                [],
+                [],
+                truncated,
+                include_details=False,
+                scores=scores,
+                window_index=window_index,
+                window_count=window_count,
+                has_previous_window=window_index > 0,
+                has_next_window=window_index + 1 < window_count,
+            )
         )
 
     def _search(self, query: str, seed_limit: int) -> PeopleWorkspaceResult:
@@ -270,6 +326,10 @@ class PersonGraphWorkspaceService:
         *,
         include_details: bool,
         scores: dict[UUID, int] | None = None,
+        window_index: int = 0,
+        window_count: int = 1,
+        has_previous_window: bool = False,
+        has_next_window: bool = False,
     ) -> PeopleWorkspaceResult:
         people = [person for person in nodes if person.kind == PERSON_KIND]
         if root_id is None:
@@ -315,6 +375,10 @@ class PersonGraphWorkspaceService:
             landscape_tasks=context_tasks,
             landscape_task_edges=context_edges,
             landscape_task_context_complete=context_complete,
+            window_index=window_index,
+            window_count=window_count,
+            has_previous_window=has_previous_window,
+            has_next_window=has_next_window,
         )
 
     def _scores(self) -> dict[UUID, int]:
@@ -339,11 +403,21 @@ class PersonGraphWorkspaceService:
             self._session.scalars(select(Object).where(Object.id.in_(ids), *self._active_filters()))
         )
 
-    def _people_page(self, *, exclude: set[UUID], limit: int) -> list[Object]:
+    def _people_page(
+        self,
+        *,
+        exclude: set[UUID],
+        limit: int,
+        offset: int = 0,
+    ) -> list[Object]:
         stmt = select(Object).where(*self._active_filters())
         if exclude:
             stmt = stmt.where(Object.id.notin_(exclude))
-        stmt = stmt.order_by(func.lower(Object.title), Object.id).limit(limit)
+        stmt = (
+            stmt.order_by(func.lower(Object.title), Object.id)
+            .offset(max(0, offset))
+            .limit(limit)
+        )
         return list(self._session.scalars(stmt))
 
     def _other_person_exists(self, shown: set[UUID]) -> bool:

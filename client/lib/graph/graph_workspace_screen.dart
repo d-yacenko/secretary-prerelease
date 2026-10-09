@@ -858,16 +858,21 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   bool get _showOverviewWindowControls =>
-      widget.controller.mode == GraphWorkspaceMode.tasks &&
       widget.controller.rootId == null &&
-      widget.controller.windowCount > 1;
+      widget.controller.windowCount > 1 &&
+      (widget.controller.mode == GraphWorkspaceMode.tasks ||
+          widget.controller.mode == GraphWorkspaceMode.people);
 
   Widget _overviewWindowControls() {
+    final people = widget.controller.mode == GraphWorkspaceMode.people;
+    final status = people
+        ? 'Люди · страница ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}'
+        : 'Область ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Tooltip(
-          message: 'Предыдущая область графа',
+          message: people ? 'Предыдущие люди' : 'Предыдущая область графа',
           child: IconButton(
             key: const ValueKey('graph-overview-window-previous'),
             visualDensity: VisualDensity.compact,
@@ -879,10 +884,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ),
         Text(
           key: const ValueKey('graph-overview-window-status'),
-          'Область ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}',
+          status,
         ),
         Tooltip(
-          message: 'Следующая область графа',
+          message: people ? 'Следующие люди' : 'Следующая область графа',
           child: IconButton(
             key: const ValueKey('graph-overview-window-next'),
             visualDensity: VisualDensity.compact,

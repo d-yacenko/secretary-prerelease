@@ -148,6 +148,7 @@ def get_people_workspace(
     q: str | None = Query(default=None, max_length=200),
     seed_limit: int = Query(default=DEFAULT_SEED_LIMIT, ge=1, le=MAX_SEED_LIMIT),
     neighbor_limit: int = Query(default=DEFAULT_NEIGHBOR_LIMIT, ge=1, le=MAX_NEIGHBOR_LIMIT),
+    window_index: int = Query(default=0, ge=0),
     service: PersonGraphWorkspaceService = Depends(_people_service),
 ) -> PeopleWorkspaceOut:
     try:
@@ -156,11 +157,17 @@ def get_people_workspace(
             query=q,
             seed_limit=seed_limit,
             neighbor_limit=neighbor_limit,
+            window_index=window_index,
         )
     except NotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"{exc.resource} not found",
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
         ) from exc
     return PeopleWorkspaceOut(
         root_id=result.root_id,
@@ -180,6 +187,10 @@ def get_people_workspace(
         landscape_tasks=[ObjectOut.from_model(task) for task in result.landscape_tasks],
         landscape_task_edges=[EdgeOut.from_model(edge) for edge in result.landscape_task_edges],
         landscape_task_context_complete=result.landscape_task_context_complete,
+        window_index=result.window_index,
+        window_count=result.window_count,
+        has_previous_window=result.has_previous_window,
+        has_next_window=result.has_next_window,
     )
 
 

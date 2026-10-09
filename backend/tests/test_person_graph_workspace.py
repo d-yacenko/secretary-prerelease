@@ -402,3 +402,173 @@ def _telegram(db_session, realm: str, *, peer_kind: str, sender: int, peer: int,
     db_session.add(obj)
     db_session.flush()
     return obj
+
+
+def test_people_overview_windows_cover_all_active_people(people_client, db_session) -> None:
+    people = _people(db_session)
+    created = []
+    for index in range(25):
+        person = people.create_person(f"Person {index:02d}")
+        created.append(person)
+        _link_task(db_session, person.id, f"Task {index:02d}")
+    rejected = people.create_person("Rejected Extra")
+    rejected.state = REJECTED_STATE
+    deleted = people.create_person("Deleted Extra")
+    tombstone_object(deleted)
+    db_session.flush()
+
+    pages = []
+    for window_index in range(3):
+        response = people_client.get(
+            "/graph/people-workspace",
+            params={"seed_limit": 12, "window_index": window_index},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        pages.append(body)
+        assert body["window_index"] == window_index
+        assert body["window_count"] == 3
+        assert body["has_previous_window"] is (window_index > 0)
+        assert body["has_next_window"] is (window_index < 2)
+        assert body["truncated"] is True
+
+    assert [len(page["nodes"]) for page in pages] == [12, 12, 1]
+    ids = [node["id"] for page in pages for node in page["nodes"]]
+    assert len(ids) == len(set(ids))
+    assert set(ids) == {str(person.id) for person in created}
+    assert str(rejected.id) not in ids
+    assert str(deleted.id) not in ids
+
+    last = people_client.get(
+        "/graph/people-workspace",
+        params={"seed_limit": 12, "window_index": 2},
+    )
+    assert last.status_code == 200
+    assert last.json()["window_index"] == 2
+    oor = people_client.get(
+        "/graph/people-workspace",
+        params={"seed_limit": 12, "window_index": 3},
+    )
+    assert oor.status_code == 422
+    assert "window index is out of range" in oor.json()["detail"]
+
+
+def test_people_overview_first_window_keeps_salience_order(people_client, db_session) -> None:
+    people = _people(db_session)
+    quiet = people.create_person("Aaa Quiet")
+    people.attach(quiet.id, normalize_email("quiet@example.com"))
+    salient = people.create_person("Zzz Salient")
+    _link_task(db_session, salient.id, "Open commitment")
+    mid = people.create_person("Mmm Mid")
+    _link_task(db_session, mid.id, "Mid commitment")
+    db_session.flush()
+
+    first = people_client.get("/graph/people-workspace", params={"seed_limit": 2})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["window_index"] == 0
+    assert body["window_count"] == 2
+    assert body["has_previous_window"] is False
+    assert body["has_next_window"] is True
+    first_ids = [node["id"] for node in body["nodes"]]
+    assert str(quiet.id) not in first_ids
+    assert set(first_ids) == {str(salient.id), str(mid.id)}
+
+    second = people_client.get(
+        "/graph/people-workspace",
+        params={"seed_limit": 2, "window_index": 1},
+    )
+    assert second.status_code == 200
+    assert [node["id"] for node in second.json()["nodes"]] == [str(quiet.id)]
+
+
+def test_people_outside_ranked_prefix_appear_once_later(people_client, db_session, monkeypatch) -> None:
+    from app.services import person_salience_service as salience_service
+
+    monkeypatch.setattr(salience_service, "MAX_RANKED_PEOPLE", 3)
+
+    people = _people(db_session)
+    ranked = []
+    for index in range(3):
+        person = people.create_person(f"Ranked {index}")
+        ranked.append(person)
+        _link_task(db_session, person.id, f"Ranked task {index}")
+    remainder = [
+        people.create_person("Remainder Alpha"),
+        people.create_person("Remainder Beta"),
+    ]
+    db_session.flush()
+
+    pages = [
+        people_client.get(
+            "/graph/people-workspace",
+            params={"seed_limit": 2, "window_index": index},
+        ).json()
+        for index in range(3)
+    ]
+    ids = [node["id"] for page in pages for node in page["nodes"]]
+    assert len(ids) == len(set(ids)) == 5
+    assert set(ids) == {str(person.id) for person in [*ranked, *remainder]}
+    # Remainder people are outside the bounded ranked prefix and land after it.
+    assert str(remainder[0].id) in {node["id"] for node in pages[1]["nodes"]} | {
+        node["id"] for node in pages[2]["nodes"]
+    }
+    assert str(remainder[1].id) in {node["id"] for node in pages[1]["nodes"]} | {
+        node["id"] for node in pages[2]["nodes"]
+    }
+
+
+def test_people_overview_empty_and_conflict_window_params(people_client, db_session) -> None:
+    empty = people_client.get("/graph/people-workspace")
+    assert empty.status_code == 200
+    body = empty.json()
+    assert body["window_index"] == 0
+    assert body["window_count"] == 1
+    assert body["has_previous_window"] is False
+    assert body["has_next_window"] is False
+    assert body["truncated"] is False
+    assert body["nodes"] == []
+
+    person = _people(db_session).create_person("Solo")
+    db_session.flush()
+    rooted = people_client.get(
+        "/graph/people-workspace",
+        params={"root_id": str(person.id), "window_index": 1},
+    )
+    assert rooted.status_code == 422
+    assert "window index is out of range" in rooted.json()["detail"]
+    search = people_client.get(
+        "/graph/people-workspace",
+        params={"q": "Solo", "window_index": 1},
+    )
+    assert search.status_code == 422
+    assert "window index is out of range" in search.json()["detail"]
+
+
+def test_people_overview_remainder_page_is_bounded(people_client, db_session, monkeypatch) -> None:
+    from app.services import person_graph_workspace_service as module
+
+    people = _people(db_session)
+    for index in range(5):
+        person = people.create_person(f"Bound {index:02d}")
+        _link_task(db_session, person.id, f"Bound task {index:02d}")
+    for index in range(10):
+        people.create_person(f"Fill {index:02d}")
+    db_session.flush()
+
+    calls: list[tuple[int, int]] = []
+    original = module.PersonGraphWorkspaceService._people_page
+
+    def tracked(self, *, exclude, limit, offset=0):
+        calls.append((limit, offset))
+        return original(self, exclude=exclude, limit=limit, offset=offset)
+
+    monkeypatch.setattr(module.PersonGraphWorkspaceService, "_people_page", tracked)
+    response = people_client.get(
+        "/graph/people-workspace",
+        params={"seed_limit": 4, "window_index": 2},
+    )
+    assert response.status_code == 200
+    assert response.json()["window_count"] == 4
+    assert calls
+    assert all(limit <= 4 for limit, _offset in calls)

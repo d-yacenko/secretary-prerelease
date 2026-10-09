@@ -74,6 +74,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   bool _detailVisitOpen = false;
   bool _detailVisitPreservesView = false;
   int _unrootedTasksWindow = 0;
+  int _unrootedPeopleWindow = 0;
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
 
@@ -149,6 +150,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _positions.clear();
     _clearCanonicalTaskCenters();
     _unrootedTasksWindow = 0;
+    _unrootedPeopleWindow = 0;
     _people.clear();
     _seedIds = const [];
     _landscapeTasks = const [];
@@ -164,8 +166,12 @@ class GraphWorkspaceController extends ChangeNotifier {
       return;
     }
     final unrooted = rootId == null;
-    if (mode == GraphWorkspaceMode.tasks && unrooted) {
-      _unrootedTasksWindow = windowIndex;
+    if (unrooted) {
+      if (mode == GraphWorkspaceMode.tasks) {
+        _unrootedTasksWindow = windowIndex;
+      } else if (mode == GraphWorkspaceMode.people) {
+        _unrootedPeopleWindow = windowIndex;
+      }
     }
     final healthyUnrooted = unrooted && canonicalTaskCentersActive;
     final resolveCanonical = !canonicalTaskCentersActive;
@@ -174,9 +180,12 @@ class GraphWorkspaceController extends ChangeNotifier {
     selectedEdgeId = null;
     searchKindFilter = null;
     searchProviderFilter = null;
+    final restoredWindow = next == GraphWorkspaceMode.tasks
+        ? _unrootedTasksWindow
+        : _unrootedPeopleWindow;
     await _loadOverviewInternal(
       setLoading: true,
-      windowIndex: next == GraphWorkspaceMode.tasks ? _unrootedTasksWindow : 0,
+      windowIndex: restoredWindow,
       fitAfterLayout: !healthyUnrooted,
       resolveCanonical: resolveCanonical,
     );
@@ -188,7 +197,12 @@ class GraphWorkspaceController extends ChangeNotifier {
     int? windowIndex,
   }) {
     if (mode == GraphWorkspaceMode.people) {
-      return _apiClient.getPeopleWorkspace(rootId: rootId, query: query);
+      final search = query != null && query.isNotEmpty;
+      return _apiClient.getPeopleWorkspace(
+        rootId: rootId,
+        query: query,
+        windowIndex: rootId == null && !search ? windowIndex : null,
+      );
     }
     return _apiClient.getGraphWorkspace(
       rootId: rootId,
@@ -311,7 +325,15 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
     try {
       final previousSelection = selectedObjectId;
-      final workspace = await _fetchWorkspace(windowIndex: windowIndex);
+      GraphWorkspaceOut workspace;
+      try {
+        workspace = await _fetchWorkspace(windowIndex: windowIndex);
+      } on ApiException catch (error) {
+        if (!_windowIndexOutOfRange(error) || windowIndex == 0) {
+          rethrow;
+        }
+        workspace = await _fetchWorkspace(windowIndex: 0);
+      }
       final keptSelection = preserveSelection &&
               previousSelection != null &&
               workspace.nodes.any((node) => node.id == previousSelection)
@@ -325,6 +347,11 @@ class GraphWorkspaceController extends ChangeNotifier {
         selectObjectId: keptSelection,
         fitAfterLayout: fitAfterLayout,
       );
+      if (mode == GraphWorkspaceMode.people && rootId == null) {
+        _unrootedPeopleWindow = this.windowIndex;
+      } else if (mode == GraphWorkspaceMode.tasks && rootId == null) {
+        _unrootedTasksWindow = this.windowIndex;
+      }
       if (resolveCanonical && rootId == null) {
         await _resolveUnrootedTaskLayout();
       }
