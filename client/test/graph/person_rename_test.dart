@@ -222,6 +222,122 @@ void main() {
   });
 
   testWidgets(
+    'rename during actor reconciliation keeps task convergence and the new title',
+    (tester) async {
+      final state = _RenameState();
+      final harness = await _openUnrooted(tester, _client(state));
+      expect(find.text('Связанные задачи · 4'), findsWidgets);
+      final hold = Completer<void>();
+      state.holdPeopleWorkspace = hold;
+      await _reveal(
+        tester,
+        find.byKey(const ValueKey('person-task-remove-edge-requested_by')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('person-task-remove-edge-requested_by')),
+      );
+      await tester.pump();
+      expect(state.peopleWorkspaceInFlight, 1);
+      expect(
+        find.byKey(const ValueKey('person-task-tile-edge-requested_by')),
+        findsNothing,
+      );
+      expect(find.text('Связанные задачи · 4'), findsWidgets);
+
+      final getsWhileHeld = state.peopleWorkspaceGets;
+      state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+      await _rename(tester, 'Ada Prime');
+      expect(state.peopleWorkspaceGets, getsWhileHeld);
+      expect(state.peopleWorkspaceInFlight, 1);
+      expect(find.text('Связанные задачи · 4'), findsWidgets);
+      expect(find.text('Ada Prime'), findsWidgets);
+
+      hold.complete();
+      await tester.pumpAndSettle();
+      expect(state.peopleWorkspaceGets, getsWhileHeld + 1);
+      expect(state.maxPeopleWorkspaceInFlight, 1);
+      expect(state.peopleWorkspaceInFlight, 0);
+      expect(harness.graph.rootId, isNull);
+      expect(harness.graph.personFor('person-ada')?.title, 'Ada Prime');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('graph-detail-panel')),
+          matching: find.text('Связанные задачи · 9'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('graph-detail-panel')),
+          matching: find.text('Связанные задачи · 4'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('person-summary-header')),
+          matching: find.text('Ada Prime'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('person-summary-header')),
+          matching: find.text('Ada'),
+        ),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'renames during one reconciliation coalesce to a single follow-up',
+    (tester) async {
+      final state = _RenameState();
+      await _openUnrooted(tester, _client(state));
+      final hold = Completer<void>();
+      state.holdPeopleWorkspace = hold;
+      await _reveal(
+        tester,
+        find.byKey(const ValueKey('person-task-remove-edge-requested_by')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('person-task-remove-edge-requested_by')),
+      );
+      await tester.pump();
+      final getsWhileHeld = state.peopleWorkspaceGets;
+      state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+
+      await _rename(tester, 'Ada Prime');
+      await _rename(tester, 'Ada Final');
+      expect(state.renameCalls, 2);
+      expect(state.peopleWorkspaceGets, getsWhileHeld);
+      expect(state.peopleWorkspaceInFlight, 1);
+      expect(find.text('Ada Final'), findsWidgets);
+      expect(find.text('Связанные задачи · 4'), findsWidgets);
+
+      hold.complete();
+      await tester.pumpAndSettle();
+      expect(state.peopleWorkspaceGets, getsWhileHeld + 1);
+      expect(state.maxPeopleWorkspaceInFlight, 1);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('graph-detail-panel')),
+          matching: find.text('Связанные задачи · 9'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('person-summary-header')),
+          matching: find.text('Ada Final'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
     'task actor edges stay in participation and leave generic relations',
     (tester) async {
       final state = _RenameState();
@@ -260,14 +376,29 @@ void main() {
 
 class _RenameState {
   var title = 'Ada';
+  var openTaskCount = 4;
   var failNextRename = false;
   var renameCalls = 0;
   var genericPatches = 0;
   var peopleWorkspaceGets = 0;
   var peopleWorkspaceInFlight = 0;
+  var maxPeopleWorkspaceInFlight = 0;
   Completer<void>? holdRename;
   Completer<void>? holdPeopleWorkspace;
   final renamePaths = <String>[];
+  final removedEdgeIds = <String>{};
+}
+
+Future<void> _rename(WidgetTester tester, String title) async {
+  await _reveal(tester, find.byKey(const ValueKey('person-rename')));
+  await tester.tap(find.byKey(const ValueKey('person-rename')));
+  await tester.pumpAndSettle();
+  await tester.enterText(
+    find.byKey(const ValueKey('person-rename-title')),
+    title,
+  );
+  await tester.tap(find.byKey(const ValueKey('person-rename-save')));
+  await tester.pumpAndSettle();
 }
 
 Future<GraphTestHarness> _openUnrooted(
@@ -359,6 +490,8 @@ MockClient _client(_RenameState state) {
     }
     if (request.method == 'DELETE' &&
         request.url.path == '/tasks/task-ask/actors/edge-requested_by') {
+      state.removedEdgeIds.add('edge-requested_by');
+      state.openTaskCount = 9;
       return jsonUtf8Response({
         'edge': _edge(
           'edge-requested_by',
@@ -404,6 +537,9 @@ MockClient _client(_RenameState state) {
       final root = request.url.queryParameters['root_id'];
       state.peopleWorkspaceGets += 1;
       state.peopleWorkspaceInFlight += 1;
+      if (state.peopleWorkspaceInFlight > state.maxPeopleWorkspaceInFlight) {
+        state.maxPeopleWorkspaceInFlight = state.peopleWorkspaceInFlight;
+      }
       final hold = state.holdPeopleWorkspace;
       Map<String, dynamic>? frozen;
       if (hold != null) {
@@ -492,19 +628,37 @@ Map<String, dynamic> _workspace(_RenameState state, String? root) {
         'identities': const [],
         'routes': const [],
         'identity_conflict': false,
-        'open_task_count': 4,
+        'open_task_count': state.openTaskCount,
         'recent_communication_count': 0,
-        'task_involvement': [
-          _involvement('edge-requested_by', 'task-ask', 'Ask', 'requested_by'),
-          _involvement(
-            'edge-delegated_to',
-            'task-delegate',
-            'Delegate',
-            'delegated_to',
-          ),
-          _involvement('edge-waiting_on', 'task-wait', 'Wait', 'waiting_on'),
-          _involvement('edge-involves', 'task-join', 'Join', 'involves'),
-        ],
+        'task_involvement':
+            [
+                  _involvement(
+                    'edge-requested_by',
+                    'task-ask',
+                    'Ask',
+                    'requested_by',
+                  ),
+                  _involvement(
+                    'edge-delegated_to',
+                    'task-delegate',
+                    'Delegate',
+                    'delegated_to',
+                  ),
+                  _involvement(
+                    'edge-waiting_on',
+                    'task-wait',
+                    'Wait',
+                    'waiting_on',
+                  ),
+                  _involvement(
+                    'edge-involves',
+                    'task-join',
+                    'Join',
+                    'involves',
+                  ),
+                ]
+                .where((row) => !state.removedEdgeIds.contains(row['edge_id']))
+                .toList(),
         'recent_communications': const [],
         'salience': null,
         'consolidations': const [],

@@ -106,6 +106,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   String? _personTaskMutationError;
   String? _personTaskReconcileWarning;
   int _personTaskGeneration = 0;
+  int _personPresentationGeneration = 0;
   bool _personReconcileActive = false;
   _PersonReconcileTarget? _personReconcilePending;
   String? _trackedPersonId;
@@ -258,7 +259,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     bool preserveVisible = false,
   }) async {
     final token = ++_rootedToken;
-    final generation = _personTaskGeneration;
+    final taskGeneration = _personTaskGeneration;
+    final presentationGeneration = _personPresentationGeneration;
     if (!preserveVisible) {
       _rootedPersonAuthoritative = false;
       if (mounted) {
@@ -275,7 +277,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       if (!_rootedDetailResponseCurrent(
         personId: personId,
         token: token,
-        generation: generation,
+        taskGeneration: taskGeneration,
+        presentationGeneration: presentationGeneration,
       )) {
         if (preserveVisible) {
           throw StateError('rooted person reload superseded');
@@ -314,7 +317,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       if (!_rootedDetailResponseCurrent(
         personId: personId,
         token: token,
-        generation: generation,
+        taskGeneration: taskGeneration,
+        presentationGeneration: presentationGeneration,
       )) {
         return;
       }
@@ -329,11 +333,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   bool _rootedDetailResponseCurrent({
     required String personId,
     required int token,
-    required int generation,
+    required int taskGeneration,
+    required int presentationGeneration,
   }) {
     return mounted &&
         token == _rootedToken &&
-        generation == _personTaskGeneration &&
+        taskGeneration == _personTaskGeneration &&
+        presentationGeneration == _personPresentationGeneration &&
         _trackedPersonId == personId;
   }
 
@@ -437,7 +443,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   void _kickPersonReconcile(String personId) {
     final target = _PersonReconcileTarget(
       personId: personId,
-      generation: _personTaskGeneration,
+      taskGeneration: _personTaskGeneration,
+      presentationGeneration: _personPresentationGeneration,
     );
     if (_personReconcileActive) {
       _personReconcilePending = target;
@@ -452,8 +459,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       final workspace = await widget.apiClient.getPeopleWorkspace(
         rootId: target.personId,
       );
-      if (!_personDetailStillCurrent(target.personId) ||
-          target.generation != _personTaskGeneration) {
+      if (!_personReconcileResponseCurrent(target)) {
         return;
       }
       if (_personControllerRootedOn(target.personId)) {
@@ -461,8 +467,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           workspace,
           rootId: target.personId,
         );
-        if (!_personDetailStillCurrent(target.personId) ||
-            target.generation != _personTaskGeneration ||
+        if (!_personReconcileResponseCurrent(target) ||
             !_personControllerRootedOn(target.personId)) {
           return;
         }
@@ -481,8 +486,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       // Unrooted overview selection: refresh only the detail card, keep overview.
       final match = _personFromWorkspace(workspace, target.personId);
       if (match == null ||
-          !_personDetailStillCurrent(target.personId) ||
-          target.generation != _personTaskGeneration ||
+          !_personReconcileResponseCurrent(target) ||
           _personControllerRootedOn(target.personId)) {
         return;
       }
@@ -493,8 +497,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         _personTaskReconcileWarning = null;
       });
     } catch (_) {
-      if (!_personDetailStillCurrent(target.personId) ||
-          target.generation != _personTaskGeneration) {
+      if (!_personReconcileResponseCurrent(target)) {
         return;
       }
       setState(() {
@@ -510,6 +513,23 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         }
       }
     }
+  }
+
+  bool _personReconcileResponseCurrent(_PersonReconcileTarget target) {
+    return _personDetailStillCurrent(target.personId) &&
+        target.taskGeneration == _personTaskGeneration &&
+        target.presentationGeneration == _personPresentationGeneration;
+  }
+
+  void _queuePersonReconcileAfterPresentationChange(String personId) {
+    if (!_personReconcileActive || !_personDetailStillCurrent(personId)) {
+      return;
+    }
+    _personReconcilePending = _PersonReconcileTarget(
+      personId: personId,
+      taskGeneration: _personTaskGeneration,
+      presentationGeneration: _personPresentationGeneration,
+    );
   }
 
   PersonPresentation? _personFromWorkspace(
@@ -1212,13 +1232,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       return;
     }
     setState(() {
-      _personTaskGeneration += 1;
+      _personPresentationGeneration += 1;
       if (_rootedPerson?.personId == updated.id) {
         _rootedPerson = _rootedPerson!.withTitle(updated.title);
         _rootedPersonAuthoritative = true;
       }
     });
     widget.controller.applyAuthoritativePersonTitle(updated);
+    _queuePersonReconcileAfterPresentationChange(personId);
   }
 
   Widget _promotionQueue(BuildContext context) {
@@ -4540,11 +4561,13 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
 class _PersonReconcileTarget {
   const _PersonReconcileTarget({
     required this.personId,
-    required this.generation,
+    required this.taskGeneration,
+    required this.presentationGeneration,
   });
 
   final String personId;
-  final int generation;
+  final int taskGeneration;
+  final int presentationGeneration;
 }
 
 class _ActorEdgeResult {
