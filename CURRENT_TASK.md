@@ -4,25 +4,38 @@ HOLD
 
 ## REL1D-HG4F — schema-neutral production rollout for accepted Person rename
 
-Production runtime SHA: `50c64dd8d16c1a1b4ec8fec2ff7e9f272944114f`
+ARCHITECT ACCEPTED.
 
-Rollback SHA: `a9221699b4b725888213ff38e6673495a512042c`
+Production runtime / release:
+`50c64dd8d16c1a1b4ec8fec2ff7e9f272944114f`
 
-Canonical `production` was non-force fast-forwarded from the rollback SHA to the release SHA. `python3 ops/production/deploy.py --release-sha 50c64dd8d16c1a1b4ec8fec2ff7e9f272944114f --rollback-sha a9221699b4b725888213ff38e6673495a512042c --expected-alembic 0054` returned exit 0:
+Rollback:
+`a9221699b4b725888213ff38e6673495a512042c`
 
+Architect acceptance ledger:
+`d6e20de4fb6c11852247ddc6c14ced568e6a7862`
+
+Deploy result:
 - `DEPLOYMENT=PASS`
-- `RELEASE_HEAD=50c64dd8d16c1a1b4ec8fec2ff7e9f272944114f`
 - `HEALTH=PASS`
-- `ALEMBIC=0054`
-- `DB_CONTAINER_UNCHANGED=true`
-- `DB_VOLUME_UNCHANGED=true`
-- `ENV_FILE_UNCHANGED=true`
-- `API_RECREATED=true`
-- `WORKER_RECREATED=true`
+- Alembic `0054`
+- DB container unchanged
+- DB volume unchanged
+- environment file unchanged
+- API/worker recreated
+- rollback unused
+- deployed OpenAPI exposes strict `PATCH /graph/people/{person_id}` title-only body
+- deployed OpenAPI still exposes optional `window_index` on `GET /graph/people-workspace`
 
-Post-deploy read-only checks: GitHub `production`, runtime HEAD, and runtime `origin/production` equal the release SHA; health is `{"status":"ok"}`; Alembic is `0054 (head)`; OpenAPI `PATCH /graph/people/{person_id}` accepts only `title` (`additionalProperties` false); `GET /graph/people-workspace` still has optional `window_index`.
+No Executor coding/deploy task is active.
 
-No live Person rename was performed. Human acceptance from a rebuilt client remains separate.
+Human verification now requires a rebuilt client from current `main`:
 
-Alembic remains:
-`0054 / 0054`
+1. Rename the previously tested Person and verify the new title appears immediately in the Person detail.
+2. Verify global Search returns/displays the new persisted title.
+3. Verify the Task actor edge remains visible in `Участие в задачах` but is no longer duplicated in generic `Связи`.
+4. Verify ordinary non-actor generic relations remain visible.
+
+The shared Task/People topology-window mismatch and Person identity-candidate/email scan depth remain separate recorded follow-ups.
+
+No next coding phase without fresh Architect authorization.
