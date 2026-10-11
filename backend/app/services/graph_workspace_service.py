@@ -17,7 +17,13 @@ from app.domain.task_relations import PART_OF
 from app.domain.telegram_mtproto_visibility import telegram_mtproto_active_object_predicate
 from app.services.errors import ConstellationTooLargeError, NotFoundError, ValidationError
 from app.services.graph_service import GraphService
-from app.services.provenance import AGENT_ORIGIN, CONFIRMED_STATE, PROPOSED_STATE, REJECTED_STATE, USER_ORIGIN
+from app.services.provenance import (
+    AGENT_ORIGIN,
+    CONFIRMED_STATE,
+    PROPOSED_STATE,
+    REJECTED_STATE,
+    USER_ORIGIN,
+)
 
 DEFAULT_SEED_LIMIT = 12
 MAX_SEED_LIMIT = 24
@@ -87,11 +93,12 @@ class GraphWorkspaceService:
 
         if root_id is not None:
             return self._rooted_workspace(root_id, neighbor_limit, node_limit, max_complete_window_nodes)
-        return self._semantic_overview(
+        result, _task_ids = self.semantic_overview_snapshot(
             window_index=window_index,
             soft_target=soft_window_target or SOFT_WINDOW_NODE_TARGET,
             emergency_ceiling=max_complete_window_nodes or MAX_COMPLETE_WINDOW_NODES,
         )
+        return result
 
     def _rooted_workspace(
         self,
@@ -145,13 +152,16 @@ class GraphWorkspaceService:
             truncated=truncated,
         )
 
-    def _semantic_overview(
+    def semantic_overview_snapshot(
         self,
         *,
         window_index: int,
-        soft_target: int,
-        emergency_ceiling: int,
-    ) -> GraphWorkspaceResult:
+        soft_target: int | None = None,
+        emergency_ceiling: int | None = None,
+    ) -> tuple[GraphWorkspaceResult, frozenset[UUID]]:
+        """One canonical semantic packing for a requested window and its Task universe."""
+        soft_target = soft_target or SOFT_WINDOW_NODE_TARGET
+        emergency_ceiling = emergency_ceiling or MAX_COMPLETE_WINDOW_NODES
         constellations = self._overview_constellations(emergency_ceiling)
         windows = self._pack_constellation_windows(constellations, soft_target)
         if not windows:
@@ -166,7 +176,14 @@ class GraphWorkspaceService:
             root_ids.append(constellation.root_id)
         edge_map = self._complete_edges_among_nodes({}, node_map)
         window_count = len(windows)
-        return GraphWorkspaceResult(
+        task_ids = {
+            member.id
+            for window in windows
+            for constellation in window
+            for member in constellation.members.values()
+            if member.kind == "task"
+        }
+        result = GraphWorkspaceResult(
             root_id=None,
             seed_ids=root_ids,
             nodes=self._ordered_nodes(node_map, None),
@@ -179,6 +196,7 @@ class GraphWorkspaceService:
             constellation_root_ids=tuple(root_ids),
             semantic_window_complete=True,
         )
+        return result, frozenset(task_ids)
 
     def _overview_constellations(self, emergency_ceiling: int) -> list[_Constellation]:
         """One overview unit is a confirmed visible Task-map component.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -533,6 +534,45 @@ def test_people_semantic_windows_match_task_projection(people_client, db_session
     assert "window index is out of range" in oor.json()["detail"]
 
 
+def test_people_overview_packs_canonical_semantics_once(people_client, db_session, monkeypatch) -> None:
+    from app.services.graph_workspace_service import GraphWorkspaceService
+
+    _patch_one_task_windows(monkeypatch)
+    people = _people(db_session)
+    for index, day in enumerate((1, 2, 3), start=1):
+        person = people.create_person(f"Window {index}")
+        _actor_task(
+            db_session,
+            person.id,
+            f"Task {index}",
+            due_at=datetime(2026, day, 1, tzinfo=UTC),
+        )
+    db_session.flush()
+    packs = {"n": 0}
+    original = GraphWorkspaceService._pack_constellation_windows
+
+    def tracked(self, constellations, soft_target):
+        packs["n"] += 1
+        return original(self, constellations, soft_target)
+
+    monkeypatch.setattr(GraphWorkspaceService, "_pack_constellation_windows", tracked)
+    response = people_client.get("/graph/people-workspace", params={"window_index": 1, "seed_limit": 1})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window_count"] == 3
+    assert body["window_index"] == 1
+    assert len(body["nodes"]) == 1
+    assert packs["n"] == 1
+
+
+def test_people_geography_check_does_not_materialize_anchor_pairs() -> None:
+    from app.services import person_graph_workspace_service as people_module
+
+    source = Path(people_module.__file__).read_text(encoding="utf-8")
+    assert "_qualifying_anchor_pairs" not in source
+    assert "def semantic_overview_snapshot" not in source
+
+
 def test_people_semantic_window_without_tasks_holds_unanchored_people(people_client, db_session) -> None:
     person = _people(db_session).create_person("Only Person")
     db_session.flush()
@@ -567,15 +607,25 @@ def test_people_semantic_window_ignores_seed_limit_and_salience_membership(peopl
 def test_people_semantic_window_ceiling_and_geography_fail_closed(people_client, db_session, monkeypatch) -> None:
     from app.services import graph_workspace_service as graph_module
     from app.services import person_graph_workspace_service as people_module
+    from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 
     people = _people(db_session)
     people.create_person("One")
     people.create_person("Two")
     db_session.flush()
+    loaded = {"n": 0}
+    original_load = PersonGraphWorkspaceService._load_semantic_people
+
+    def tracked_load(self, selected_task_ids):
+        loaded["n"] += 1
+        return original_load(self, selected_task_ids)
+
+    monkeypatch.setattr(PersonGraphWorkspaceService, "_load_semantic_people", tracked_load)
     monkeypatch.setattr(people_module, "MAX_COMPLETE_WINDOW_NODES", 1)
     ceiling = people_client.get("/graph/people-workspace")
     assert ceiling.status_code == 422
     assert ceiling.json()["detail"] == "people semantic window exceeds completeness ceiling"
+    assert loaded["n"] == 0
     monkeypatch.setattr(people_module, "MAX_COMPLETE_WINDOW_NODES", graph_module.MAX_COMPLETE_WINDOW_NODES)
 
     hidden = people.create_person("Hidden Anchor")

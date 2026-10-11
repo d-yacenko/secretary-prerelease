@@ -227,22 +227,16 @@ class PersonGraphWorkspaceService:
     def _overview(self, window_index: int) -> PeopleWorkspaceResult:
         graph = GraphWorkspaceService(self._session, self._user_id)
         try:
-            workspace = graph.get_workspace(window_index=window_index)
+            workspace, universe = graph.semantic_overview_snapshot(window_index=window_index)
         except ValidationError as exc:
             if "window index is out of range" in str(exc):
                 raise ValidationError("people window index is out of range") from exc
             raise
         selected_task_ids = {node.id for node in workspace.nodes if node.kind == "task"}
-        universe = set(selected_task_ids)
-        for index in range(workspace.window_count):
-            if index == workspace.window_index:
-                continue
-            other = graph.get_workspace(window_index=index)
-            universe.update(node.id for node in other.nodes if node.kind == "task")
         self._require_projectable_anchor_geography(universe)
-        visible = self._people_for_semantic_window(selected_task_ids)
-        if len(visible) > MAX_COMPLETE_WINDOW_NODES:
+        if self._count_semantic_people(selected_task_ids) > MAX_COMPLETE_WINDOW_NODES:
             raise ValidationError("people semantic window exceeds completeness ceiling")
+        visible = self._load_semantic_people(selected_task_ids)
         scores = self._scores()
         visible.sort(
             key=lambda person: (-scores.get(person.id, 0), person.title.casefold(), str(person.id))
@@ -263,24 +257,78 @@ class PersonGraphWorkspaceService:
             )
         )
 
-    def _people_for_semantic_window(self, selected_task_ids: set[UUID]) -> list[Object]:
-        anchored_here = self._qualifying_anchor_exists(Object.id, selected_task_ids)
-        any_anchor = self._qualifying_anchor_exists(Object.id, None)
+    def _semantic_people_filter(self, selected_task_ids: set[UUID]):
+        return or_(
+            self._qualifying_anchor_exists(Object.id, selected_task_ids),
+            ~self._qualifying_anchor_exists(Object.id, None),
+        )
+
+    def _count_semantic_people(self, selected_task_ids: set[UUID]) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(Object)
+                .where(*self._active_filters(), self._semantic_people_filter(selected_task_ids))
+            )
+            or 0
+        )
+
+    def _load_semantic_people(self, selected_task_ids: set[UUID]) -> list[Object]:
         return list(
             self._session.scalars(
-                select(Object).where(*self._active_filters(), or_(anchored_here, ~any_anchor))
+                select(Object).where(
+                    *self._active_filters(),
+                    self._semantic_people_filter(selected_task_ids),
+                )
             )
         )
 
     def _require_projectable_anchor_geography(self, universe: set[UUID]) -> None:
-        grouped: dict[UUID, set[UUID]] = {}
-        for person_id, task_id in self._qualifying_anchor_pairs():
-            grouped.setdefault(person_id, set()).add(task_id)
-        for task_ids in grouped.values():
-            if len(task_ids) > PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP or any(
-                task_id not in universe for task_id in task_ids
-            ):
-                raise ValidationError("people semantic window geography is incomplete")
+        if self._over_cap_anchor_exists() or self._unmapped_anchor_exists(universe):
+            raise ValidationError("people semantic window geography is incomplete")
+
+    def _over_cap_anchor_exists(self) -> bool:
+        task = aliased(Object)
+        person = aliased(Object)
+        grouped = (
+            select(person.id)
+            .select_from(person)
+            .join(Edge, and_(Edge.target_id == person.id, Edge.user_id == self._user_id))
+            .join(task, task.id == Edge.source_id)
+            .where(*self._active_anchor_person_filters(person), *self._qualifying_anchor_conditions(task))
+            .group_by(person.id)
+            .having(func.count(func.distinct(task.id)) > PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP)
+            .limit(1)
+            .subquery()
+        )
+        return self._session.scalar(select(literal(1)).select_from(grouped).limit(1)) is not None
+
+    def _unmapped_anchor_exists(self, universe: set[UUID]) -> bool:
+        task = aliased(Object)
+        person = aliased(Object)
+        conditions = [
+            *self._active_anchor_person_filters(person),
+            *self._qualifying_anchor_conditions(task),
+        ]
+        if universe:
+            conditions.append(task.id.notin_(universe))
+        found = self._session.scalar(
+            select(literal(1))
+            .select_from(person)
+            .join(Edge, and_(Edge.target_id == person.id, Edge.user_id == self._user_id))
+            .join(task, task.id == Edge.source_id)
+            .where(*conditions)
+            .limit(1)
+        )
+        return found is not None
+
+    def _active_anchor_person_filters(self, person):
+        return (
+            person.user_id == self._user_id,
+            person.kind == PERSON_KIND,
+            person.state != REJECTED_STATE,
+            object_is_active(person),
+        )
 
     def _qualifying_anchor_exists(self, person_id_column, task_ids: set[UUID] | None):
         if task_ids is not None and not task_ids:
@@ -295,28 +343,6 @@ class PersonGraphWorkspaceService:
         if task_ids is not None:
             conditions.append(task.id.in_(task_ids))
         return exists(select(Edge.id).select_from(Edge).join(task, task.id == Edge.source_id).where(*conditions))
-
-    def _qualifying_anchor_pairs(self) -> list[tuple[UUID, UUID]]:
-        task = aliased(Object)
-        person = aliased(Object)
-        rows = self._session.execute(
-            select(person.id, task.id)
-            .select_from(person)
-            .join(
-                Edge,
-                and_(Edge.target_id == person.id, Edge.user_id == self._user_id),
-            )
-            .join(task, task.id == Edge.source_id)
-            .where(
-                person.user_id == self._user_id,
-                person.kind == PERSON_KIND,
-                person.state != REJECTED_STATE,
-                object_is_active(person),
-                *self._qualifying_anchor_conditions(task),
-            )
-            .distinct()
-        )
-        return [(person_id, task_id) for person_id, task_id in rows]
 
     def _qualifying_anchor_conditions(self, task):
         return (
