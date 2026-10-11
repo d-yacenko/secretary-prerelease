@@ -185,7 +185,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       return;
     }
     final selected = widget.controller.selectedObject;
-    final id = selected != null && selected.kind == 'person' ? selected.id : null;
+    final id = selected != null && selected.kind == 'person'
+        ? selected.id
+        : null;
     if (id == _trackedPersonId) {
       return;
     }
@@ -273,7 +275,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       }
     }
     try {
-      final workspace = await widget.apiClient.getPeopleWorkspace(rootId: personId);
+      final workspace = await widget.apiClient.getPeopleWorkspace(
+        rootId: personId,
+      );
       if (!_rootedDetailResponseCurrent(
         personId: personId,
         token: token,
@@ -412,7 +416,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       final task = result.task;
       final next = PersonTaskInvolvement(
         edgeId: edge.id,
-        taskId: edge.sourceId.isNotEmpty ? edge.sourceId : (task?.id ?? previous?.taskId ?? ''),
+        taskId: edge.sourceId.isNotEmpty
+            ? edge.sourceId
+            : (task?.id ?? previous?.taskId ?? ''),
         title: task?.title ?? previous?.title ?? '',
         status: task?.status ?? previous?.status,
         completionMode: task?.completionMode ?? previous?.completionMode,
@@ -501,7 +507,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         return;
       }
       setState(() {
-        _personTaskReconcileWarning = 'Изменение сохранено, обзор обновится позже';
+        _personTaskReconcileWarning =
+            'Изменение сохранено, обзор обновится позже';
       });
     } finally {
       _personReconcileActive = false;
@@ -683,7 +690,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     required List<SecretaryEdge> edges,
   }) {
     _healthyPeopleLandscape = null;
-    final positions = Map<String, Offset>.from(widget.controller.visiblePositions);
+    final positions = Map<String, Offset>.from(
+      widget.controller.visiblePositions,
+    );
     if (widget.controller.mode == GraphWorkspaceMode.tasks) {
       final canonical = _canonicalTaskTopLefts(nodes);
       if (canonical != null) {
@@ -792,16 +801,19 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final selected = widget.controller.selectedObject;
     final peopleMode = widget.controller.mode == GraphWorkspaceMode.people;
     final showPeopleInspector = peopleMode && _peopleInspectorOpen;
-    final showDesktopPane = isWide && (showPeopleInspector || (!peopleMode && selected != null));
+    final showDesktopPane =
+        isWide && (showPeopleInspector || (!peopleMode && selected != null));
     final canvas = KeyedSubtree(
       key: const ValueKey('graph-canvas-region'),
       child: _buildCanvas(context),
     );
     final details = peopleMode
-        ? (showPeopleInspector ? _peopleInspector(context, compact: !isWide) : null)
+        ? (showPeopleInspector
+              ? _peopleInspector(context, compact: !isWide)
+              : null)
         : selected == null
-            ? null
-            : _buildDetailPanel(context, compact: !isWide);
+        ? null
+        : _buildDetailPanel(context, compact: !isWide);
 
     return Column(
       children: [
@@ -849,7 +861,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               : Stack(
                   children: [
                     Positioned.fill(child: canvas),
-                    if (showPeopleInspector || (!peopleMode && selected != null))
+                    if (showPeopleInspector ||
+                        (!peopleMode && selected != null))
                       Positioned(
                         left: 0,
                         right: 0,
@@ -858,16 +871,18 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           elevation: 4,
                           child: peopleMode
                               ? SizedBox(
-                                  height: MediaQuery.sizeOf(context).height * 0.45,
+                                  height:
+                                      MediaQuery.sizeOf(context).height * 0.45,
                                   child: details,
                                 )
                               : ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxHeight:
-                                  MediaQuery.sizeOf(context).height * 0.45,
-                            ),
-                            child: details,
-                          ),
+                                  constraints: BoxConstraints(
+                                    maxHeight:
+                                        MediaQuery.sizeOf(context).height *
+                                        0.45,
+                                  ),
+                                  child: details,
+                                ),
                         ),
                       ),
                   ],
@@ -885,14 +900,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   Widget _overviewWindowControls() {
     final people = widget.controller.mode == GraphWorkspaceMode.people;
-    final status = people
-        ? 'Люди · страница ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}'
-        : 'Область ${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}';
+    final area =
+        '${widget.controller.windowIndex + 1} из ${widget.controller.windowCount}';
+    final status = people ? 'Люди · область $area' : 'Область $area';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Tooltip(
-          message: people ? 'Предыдущие люди' : 'Предыдущая область графа',
+          message: people ? 'Предыдущая область' : 'Предыдущая область графа',
           child: IconButton(
             key: const ValueKey('graph-overview-window-previous'),
             visualDensity: VisualDensity.compact,
@@ -902,12 +917,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             icon: const Icon(Icons.chevron_left),
           ),
         ),
-        Text(
-          key: const ValueKey('graph-overview-window-status'),
-          status,
-        ),
+        Text(key: const ValueKey('graph-overview-window-status'), status),
         Tooltip(
-          message: people ? 'Следующие люди' : 'Следующая область графа',
+          message: people ? 'Следующая область' : 'Следующая область графа',
           child: IconButton(
             key: const ValueKey('graph-overview-window-next'),
             visualDensity: VisualDensity.compact,
@@ -1014,7 +1026,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               key: const ValueKey('people-inspector-toggle'),
               onPressed: _togglePeopleInspector,
               icon: Icon(
-                _peopleInspectorOpen ? Icons.view_sidebar_outlined : Icons.view_sidebar,
+                _peopleInspectorOpen
+                    ? Icons.view_sidebar_outlined
+                    : Icons.view_sidebar,
               ),
               label: Text(_peopleInspectorCue()),
             ),
@@ -1117,7 +1131,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                       ],
                       selected: {_peopleInspectorCandidates},
                       onSelectionChanged: (value) {
-                        setState(() => _peopleInspectorCandidates = value.first);
+                        setState(
+                          () => _peopleInspectorCandidates = value.first,
+                        );
                       },
                     ),
                   )
@@ -1261,71 +1277,74 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               style: Theme.of(context).textTheme.titleSmall,
             ),
           const SizedBox(height: 8),
-                        if (controller.promotionSuppressions.isNotEmpty) ...[
-                          ExpansionTile(
-                            key: const ValueKey('promotion-hidden-suggestions'),
-                            tilePadding: EdgeInsets.zero,
-                            initiallyExpanded: false,
-                            title: Text(
-                              'Скрытые предложения · ${controller.promotionSuppressions.length}',
-                              style: Theme.of(context).textTheme.labelLarge,
-                            ),
-                            children: [
-                              for (final item in controller.promotionSuppressions)
-                                ListTile(
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text(
-                                    item.displayValue,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  subtitle: Text(
-                                    '${providerLabel(item.provider)} · ${item.canonicalValue}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  trailing: TextButton(
-                                    onPressed: () => _applyPromotion(item, 'retract'),
-                                    child: const Text('Вернуть'),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        if (controller.promotionCandidatesTruncated)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Text(
-                              'Показана часть предложений: просмотрены не все недавние сообщения.',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final cardWidth = constraints.maxWidth < 680
-                                ? constraints.maxWidth
-                                : 320.0;
-                            return Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                for (final candidate in controller.promotionCandidates)
-                                  SizedBox(
-                                    width: cardWidth,
-                                    child: _promotionCandidate(context, candidate),
-                                  ),
-                              ],
-                            );
-                          },
-                        ),
+          if (controller.promotionSuppressions.isNotEmpty) ...[
+            ExpansionTile(
+              key: const ValueKey('promotion-hidden-suggestions'),
+              tilePadding: EdgeInsets.zero,
+              initiallyExpanded: false,
+              title: Text(
+                'Скрытые предложения · ${controller.promotionSuppressions.length}',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              children: [
+                for (final item in controller.promotionSuppressions)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      item.displayValue,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      '${providerLabel(item.provider)} · ${item.canonicalValue}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: TextButton(
+                      onPressed: () => _applyPromotion(item, 'retract'),
+                      child: const Text('Вернуть'),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (controller.promotionCandidatesTruncated)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Показана часть предложений: просмотрены не все недавние сообщения.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final cardWidth = constraints.maxWidth < 680
+                  ? constraints.maxWidth
+                  : 320.0;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final candidate in controller.promotionCandidates)
+                    SizedBox(
+                      width: cardWidth,
+                      child: _promotionCandidate(context, candidate),
+                    ),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
   }
 
-  Widget _promotionCandidate(BuildContext context, PersonPromotionCandidate candidate) {
+  Widget _promotionCandidate(
+    BuildContext context,
+    PersonPromotionCandidate candidate,
+  ) {
     final scheme = Theme.of(context).colorScheme;
     final secondary = candidate.displayValue == candidate.canonicalValue
         ? null
@@ -1348,7 +1367,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                 CircleAvatar(
                   radius: 14,
                   backgroundColor: scheme.surfaceContainerHighest,
-                  child: Icon(iconForKind('person'), size: 16, color: scheme.onSurfaceVariant),
+                  child: Icon(
+                    iconForKind('person'),
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1356,9 +1379,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     candidate.displayValue,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: Theme.of(context).textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
@@ -1370,9 +1392,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                   secondary,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ),
             const SizedBox(height: 4),
@@ -1380,21 +1401,24 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               '${providerLabel(candidate.provider)} · ${_promotionExplanation(candidate)}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 6),
             Wrap(
               spacing: 4,
               children: [
                 TextButton(
-                  key: ValueKey('promotion-approve-${candidate.canonicalValue}'),
+                  key: ValueKey(
+                    'promotion-approve-${candidate.canonicalValue}',
+                  ),
                   onPressed: () => _applyPromotion(candidate, 'approve'),
                   child: const Text('Добавить'),
                 ),
                 TextButton(
-                  key: ValueKey('promotion-suppress-${candidate.canonicalValue}'),
+                  key: ValueKey(
+                    'promotion-suppress-${candidate.canonicalValue}',
+                  ),
                   onPressed: () => _applyPromotion(candidate, 'suppress'),
                   child: const Text('Не предлагать'),
                 ),
@@ -1462,16 +1486,21 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               children: [
                 Row(
                   children: [
-                    Icon(iconForKind(kind), size: 14, color: scheme.onSurfaceVariant),
+                    Icon(
+                      iconForKind(kind),
+                      size: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        provider == null || provider.isEmpty ? kind : providerLabel(provider),
+                        provider == null || provider.isEmpty
+                            ? kind
+                            : providerLabel(provider),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+                        style: Theme.of(context).textTheme.labelSmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
                       ),
                     ),
                   ],
@@ -1488,9 +1517,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                     when,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: Theme.of(context).textTheme.labelSmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
               ],
             ),
@@ -1536,8 +1564,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     final hits = count == 1
         ? '1 прямой контакт'
         : count >= 2 && count <= 4
-            ? '$count прямых контакта'
-            : '$count прямых контактов';
+        ? '$count прямых контакта'
+        : '$count прямых контактов';
     return '$hits · последнее ${_promotionWhen(candidate.latestOccurredAt)}';
   }
 
@@ -1548,7 +1576,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     final local = parsed.toLocal();
     final now = DateTime.now();
-    final sameDay = local.year == now.year && local.month == now.month && local.day == now.day;
+    final sameDay =
+        local.year == now.year &&
+        local.month == now.month &&
+        local.day == now.day;
     if (sameDay) {
       return 'сегодня';
     }
@@ -1663,20 +1694,25 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           _canvasViewportSize = viewportSize;
         }
         final usingShared = sharedFrame != null;
-        if (widget.controller.shouldFitAfterLayout || usingShared || _worldFrameShared) {
+        if (widget.controller.shouldFitAfterLayout ||
+            usingShared ||
+            _worldFrameShared) {
           final fitMatrix = widget.controller.shouldFitAfterLayout
               ? (usingShared
-                  ? fitSharedLayer(frame: sharedFrame, viewportSize: viewportSize)
-                  : hybrid != null
-                      ? hybridFitTransform(
-                          graphBounds: bounds,
-                          viewportSize: viewportSize,
-                        )
-                      : GraphLayout.fitTransform(
-                          positions: positions,
-                          viewportSize: viewportSize,
-                          nodeSizes: overviewSizes,
-                        ))
+                    ? fitSharedLayer(
+                        frame: sharedFrame,
+                        viewportSize: viewportSize,
+                      )
+                    : hybrid != null
+                    ? hybridFitTransform(
+                        graphBounds: bounds,
+                        viewportSize: viewportSize,
+                      )
+                    : GraphLayout.fitTransform(
+                        positions: positions,
+                        viewportSize: viewportSize,
+                        nodeSizes: overviewSizes,
+                      ))
               : null;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) {
@@ -1686,7 +1722,9 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
               _transform.value = fitMatrix;
               widget.controller.clearFitRequest();
             }
-            final box = _graphViewportKey.currentContext?.findRenderObject() as RenderBox?;
+            final box =
+                _graphViewportKey.currentContext?.findRenderObject()
+                    as RenderBox?;
             if (usingShared && box != null && box.attached && box.hasSize) {
               final global = box.localToGlobal(Offset.zero);
               final previous = _viewportGlobal;
@@ -1757,9 +1795,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                           top: 12,
                           child: IgnorePointer(
                             child: Material(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
                                 child: Text(
                                   widget.controller.taskLayoutWarning!,
                                   key: const ValueKey('task-layout-warning'),
@@ -1841,9 +1884,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     HybridFocusPresentation? hybrid,
   ) {
     final edgePositions = Map<String, Offset>.from(positions);
-    final nodeSizes = <String, Size>{
-      ...?_peopleOverviewCardSizes(nodes),
-    };
+    final nodeSizes = <String, Size>{...?_peopleOverviewCardSizes(nodes)};
     if (hybrid != null) {
       for (final node in hybrid.scene.nodes) {
         edgePositions[node.id] = hybrid.displayTopLeft[node.id] ?? node.topLeft;
@@ -2230,9 +2271,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
     } finally {
       if (mounted) {
         setState(() => _partOfSubmitting = false);
@@ -2633,9 +2673,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                                   )
                                   .toList()
                             : results;
-                        final parents = await _confirmedParentsForDuplicateTasks(
-                          filtered,
-                        );
+                        final parents =
+                            await _confirmedParentsForDuplicateTasks(filtered);
                         if (!context.mounted) {
                           return;
                         }
@@ -2669,9 +2708,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
                               confirmedParentTitleByTaskId:
                                   confirmedParentTitles,
                               selected: target?.id == item.id,
-                              bookmarkColor: widget.bookmarkController?.colorFor(
-                                item.id,
-                              ),
+                              bookmarkColor: widget.bookmarkController
+                                  ?.colorFor(item.id),
                               onTap: () => setState(() => target = item),
                             );
                           },
@@ -2871,9 +2909,14 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     return null;
   }
 
-  Future<void> _rejectConfirmedAgentRelation(BuildContext context, SecretaryEdge edge) async {
-    final sourceTitle = widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId;
-    final targetTitle = widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId;
+  Future<void> _rejectConfirmedAgentRelation(
+    BuildContext context,
+    SecretaryEdge edge,
+  ) async {
+    final sourceTitle =
+        widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId;
+    final targetTitle =
+        widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -3008,7 +3051,8 @@ class _PersonDetailSection extends StatelessWidget {
   final bool taskMutationBusy;
   final String? taskMutationError;
   final String? taskReconcileWarning;
-  final Future<void> Function(Future<_ActorEdgeResult> Function() action) onTaskMutation;
+  final Future<void> Function(Future<_ActorEdgeResult> Function() action)
+  onTaskMutation;
   final Future<void> Function() onChanged;
   final Future<void> Function() onRename;
   final Future<void> Function(String survivorId) onMerged;
@@ -3033,7 +3077,10 @@ class _PersonDetailSection extends StatelessWidget {
             CircleAvatar(
               radius: 18,
               backgroundColor: scheme.surfaceContainerHighest,
-              child: Icon(iconForKind('person'), color: scheme.onSurfaceVariant),
+              child: Icon(
+                iconForKind('person'),
+                color: scheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -3044,9 +3091,8 @@ class _PersonDetailSection extends StatelessWidget {
                     person.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: Theme.of(context).textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   TextButton(
                     key: const ValueKey('person-rename'),
@@ -3063,9 +3109,8 @@ class _PersonDetailSection extends StatelessWidget {
                       cues,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                 ],
               ),
@@ -3117,8 +3162,12 @@ class _PersonDetailSection extends StatelessWidget {
                 child: _metricChip(context, 'Сообщения · часть'),
               ),
             if (person.salience != null)
-              _metricChip(context, personSalienceTierLabel(person.salience!.tier)),
-            if (lastContact != null) _metricChip(context, 'Последний контакт · $lastContact'),
+              _metricChip(
+                context,
+                personSalienceTierLabel(person.salience!.tier),
+              ),
+            if (lastContact != null)
+              _metricChip(context, 'Последний контакт · $lastContact'),
           ],
         ),
         const SizedBox(height: 12),
@@ -3161,9 +3210,12 @@ class _PersonDetailSection extends StatelessWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: person.taskInvolvement.map((row) => _taskTile(context, row)).toList(),
+            children: person.taskInvolvement
+                .map((row) => _taskTile(context, row))
+                .toList(),
           ),
-        if (person.taskInvolvementTruncated) const Text('Показаны не все задачи'),
+        if (person.taskInvolvementTruncated)
+          const Text('Показаны не все задачи'),
         const SizedBox(height: 8),
         const _DetailSectionHeader(title: 'Недавние сообщения'),
         if (person.recentCommunications.isEmpty)
@@ -3175,9 +3227,12 @@ class _PersonDetailSection extends StatelessWidget {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: person.recentCommunications.map((row) => _flowTile(context, row)).toList(),
+            children: person.recentCommunications
+                .map((row) => _flowTile(context, row))
+                .toList(),
           ),
-        if (person.recentCommunicationsTruncated) const Text('Показаны не все сообщения'),
+        if (person.recentCommunicationsTruncated)
+          const Text('Показаны не все сообщения'),
         const SizedBox(height: 12),
         const _DetailSectionHeader(title: 'Известные контакты'),
         if (person.salience != null)
@@ -3224,13 +3279,17 @@ class _PersonDetailSection extends StatelessWidget {
           );
         }),
         if (person.salience != null &&
-            (person.identityCandidates.isNotEmpty || person.identityCandidatesTruncated)) ...[
+            (person.identityCandidates.isNotEmpty ||
+                person.identityCandidatesTruncated)) ...[
           const _DetailSectionHeader(title: 'Возможные контакты'),
-          ...person.identityCandidates.map((candidate) => _candidateBlock(context, candidate)),
+          ...person.identityCandidates.map(
+            (candidate) => _candidateBlock(context, candidate),
+          ),
           if (person.identityCandidatesTruncated)
             const Text('Показаны не все возможные контакты'),
         ],
-        if (person.salience != null && person.rejectedIdentityCandidates.isNotEmpty) ...[
+        if (person.salience != null &&
+            person.rejectedIdentityCandidates.isNotEmpty) ...[
           const _DetailSectionHeader(title: 'Отклонённые предложения'),
           ...person.rejectedIdentityCandidates.map(_rejectedCandidateRow),
         ],
@@ -3287,7 +3346,10 @@ class _PersonDetailSection extends StatelessWidget {
     await onMerged(survivorId);
   }
 
-  Widget _candidateBlock(BuildContext context, PersonIdentityCandidate candidate) {
+  Widget _candidateBlock(
+    BuildContext context,
+    PersonIdentityCandidate candidate,
+  ) {
     final exact = candidate.displayValue == candidate.canonicalValue
         ? ''
         : candidate.canonicalValue;
@@ -3320,7 +3382,8 @@ class _PersonDetailSection extends StatelessWidget {
               ),
             ],
           ),
-        if (candidate.state == 'conflicted' && candidate.conflictingPersonId != null)
+        if (candidate.state == 'conflicted' &&
+            candidate.conflictingPersonId != null)
           TextButton(
             key: ValueKey('person-merge-conflict-${candidate.canonicalValue}'),
             onPressed: () => _openMerge(
@@ -3405,7 +3468,8 @@ class _PersonDetailSection extends StatelessWidget {
     final due = _shortWhen(row.dueAt);
     final kind = row.completionMode == 'ongoing' ? 'Направление' : 'Задача';
     final tileId = row.edgeId.isEmpty ? row.taskId : row.edgeId;
-    final removable = row.edgeId.isNotEmpty &&
+    final removable =
+        row.edgeId.isNotEmpty &&
         row.edgeState == 'confirmed' &&
         (row.edgeOrigin == 'user' || row.edgeOrigin == 'agent');
     final proposed = row.edgeId.isNotEmpty && row.edgeState == 'proposed';
@@ -3430,9 +3494,8 @@ class _PersonDetailSection extends StatelessWidget {
                       row.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: Theme.of(context).textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -3530,7 +3593,9 @@ class _PersonDetailSection extends StatelessWidget {
     });
   }
 
-  Future<void> _changeTaskLink(Future<_ActorEdgeResult> Function() action) async {
+  Future<void> _changeTaskLink(
+    Future<_ActorEdgeResult> Function() action,
+  ) async {
     await onTaskMutation(action);
   }
 
@@ -3556,7 +3621,9 @@ class _PersonDetailSection extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        row.provider == null ? row.kind : providerLabel(row.provider!),
+                        row.provider == null
+                            ? row.kind
+                            : providerLabel(row.provider!),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelSmall,
@@ -3619,10 +3686,8 @@ class _PersonDetailSection extends StatelessWidget {
     final added = await showDialog<bool>(
       context: context,
       builder: (context) => _AddPersonEmailDialog(
-        onSubmit: (email) => apiClient.bindPersonEmail(
-          personId: person.personId,
-          email: email,
-        ),
+        onSubmit: (email) =>
+            apiClient.bindPersonEmail(personId: person.personId, email: email),
       ),
     );
     if (added == true) {
@@ -3714,7 +3779,11 @@ class _UnanchoredShelfEdgeTab extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.person_outline, size: 16, color: scheme.onSurfaceVariant),
+                  Icon(
+                    Icons.person_outline,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
                   Text(
                     '$count',
                     key: const ValueKey('unanchored-shelf-cue-count'),
@@ -3767,7 +3836,9 @@ class _GraphNodeCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         child: Container(
           width: compact ? kPeopleLandscapeOverviewCardWidth : kGraphNodeWidth,
-          height: compact ? kPeopleLandscapeOverviewCardHeight : kGraphNodeHeight,
+          height: compact
+              ? kPeopleLandscapeOverviewCardHeight
+              : kGraphNodeHeight,
           padding: compact
               ? const EdgeInsets.fromLTRB(6, 2, 6, 2)
               : const EdgeInsets.all(8),
@@ -3823,7 +3894,9 @@ class _GraphNodeCard extends StatelessWidget {
               SizedBox(
                 width: 18,
                 height: 18,
-                child: FittedBox(child: providerBadge(context, object.provider!)),
+                child: FittedBox(
+                  child: providerBadge(context, object.provider!),
+                ),
               ),
           ],
         ),
@@ -3833,14 +3906,16 @@ class _GraphNodeCard extends StatelessWidget {
             object.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(fontWeight: FontWeight.w600),
           ),
         ),
         Text(
           _graphNodeFooterLabel(object),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
       ],
     );
@@ -3848,9 +3923,8 @@ class _GraphNodeCard extends StatelessWidget {
 
   Widget _compactPersonNodeBody(BuildContext context, ColorScheme scheme) {
     final current = person;
-    final titleStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      fontWeight: FontWeight.w600,
-    );
+    final titleStyle = Theme.of(context).textTheme.bodyMedium
+        ?.copyWith(fontWeight: FontWeight.w600);
     return Row(
       key: ValueKey('person-summary-card-${object.id}'),
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -3861,7 +3935,11 @@ class _GraphNodeCard extends StatelessWidget {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              Icon(Icons.person_outline, size: 28, color: scheme.onSurfaceVariant),
+              Icon(
+                Icons.person_outline,
+                size: 28,
+                color: scheme.onSurfaceVariant,
+              ),
               if (current?.identityConflict ?? false)
                 Positioned(
                   right: -2,
@@ -3890,15 +3968,15 @@ class _GraphNodeCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: titleStyle,
               ),
-              if (personRoleCardSummary(current?.roleAssignments ?? const []) case final summary?)
+              if (personRoleCardSummary(current?.roleAssignments ?? const [])
+                  case final summary?)
                 Text(
                   summary,
                   key: Key('person-role-summary-${object.id}'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(context).textTheme.labelSmall
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
             ],
           ),
@@ -3915,7 +3993,11 @@ class _GraphNodeCard extends StatelessWidget {
           CircleAvatar(
             radius: 12,
             backgroundColor: scheme.surfaceContainerHighest,
-            child: Icon(iconForKind('person'), size: 14, color: scheme.onSurfaceVariant),
+            child: Icon(
+              iconForKind('person'),
+              size: 14,
+              color: scheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(width: 6),
           Expanded(
@@ -3923,7 +4005,8 @@ class _GraphNodeCard extends StatelessWidget {
               object.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -3943,7 +4026,11 @@ class _GraphNodeCard extends StatelessWidget {
             CircleAvatar(
               radius: 12,
               backgroundColor: scheme.surfaceContainerHighest,
-              child: Icon(iconForKind('person'), size: 14, color: scheme.onSurfaceVariant),
+              child: Icon(
+                iconForKind('person'),
+                size: 14,
+                color: scheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(width: 6),
             Expanded(
@@ -3951,9 +4038,8 @@ class _GraphNodeCard extends StatelessWidget {
                 object.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
             if (current.identityConflict)
@@ -3972,7 +4058,8 @@ class _GraphNodeCard extends StatelessWidget {
             key: Key('person-provider-cues-${object.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
         if (personRoleCardSummary(current.roleAssignments) case final summary?)
           Text(
@@ -3980,7 +4067,8 @@ class _GraphNodeCard extends StatelessWidget {
             key: Key('person-role-summary-${object.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           ),
         const Spacer(),
         Text(
@@ -3988,7 +4076,8 @@ class _GraphNodeCard extends StatelessWidget {
           key: Key('person-activity-footer-${object.id}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
         if (messageCountMetric(
               current.recentCommunicationCount,
@@ -4000,7 +4089,8 @@ class _GraphNodeCard extends StatelessWidget {
             key: Key('person-message-metric-${object.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
           )
         else
           Tooltip(
@@ -4010,7 +4100,8 @@ class _GraphNodeCard extends StatelessWidget {
               key: Key('person-message-partial-${object.id}'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
       ],
@@ -4360,15 +4451,17 @@ class _AddPersonEmailDialogState extends State<_AddPersonEmailDialog> {
             autofocus: true,
             decoration: const InputDecoration(
               labelText: 'Email',
-              helperText:
-                  'Добавляется только точный адрес, который вы подтверждаете как принадлежащий этому человеку.',
+              helperText: 'Добавляется только точный адрес, который вы подтверждаете как принадлежащий этому человеку.',
             ),
             onChanged: (_) => setState(() {}),
             onSubmitted: canSubmit ? (_) => _submit() : null,
           ),
           if (_error != null) ...[
             const SizedBox(height: 8),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ],
         ],
       ),
@@ -4445,12 +4538,17 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
       setState(() => _results = const []);
       return;
     }
-    final found = await widget.apiClient.getPeopleWorkspace(query: cleaned, seedLimit: 24);
+    final found = await widget.apiClient.getPeopleWorkspace(
+      query: cleaned,
+      seedLimit: 24,
+    );
     if (!mounted) {
       return;
     }
     setState(() {
-      _results = found.people.where((item) => item.personId != widget.currentPersonId).toList();
+      _results = found.people
+          .where((item) => item.personId != widget.currentPersonId)
+          .toList();
     });
   }
 
@@ -4531,9 +4629,14 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
               ),
               Text('Контакты: ${preview.identityCount}'),
               for (final cue in preview.identities) Text(cue),
-              Text('Связанные задачи: ${preview.actorCounts.values.fold<int>(0, (sum, value) => sum + value)}'),
+              Text(
+                'Связанные задачи: ${preview.actorCounts.values.fold<int>(0, (sum, value) => sum + value)}',
+              ),
               if (preview.blockers.isNotEmpty)
-                Text(preview.blockers.join(' '), key: const ValueKey('person-merge-blocker')),
+                Text(
+                  preview.blockers.join(' '),
+                  key: const ValueKey('person-merge-blocker'),
+                ),
               TextButton(
                 key: const ValueKey('person-merge-swap'),
                 onPressed: () {
@@ -4547,10 +4650,15 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Отмена')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
         FilledButton(
           key: const ValueKey('person-merge-confirm'),
-          onPressed: preview != null && preview.canMerge && !_busy ? _confirm : null,
+          onPressed: preview != null && preview.canMerge && !_busy
+              ? _confirm
+              : null,
           child: const Text('Объединить людей'),
         ),
       ],
@@ -4585,7 +4693,10 @@ class _PersonTaskChoice {
 }
 
 class _LinkPersonTaskDialog extends StatefulWidget {
-  const _LinkPersonTaskDialog({required this.apiClient, required this.personTitle});
+  const _LinkPersonTaskDialog({
+    required this.apiClient,
+    required this.personTitle,
+  });
 
   final SecretaryApiClient apiClient;
   final String personTitle;
@@ -4625,7 +4736,10 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
       });
       return;
     }
-    final found = await widget.apiClient.searchObjects(query: cleaned, kind: 'task');
+    final found = await widget.apiClient.searchObjects(
+      query: cleaned,
+      kind: 'task',
+    );
     if (!mounted || token != _searchToken) {
       return;
     }
@@ -4671,14 +4785,17 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
                     key: ValueKey('person-task-role-$role'),
                     label: Text(personTaskLinkChoiceLabel(role)),
                     selected: _role == role,
-                    onSelected: (selected) => setState(() => _role = selected ? role : null),
+                    onSelected: (selected) =>
+                        setState(() => _role = selected ? role : null),
                   ),
               ],
             ),
             TextField(
               key: const ValueKey('person-task-search'),
               controller: _query,
-              decoration: const InputDecoration(labelText: 'Найти задачу или направление'),
+              decoration: const InputDecoration(
+                labelText: 'Найти задачу или направление',
+              ),
               onChanged: _search,
             ),
             for (final item in _results)
@@ -4694,7 +4811,8 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
                 subtitle: Text(
                   [
                     taskStatusLabel(item.status),
-                    if (item.dueAt != null && item.dueAt!.isNotEmpty) item.dueAt!,
+                    if (item.dueAt != null && item.dueAt!.isNotEmpty)
+                      item.dueAt!,
                   ].join(' · '),
                 ),
                 selected: _task?.id == item.id,
@@ -4716,14 +4834,17 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Отмена')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
         FilledButton(
           key: const ValueKey('person-task-add'),
           onPressed: _role == null || _task == null
               ? null
-              : () => Navigator.of(context).pop(
-                  _PersonTaskChoice(role: _role!, task: _task!),
-                ),
+              : () =>
+                    Navigator.of(context)
+                        .pop(_PersonTaskChoice(role: _role!, task: _task!)),
           child: const Text('Добавить'),
         ),
       ],
@@ -4745,7 +4866,9 @@ class _RenamePersonDialog extends StatefulWidget {
 }
 
 class _RenamePersonDialogState extends State<_RenamePersonDialog> {
-  late final TextEditingController _name = TextEditingController(text: widget.initialTitle);
+  late final TextEditingController _name = TextEditingController(
+    text: widget.initialTitle,
+  );
   var _submitting = false;
   String? _error;
 
@@ -4919,7 +5042,8 @@ class _DirectRelationInventory extends StatefulWidget {
   final Widget? Function(SecretaryEdge edge) trailingBuilder;
 
   @override
-  State<_DirectRelationInventory> createState() => _DirectRelationInventoryState();
+  State<_DirectRelationInventory> createState() =>
+      _DirectRelationInventoryState();
 }
 
 class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
@@ -4939,7 +5063,8 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
   void didUpdateWidget(covariant _DirectRelationInventory oldWidget) {
     super.didUpdateWidget(oldWidget);
     final signature = _edgeSignature(widget.controller);
-    if (oldWidget.objectId != widget.objectId || signature != _loadedSignature) {
+    if (oldWidget.objectId != widget.objectId ||
+        signature != _loadedSignature) {
       _loadedSignature = signature;
       _load();
     }
@@ -4954,7 +5079,9 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
     final objectId = widget.objectId;
     try {
       final response = await widget.apiClient.getObjectNeighbors(objectId);
-      if (!mounted || generation != _requestGeneration || widget.objectId != objectId) {
+      if (!mounted ||
+          generation != _requestGeneration ||
+          widget.objectId != objectId) {
         return;
       }
       setState(() {
@@ -4978,27 +5105,33 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
     final rows = <_RelationRow>[];
     final seen = <String>{};
     for (final edge in widget.controller.edges) {
-      if (edge.sourceId != widget.objectId && edge.targetId != widget.objectId) {
+      if (edge.sourceId != widget.objectId &&
+          edge.targetId != widget.objectId) {
         continue;
       }
       if (isTaskActorRelationType(edge.type)) {
         continue;
       }
-      final otherId = edge.sourceId == widget.objectId ? edge.targetId : edge.sourceId;
+      final otherId = edge.sourceId == widget.objectId
+          ? edge.targetId
+          : edge.sourceId;
       final other = widget.controller.nodeById(otherId);
       rows.add(
         _RelationRow(
           edge: edge,
           otherId: otherId,
-          sourceTitle: widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId,
-          targetTitle: widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId,
+          sourceTitle:
+              widget.controller.nodeById(edge.sourceId)?.title ?? edge.sourceId,
+          targetTitle:
+              widget.controller.nodeById(edge.targetId)?.title ?? edge.targetId,
           onMap: other != null,
         ),
       );
       seen.add(edge.id);
     }
     for (final neighbor in _neighbors) {
-      if (seen.contains(neighbor.edge.id) || isTaskActorRelationType(neighbor.edge.type)) {
+      if (seen.contains(neighbor.edge.id) ||
+          isTaskActorRelationType(neighbor.edge.type)) {
         continue;
       }
       final onMap = widget.controller.nodeById(neighbor.object.id) != null;

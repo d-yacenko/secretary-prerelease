@@ -85,9 +85,11 @@ def test_overview_orders_by_salience_and_search_reaches_the_rest(people_client, 
     overview = people_client.get("/graph/people-workspace", params={"seed_limit": 1})
     assert overview.status_code == 200
     body = overview.json()
-    assert body["truncated"] is True
-    assert [node["kind"] for node in body["nodes"]] == ["person"]
+    assert body["truncated"] is False
+    assert body["window_count"] == 1
+    assert [node["kind"] for node in body["nodes"]] == ["person", "person"]
     assert body["nodes"][0]["id"] == str(salient.id)
+    assert {node["id"] for node in body["nodes"]} == {str(salient.id), str(quiet.id)}
     assert author.id not in {uuid.UUID(node["id"]) for node in body["nodes"]}
     assert str(rejected.id) not in {node["id"] for node in body["nodes"]}
     assert str(deleted.id) not in {node["id"] for node in body["nodes"]}
@@ -404,118 +406,199 @@ def _telegram(db_session, realm: str, *, peer_kind: str, sender: int, peer: int,
     return obj
 
 
-def test_people_overview_windows_cover_all_active_people(people_client, db_session) -> None:
+def _actor_task(db_session, person_id, title: str, *, due_at: datetime, role: str = "involves", edge_state: str = CONFIRMED_STATE, status: str = "open", task_state: str = CONFIRMED_STATE):
+    task = _graph(db_session).create_object(
+        ObjectCreate(
+            kind="task",
+            title=title,
+            origin=USER_ORIGIN,
+            state=task_state,
+            status=status,
+            due_at=due_at,
+        )
+    )
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=task.id,
+            target_id=person_id,
+            type=role,
+            origin=USER_ORIGIN,
+            state=edge_state,
+        )
+    )
+    return task
+
+
+def _patch_one_task_windows(monkeypatch) -> None:
+    from app.services import graph_workspace_service as graph_module
+
+    monkeypatch.setattr(graph_module, "SOFT_WINDOW_NODE_TARGET", 1)
+
+
+def test_people_semantic_windows_match_task_projection(people_client, db_session, monkeypatch) -> None:
+    _patch_one_task_windows(monkeypatch)
     people = _people(db_session)
-    created = []
-    for index in range(25):
-        person = people.create_person(f"Person {index:02d}")
-        created.append(person)
-        _link_task(db_session, person.id, f"Task {index:02d}")
+    left = people.create_person("Left Person")
+    right = people.create_person("Right Person")
+    shared = people.create_person("Shared Person")
+    loose = people.create_person("Loose Person")
+    generic = people.create_person("Generic Person")
+    proposed = people.create_person("Proposed Person")
+    terminal = people.create_person("Terminal Person")
     rejected = people.create_person("Rejected Extra")
     rejected.state = REJECTED_STATE
     deleted = people.create_person("Deleted Extra")
     tombstone_object(deleted)
+    early = datetime(2026, 1, 1, tzinfo=UTC)
+    later = datetime(2026, 2, 1, tzinfo=UTC)
+    left_task = _actor_task(db_session, left.id, "Left task", due_at=early)
+    right_task = _actor_task(db_session, right.id, "Right task", due_at=later)
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=left_task.id,
+            target_id=shared.id,
+            type="involves",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+        )
+    )
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=right_task.id,
+            target_id=shared.id,
+            type="delegated_to",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+        )
+    )
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=generic.id,
+            target_id=left_task.id,
+            type="related_to",
+            origin=USER_ORIGIN,
+            state=CONFIRMED_STATE,
+        )
+    )
+    _graph(db_session).create_edge(
+        EdgeCreate(
+            source_id=left_task.id,
+            target_id=proposed.id,
+            type="waiting_on",
+            origin=USER_ORIGIN,
+            state="proposed",
+        )
+    )
+    _actor_task(db_session, terminal.id, "Done task", due_at=later, status="done")
     db_session.flush()
 
     pages = []
-    for window_index in range(3):
+    for window_index in range(2):
+        graph = people_client.get("/graph/workspace", params={"window_index": window_index})
         response = people_client.get(
             "/graph/people-workspace",
-            params={"seed_limit": 12, "window_index": window_index},
+            params={"seed_limit": 1, "window_index": window_index},
         )
+        assert graph.status_code == 200
         assert response.status_code == 200
         body = response.json()
         pages.append(body)
-        assert body["window_index"] == window_index
-        assert body["window_count"] == 3
-        assert body["has_previous_window"] is (window_index > 0)
-        assert body["has_next_window"] is (window_index < 2)
-        assert body["truncated"] is True
+        for key in ("window_index", "window_count", "has_previous_window", "has_next_window"):
+            assert body[key] == graph.json()[key]
+        assert body["window_count"] == 2
 
-    assert [len(page["nodes"]) for page in pages] == [12, 12, 1]
-    ids = [node["id"] for page in pages for node in page["nodes"]]
-    assert len(ids) == len(set(ids))
-    assert set(ids) == {str(person.id) for person in created}
-    assert str(rejected.id) not in ids
-    assert str(deleted.id) not in ids
-
-    last = people_client.get(
-        "/graph/people-workspace",
-        params={"seed_limit": 12, "window_index": 2},
-    )
-    assert last.status_code == 200
-    assert last.json()["window_index"] == 2
-    oor = people_client.get(
-        "/graph/people-workspace",
-        params={"seed_limit": 12, "window_index": 3},
-    )
+    left_ids = {node["id"] for node in pages[0]["nodes"]}
+    right_ids = {node["id"] for node in pages[1]["nodes"]}
+    assert str(left.id) in left_ids
+    assert str(left.id) not in right_ids
+    assert str(right.id) in right_ids
+    assert str(right.id) not in left_ids
+    assert str(shared.id) in left_ids
+    assert str(shared.id) in right_ids
+    left_shared = next(person for person in pages[0]["people"] if person["person_id"] == str(shared.id))
+    right_shared = next(person for person in pages[1]["people"] if person["person_id"] == str(shared.id))
+    assert left_shared["landscape_task_ids"] == right_shared["landscape_task_ids"]
+    assert len(left_shared["landscape_task_ids"]) == 2
+    for page in pages:
+        ids = {node["id"] for node in page["nodes"]}
+        assert str(loose.id) in ids
+        assert str(generic.id) in ids
+        assert str(proposed.id) in ids
+        assert str(terminal.id) in ids
+        assert str(rejected.id) not in ids
+        assert str(deleted.id) not in ids
+        assert str(left_task.id) not in ids
+    oor = people_client.get("/graph/people-workspace", params={"window_index": 2})
     assert oor.status_code == 422
     assert "window index is out of range" in oor.json()["detail"]
 
 
-def test_people_overview_first_window_keeps_salience_order(people_client, db_session) -> None:
-    people = _people(db_session)
-    quiet = people.create_person("Aaa Quiet")
-    people.attach(quiet.id, normalize_email("quiet@example.com"))
-    salient = people.create_person("Zzz Salient")
-    _link_task(db_session, salient.id, "Open commitment")
-    mid = people.create_person("Mmm Mid")
-    _link_task(db_session, mid.id, "Mid commitment")
+def test_people_semantic_window_without_tasks_holds_unanchored_people(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Only Person")
     db_session.flush()
-
-    first = people_client.get("/graph/people-workspace", params={"seed_limit": 2})
-    assert first.status_code == 200
-    body = first.json()
+    body = people_client.get("/graph/people-workspace", params={"seed_limit": 1}).json()
     assert body["window_index"] == 0
-    assert body["window_count"] == 2
+    assert body["window_count"] == 1
     assert body["has_previous_window"] is False
-    assert body["has_next_window"] is True
-    first_ids = [node["id"] for node in body["nodes"]]
-    assert str(quiet.id) not in first_ids
-    assert set(first_ids) == {str(salient.id), str(mid.id)}
-
-    second = people_client.get(
-        "/graph/people-workspace",
-        params={"seed_limit": 2, "window_index": 1},
-    )
-    assert second.status_code == 200
-    assert [node["id"] for node in second.json()["nodes"]] == [str(quiet.id)]
+    assert body["has_next_window"] is False
+    assert [node["id"] for node in body["nodes"]] == [str(person.id)]
 
 
-def test_people_outside_ranked_prefix_appear_once_later(people_client, db_session, monkeypatch) -> None:
-    from app.services import person_salience_service as salience_service
-
-    monkeypatch.setattr(salience_service, "MAX_RANKED_PEOPLE", 3)
+def test_people_semantic_window_ignores_seed_limit_and_salience_membership(people_client, db_session, monkeypatch) -> None:
+    from app.services.person_graph_workspace_service import PersonGraphWorkspaceService
 
     people = _people(db_session)
-    ranked = []
-    for index in range(3):
-        person = people.create_person(f"Ranked {index}")
-        ranked.append(person)
-        _link_task(db_session, person.id, f"Ranked task {index}")
-    remainder = [
-        people.create_person("Remainder Alpha"),
-        people.create_person("Remainder Beta"),
-    ]
+    alpha = people.create_person("Alpha")
+    beta = people.create_person("Beta")
     db_session.flush()
+    scores = {alpha.id: 1, beta.id: 9}
 
-    pages = [
-        people_client.get(
-            "/graph/people-workspace",
-            params={"seed_limit": 2, "window_index": index},
-        ).json()
-        for index in range(3)
-    ]
-    ids = [node["id"] for page in pages for node in page["nodes"]]
-    assert len(ids) == len(set(ids)) == 5
-    assert set(ids) == {str(person.id) for person in [*ranked, *remainder]}
-    # Remainder people are outside the bounded ranked prefix and land after it.
-    assert str(remainder[0].id) in {node["id"] for node in pages[1]["nodes"]} | {
-        node["id"] for node in pages[2]["nodes"]
-    }
-    assert str(remainder[1].id) in {node["id"] for node in pages[1]["nodes"]} | {
-        node["id"] for node in pages[2]["nodes"]
-    }
+    monkeypatch.setattr(PersonGraphWorkspaceService, "_scores", lambda self: scores)
+    first = people_client.get("/graph/people-workspace", params={"seed_limit": 1})
+    assert first.status_code == 200
+    assert [node["id"] for node in first.json()["nodes"]] == [str(beta.id), str(alpha.id)]
+    scores[alpha.id] = 20
+    scores[beta.id] = 2
+    second = people_client.get("/graph/people-workspace", params={"seed_limit": 1})
+    assert [node["id"] for node in second.json()["nodes"]] == [str(alpha.id), str(beta.id)]
+    assert second.json()["window_count"] == 1
+
+
+def test_people_semantic_window_ceiling_and_geography_fail_closed(people_client, db_session, monkeypatch) -> None:
+    from app.services import graph_workspace_service as graph_module
+    from app.services import person_graph_workspace_service as people_module
+
+    people = _people(db_session)
+    people.create_person("One")
+    people.create_person("Two")
+    db_session.flush()
+    monkeypatch.setattr(people_module, "MAX_COMPLETE_WINDOW_NODES", 1)
+    ceiling = people_client.get("/graph/people-workspace")
+    assert ceiling.status_code == 422
+    assert ceiling.json()["detail"] == "people semantic window exceeds completeness ceiling"
+    monkeypatch.setattr(people_module, "MAX_COMPLETE_WINDOW_NODES", graph_module.MAX_COMPLETE_WINDOW_NODES)
+
+    hidden = people.create_person("Hidden Anchor")
+    task = _actor_task(db_session, hidden.id, "Unmapped task", due_at=datetime(2026, 3, 1, tzinfo=UTC))
+    db_session.flush()
+    original = graph_module.GraphWorkspaceService._visible_tasks
+
+    def without_unmapped(self):
+        tasks = original(self)
+        tasks.pop(task.id, None)
+        return tasks
+
+    monkeypatch.setattr(graph_module.GraphWorkspaceService, "_visible_tasks", without_unmapped)
+    unmapped = people_client.get("/graph/people-workspace")
+    assert unmapped.status_code == 422
+    assert unmapped.json()["detail"] == "people semantic window geography is incomplete"
+    assert "Hidden Anchor" not in unmapped.text
+
+    monkeypatch.undo()
+    monkeypatch.setattr(people_module, "PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP", 0)
+    incomplete = people_client.get("/graph/people-workspace")
+    assert incomplete.status_code == 422
+    assert incomplete.json()["detail"] == "people semantic window geography is incomplete"
 
 
 def test_people_overview_empty_and_conflict_window_params(people_client, db_session) -> None:
@@ -545,17 +628,12 @@ def test_people_overview_empty_and_conflict_window_params(people_client, db_sess
     assert "window index is out of range" in search.json()["detail"]
 
 
-def test_people_overview_remainder_page_is_bounded(people_client, db_session, monkeypatch) -> None:
+def test_people_overview_does_not_page_people_by_seed_limit(people_client, db_session, monkeypatch) -> None:
     from app.services import person_graph_workspace_service as module
 
     people = _people(db_session)
-    for index in range(5):
-        person = people.create_person(f"Bound {index:02d}")
-        _link_task(db_session, person.id, f"Bound task {index:02d}")
-    for index in range(10):
-        people.create_person(f"Fill {index:02d}")
+    created = [people.create_person(f"Fill {index:02d}") for index in range(5)]
     db_session.flush()
-
     calls: list[tuple[int, int]] = []
     original = module.PersonGraphWorkspaceService._people_page
 
@@ -564,14 +642,12 @@ def test_people_overview_remainder_page_is_bounded(people_client, db_session, mo
         return original(self, exclude=exclude, limit=limit, offset=offset)
 
     monkeypatch.setattr(module.PersonGraphWorkspaceService, "_people_page", tracked)
-    response = people_client.get(
-        "/graph/people-workspace",
-        params={"seed_limit": 4, "window_index": 2},
-    )
+    response = people_client.get("/graph/people-workspace", params={"seed_limit": 1})
     assert response.status_code == 200
-    assert response.json()["window_count"] == 4
-    assert calls
-    assert all(limit <= 4 for limit, _offset in calls)
+    body = response.json()
+    assert body["window_count"] == 1
+    assert {node["id"] for node in body["nodes"]} == {str(person.id) for person in created}
+    assert calls == []
 
 
 def test_person_rename_trims_and_persists(people_client, db_session) -> None:

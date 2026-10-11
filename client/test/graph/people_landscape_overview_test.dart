@@ -90,9 +90,12 @@ bool _compactCardsOverlap(Offset left, Offset right) {
     kPeopleLandscapeOverviewCardWidth,
     kPeopleLandscapeOverviewCardHeight,
   );
-  return Rect.fromLTWH(left.dx, left.dy, card.width, card.height).overlaps(
-    Rect.fromLTWH(right.dx, right.dy, card.width, card.height),
-  );
+  return Rect.fromLTWH(
+    left.dx,
+    left.dy,
+    card.width,
+    card.height,
+  ).overlaps(Rect.fromLTWH(right.dx, right.dy, card.width, card.height));
 }
 
 void main() {
@@ -100,7 +103,9 @@ void main() {
     const center = Offset(400, 220);
     final overview = _project(
       personIds: const ['person-a'],
-      people: [_person('person-a', anchors: const ['task-a'])],
+      people: [
+        _person('person-a', anchors: const ['task-a']),
+      ],
       taskCenters: const {'task-a': center},
     );
     expect(overview.usable, isTrue);
@@ -112,7 +117,9 @@ void main() {
   test('a visible Person without a presentation blocks every position', () {
     final overview = _project(
       personIds: const ['person-a', 'person-z'],
-      people: [_person('person-a', anchors: const ['task-a'])],
+      people: [
+        _person('person-a', anchors: const ['task-a']),
+      ],
       taskCenters: const {'task-a': Offset(10, 20)},
     );
     expect(overview.usable, isFalse);
@@ -145,7 +152,9 @@ void main() {
     };
     final anchoredOnly = _project(
       personIds: const ['person-anchored'],
-      people: [_person('person-anchored', anchors: const ['task-a', 'task-b'])],
+      people: [
+        _person('person-anchored', anchors: const ['task-a', 'task-b']),
+      ],
       taskCenters: centers,
     );
     final overview = _project(
@@ -158,7 +167,10 @@ void main() {
       taskCenters: centers,
     );
     expect(overview.usable, isTrue);
-    expect(overview.positions['person-anchored'], anchoredOnly.positions['person-anchored']);
+    expect(
+      overview.positions['person-anchored'],
+      anchoredOnly.positions['person-anchored'],
+    );
     expect(overview.unanchoredPersonIds, ['person-shelf-a', 'person-shelf-b']);
     final bounds = overview.taskBounds!;
     final stripX = overview.positions['person-shelf-a']!.dx;
@@ -168,12 +180,16 @@ void main() {
       lessThan(overview.positions['person-shelf-b']!.dy),
     );
     expect(
-      overview.positions['person-anchored']!.dx + kPeopleLandscapeOverviewCardWidth,
+      overview.positions['person-anchored']!.dx +
+          kPeopleLandscapeOverviewCardWidth,
       lessThan(stripX),
     );
     for (final id in overview.unanchoredPersonIds) {
       final topLeft = overview.positions[id]!;
-      expect(topLeft.dx, greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap));
+      expect(
+        topLeft.dx,
+        greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap),
+      );
       final card = Rect.fromLTWH(
         topLeft.dx,
         topLeft.dy,
@@ -201,32 +217,46 @@ void main() {
     expect(reversed.positions, overview.positions);
   });
 
-  test('empty complete Task context places unanchored People on a neutral shelf', () {
-    final overview = _project(
-      personIds: const ['person-b', 'person-a'],
-      people: [_person('person-b'), _person('person-a')],
-    );
-    expect(overview.usable, isTrue);
-    expect(overview.taskBounds, isNull);
-    expect(overview.positions['person-a'], kPeopleLandscapeNeutralShelfOrigin);
-    expect(
-      overview.positions['person-b'],
-      const Offset(
-        0,
-        kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap,
-      ),
-    );
-    expect(overview.positions['person-a']!.dx, overview.positions['person-b']!.dx);
-    expect(
-      _compactCardsOverlap(overview.positions['person-a']!, overview.positions['person-b']!),
-      isFalse,
-    );
-  });
+  test(
+    'empty complete Task context places unanchored People on a neutral shelf',
+    () {
+      final overview = _project(
+        personIds: const ['person-b', 'person-a'],
+        people: [_person('person-b'), _person('person-a')],
+      );
+      expect(overview.usable, isTrue);
+      expect(overview.taskBounds, isNull);
+      expect(
+        overview.positions['person-a'],
+        kPeopleLandscapeNeutralShelfOrigin,
+      );
+      expect(
+        overview.positions['person-b'],
+        const Offset(
+          0,
+          kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap,
+        ),
+      );
+      expect(
+        overview.positions['person-a']!.dx,
+        overview.positions['person-b']!.dx,
+      );
+      expect(
+        _compactCardsOverlap(
+          overview.positions['person-a']!,
+          overview.positions['person-b']!,
+        ),
+        isFalse,
+      );
+    },
+  );
 
   test('inactive canonical centers yield no Person positions', () {
     final overview = _project(
       personIds: const ['person-a'],
-      people: [_person('person-a', anchors: const ['task-a'])],
+      people: [
+        _person('person-a', anchors: const ['task-a']),
+      ],
       taskCenters: const {'task-a': Offset(10, 20)},
       active: false,
     );
@@ -264,83 +294,103 @@ void main() {
     expect(overview.unresolvedPersonIds, ['person-b']);
   });
 
-  test('controller replaces People Task context instead of accumulating it', () async {
-    final firstEdge = _partOf('edge-old', 'task-old-child', 'task-old');
-    final responses = [
-      GraphWorkspaceOut(
-        seedIds: const [],
-        nodes: const [],
-        edges: const [],
-        truncated: false,
-        landscapeTasks: [_task('task-old'), _task('task-old-child')],
-        landscapeTaskEdges: [firstEdge],
-        landscapeTaskContextComplete: true,
-      ),
-      GraphWorkspaceOut(
-        seedIds: const [],
-        nodes: const [],
-        edges: const [],
-        truncated: false,
-        landscapeTasks: [_task('task-new')],
-        landscapeTaskContextComplete: false,
-      ),
-    ];
-    var index = 0;
-    final controller = GraphWorkspaceController(
-      apiClient: _PeopleApi(() => responses[index++]),
-      authController: _FakeAuth(),
-    );
+  test(
+    'controller replaces People Task context instead of accumulating it',
+    () async {
+      final firstEdge = _partOf('edge-old', 'task-old-child', 'task-old');
+      final responses = [
+        GraphWorkspaceOut(
+          seedIds: const [],
+          nodes: const [],
+          edges: const [],
+          truncated: false,
+          landscapeTasks: [_task('task-old'), _task('task-old-child')],
+          landscapeTaskEdges: [firstEdge],
+          landscapeTaskContextComplete: true,
+        ),
+        GraphWorkspaceOut(
+          seedIds: const [],
+          nodes: const [],
+          edges: const [],
+          truncated: false,
+          landscapeTasks: [_task('task-new')],
+          landscapeTaskContextComplete: false,
+        ),
+      ];
+      var index = 0;
+      final controller = GraphWorkspaceController(
+        apiClient: _PeopleApi(() => responses[index++]),
+        authController: _FakeAuth(),
+      );
 
-    await controller.setMode(GraphWorkspaceMode.people);
-    expect(controller.landscapeTasks.map((task) => task.id), ['task-old', 'task-old-child']);
-    expect(controller.landscapeTaskEdges.map((edge) => edge.id), ['edge-old']);
-    expect(controller.landscapeTaskContextComplete, isTrue);
+      await controller.setMode(GraphWorkspaceMode.people);
+      expect(controller.landscapeTasks.map((task) => task.id), [
+        'task-old',
+        'task-old-child',
+      ]);
+      expect(controller.landscapeTaskEdges.map((edge) => edge.id), [
+        'edge-old',
+      ]);
+      expect(controller.landscapeTaskContextComplete, isTrue);
 
-    await controller.loadOverview();
-    expect(controller.landscapeTasks.map((task) => task.id), ['task-new']);
-    expect(controller.landscapeTaskEdges, isEmpty);
-    expect(controller.landscapeTaskContextComplete, isFalse);
-    expect(controller.nodes, isEmpty);
-    expect(controller.edges, isEmpty);
+      await controller.loadOverview();
+      expect(controller.landscapeTasks.map((task) => task.id), ['task-new']);
+      expect(controller.landscapeTaskEdges, isEmpty);
+      expect(controller.landscapeTaskContextComplete, isFalse);
+      expect(controller.nodes, isEmpty);
+      expect(controller.edges, isEmpty);
 
-    controller.resetSession();
-    expect(controller.landscapeTasks, isEmpty);
-    expect(controller.landscapeTaskEdges, isEmpty);
-    expect(controller.landscapeTaskContextComplete, isTrue);
-  });
+      controller.resetSession();
+      expect(controller.landscapeTasks, isEmpty);
+      expect(controller.landscapeTaskEdges, isEmpty);
+      expect(controller.landscapeTaskContextComplete, isTrue);
+    },
+  );
 
-  test('person ids keep their projected positions when input order changes', () {
-    const centers = {
-      'task-left': Offset(80, 40),
-      'task-right': Offset(640, 40),
-    };
-    final forward = _project(
-      personIds: const ['person-b', 'person-a'],
-      people: [
-        _person('person-b', anchors: const ['task-right']),
-        _person('person-a', anchors: const ['task-left']),
-      ],
-      taskCenters: centers,
-    );
-    final reversed = _project(
-      personIds: const ['person-a', 'person-b'],
-      people: [
-        _person('person-a', anchors: const ['task-left']),
-        _person('person-b', anchors: const ['task-right']),
-      ],
-      taskCenters: centers,
-    );
-    expect(forward.usable, isTrue);
-    expect(forward.positions, reversed.positions);
-    expect(peopleMarkerCenter(forward.positions['person-a']!), centers['task-left']);
-    expect(peopleMarkerCenter(forward.positions['person-b']!), centers['task-right']);
-  });
+  test(
+    'person ids keep their projected positions when input order changes',
+    () {
+      const centers = {
+        'task-left': Offset(80, 40),
+        'task-right': Offset(640, 40),
+      };
+      final forward = _project(
+        personIds: const ['person-b', 'person-a'],
+        people: [
+          _person('person-b', anchors: const ['task-right']),
+          _person('person-a', anchors: const ['task-left']),
+        ],
+        taskCenters: centers,
+      );
+      final reversed = _project(
+        personIds: const ['person-a', 'person-b'],
+        people: [
+          _person('person-a', anchors: const ['task-left']),
+          _person('person-b', anchors: const ['task-right']),
+        ],
+        taskCenters: centers,
+      );
+      expect(forward.usable, isTrue);
+      expect(forward.positions, reversed.positions);
+      expect(
+        peopleMarkerCenter(forward.positions['person-a']!),
+        centers['task-left'],
+      );
+      expect(
+        peopleMarkerCenter(forward.positions['person-b']!),
+        centers['task-right'],
+      );
+    },
+  );
 
   test('dense anchored spread stays left of the unanchored strip', () {
     const center = Offset(0, 0);
     final people = [
       for (var index = 0; index < 40; index++)
-        _person('person-${index.toString().padLeft(2, '0')}', anchors: const ['task-shared']),
+        _person(
+          'person-${index.toString().padLeft(2, '0')}',
+          anchors: const ['task-shared'],
+        ),
       _person('person-shelf-b'),
       _person('person-shelf-a'),
     ];
@@ -367,13 +417,20 @@ void main() {
     final bounds = overview.taskBounds!;
     var anchoredRight = double.negativeInfinity;
     for (final id in overview.anchoredPersonIds) {
-      final right = overview.positions[id]!.dx + kPeopleLandscapeOverviewCardWidth;
+      final right =
+          overview.positions[id]!.dx + kPeopleLandscapeOverviewCardWidth;
       anchoredRight = right > anchoredRight ? right : anchoredRight;
       expect(right, lessThan(stripX));
     }
     expect(anchoredRight, greaterThan(bounds.right));
-    expect(stripX, greaterThanOrEqualTo(anchoredRight + kPeopleLandscapeShelfGap));
-    expect(stripX, greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap));
+    expect(
+      stripX,
+      greaterThanOrEqualTo(anchoredRight + kPeopleLandscapeShelfGap),
+    );
+    expect(
+      stripX,
+      greaterThanOrEqualTo(bounds.right + kPeopleLandscapeShelfGap),
+    );
 
     final withoutShelf = _project(
       personIds: overview.anchoredPersonIds,
@@ -405,11 +462,32 @@ void main() {
     expect(identical.positions, repeated.positions);
     expect(_clusterCenter(identical.positions).dx, closeTo(shared.dx, 0.01));
     expect(_clusterCenter(identical.positions).dy, closeTo(shared.dy, 0.01));
-    expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-b']!), isFalse);
-    expect(_compactCardsOverlap(identical.positions['person-a']!, identical.positions['person-c']!), isFalse);
-    expect(_compactCardsOverlap(identical.positions['person-b']!, identical.positions['person-c']!), isFalse);
     expect(
-      _edgeGap(identical.positions['person-a']!, identical.positions['person-b']!),
+      _compactCardsOverlap(
+        identical.positions['person-a']!,
+        identical.positions['person-b']!,
+      ),
+      isFalse,
+    );
+    expect(
+      _compactCardsOverlap(
+        identical.positions['person-a']!,
+        identical.positions['person-c']!,
+      ),
+      isFalse,
+    );
+    expect(
+      _compactCardsOverlap(
+        identical.positions['person-b']!,
+        identical.positions['person-c']!,
+      ),
+      isFalse,
+    );
+    expect(
+      _edgeGap(
+        identical.positions['person-a']!,
+        identical.positions['person-b']!,
+      ),
       closeTo(kPeopleLandscapeIntraClusterGap, 0.01),
     );
     for (final position in identical.positions.values) {
@@ -429,7 +507,10 @@ void main() {
       (peopleMarkerCenter(pair.positions['person-a']!) -
               peopleMarkerCenter(pair.positions['person-b']!))
           .distance,
-      closeTo(kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap, 0.01),
+      closeTo(
+        kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap,
+        0.01,
+      ),
     );
 
     const left = Offset(10, 30);
@@ -442,10 +523,42 @@ void main() {
       ],
       taskCenters: const {'task-left': left, 'task-right': right},
     );
-    expect(_compactCardsOverlap(near.positions['person-a']!, near.positions['person-b']!), isFalse);
+    expect(
+      _compactCardsOverlap(
+        near.positions['person-a']!,
+        near.positions['person-b']!,
+      ),
+      isFalse,
+    );
     expect(peopleMarkerCenter(near.positions['person-a']!), left);
-    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, greaterThan(0));
-    expect((peopleMarkerCenter(near.positions['person-b']!) - right).distance, lessThan(220));
+    expect(
+      (peopleMarkerCenter(near.positions['person-b']!) - right).distance,
+      greaterThan(0),
+    );
+    expect(
+      (peopleMarkerCenter(near.positions['person-b']!) - right).distance,
+      lessThan(220),
+    );
+  });
+
+  test('semantic windows keep unanchored shelf and full-anchor positions', () {
+    const centers = {'task-a': Offset(100, 80), 'task-b': Offset(420, 200)};
+    final multi = _person('person-multi', anchors: const ['task-a', 'task-b']);
+    final shelf = _person('person-shelf');
+    final first = _project(
+      personIds: const ['person-multi', 'person-shelf'],
+      people: [multi, shelf],
+      taskCenters: centers,
+    );
+    final second = _project(
+      personIds: const ['person-shelf', 'person-multi'],
+      people: [shelf, multi],
+      taskCenters: centers,
+    );
+    expect(first.usable, isTrue);
+    expect(first.positions['person-multi'], second.positions['person-multi']);
+    expect(first.positions['person-shelf'], second.positions['person-shelf']);
+    expect(first.unanchoredPersonIds, ['person-shelf']);
   });
 }
 
@@ -460,6 +573,7 @@ class _PeopleApi extends SecretaryApiClient {
     String? query,
     int? seedLimit,
     int? neighborLimit,
+    int? windowIndex,
   }) async {
     return _next();
   }
@@ -467,9 +581,9 @@ class _PeopleApi extends SecretaryApiClient {
 
 class _FakeAuth extends AuthController {
   _FakeAuth()
-      : super(
-          apiClient: SecretaryApiClient(),
-          tokenStore: FakeTokenStore(),
-          serverUrlStore: FakeServerUrlStore(),
-        );
+    : super(
+        apiClient: SecretaryApiClient(),
+        tokenStore: FakeTokenStore(),
+        serverUrlStore: FakeServerUrlStore(),
+      );
 }

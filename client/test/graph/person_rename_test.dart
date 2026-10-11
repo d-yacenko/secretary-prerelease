@@ -89,7 +89,7 @@ void main() {
       final state = _RenameState();
       final harness = await _openUnrooted(tester, _client(state));
       final gets = state.peopleWorkspaceGets;
-      expect(find.text('Люди · страница 1 из 2'), findsOneWidget);
+      expect(find.text('Люди · область 1 из 2'), findsOneWidget);
 
       await _reveal(tester, find.byKey(const ValueKey('person-rename')));
       await tester.tap(find.byKey(const ValueKey('person-rename')));
@@ -107,7 +107,7 @@ void main() {
       expect(state.peopleWorkspaceGets, gets);
       expect(harness.graph.rootId, isNull);
       expect(harness.graph.windowIndex, 0);
-      expect(find.text('Люди · страница 1 из 2'), findsOneWidget);
+      expect(find.text('Люди · область 1 из 2'), findsOneWidget);
       expect(find.text('Ada Prime'), findsWidgets);
       expect(find.text('Ada'), findsNothing);
       expect(harness.graph.personFor('person-ada')?.title, 'Ada Prime');

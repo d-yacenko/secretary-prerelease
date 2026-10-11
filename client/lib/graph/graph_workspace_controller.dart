@@ -34,8 +34,8 @@ class GraphWorkspaceController extends ChangeNotifier {
   GraphWorkspaceController({
     required SecretaryApiClient apiClient,
     required AuthController authController,
-  })  : _apiClient = apiClient,
-        _authController = authController;
+  }) : _apiClient = apiClient,
+       _authController = authController;
 
   final SecretaryApiClient _apiClient;
   final AuthController _authController;
@@ -73,8 +73,7 @@ class GraphWorkspaceController extends ChangeNotifier {
   String? taskLayoutWarning;
   bool _detailVisitOpen = false;
   bool _detailVisitPreservesView = false;
-  int _unrootedTasksWindow = 0;
-  int _unrootedPeopleWindow = 0;
+  int _unrootedSemanticWindow = 0;
   List<String> _seedIds = const [];
   final List<String> _localContextAnchorIds = [];
 
@@ -92,6 +91,7 @@ class GraphWorkspaceController extends ChangeNotifier {
         )
         .toList();
   }
+
   Map<String, Offset> get positions => Map.unmodifiable(_positions);
   Map<String, Offset> get canonicalTaskCenters =>
       Map.unmodifiable(_canonicalTaskCenters);
@@ -102,8 +102,10 @@ class GraphWorkspaceController extends ChangeNotifier {
     );
   }
 
-  List<SecretaryObject> get landscapeTasks => List.unmodifiable(_landscapeTasks);
-  List<SecretaryEdge> get landscapeTaskEdges => List.unmodifiable(_landscapeTaskEdges);
+  List<SecretaryObject> get landscapeTasks =>
+      List.unmodifiable(_landscapeTasks);
+  List<SecretaryEdge> get landscapeTaskEdges =>
+      List.unmodifiable(_landscapeTaskEdges);
   bool get landscapeTaskContextComplete => _landscapeTaskContextComplete;
 
   PersonPresentation? personFor(String id) => _people[id];
@@ -149,8 +151,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     _edges.clear();
     _positions.clear();
     _clearCanonicalTaskCenters();
-    _unrootedTasksWindow = 0;
-    _unrootedPeopleWindow = 0;
+    _unrootedSemanticWindow = 0;
     _people.clear();
     _seedIds = const [];
     _landscapeTasks = const [];
@@ -167,11 +168,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     }
     final unrooted = rootId == null;
     if (unrooted) {
-      if (mode == GraphWorkspaceMode.tasks) {
-        _unrootedTasksWindow = windowIndex;
-      } else if (mode == GraphWorkspaceMode.people) {
-        _unrootedPeopleWindow = windowIndex;
-      }
+      _unrootedSemanticWindow = windowIndex;
     }
     final healthyUnrooted = unrooted && canonicalTaskCentersActive;
     final resolveCanonical = !canonicalTaskCentersActive;
@@ -180,9 +177,7 @@ class GraphWorkspaceController extends ChangeNotifier {
     selectedEdgeId = null;
     searchKindFilter = null;
     searchProviderFilter = null;
-    final restoredWindow = next == GraphWorkspaceMode.tasks
-        ? _unrootedTasksWindow
-        : _unrootedPeopleWindow;
+    final restoredWindow = _unrootedSemanticWindow;
     await _loadOverviewInternal(
       setLoading: true,
       windowIndex: restoredWindow,
@@ -240,7 +235,8 @@ class GraphWorkspaceController extends ChangeNotifier {
       layoutRoot: rootId,
       freshRoot: false,
       rootIdAfter: rootId,
-      selectObjectId: preservedSelection != null &&
+      selectObjectId:
+          preservedSelection != null &&
               workspace.nodes.any((node) => node.id == preservedSelection)
           ? preservedSelection
           : rootId,
@@ -255,7 +251,10 @@ class GraphWorkspaceController extends ChangeNotifier {
     if (loadState == GraphWorkspaceLoadState.loading) {
       return;
     }
-    await _loadOverviewInternal(setLoading: true, windowIndex: 0);
+    await _loadOverviewInternal(
+      setLoading: true,
+      windowIndex: _unrootedSemanticWindow,
+    );
   }
 
   Future<void> loadOverviewWindow(int index) async {
@@ -334,7 +333,8 @@ class GraphWorkspaceController extends ChangeNotifier {
         }
         workspace = await _fetchWorkspace(windowIndex: 0);
       }
-      final keptSelection = preserveSelection &&
+      final keptSelection =
+          preserveSelection &&
               previousSelection != null &&
               workspace.nodes.any((node) => node.id == previousSelection)
           ? previousSelection
@@ -347,10 +347,8 @@ class GraphWorkspaceController extends ChangeNotifier {
         selectObjectId: keptSelection,
         fitAfterLayout: fitAfterLayout,
       );
-      if (mode == GraphWorkspaceMode.people && rootId == null) {
-        _unrootedPeopleWindow = this.windowIndex;
-      } else if (mode == GraphWorkspaceMode.tasks && rootId == null) {
-        _unrootedTasksWindow = this.windowIndex;
+      if (rootId == null) {
+        _unrootedSemanticWindow = this.windowIndex;
       }
       if (resolveCanonical && rootId == null) {
         await _resolveUnrootedTaskLayout();
@@ -369,7 +367,9 @@ class GraphWorkspaceController extends ChangeNotifier {
   }
 
   String _workspaceErrorMessage(ApiException error) {
-    if (error.message.toLowerCase().contains('too large for complete overview')) {
+    if (error.message.toLowerCase().contains(
+      'too large for complete overview',
+    )) {
       return 'Это соцветие слишком велико для полного обзора. Нужен отдельный сфокусированный вид.';
     }
     return error.message;
@@ -431,7 +431,8 @@ class GraphWorkspaceController extends ChangeNotifier {
         layoutRoot: objectId,
         freshRoot: true,
         rootIdAfter: objectId,
-        selectObjectId: preservedSelection != null &&
+        selectObjectId:
+            preservedSelection != null &&
                 workspace.nodes.any((node) => node.id == preservedSelection)
             ? preservedSelection
             : objectId,
@@ -668,7 +669,8 @@ class GraphWorkspaceController extends ChangeNotifier {
         layoutRoot: objectId,
         freshRoot: true,
         rootIdAfter: objectId,
-        selectObjectId: preservedSelection != null &&
+        selectObjectId:
+            preservedSelection != null &&
                 workspace.nodes.any((node) => node.id == preservedSelection)
             ? preservedSelection
             : objectId,
@@ -690,7 +692,8 @@ class GraphWorkspaceController extends ChangeNotifier {
   Future<void> _installFreshOverview(int index) async {
     final previousSelection = selectedObjectId;
     final workspace = await _fetchWorkspace(windowIndex: index);
-    final keptSelection = previousSelection != null &&
+    final keptSelection =
+        previousSelection != null &&
             workspace.nodes.any((node) => node.id == previousSelection)
         ? previousSelection
         : null;
@@ -775,20 +778,16 @@ class GraphWorkspaceController extends ChangeNotifier {
     );
     _localContextAnchorIds.addAll(replays.map((replay) => replay.id));
     for (final replay in replays) {
-      _mergeWorkspace(
-        replay.workspace,
-        expandAround: replay.id,
-        notify: false,
-      );
+      _mergeWorkspace(replay.workspace, expandAround: replay.id, notify: false);
     }
     selectedObjectId =
         previousSelection != null && _nodes.containsKey(previousSelection)
-            ? previousSelection
-            : null;
+        ? previousSelection
+        : null;
     selectedEdgeId =
         previousEdge != null && _edges.any((edge) => edge.id == previousEdge)
-            ? previousEdge
-            : null;
+        ? previousEdge
+        : null;
     shouldFitAfterLayout = true;
     loadState = GraphWorkspaceLoadState.ready;
     errorMessage = null;
@@ -808,7 +807,8 @@ class GraphWorkspaceController extends ChangeNotifier {
     SecretaryEdge? edge,
   }) async {
     final sourceKind = nodeById(sourceId)?.kind;
-    final targetKind = target?.kind ?? (edge == null ? null : nodeById(edge.targetId)?.kind);
+    final targetKind =
+        target?.kind ?? (edge == null ? null : nodeById(edge.targetId)?.kind);
     if (edge != null &&
         relationInvalidatesTaskTopology(
           type: edge.type,
@@ -1021,7 +1021,8 @@ class GraphWorkspaceController extends ChangeNotifier {
       ..clear()
       ..addEntries(
         snapshot.centers.map(
-          (center) => MapEntry(center.taskId, Offset(center.worldX, center.worldY)),
+          (center) =>
+              MapEntry(center.taskId, Offset(center.worldX, center.worldY)),
         ),
       );
     canonicalTaskCentersActive = true;
@@ -1106,7 +1107,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     _applyWorkspace(workspace, layoutRoot: layoutRoot, freshRoot: freshRoot);
     rootId = rootIdAfter;
     truncated = workspace.truncated;
-    promotionCandidates = List<PersonPromotionCandidate>.from(workspace.promotionCandidates);
+    promotionCandidates = List<PersonPromotionCandidate>.from(
+      workspace.promotionCandidates,
+    );
     promotionCandidatesTruncated = workspace.promotionCandidatesTruncated;
     promotionSuppressions = List<PersonPromotionSuppression>.from(
       workspace.promotionSuppressions,
@@ -1118,7 +1121,9 @@ class GraphWorkspaceController extends ChangeNotifier {
     semanticWindowComplete = workspace.semanticWindowComplete;
     constellationRootIds = List<String>.from(workspace.constellationRootIds);
     _landscapeTasks = List<SecretaryObject>.from(workspace.landscapeTasks);
-    _landscapeTaskEdges = List<SecretaryEdge>.from(workspace.landscapeTaskEdges);
+    _landscapeTaskEdges = List<SecretaryEdge>.from(
+      workspace.landscapeTaskEdges,
+    );
     _landscapeTaskContextComplete = workspace.landscapeTaskContextComplete;
     selectedObjectId = selectObjectId;
     selectedEdgeId = null;

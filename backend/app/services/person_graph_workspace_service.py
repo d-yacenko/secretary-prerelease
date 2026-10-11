@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from uuid import UUID
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.db.models import Edge, Object, PersonIdentity, PersonIdentityEvidence
@@ -27,6 +27,7 @@ from app.services.errors import ConflictError, NotFoundError, ValidationError
 from app.services.graph_workspace_service import (
     DEFAULT_NEIGHBOR_LIMIT,
     DEFAULT_SEED_LIMIT,
+    MAX_COMPLETE_WINDOW_NODES,
     MAX_NEIGHBOR_LIMIT,
     MAX_SEED_LIMIT,
     GraphWorkspaceService,
@@ -108,7 +109,7 @@ class PersonGraphWorkspaceService:
             if window_index != 0:
                 raise ValidationError("people window index is out of range")
             return self._search(query.strip(), seed_limit)
-        return self._overview(seed_limit, window_index)
+        return self._overview(window_index)
 
     def correct_identity(
         self,
@@ -223,69 +224,112 @@ class PersonGraphWorkspaceService:
             promotion_suppressions=suppressions,
         )
 
-    def _overview(self, seed_limit: int, window_index: int) -> PeopleWorkspaceResult:
-        scores, ranked = self._ranked_people()
-        positive = [person for person in ranked if scores.get(person.id, 0) > 0]
-        positive.sort(
-            key=lambda person: (-scores[person.id], person.title.casefold(), str(person.id))
+    def _overview(self, window_index: int) -> PeopleWorkspaceResult:
+        graph = GraphWorkspaceService(self._session, self._user_id)
+        try:
+            workspace = graph.get_workspace(window_index=window_index)
+        except ValidationError as exc:
+            if "window index is out of range" in str(exc):
+                raise ValidationError("people window index is out of range") from exc
+            raise
+        selected_task_ids = {node.id for node in workspace.nodes if node.kind == "task"}
+        universe = set(selected_task_ids)
+        for index in range(workspace.window_count):
+            if index == workspace.window_index:
+                continue
+            other = graph.get_workspace(window_index=index)
+            universe.update(node.id for node in other.nodes if node.kind == "task")
+        self._require_projectable_anchor_geography(universe)
+        visible = self._people_for_semantic_window(selected_task_ids)
+        if len(visible) > MAX_COMPLETE_WINDOW_NODES:
+            raise ValidationError("people semantic window exceeds completeness ceiling")
+        scores = self._scores()
+        visible.sort(
+            key=lambda person: (-scores.get(person.id, 0), person.title.casefold(), str(person.id))
         )
-        ranked_ids = {person.id for person in positive}
-        total = int(
-            self._session.scalar(
-                select(func.count()).select_from(Object).where(*self._active_filters())
-            )
-            or 0
-        )
-        if total == 0:
-            if window_index != 0:
-                raise ValidationError("people window index is out of range")
-            return self._with_promotions(
-                self._result(
-                    None,
-                    [],
-                    [],
-                    [],
-                    False,
-                    include_details=False,
-                    scores=scores,
-                    window_index=0,
-                    window_count=1,
-                    has_previous_window=False,
-                    has_next_window=False,
-                )
-            )
-        window_count = (total + seed_limit - 1) // seed_limit
-        if window_index < 0 or window_index >= window_count:
-            raise ValidationError("people window index is out of range")
-        start = window_index * seed_limit
-        end = min(start + seed_limit, total)
-        from_ranked: list[Object] = []
-        if start < len(positive):
-            from_ranked = positive[start : min(end, len(positive))]
-        need = (end - start) - len(from_ranked)
-        rest: list[Object] = []
-        if need > 0:
-            rest = self._people_page(
-                exclude=ranked_ids,
-                limit=need,
-                offset=max(0, start - len(positive)),
-            )
-        visible = [*from_ranked, *rest]
-        truncated = window_count > 1
         return self._with_promotions(
             self._result(
                 None,
                 visible,
                 [],
                 [],
-                truncated,
+                workspace.window_count > 1,
                 include_details=False,
                 scores=scores,
-                window_index=window_index,
-                window_count=window_count,
-                has_previous_window=window_index > 0,
-                has_next_window=window_index + 1 < window_count,
+                window_index=workspace.window_index,
+                window_count=workspace.window_count,
+                has_previous_window=workspace.has_previous_window,
+                has_next_window=workspace.has_next_window,
             )
+        )
+
+    def _people_for_semantic_window(self, selected_task_ids: set[UUID]) -> list[Object]:
+        anchored_here = self._qualifying_anchor_exists(Object.id, selected_task_ids)
+        any_anchor = self._qualifying_anchor_exists(Object.id, None)
+        return list(
+            self._session.scalars(
+                select(Object).where(*self._active_filters(), or_(anchored_here, ~any_anchor))
+            )
+        )
+
+    def _require_projectable_anchor_geography(self, universe: set[UUID]) -> None:
+        grouped: dict[UUID, set[UUID]] = {}
+        for person_id, task_id in self._qualifying_anchor_pairs():
+            grouped.setdefault(person_id, set()).add(task_id)
+        for task_ids in grouped.values():
+            if len(task_ids) > PEOPLE_LANDSCAPE_TASK_ANCHOR_CAP or any(
+                task_id not in universe for task_id in task_ids
+            ):
+                raise ValidationError("people semantic window geography is incomplete")
+
+    def _qualifying_anchor_exists(self, person_id_column, task_ids: set[UUID] | None):
+        if task_ids is not None and not task_ids:
+            return literal(False)
+        task = aliased(Object)
+        conditions = [
+            Edge.user_id == self._user_id,
+            Edge.target_id == person_id_column,
+            Edge.source_id == task.id,
+            *self._qualifying_anchor_conditions(task),
+        ]
+        if task_ids is not None:
+            conditions.append(task.id.in_(task_ids))
+        return exists(select(Edge.id).select_from(Edge).join(task, task.id == Edge.source_id).where(*conditions))
+
+    def _qualifying_anchor_pairs(self) -> list[tuple[UUID, UUID]]:
+        task = aliased(Object)
+        person = aliased(Object)
+        rows = self._session.execute(
+            select(person.id, task.id)
+            .select_from(person)
+            .join(
+                Edge,
+                and_(Edge.target_id == person.id, Edge.user_id == self._user_id),
+            )
+            .join(task, task.id == Edge.source_id)
+            .where(
+                person.user_id == self._user_id,
+                person.kind == PERSON_KIND,
+                person.state != REJECTED_STATE,
+                object_is_active(person),
+                *self._qualifying_anchor_conditions(task),
+            )
+            .distinct()
+        )
+        return [(person_id, task_id) for person_id, task_id in rows]
+
+    def _qualifying_anchor_conditions(self, task):
+        return (
+            Edge.type.in_(tuple(TASK_ACTOR_ROLES)),
+            Edge.state == CONFIRMED_STATE,
+            task.user_id == self._user_id,
+            task.kind == "task",
+            task.state != REJECTED_STATE,
+            object_is_active(task),
+            or_(
+                task.status.is_(None),
+                task.status.notin_(tuple(TERMINAL_TASK_STATUSES_FOR_READS)),
+            ),
         )
 
     def _search(self, query: str, seed_limit: int) -> PeopleWorkspaceResult:

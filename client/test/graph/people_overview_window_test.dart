@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:personal_secretary/graph/graph_workspace_controller.dart';
 
 import 'graph_test_harness.dart';
 
 void main() {
-  testWidgets('single-page People overview omits window controls', (tester) async {
+  testWidgets('single-page People overview omits window controls', (
+    tester,
+  ) async {
     final calls = <String>[];
     final harness = await _openPeople(tester, (request) async {
       calls.add(request.url.query);
@@ -19,12 +20,26 @@ void main() {
     });
 
     expect(harness.graph.windowCount, 1);
-    expect(find.byKey(const ValueKey('graph-overview-window-status')), findsNothing);
-    expect(find.byKey(const ValueKey('graph-overview-window-next')), findsNothing);
-    expect(calls.any((query) => query.contains('window_index=0') || !query.contains('window_index')), isTrue);
+    expect(
+      find.byKey(const ValueKey('graph-overview-window-status')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('graph-overview-window-next')),
+      findsNothing,
+    );
+    expect(
+      calls.any(
+        (query) =>
+            query.contains('window_index=0') || !query.contains('window_index'),
+      ),
+      isTrue,
+    );
   });
 
-  testWidgets('multi-window People overview navigates with People wording', (tester) async {
+  testWidgets('multi-window People overview navigates with People wording', (
+    tester,
+  ) async {
     final calls = <String>[];
     final harness = await _openPeople(tester, (request) async {
       calls.add(request.url.query);
@@ -37,10 +52,15 @@ void main() {
           windowCount: 1,
         );
       }
-      final window = int.parse(request.url.queryParameters['window_index'] ?? '0');
+      final window = int.parse(
+        request.url.queryParameters['window_index'] ?? '0',
+      );
       if (window == 1) {
         return _peoplePage(
-          nodes: [_personNode('person-b', 'Bob'), _personNode('person-c', 'Cara')],
+          nodes: [
+            _personNode('person-b', 'Bob'),
+            _personNode('person-c', 'Cara'),
+          ],
           windowIndex: 1,
           windowCount: 3,
           hasPrevious: true,
@@ -63,9 +83,9 @@ void main() {
       );
     });
 
-    expect(find.text('Люди · страница 1 из 3'), findsOneWidget);
-    expect(find.byTooltip('Следующие люди'), findsOneWidget);
-    expect(find.byTooltip('Предыдущие люди'), findsOneWidget);
+    expect(find.text('Люди · область 1 из 3'), findsOneWidget);
+    expect(find.byTooltip('Следующая область'), findsOneWidget);
+    expect(find.byTooltip('Предыдущая область'), findsOneWidget);
     expect(find.text('Ada'), findsWidgets);
     expect(harness.graph.rootId, isNull);
 
@@ -75,29 +95,39 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
     await tester.pumpAndSettle();
-    expect(calls.where((query) => query.contains('window_index=1')), isNotEmpty);
-    expect(find.text('Люди · страница 2 из 3'), findsOneWidget);
+    expect(
+      calls.where((query) => query.contains('window_index=1')),
+      isNotEmpty,
+    );
+    expect(find.text('Люди · область 2 из 3'), findsOneWidget);
     expect(find.text('Bob'), findsWidgets);
     expect(find.text('Ada'), findsNothing);
     expect(harness.graph.rootId, isNull);
     expect(harness.graph.selectedObjectId, isNull);
 
-    await tester.tap(find.byKey(const ValueKey('graph-overview-window-previous')));
+    await tester.tap(
+      find.byKey(const ValueKey('graph-overview-window-previous')),
+    );
     await tester.pumpAndSettle();
-    expect(calls.where((query) => query.contains('window_index=0')).length, greaterThan(1));
-    expect(find.text('Люди · страница 1 из 3'), findsOneWidget);
+    expect(
+      calls.where((query) => query.contains('window_index=0')).length,
+      greaterThan(1),
+    );
+    expect(find.text('Люди · область 1 из 3'), findsOneWidget);
     expect(find.text('Ada'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
     await tester.pumpAndSettle();
-    expect(find.text('Люди · страница 3 из 3'), findsOneWidget);
+    expect(find.text('Люди · область 3 из 3'), findsOneWidget);
     expect(find.text('Manual Person'), findsWidgets);
     expect(harness.graph.rootId, isNull);
   });
 
-  testWidgets('Tasks and People remember independent overview windows', (tester) async {
+  testWidgets('Tasks and People share one semantic overview window', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -108,7 +138,9 @@ void main() {
       MockClient((request) async {
         if (request.url.path == '/graph/workspace') {
           taskWindows.add(request.url.queryParameters['window_index']);
-          final window = int.parse(request.url.queryParameters['window_index'] ?? '0');
+          final window = int.parse(
+            request.url.queryParameters['window_index'] ?? '0',
+          );
           return jsonUtf8Response({
             ...graphWorkspaceJson(
               nodes: [
@@ -128,7 +160,9 @@ void main() {
         }
         if (request.url.path == '/graph/people-workspace') {
           peopleWindows.add(request.url.queryParameters['window_index']);
-          final window = int.parse(request.url.queryParameters['window_index'] ?? '0');
+          final window = int.parse(
+            request.url.queryParameters['window_index'] ?? '0',
+          );
           return _peoplePage(
             nodes: [
               _personNode(
@@ -172,10 +206,9 @@ void main() {
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
-    expect(find.text('Люди · страница 1 из 2'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
-    await tester.pumpAndSettle();
-    expect(find.text('Люди · страница 2 из 2'), findsOneWidget);
+    expect(find.text('Люди · область 2 из 2'), findsOneWidget);
+    expect(find.text('Bob'), findsWidgets);
+    expect(harness.graph.selectedObjectId, isNull);
 
     await tester.tap(find.text('Задачи'));
     await tester.pumpAndSettle();
@@ -184,99 +217,179 @@ void main() {
 
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
-    expect(find.text('Люди · страница 2 из 2'), findsOneWidget);
+    expect(find.text('Люди · область 2 из 2'), findsOneWidget);
     expect(find.text('Bob'), findsWidgets);
-    expect(peopleWindows.where((value) => value == '1').length, greaterThanOrEqualTo(2));
-    expect(taskWindows.where((value) => value == '1').length, greaterThanOrEqualTo(2));
+    expect(
+      peopleWindows.where((value) => value == '1').length,
+      greaterThanOrEqualTo(2),
+    );
+    expect(
+      taskWindows.where((value) => value == '1').length,
+      greaterThanOrEqualTo(2),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('graph-overview-window-previous')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Люди · область 1 из 2'), findsOneWidget);
+    await tester.tap(find.text('Задачи'));
+    await tester.pumpAndSettle();
+    expect(find.text('Область 1 из 2'), findsOneWidget);
+    expect(find.text('Task A'), findsWidgets);
   });
 
-  testWidgets('People refresh keeps the current page and OOR falls back to page 0', (
-    tester,
-  ) async {
-    var allowPageTwo = true;
-    final harness = await _openPeople(tester, (request) async {
-      final window = int.parse(request.url.queryParameters['window_index'] ?? '0');
-      if (window == 2 && !allowPageTwo) {
-        return jsonUtf8Response(
-          {'detail': 'people window index is out of range'},
-          statusCode: 422,
+  testWidgets(
+    'People refresh keeps the current page and OOR falls back to page 0',
+    (tester) async {
+      var allowPageTwo = true;
+      final harness = await _openPeople(tester, (request) async {
+        final window = int.parse(
+          request.url.queryParameters['window_index'] ?? '0',
         );
-      }
-      if (window == 1 || window == 2) {
+        if (window == 2 && !allowPageTwo) {
+          return jsonUtf8Response({
+            'detail': 'people window index is out of range',
+          }, statusCode: 422);
+        }
+        if (window == 1 || window == 2) {
+          return _peoplePage(
+            nodes: [_personNode('person-b', 'Bob')],
+            windowIndex: allowPageTwo ? window : 0,
+            windowCount: allowPageTwo ? 3 : 1,
+            hasPrevious: allowPageTwo && window > 0,
+            hasNext: allowPageTwo && window < 2,
+          );
+        }
         return _peoplePage(
-          nodes: [_personNode('person-b', 'Bob')],
-          windowIndex: allowPageTwo ? window : 0,
+          nodes: [_personNode('person-a', 'Ada')],
+          windowIndex: 0,
           windowCount: allowPageTwo ? 3 : 1,
-          hasPrevious: allowPageTwo && window > 0,
-          hasNext: allowPageTwo && window < 2,
+          hasNext: allowPageTwo,
         );
-      }
-      return _peoplePage(
-        nodes: [_personNode('person-a', 'Ada')],
-        windowIndex: 0,
-        windowCount: allowPageTwo ? 3 : 1,
-        hasNext: allowPageTwo,
+      });
+
+      await tester.tap(
+        find.byKey(const ValueKey('graph-overview-window-next')),
       );
-    });
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('graph-overview-window-next')),
+      );
+      await tester.pumpAndSettle();
+      expect(harness.graph.windowIndex, 2);
 
-    await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
-    await tester.pumpAndSettle();
-    expect(harness.graph.windowIndex, 2);
+      await harness.graph.refreshCurrentWorkspace();
+      await tester.pumpAndSettle();
+      expect(harness.graph.windowIndex, 2);
+      expect(find.text('Bob'), findsWidgets);
 
-    await harness.graph.refreshCurrentWorkspace();
-    await tester.pumpAndSettle();
-    expect(harness.graph.windowIndex, 2);
-    expect(find.text('Bob'), findsWidgets);
+      allowPageTwo = false;
+      await harness.graph.refreshCurrentWorkspace();
+      await tester.pumpAndSettle();
+      expect(harness.graph.windowIndex, 0);
+      expect(find.text('Ada'), findsWidgets);
+      expect(harness.graph.errorMessage, isNull);
+    },
+  );
 
-    allowPageTwo = false;
-    await harness.graph.refreshCurrentWorkspace();
-    await tester.pumpAndSettle();
-    expect(harness.graph.windowIndex, 0);
-    expect(find.text('Ada'), findsWidgets);
-    expect(harness.graph.errorMessage, isNull);
-  });
+  testWidgets(
+    'People search still finds a Person outside the current overview page',
+    (tester) async {
+      final harness = await _openPeople(tester, (request) async {
+        final query = request.url.queryParameters['q'];
+        final root = request.url.queryParameters['root_id'];
+        final window = request.url.queryParameters['window_index'];
+        if (query == 'Manual Person') {
+          expect(window, isNull);
+          return _peoplePage(
+            nodes: [_personNode('person-manual', 'Manual Person')],
+            windowIndex: 0,
+            windowCount: 1,
+          );
+        }
+        if (root == 'person-manual') {
+          expect(window, isNull);
+          return _peoplePage(
+            rootId: 'person-manual',
+            nodes: [_personNode('person-manual', 'Manual Person')],
+            windowIndex: 0,
+            windowCount: 1,
+          );
+        }
+        return _peoplePage(
+          nodes: [_personNode('person-a', 'Ada')],
+          windowIndex: 0,
+          windowCount: 2,
+          hasNext: true,
+        );
+      });
 
-  testWidgets('People search still finds a Person outside the current overview page', (
+      await tester.enterText(find.byType(TextField).first, 'Manual Person');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manual Person').last);
+      await tester.pumpAndSettle();
+      expect(harness.graph.rootId, 'person-manual');
+      expect(find.text('Manual Person'), findsWidgets);
+
+      await harness.graph.loadOverview();
+      await tester.pumpAndSettle();
+      expect(harness.graph.rootId, isNull);
+      expect(harness.graph.windowIndex, 0);
+      expect(find.text('Люди · область 1 из 2'), findsOneWidget);
+    },
+  );
+
+  testWidgets('rooted Person visit restores the shared semantic area', (
     tester,
   ) async {
+    final peopleWindows = <String?>[];
     final harness = await _openPeople(tester, (request) async {
-      final query = request.url.queryParameters['q'];
       final root = request.url.queryParameters['root_id'];
       final window = request.url.queryParameters['window_index'];
-      if (query == 'Manual Person') {
+      peopleWindows.add(window);
+      if (root == 'person-b') {
         expect(window, isNull);
         return _peoplePage(
-          nodes: [_personNode('person-manual', 'Manual Person')],
+          rootId: 'person-b',
+          nodes: [_personNode('person-b', 'Bob')],
           windowIndex: 0,
           windowCount: 1,
         );
       }
-      if (root == 'person-manual') {
-        expect(window, isNull);
-        return _peoplePage(
-          rootId: 'person-manual',
-          nodes: [_personNode('person-manual', 'Manual Person')],
-          windowIndex: 0,
-          windowCount: 1,
-        );
-      }
+      final index = int.parse(window ?? '0');
       return _peoplePage(
-        nodes: [_personNode('person-a', 'Ada')],
-        windowIndex: 0,
+        nodes: [
+          _personNode(
+            index == 0 ? 'person-a' : 'person-b',
+            index == 0 ? 'Ada' : 'Bob',
+          ),
+        ],
+        windowIndex: index,
         windowCount: 2,
-        hasNext: true,
+        hasPrevious: index > 0,
+        hasNext: index < 1,
       );
     });
 
-    await tester.enterText(find.byType(TextField).first, 'Manual Person');
-    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.tap(find.byKey(const ValueKey('graph-overview-window-next')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Manual Person').last);
+    expect(find.text('Люди · область 2 из 2'), findsOneWidget);
+    await harness.graph.reRoot('person-b');
     await tester.pumpAndSettle();
-    expect(harness.graph.rootId, 'person-manual');
-    expect(find.text('Manual Person'), findsWidgets);
+    expect(harness.graph.rootId, 'person-b');
+    expect(harness.graph.windowIndex, 0);
+
+    await harness.graph.loadOverview();
+    await tester.pumpAndSettle();
+    expect(harness.graph.rootId, isNull);
+    expect(harness.graph.windowIndex, 1);
+    expect(find.text('Люди · область 2 из 2'), findsOneWidget);
+    expect(
+      peopleWindows.where((value) => value == '1').length,
+      greaterThanOrEqualTo(2),
+    );
   });
 }
 
@@ -342,7 +455,9 @@ Future<http.Response?> _common(
   }
   if (includeWorkspace && request.url.path == '/graph/workspace') {
     return jsonUtf8Response(
-      graphWorkspaceJson(nodes: [graphObjectJson(id: 'task-1', title: 'Graph task')]),
+      graphWorkspaceJson(
+        nodes: [graphObjectJson(id: 'task-1', title: 'Graph task')],
+      ),
     );
   }
   return null;
