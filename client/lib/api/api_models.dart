@@ -2959,6 +2959,32 @@ class PersonPresentation {
     );
   }
 
+  PersonPresentation withTitle(String title) {
+    return PersonPresentation(
+      personId: personId,
+      title: title,
+      salienceScore: salienceScore,
+      identities: identities,
+      routes: routes,
+      identityConflict: identityConflict,
+      openTaskCount: openTaskCount,
+      landscapeTaskIds: landscapeTaskIds,
+      landscapeTaskIdsComplete: landscapeTaskIdsComplete,
+      recentCommunicationCount: recentCommunicationCount,
+      recentCommunicationCountTruncated: recentCommunicationCountTruncated,
+      taskInvolvement: taskInvolvement,
+      taskInvolvementTruncated: taskInvolvementTruncated,
+      recentCommunications: recentCommunications,
+      recentCommunicationsTruncated: recentCommunicationsTruncated,
+      salience: salience,
+      identityCandidates: identityCandidates,
+      identityCandidatesTruncated: identityCandidatesTruncated,
+      rejectedIdentityCandidates: rejectedIdentityCandidates,
+      consolidations: consolidations,
+      roleAssignments: roleAssignments,
+    );
+  }
+
   PersonPresentation withTaskInvolvement(List<PersonTaskInvolvement> taskInvolvement) {
     return PersonPresentation(
       personId: personId,

@@ -572,3 +572,123 @@ def test_people_overview_remainder_page_is_bounded(people_client, db_session, mo
     assert response.json()["window_count"] == 4
     assert calls
     assert all(limit <= 4 for limit, _offset in calls)
+
+
+def test_person_rename_trims_and_persists(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Ada")
+    db_session.flush()
+    response = people_client.patch(
+        f"/graph/people/{person.id}",
+        json={"title": "  Ada Prime  "},
+    )
+    assert response.status_code == 200
+    assert response.json()["title"] == "Ada Prime"
+    db_session.refresh(person)
+    assert person.title == "Ada Prime"
+
+
+def test_person_rename_rejects_blank_without_changing_title(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Ada")
+    db_session.flush()
+    response = people_client.patch(f"/graph/people/{person.id}", json={"title": "   "})
+    assert response.status_code == 422
+    db_session.refresh(person)
+    assert person.title == "Ada"
+
+
+def test_person_rename_rejects_title_over_200(people_client, db_session) -> None:
+    person = _people(db_session).create_person("Ada")
+    db_session.flush()
+    response = people_client.patch(
+        f"/graph/people/{person.id}",
+        json={"title": "x" * 201},
+    )
+    assert response.status_code == 422
+    db_session.refresh(person)
+    assert person.title == "Ada"
+    accepted = people_client.patch(
+        f"/graph/people/{person.id}",
+        json={"title": "y" * 200},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["title"] == "y" * 200
+
+
+def test_person_rename_rejects_non_person(people_client, db_session) -> None:
+    task = _graph(db_session).create_object(
+        ObjectCreate(kind="task", title="Ship", origin=USER_ORIGIN, state=CONFIRMED_STATE, status="open")
+    )
+    db_session.flush()
+    response = people_client.patch(f"/graph/people/{task.id}", json={"title": "Nope"})
+    assert response.status_code == 422
+    db_session.refresh(task)
+    assert task.title == "Ship"
+
+
+def test_person_rename_rejects_inactive_and_foreign(people_client, db_session) -> None:
+    people = _people(db_session)
+    rejected = people.create_person("Rejected Ada")
+    rejected.state = REJECTED_STATE
+    deleted = people.create_person("Deleted Ada")
+    tombstone_object(deleted)
+    other_id = uuid.uuid4()
+    db_session.add(User(id=other_id, display_name="other-hg4e"))
+    db_session.flush()
+    foreign = PersonIdentityService(db_session, other_id).create_person("Foreign Ada")
+    db_session.flush()
+
+    for person in (rejected, deleted, foreign):
+        response = people_client.patch(f"/graph/people/{person.id}", json={"title": "Renamed"})
+        assert response.status_code == 404
+        db_session.refresh(person)
+        assert person.title != "Renamed"
+
+
+def test_person_rename_skips_embedding_and_stays_searchable(
+    people_client, db_session, fake_embedding_service, monkeypatch
+) -> None:
+    from app.api.deps import get_user_embedding_service
+    from app.services import graph_service as graph_module
+
+    def fail_embedding():
+        raise RuntimeError("embedding dependency resolved")
+
+    app.dependency_overrides[get_user_embedding_service] = fail_embedding
+    refresh_calls: list[uuid.UUID] = []
+    original = graph_module.refresh_object_embedding
+
+    def tracked(obj, service):
+        refresh_calls.append(obj.id)
+        return original(obj, service)
+
+    monkeypatch.setattr(graph_module, "refresh_object_embedding", tracked)
+    person = _people(db_session).create_person("Ada")
+    db_session.flush()
+    renamed = people_client.patch(
+        f"/graph/people/{person.id}",
+        json={"title": "  Zqxrenametoken  "},
+    )
+    assert renamed.status_code == 200
+    assert refresh_calls == []
+    loaded = people_client.get(f"/objects/{person.id}")
+    assert loaded.status_code == 200
+    assert loaded.json()["title"] == "Zqxrenametoken"
+    rooted = people_client.get("/graph/people-workspace", params={"root_id": str(person.id)})
+    assert rooted.status_code == 200
+    assert rooted.json()["people"][0]["title"] == "Zqxrenametoken"
+    found = people_client.get("/search", params={"q": "Zqxrenametoken", "kind": "person"})
+    assert found.status_code == 200
+    assert str(person.id) in {row["id"] for row in found.json()}
+    assert refresh_calls == []
+
+    apply_embedding_service_overrides(fake_embedding_service)
+    note = _graph(db_session).create_object(
+        ObjectCreate(kind="note", title="Note", origin=USER_ORIGIN, state=CONFIRMED_STATE)
+    )
+    db_session.flush()
+    generic = people_client.patch(f"/objects/{note.id}", json={"title": "Note renamed"})
+    assert generic.status_code == 200
+    assert generic.json()["title"] == "Note renamed"
+    assert refresh_calls == [note.id]
+    db_session.refresh(person)
+    assert person.title == "Zqxrenametoken"

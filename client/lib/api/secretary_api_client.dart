@@ -577,6 +577,18 @@ class SecretaryApiClient {
     return SecretaryObject.fromJson(body);
   }
 
+  Future<SecretaryObject> renamePerson({
+    required String personId,
+    required String title,
+  }) async {
+    final body = await _request(
+      'PATCH',
+      '/graph/people/$personId',
+      jsonBody: {'title': title},
+    );
+    return SecretaryObject.fromJson(body);
+  }
+
   Future<SecretaryObject> patchObject(
     String objectId,
     Map<String, dynamic> jsonBody,

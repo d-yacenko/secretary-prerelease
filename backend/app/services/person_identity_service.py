@@ -45,6 +45,24 @@ class PersonIdentityService:
             )
         )
 
+    def rename_person(self, person_id: UUID, title: str) -> Object:
+        cleaned = title.strip()
+        if not cleaned or len(cleaned) > _MAX_TITLE_CHARS:
+            raise ValidationError("person title is required")
+        person = self._session.get(Object, person_id)
+        if person is not None and person.user_id == self._user_id and person.kind != PERSON_KIND:
+            raise ValidationError("identity target must be a person")
+        if (
+            person is None
+            or person.user_id != self._user_id
+            or person.state == REJECTED_STATE
+            or is_object_hidden_from_active_reads(person)
+        ):
+            raise NotFoundError("person", person_id)
+        person.title = cleaned
+        self._session.flush()
+        return person
+
     def attach(self, person_id: UUID, identity: NormalizedPersonIdentity) -> PersonIdentity:
         self._lock_user()
         self._require_person(person_id)

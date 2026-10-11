@@ -761,6 +761,12 @@ class PersonCreateRequest(BaseModel):
     title: str
 
 
+class PersonRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+
 class PersonIdentityCorrectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

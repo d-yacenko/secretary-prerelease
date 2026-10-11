@@ -1194,21 +1194,31 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   Future<void> _renamePerson(PersonPresentation person) async {
-    final title = await showDialog<String>(
+    await showDialog<void>(
       context: context,
-      builder: (context) => _RenamePersonDialog(initialTitle: person.title),
+      builder: (context) => _RenamePersonDialog(
+        initialTitle: person.title,
+        onSubmit: (title) => _submitPersonRename(person.personId, title),
+      ),
     );
-    final cleaned = title?.trim() ?? '';
-    if (cleaned.isEmpty || !mounted) {
+  }
+
+  Future<void> _submitPersonRename(String personId, String title) async {
+    final updated = await widget.apiClient.renamePerson(
+      personId: personId,
+      title: title,
+    );
+    if (!mounted || !_personDetailStillCurrent(personId)) {
       return;
     }
-    final updated = await widget.apiClient.patchObject(person.personId, {'title': cleaned});
-    if (!mounted) {
-      return;
-    }
-    widget.controller.upsertObject(updated);
-    await widget.controller.refreshCurrentWorkspace();
-    await _loadRootedPerson(person.personId);
+    setState(() {
+      _personTaskGeneration += 1;
+      if (_rootedPerson?.personId == updated.id) {
+        _rootedPerson = _rootedPerson!.withTitle(updated.title);
+        _rootedPersonAuthoritative = true;
+      }
+    });
+    widget.controller.applyAuthoritativePersonTitle(updated);
   }
 
   Widget _promotionQueue(BuildContext context) {
@@ -4699,9 +4709,13 @@ class _LinkPersonTaskDialogState extends State<_LinkPersonTaskDialog> {
 }
 
 class _RenamePersonDialog extends StatefulWidget {
-  const _RenamePersonDialog({required this.initialTitle});
+  const _RenamePersonDialog({
+    required this.initialTitle,
+    required this.onSubmit,
+  });
 
   final String initialTitle;
+  final Future<void> Function(String title) onSubmit;
 
   @override
   State<_RenamePersonDialog> createState() => _RenamePersonDialogState();
@@ -4709,6 +4723,8 @@ class _RenamePersonDialog extends StatefulWidget {
 
 class _RenamePersonDialogState extends State<_RenamePersonDialog> {
   late final TextEditingController _name = TextEditingController(text: widget.initialTitle);
+  var _submitting = false;
+  String? _error;
 
   @override
   void dispose() {
@@ -4716,23 +4732,76 @@ class _RenamePersonDialogState extends State<_RenamePersonDialog> {
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final cleaned = _name.text.trim();
+    if (cleaned.isEmpty || _submitting) {
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await widget.onSubmit(cleaned);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } on ApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _submitting = false;
+        _error = error.message;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _submitting = false;
+        _error = 'Не удалось переименовать человека';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final canSave = _name.text.trim().isNotEmpty && !_submitting;
     return AlertDialog(
       title: const Text('Переименовать'),
-      content: TextField(
-        controller: _name,
-        autofocus: true,
-        decoration: const InputDecoration(labelText: 'Имя'),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const ValueKey('person-rename-title'),
+            controller: _name,
+            enabled: !_submitting,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Имя'),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: canSave ? (_) => _save() : null,
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              key: const ValueKey('person-rename-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          key: const ValueKey('person-rename-cancel'),
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
           child: const Text('Отмена'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(_name.text),
+          key: const ValueKey('person-rename-save'),
+          onPressed: canSave ? _save : null,
           child: const Text('Сохранить'),
         ),
       ],
@@ -4889,6 +4958,9 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
       if (edge.sourceId != widget.objectId && edge.targetId != widget.objectId) {
         continue;
       }
+      if (isTaskActorRelationType(edge.type)) {
+        continue;
+      }
       final otherId = edge.sourceId == widget.objectId ? edge.targetId : edge.sourceId;
       final other = widget.controller.nodeById(otherId);
       rows.add(
@@ -4903,7 +4975,7 @@ class _DirectRelationInventoryState extends State<_DirectRelationInventory> {
       seen.add(edge.id);
     }
     for (final neighbor in _neighbors) {
-      if (seen.contains(neighbor.edge.id)) {
+      if (seen.contains(neighbor.edge.id) || isTaskActorRelationType(neighbor.edge.type)) {
         continue;
       }
       final onMap = widget.controller.nodeById(neighbor.object.id) != null;

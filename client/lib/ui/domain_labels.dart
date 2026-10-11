@@ -21,6 +21,15 @@ const Map<String, String> _provenanceStateLabels = {
   'observed': 'Наблюдено',
 };
 
+const taskActorRelationTypes = <String>{
+  'requested_by',
+  'delegated_to',
+  'waiting_on',
+  'involves',
+};
+
+bool isTaskActorRelationType(String type) => taskActorRelationTypes.contains(type);
+
 const Map<String, String> _relationTypeLabels = {
   'related_to': 'Связано с',
   'references': 'Ссылается на',

@@ -19,6 +19,7 @@ from app.api.schemas import (
     PersonPromotionCandidateOut,
     PersonPromotionRequest,
     PersonPromotionSuppressionOut,
+    PersonRenameRequest,
     PersonRoleAssignmentOut,
     PersonRoleAssignRequest,
     PersonRoleTermOut,
@@ -134,6 +135,27 @@ def create_person(
 ) -> ObjectOut:
     try:
         person = service.create_person(body.title)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.message,
+        ) from exc
+    return ObjectOut.from_model(person)
+
+
+@router.patch("/graph/people/{person_id}", response_model=ObjectOut)
+def rename_person(
+    person_id: UUID,
+    body: PersonRenameRequest,
+    service: PersonIdentityService = Depends(_person_identity_service),
+) -> ObjectOut:
+    try:
+        person = service.rename_person(person_id, body.title)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{exc.resource} not found",
+        ) from exc
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

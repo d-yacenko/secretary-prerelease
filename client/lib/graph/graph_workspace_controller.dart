@@ -947,6 +947,14 @@ class GraphWorkspaceController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void applyAuthoritativePersonTitle(SecretaryObject object) {
+    final current = _people[object.id];
+    if (current != null) {
+      _people[object.id] = current.withTitle(object.title);
+    }
+    upsertObject(object);
+  }
+
   void upsertObject(SecretaryObject object) {
     _nodes[object.id] = object;
     notifyListeners();
