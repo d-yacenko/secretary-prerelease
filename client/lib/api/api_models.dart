@@ -2093,17 +2093,24 @@ class PendingAction {
         if (target == null) {
           return null;
         }
-        final lines = <String>['Изменить задачу: $target', ..._temporalFieldLines(fields)];
+        final lines = <String>[
+          'Изменить задачу: $target',
+          ..._temporalFieldLines(fields),
+        ];
         final mode = fields['completion_mode'];
         if (mode != null && mode.isNotEmpty) {
           lines.add('Режим: $mode');
         }
-        for (final entity in entities.where((item) => item.role == 'waiting_on')) {
+        for (final entity in entities.where(
+          (item) => item.role == 'waiting_on',
+        )) {
           if (entity.title.isNotEmpty) {
             lines.add('Ожидает: ${entity.title}');
           }
         }
-        for (final entity in entities.where((item) => item.role == 'evidence')) {
+        for (final entity in entities.where(
+          (item) => item.role == 'evidence',
+        )) {
           if (entity.title.isNotEmpty) {
             lines.add('Основание: ${entity.title}');
           }
@@ -2197,7 +2204,9 @@ class PendingAction {
     return null;
   }
 
-  static List<_PresentationEntity> _presentationEntities(Map<String, dynamic> snapshot) {
+  static List<_PresentationEntity> _presentationEntities(
+    Map<String, dynamic> snapshot,
+  ) {
     final raw = snapshot['entities'];
     if (raw is! List) {
       return const [];
@@ -2216,7 +2225,9 @@ class PendingAction {
     return entities;
   }
 
-  static Map<String, String?> _presentationFields(Map<String, dynamic> snapshot) {
+  static Map<String, String?> _presentationFields(
+    Map<String, dynamic> snapshot,
+  ) {
     final raw = snapshot['fields'];
     if (raw is! List) {
       return const {};
@@ -2773,12 +2784,14 @@ class PersonSalienceSummary {
       tier: json['tier'] as String? ?? '',
       components: (json['components'] as List<dynamic>? ?? [])
           .map(
-            (item) => PersonSalienceComponent.fromJson(item as Map<String, dynamic>),
+            (item) =>
+                PersonSalienceComponent.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
       truncated: json['truncated'] as bool? ?? false,
       windowDays: json['window_days'] as int? ?? 0,
-      claimsObjectImportance: json['claims_object_importance'] as bool? ?? false,
+      claimsObjectImportance:
+          json['claims_object_importance'] as bool? ?? false,
     );
   }
 }
@@ -2819,11 +2832,15 @@ class PersonIdentityCandidate {
       displayValue: json['display_value'] as String? ?? '',
       confirmable: json['confirmable'] as bool? ?? false,
       state: json['state'] as String? ?? '',
-      reasons: (json['reasons'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
+      reasons: (json['reasons'] as List<dynamic>? ?? [])
+          .map((item) => item as String)
+          .toList(),
       assessmentResolution: json['assessment_resolution'] as String?,
       conflictingPersonId: json['conflicting_person_id'] as String?,
       sources: (json['sources'] as List<dynamic>? ?? [])
-          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
     );
   }
@@ -2925,36 +2942,60 @@ class PersonPresentation {
       landscapeTaskIds: (json['landscape_task_ids'] as List<dynamic>? ?? [])
           .map((item) => item as String)
           .toList(),
-      landscapeTaskIdsComplete: json['landscape_task_ids_complete'] as bool? ?? true,
+      landscapeTaskIdsComplete:
+          json['landscape_task_ids_complete'] as bool? ?? true,
       recentCommunicationCount: json['recent_communication_count'] as int? ?? 0,
       recentCommunicationCountTruncated:
           json['recent_communication_count_truncated'] as bool? ?? false,
       taskInvolvement: (json['task_involvement'] as List<dynamic>? ?? [])
-          .map((item) => PersonTaskInvolvement.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) =>
+                PersonTaskInvolvement.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
-      taskInvolvementTruncated: json['task_involvement_truncated'] as bool? ?? false,
-      recentCommunications: (json['recent_communications'] as List<dynamic>? ?? [])
-          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
-          .toList(),
+      taskInvolvementTruncated:
+          json['task_involvement_truncated'] as bool? ?? false,
+      recentCommunications:
+          (json['recent_communications'] as List<dynamic>? ?? [])
+              .map(
+                (item) =>
+                    PersonFlowPreview.fromJson(item as Map<String, dynamic>),
+              )
+              .toList(),
       recentCommunicationsTruncated:
           json['recent_communications_truncated'] as bool? ?? false,
       salience: json['salience'] == null
           ? null
-          : PersonSalienceSummary.fromJson(json['salience'] as Map<String, dynamic>),
+          : PersonSalienceSummary.fromJson(
+              json['salience'] as Map<String, dynamic>,
+            ),
       identityCandidates: (json['identity_candidates'] as List<dynamic>? ?? [])
-          .map((item) => PersonIdentityCandidate.fromJson(item as Map<String, dynamic>))
-          .toList(),
-      identityCandidatesTruncated: json['identity_candidates_truncated'] as bool? ?? false,
-      rejectedIdentityCandidates: (json['rejected_identity_candidates'] as List<dynamic>? ?? [])
           .map(
-            (item) => PersonRejectedIdentityCandidate.fromJson(item as Map<String, dynamic>),
+            (item) =>
+                PersonIdentityCandidate.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
+      identityCandidatesTruncated:
+          json['identity_candidates_truncated'] as bool? ?? false,
+      rejectedIdentityCandidates:
+          (json['rejected_identity_candidates'] as List<dynamic>? ?? [])
+              .map(
+                (item) => PersonRejectedIdentityCandidate.fromJson(
+                  item as Map<String, dynamic>,
+                ),
+              )
+              .toList(),
       consolidations: (json['consolidations'] as List<dynamic>? ?? [])
-          .map((item) => PersonConsolidation.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) =>
+                PersonConsolidation.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
       roleAssignments: (json['role_assignments'] as List<dynamic>? ?? [])
-          .map((item) => PersonRoleAssignment.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) =>
+                PersonRoleAssignment.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
     );
   }
@@ -2985,7 +3026,37 @@ class PersonPresentation {
     );
   }
 
-  PersonPresentation withTaskInvolvement(List<PersonTaskInvolvement> taskInvolvement) {
+  PersonPresentation withTaskInvolvement(
+    List<PersonTaskInvolvement> taskInvolvement,
+  ) {
+    return PersonPresentation(
+      personId: personId,
+      title: title,
+      salienceScore: salienceScore,
+      identities: identities,
+      routes: routes,
+      identityConflict: identityConflict,
+      openTaskCount: openTaskCount,
+      landscapeTaskIds: landscapeTaskIds,
+      landscapeTaskIdsComplete: landscapeTaskIdsComplete,
+      recentCommunicationCount: recentCommunicationCount,
+      recentCommunicationCountTruncated: recentCommunicationCountTruncated,
+      taskInvolvement: taskInvolvement,
+      taskInvolvementTruncated: taskInvolvementTruncated,
+      recentCommunications: recentCommunications,
+      recentCommunicationsTruncated: recentCommunicationsTruncated,
+      salience: salience,
+      identityCandidates: identityCandidates,
+      identityCandidatesTruncated: identityCandidatesTruncated,
+      rejectedIdentityCandidates: rejectedIdentityCandidates,
+      consolidations: consolidations,
+      roleAssignments: roleAssignments,
+    );
+  }
+
+  PersonPresentation withRoleAssignments(
+    List<PersonRoleAssignment> roleAssignments,
+  ) {
     return PersonPresentation(
       personId: personId,
       title: title,
@@ -3140,14 +3211,20 @@ class PersonMergePreview {
       identities: (json['identities'] as List<dynamic>? ?? [])
           .map((item) {
             final row = item as Map<String, dynamic>;
-            return (row['display_value'] as String?) ?? (row['canonical_value'] as String?) ?? '';
+            return (row['display_value'] as String?) ??
+                (row['canonical_value'] as String?) ??
+                '';
           })
           .where((item) => item.isNotEmpty)
           .toList(),
-      actorCounts: counts.map((key, value) => MapEntry(key, (value as num).toInt())),
+      actorCounts: counts.map(
+        (key, value) => MapEntry(key, (value as num).toInt()),
+      ),
       evidenceCount: json['evidence_count'] as int? ?? 0,
       canMerge: json['can_merge'] as bool? ?? false,
-      blockers: (json['blockers'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
+      blockers: (json['blockers'] as List<dynamic>? ?? [])
+          .map((item) => item as String)
+          .toList(),
     );
   }
 }
@@ -3184,9 +3261,13 @@ class PersonPromotionCandidate {
       displayValue: json['display_value'] as String? ?? '',
       directHitCount: json['direct_hit_count'] as int? ?? 0,
       latestOccurredAt: json['latest_occurred_at'] as String?,
-      reasons: (json['reasons'] as List<dynamic>? ?? []).map((item) => item as String).toList(),
+      reasons: (json['reasons'] as List<dynamic>? ?? [])
+          .map((item) => item as String)
+          .toList(),
       sources: (json['sources'] as List<dynamic>? ?? [])
-          .map((item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => PersonFlowPreview.fromJson(item as Map<String, dynamic>),
+          )
           .toList(),
     );
   }
@@ -3276,33 +3357,43 @@ class GraphWorkspaceOut {
       windowCount: json['window_count'] as int? ?? 1,
       hasPreviousWindow: json['has_previous_window'] as bool? ?? false,
       hasNextWindow: json['has_next_window'] as bool? ?? false,
-      constellationRootIds: (json['constellation_root_ids'] as List<dynamic>? ?? [])
-          .map((item) => item as String)
-          .toList(),
-      semanticWindowComplete: json['semantic_window_complete'] as bool? ?? false,
+      constellationRootIds:
+          (json['constellation_root_ids'] as List<dynamic>? ?? [])
+              .map((item) => item as String)
+              .toList(),
+      semanticWindowComplete:
+          json['semantic_window_complete'] as bool? ?? false,
       landscapeTasks: (json['landscape_tasks'] as List<dynamic>? ?? [])
           .map((item) => SecretaryObject.fromJson(item as Map<String, dynamic>))
           .toList(),
       landscapeTaskEdges: (json['landscape_task_edges'] as List<dynamic>? ?? [])
           .map((item) => SecretaryEdge.fromJson(item as Map<String, dynamic>))
           .toList(),
-      landscapeTaskContextComplete: json['landscape_task_context_complete'] as bool? ?? true,
+      landscapeTaskContextComplete:
+          json['landscape_task_context_complete'] as bool? ?? true,
       people: (json['people'] as List<dynamic>? ?? [])
           .map(
             (item) => PersonPresentation.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
-      promotionCandidates: (json['promotion_candidates'] as List<dynamic>? ?? [])
-          .map(
-            (item) => PersonPromotionCandidate.fromJson(item as Map<String, dynamic>),
-          )
-          .toList(),
-      promotionCandidatesTruncated: json['promotion_candidates_truncated'] as bool? ?? false,
-      promotionSuppressions: (json['promotion_suppressions'] as List<dynamic>? ?? [])
-          .map(
-            (item) => PersonPromotionSuppression.fromJson(item as Map<String, dynamic>),
-          )
-          .toList(),
+      promotionCandidates:
+          (json['promotion_candidates'] as List<dynamic>? ?? [])
+              .map(
+                (item) => PersonPromotionCandidate.fromJson(
+                  item as Map<String, dynamic>,
+                ),
+              )
+              .toList(),
+      promotionCandidatesTruncated:
+          json['promotion_candidates_truncated'] as bool? ?? false,
+      promotionSuppressions:
+          (json['promotion_suppressions'] as List<dynamic>? ?? [])
+              .map(
+                (item) => PersonPromotionSuppression.fromJson(
+                  item as Map<String, dynamic>,
+                ),
+              )
+              .toList(),
     );
   }
 }
@@ -4005,10 +4096,10 @@ class TaskLayoutCenter {
   final double worldY;
 
   Map<String, dynamic> toJson() => {
-        'task_id': taskId,
-        'world_x': worldX,
-        'world_y': worldY,
-      };
+    'task_id': taskId,
+    'world_x': worldX,
+    'world_y': worldY,
+  };
 
   static TaskLayoutCenter? tryParse(Map<String, dynamic> json) {
     final taskId = json['task_id'];
@@ -4098,10 +4189,10 @@ class TaskLayoutReplacement {
   final List<TaskLayoutCenter> centers;
 
   Map<String, dynamic> toJson() => {
-        'expected_topology_revision': expectedTopologyRevision,
-        'algorithm_version': algorithmVersion,
-        'centers': [for (final center in centers) center.toJson()],
-      };
+    'expected_topology_revision': expectedTopologyRevision,
+    'algorithm_version': algorithmVersion,
+    'centers': [for (final center in centers) center.toJson()],
+  };
 }
 
 class TaskLayoutTopology {

@@ -9,8 +9,14 @@ import 'package:http/testing.dart';
 import 'graph_test_harness.dart';
 
 void main() {
-  testWidgets('inspector opens on candidates and selection does not re-root', (tester) async {
-    final harness = await _open(tester, const Size(1280, 900), client: _client());
+  testWidgets('inspector opens on candidates and selection does not re-root', (
+    tester,
+  ) async {
+    final harness = await _open(
+      tester,
+      const Size(1280, 900),
+      client: _client(),
+    );
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
     expect(harness.graph.rootId, isNull);
@@ -71,28 +77,36 @@ void main() {
     expect(find.text('Связанные задачи · 2'), findsWidgets);
   });
 
-  testWidgets('rooted detail waits, ignores a stale person, and retries', (tester) async {
+  testWidgets('rooted detail waits, ignores a stale person, and retries', (
+    tester,
+  ) async {
     final gates = {
       'person-a': Completer<void>(),
       'person-b': Completer<void>(),
     };
     final failures = {'person-a': 2};
-    await _open(tester, const Size(1280, 900), client: _client(gates: gates, failures: failures));
+    await _open(
+      tester,
+      const Size(1280, 900),
+      client: _client(gates: gates, failures: failures),
+    );
     await tester.tap(find.text('Люди'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('graph_node_person-a')));
     await tester.pump();
-    expect(find.byKey(const ValueKey('person-detail-loading')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-detail-loading')), findsNothing);
     expect(find.text('Нет недавних коммуникаций'), findsNothing);
-    expect(find.text('Письмо A'), findsNothing);
+    expect(find.text('Письмо A'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-add')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('graph_node_person-b')));
     await tester.pump();
     gates['person-a']!.complete();
     await tester.pump();
     expect(find.text('Письмо A'), findsNothing);
-    expect(find.byKey(const ValueKey('person-detail-loading')), findsOneWidget);
+    expect(find.text('Письмо B'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-detail-loading')), findsNothing);
 
     gates['person-b']!.complete();
     await tester.pumpAndSettle();
@@ -101,52 +115,68 @@ void main() {
 
     await tester.tap(find.byKey(const Key('graph_node_person-a')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('person-detail-error')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-detail-hydration-error')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('person-detail-loading')), findsNothing);
     expect(find.text('Письмо B'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('person-detail-retry')));
+    expect(find.text('Person A'), findsWidgets);
+    await tester.tap(
+      find.byKey(const ValueKey('person-detail-hydration-retry')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Письмо A'), findsOneWidget);
     expect(find.text('ada-a@example.com'), findsWidgets);
   });
 
-  testWidgets('overview metrics disclose truncation and rename keeps the identity', (tester) async {
-    final titles = {'person-exact': 'Exact'};
-    final patched = <String>[];
-    await _open(
-      tester,
-      const Size(1280, 900),
-      client: _client(titles: titles, patched: patched),
-    );
-    await tester.tap(find.text('Люди'));
-    await tester.pumpAndSettle();
-    expect(find.text('Сообщения · 0'), findsOneWidget);
-    expect(find.byKey(const Key('person-message-partial-person-gap')), findsOneWidget);
-    expect(find.text('Сообщения · ≥3'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('graph_node_person-gap')),
-        matching: find.text('Сообщения · 0'),
-      ),
-      findsNothing,
-    );
+  testWidgets(
+    'overview metrics disclose truncation and rename keeps the identity',
+    (tester) async {
+      final titles = {'person-exact': 'Exact'};
+      final patched = <String>[];
+      await _open(
+        tester,
+        const Size(1280, 900),
+        client: _client(titles: titles, patched: patched),
+      );
+      await tester.tap(find.text('Люди'));
+      await tester.pumpAndSettle();
+      expect(find.text('Сообщения · 0'), findsOneWidget);
+      expect(
+        find.byKey(const Key('person-message-partial-person-gap')),
+        findsOneWidget,
+      );
+      expect(find.text('Сообщения · ≥3'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('graph_node_person-gap')),
+          matching: find.text('Сообщения · 0'),
+        ),
+        findsNothing,
+      );
 
-    await tester.tap(find.byKey(const Key('graph_node_person-exact')));
-    await tester.pumpAndSettle();
-    expect(find.text('ada-exact@example.com'), findsWidgets);
-    await tester.tap(find.byKey(const ValueKey('person-rename')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)),
-      'Exact Renamed',
-    );
-    await tester.tap(find.widgetWithText(FilledButton, 'Сохранить'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('graph_node_person-exact')));
+      await tester.pumpAndSettle();
+      expect(find.text('ada-exact@example.com'), findsWidgets);
+      await tester.tap(find.byKey(const ValueKey('person-rename')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'Exact Renamed',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Сохранить'));
+      await tester.pumpAndSettle();
 
-    expect(patched, ['Exact Renamed']);
-    expect(find.text('Exact Renamed'), findsWidgets);
-    expect(find.text('ada-exact@example.com'), findsWidgets);
-    expect(find.text('Exact'), findsNothing);
-  });
+      expect(patched, ['Exact Renamed']);
+      expect(find.text('Exact Renamed'), findsWidgets);
+      expect(find.text('ada-exact@example.com'), findsWidgets);
+      expect(find.text('Exact'), findsNothing);
+    },
+  );
 
   testWidgets('narrow people inspector stays on screen', (tester) async {
     await _open(tester, const Size(390, 700), client: _client());
@@ -200,10 +230,13 @@ MockClient _client({
     }
     if (request.url.path == '/graph/workspace') {
       return jsonUtf8Response(
-        graphWorkspaceJson(nodes: [graphObjectJson(id: 'task-home', title: 'Home')]),
+        graphWorkspaceJson(
+          nodes: [graphObjectJson(id: 'task-home', title: 'Home')],
+        ),
       );
     }
-    if (request.method == 'PATCH' && request.url.path == '/objects/person-exact') {
+    if (request.method == 'PATCH' &&
+        request.url.path == '/objects/person-exact') {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
       final title = body['title'] as String;
       titles!['person-exact'] = title;
@@ -236,8 +269,22 @@ MockClient _client({
 
 Map<String, dynamic> _workspace({String? root, Map<String, String>? titles}) {
   final people = [
-    _person('person-bound', 'Bound', messages: 4, truncated: true, tasks: 2, marker: 'Письмо bound'),
-    _person('person-gap', 'Gap', messages: 0, truncated: true, tasks: 0, marker: 'Письмо gap'),
+    _person(
+      'person-bound',
+      'Bound',
+      messages: 4,
+      truncated: true,
+      tasks: 2,
+      marker: 'Письмо bound',
+    ),
+    _person(
+      'person-gap',
+      'Gap',
+      messages: 0,
+      truncated: true,
+      tasks: 0,
+      marker: 'Письмо gap',
+    ),
     _person(
       'person-exact',
       titles?['person-exact'] ?? 'Exact',
@@ -246,11 +293,34 @@ Map<String, dynamic> _workspace({String? root, Map<String, String>? titles}) {
       tasks: 1,
       marker: 'Письмо exact',
     ),
-    _person('person-lower', 'Lower', messages: 3, truncated: true, tasks: 0, marker: 'Письмо lower'),
-    _person('person-a', 'Person A', messages: 1, truncated: false, tasks: 1, marker: 'Письмо A'),
-    _person('person-b', 'Person B', messages: 2, truncated: false, tasks: 1, marker: 'Письмо B'),
+    _person(
+      'person-lower',
+      'Lower',
+      messages: 3,
+      truncated: true,
+      tasks: 0,
+      marker: 'Письмо lower',
+    ),
+    _person(
+      'person-a',
+      'Person A',
+      messages: 1,
+      truncated: false,
+      tasks: 1,
+      marker: 'Письмо A',
+    ),
+    _person(
+      'person-b',
+      'Person B',
+      messages: 2,
+      truncated: false,
+      tasks: 1,
+      marker: 'Письмо B',
+    ),
   ];
-  final visible = root == null ? people : people.where((item) => item['person_id'] == root);
+  final visible = root == null
+      ? people
+      : people.where((item) => item['person_id'] == root);
   return {
     'root_id': root,
     'seed_ids': root == null ? <String>[] : [root],
@@ -265,7 +335,9 @@ Map<String, dynamic> _workspace({String? root, Map<String, String>? titles}) {
     'edges': [],
     'truncated': false,
     'people': visible.toList(),
-    'promotion_candidates': root == null ? [_candidate()] : <Map<String, dynamic>>[],
+    'promotion_candidates': root == null
+        ? [_candidate()]
+        : <Map<String, dynamic>>[],
     'promotion_candidates_truncated': false,
     'promotion_suppressions': <Map<String, dynamic>>[],
   };

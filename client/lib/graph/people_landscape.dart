@@ -3,11 +3,13 @@ import 'dart:ui';
 
 import '../api/api_models.dart';
 import 'graph_layout.dart';
+import 'person_context_visual.dart';
 
 /// Clearance between anchored Task geography and the unanchored strip.
 ///
 /// The strip means only “no current Task anchor”.
-const double kPeopleLandscapeShelfGap = kGraphNodeWidth + kGraphNodeHorizontalGap;
+const double kPeopleLandscapeShelfGap =
+    kGraphNodeWidth + kGraphNodeHorizontalGap;
 
 /// Unrooted People marker. Smaller than the rooted 186×100 card.
 const double kPeopleLandscapeOverviewCardWidth = 128;
@@ -39,7 +41,10 @@ Map<String, Offset> projectPeopleFromTasks({
 }) {
   final bases = <String, Offset>{};
   for (final personId in personIds) {
-    final anchor = _anchor(taskIdsByPerson[personId] ?? const [], taskPositions);
+    final anchor = _anchor(
+      taskIdsByPerson[personId] ?? const [],
+      taskPositions,
+    );
     if (anchor != null) {
       bases[personId] = anchor;
     }
@@ -162,7 +167,8 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
   final groups = <String, List<String>>{};
   final anchorOf = <String, Offset>{};
   for (final personId in ordered) {
-    final anchors = peopleById[personId]!.landscapeTaskIds.toSet().toList()..sort();
+    final anchors = peopleById[personId]!.landscapeTaskIds.toSet().toList()
+      ..sort();
     final key = anchors.join('\u0001');
     (groups[key] ??= <String>[]).add(personId);
     anchorOf[key] = bases[personId]!;
@@ -172,11 +178,10 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
   final anchoredPositions = <String, Offset>{};
   for (final key in groupKeys) {
     final members = groups[key]!;
-    final packed = _packSameAnchorCluster(members.length);
+    final packed = _packAnchorCluster(members, peopleById);
     final anchor = anchorOf[key]!;
     final cluster = <String, Offset>{
-      for (var index = 0; index < members.length; index++)
-        members[index]: packed[index] + anchor,
+      for (final entry in packed.entries) entry.key: entry.value + anchor,
     };
     final delta = _separateCluster(cluster, anchoredPositions, cardSize);
     anchoredPositions.addAll({
@@ -185,7 +190,9 @@ PeopleLandscapeOverview projectPeopleLandscapeOverview({
   }
   final taskBounds = canonicalTaskWorldBounds(taskCenters);
   final positions = Map<String, Offset>.from(anchoredPositions);
-  positions.addAll(_shelfPositions(unanchored, taskBounds, anchoredPositions));
+  positions.addAll(
+    _shelfPositions(unanchored, peopleById, taskBounds, anchoredPositions),
+  );
   return PeopleLandscapeOverview(
     usable: true,
     positions: positions,
@@ -210,6 +217,7 @@ PeopleLandscapeOverview _unusable(List<String> unresolved) {
 
 Map<String, Offset> _shelfPositions(
   List<String> personIds,
+  Map<String, PersonPresentation> peopleById,
   Rect? taskBounds,
   Map<String, Offset> anchoredPositions,
 ) {
@@ -220,15 +228,179 @@ Map<String, Offset> _shelfPositions(
   final origin = taskBounds == null && anchoredPositions.isEmpty
       ? kPeopleLandscapeNeutralShelfOrigin
       : Offset(
-          _occupiedRight(taskBounds, anchoredPositions) + kPeopleLandscapeShelfGap,
+          _occupiedRight(taskBounds, anchoredPositions) +
+              kPeopleLandscapeShelfGap,
           taskBounds?.top ?? kPeopleLandscapeNeutralShelfOrigin.dy,
         );
+  final buckets = <String, List<String>>{};
+  for (final id in ordered) {
+    final visual = personContextVisual(
+      peopleById[id]?.roleAssignments ?? const [],
+    );
+    (buckets[visual.sortKey] ??= <String>[]).add(id);
+  }
+  final keys = buckets.keys.toList()..sort();
   final placed = <String, Offset>{};
-  final step = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap;
-  for (var index = 0; index < ordered.length; index++) {
-    placed[ordered[index]] = Offset(origin.dx, origin.dy + index * step);
+  final rowStep =
+      kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeOverviewCardGap;
+  final columnStep =
+      kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap;
+  for (var column = 0; column < keys.length; column++) {
+    final ids = buckets[keys[column]]!;
+    for (var row = 0; row < ids.length; row++) {
+      placed[ids[row]] = Offset(
+        origin.dx + column * columnStep,
+        origin.dy + row * rowStep,
+      );
+    }
   }
   return placed;
+}
+
+Map<String, Offset> _packAnchorCluster(
+  List<String> members,
+  Map<String, PersonPresentation> peopleById,
+) {
+  if (_singleVisualBucket(members, peopleById)) {
+    final packed = _packSameAnchorCluster(members.length);
+    return {
+      for (var index = 0; index < members.length; index++)
+        members[index]: packed[index],
+    };
+  }
+  return _packGravityCluster(members, peopleById);
+}
+
+bool _singleVisualBucket(
+  List<String> members,
+  Map<String, PersonPresentation> peopleById,
+) {
+  String? bucket;
+  for (final id in members) {
+    final visual = personContextVisual(
+      peopleById[id]?.roleAssignments ?? const [],
+    );
+    final key = visual.multiple
+        ? visual.sortKey
+        : '${visual.familyKey ?? ''}\u0001${visual.exactKey ?? ''}';
+    bucket ??= key;
+    if (bucket != key) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Map<String, Offset> _packGravityCluster(
+  List<String> members,
+  Map<String, PersonPresentation> peopleById,
+) {
+  final visuals = <String, PersonContextVisual>{
+    for (final id in members)
+      id: personContextVisual(peopleById[id]?.roleAssignments ?? const []),
+  };
+  final families = <String, List<String>>{};
+  for (final id in members) {
+    final key = visuals[id]!.familyKey ?? '';
+    (families[key] ??= <String>[]).add(id);
+  }
+  final familyKeys = families.keys.toList()
+    ..sort((a, b) {
+      if (a.isEmpty != b.isEmpty) {
+        return a.isEmpty ? -1 : 1;
+      }
+      return a.compareTo(b);
+    });
+  final contextFamilies = [
+    for (final key in familyKeys)
+      if (key.isNotEmpty) key,
+  ];
+  final placed = <String, Offset>{};
+  for (final family in familyKeys) {
+    final ids = families[family]!..sort();
+    final byExact = <String, List<String>>{};
+    for (final id in ids) {
+      final visual = visuals[id]!;
+      final exact = visual.multiple ? visual.sortKey : (visual.exactKey ?? '');
+      (byExact[exact] ??= <String>[]).add(id);
+    }
+    final exactKeys = byExact.keys.toList()..sort();
+    final familyAttractor = family.isEmpty
+        ? Offset.zero
+        : _familyAttractor(
+            contextFamilies.indexOf(family),
+            contextFamilies.length,
+          );
+    for (var exactIndex = 0; exactIndex < exactKeys.length; exactIndex++) {
+      final attractor =
+          familyAttractor + Offset(exactIndex * 36, exactIndex * 12);
+      final group = byExact[exactKeys[exactIndex]]!..sort();
+      for (final id in group) {
+        placed[id] = _nearestFreeSlot(attractor, placed);
+      }
+    }
+  }
+  var sumX = 0.0;
+  var sumY = 0.0;
+  for (final topLeft in placed.values) {
+    final center = peopleMarkerCenter(topLeft);
+    sumX += center.dx;
+    sumY += center.dy;
+  }
+  final centroid = Offset(sumX / placed.length, sumY / placed.length);
+  return {
+    for (final entry in placed.entries) entry.key: entry.value - centroid,
+  };
+}
+
+Offset _familyAttractor(int index, int count) {
+  if (count <= 1) {
+    return Offset.zero;
+  }
+  final angle = index * (2 * math.pi / count);
+  return Offset(math.cos(angle) * 220, math.sin(angle) * 220);
+}
+
+Offset _nearestFreeSlot(Offset attractorCenter, Map<String, Offset> placed) {
+  const card = Size(
+    kPeopleLandscapeOverviewCardWidth,
+    kPeopleLandscapeOverviewCardHeight,
+  );
+  bool free(Offset topLeft) {
+    final probe = _cardRect(topLeft, card, 0);
+    for (final other in placed.values) {
+      final rect = _cardRect(other, card, 0);
+      if (probe.left < rect.right - 0.01 &&
+          probe.right > rect.left + 0.01 &&
+          probe.top < rect.bottom - 0.01 &&
+          probe.bottom > rect.top + 0.01) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  final origin = peopleMarkerTopLeft(attractorCenter);
+  if (free(origin)) {
+    return origin;
+  }
+  for (var ring = 1; ring <= 32; ring++) {
+    final radius =
+        ring *
+        (kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap);
+    final slots = 8 * ring;
+    for (var slot = 0; slot < slots; slot++) {
+      final angle = slot * 2 * math.pi / slots;
+      final center =
+          attractorCenter +
+          Offset(math.cos(angle) * radius, math.sin(angle) * radius);
+      final topLeft = peopleMarkerTopLeft(center);
+      if (free(topLeft)) {
+        return topLeft;
+      }
+    }
+  }
+  throw StateError('no free local slot for person landscape');
 }
 
 double _occupiedRight(Rect? taskBounds, Map<String, Offset> anchoredPositions) {
@@ -246,10 +418,12 @@ List<Offset> _packSameAnchorCluster(int count) {
   final cols = count == 1
       ? 1
       : count == 2
-          ? 2
-          : math.max(1, math.sqrt(count).ceil());
-  final stepX = kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap;
-  final stepY = kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeIntraClusterGap;
+      ? 2
+      : math.max(1, math.sqrt(count).ceil());
+  final stepX =
+      kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap;
+  final stepY =
+      kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeIntraClusterGap;
   final topLefts = <Offset>[
     for (var index = 0; index < count; index++)
       Offset((index % cols) * stepX, (index ~/ cols) * stepY),
@@ -325,7 +499,12 @@ Offset? _anchor(Iterable<String> taskIds, Map<String, Offset> taskPositions) {
   return Offset(x / count, y / count);
 }
 
-Offset _place(Offset base, Map<String, Offset> placed, Size cardSize, double nearGap) {
+Offset _place(
+  Offset base,
+  Map<String, Offset> placed,
+  Size cardSize,
+  double nearGap,
+) {
   if (!_overlaps(base, placed, cardSize, nearGap)) {
     return base;
   }
@@ -351,7 +530,12 @@ Offset _place(Offset base, Map<String, Offset> placed, Size cardSize, double nea
   throw StateError('no free local slot for person landscape');
 }
 
-bool _overlaps(Offset candidate, Map<String, Offset> placed, Size cardSize, double nearGap) {
+bool _overlaps(
+  Offset candidate,
+  Map<String, Offset> placed,
+  Size cardSize,
+  double nearGap,
+) {
   final probe = _cardRect(candidate, cardSize, nearGap);
   for (final other in placed.values) {
     if (probe.overlaps(_cardRect(other, cardSize, nearGap))) {

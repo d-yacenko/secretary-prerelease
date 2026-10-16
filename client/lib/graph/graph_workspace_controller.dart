@@ -955,6 +955,19 @@ class GraphWorkspaceController extends ChangeNotifier {
     upsertObject(object);
   }
 
+  /// Replaces only this Person's role assignments and repaints the overview.
+  void patchPersonRoleAssignments(
+    String personId,
+    List<PersonRoleAssignment> roleAssignments,
+  ) {
+    final current = _people[personId];
+    if (current == null) {
+      return;
+    }
+    _people[personId] = current.withRoleAssignments(roleAssignments);
+    notifyListeners();
+  }
+
   void upsertObject(SecretaryObject object) {
     _nodes[object.id] = object;
     notifyListeners();

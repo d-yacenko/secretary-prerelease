@@ -28,6 +28,7 @@ import 'graph_map_edge_presentation.dart';
 import 'hybrid_focus_lod.dart';
 import 'graph_layout.dart';
 import 'people_landscape.dart';
+import 'person_context_visual.dart';
 import 'person_roles_section.dart';
 import 'shared_world_frame.dart';
 import 'unanchored_shelf_cue.dart';
@@ -107,6 +108,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   String? _personTaskReconcileWarning;
   int _personTaskGeneration = 0;
   int _personPresentationGeneration = 0;
+  int _personRoleGeneration = 0;
+  String? _detailHydrationError;
   bool _personReconcileActive = false;
   _PersonReconcileTarget? _personReconcilePending;
   String? _trackedPersonId;
@@ -197,6 +200,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _rootedPersonId = null;
       _rootedLoading = false;
       _rootedError = null;
+      _detailHydrationError = null;
       _rootedPersonAuthoritative = false;
       _personTaskMutationBusy = false;
       _personTaskMutationError = null;
@@ -212,6 +216,17 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     _peopleInspectorOpen = true;
     _peopleInspectorCandidates = false;
     if (_adoptRootedControllerPerson(id)) {
+      return;
+    }
+    final overview = widget.controller.personFor(id);
+    if (overview != null) {
+      _rootedPerson = overview;
+      _rootedPersonId = id;
+      _rootedLoading = false;
+      _rootedError = null;
+      _detailHydrationError = null;
+      _rootedPersonAuthoritative = false;
+      _loadRootedPerson(id, preserveSummary: true);
       return;
     }
     _loadRootedPerson(id);
@@ -232,6 +247,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     _rootedPersonId = personId;
     _rootedLoading = false;
     _rootedError = null;
+    _detailHydrationError = null;
     _rootedPersonAuthoritative = true;
     return true;
   }
@@ -259,16 +275,21 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   Future<void> _loadRootedPerson(
     String personId, {
     bool preserveVisible = false,
+    bool preserveSummary = false,
   }) async {
     final token = ++_rootedToken;
     final taskGeneration = _personTaskGeneration;
     final presentationGeneration = _personPresentationGeneration;
-    if (!preserveVisible) {
+    final roleGeneration = _personRoleGeneration;
+    if (preserveSummary) {
+      _detailHydrationError = null;
+    } else if (!preserveVisible) {
       _rootedPersonAuthoritative = false;
       if (mounted) {
         setState(() {
           _rootedLoading = true;
           _rootedError = null;
+          _detailHydrationError = null;
           _rootedPerson = null;
           _rootedPersonId = personId;
         });
@@ -300,6 +321,13 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         if (preserveVisible) {
           throw StateError('rooted person missing');
         }
+        if (preserveSummary && _rootedPerson?.personId == personId) {
+          setState(() {
+            _rootedLoading = false;
+            _detailHydrationError = 'Не удалось загрузить подробности';
+          });
+          return;
+        }
         setState(() {
           _rootedLoading = false;
           _rootedPerson = null;
@@ -307,13 +335,19 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         });
         return;
       }
+      final applied = _keepLocalRoles(match, roleGeneration);
       setState(() {
         _rootedLoading = false;
-        _rootedPerson = match;
+        _rootedPerson = applied;
         _rootedPersonId = personId;
         _rootedPersonAuthoritative = true;
         _rootedError = null;
+        _detailHydrationError = null;
       });
+      widget.controller.patchPersonRoleAssignments(
+        personId,
+        applied.roleAssignments,
+      );
     } catch (_) {
       if (preserveVisible) {
         rethrow;
@@ -326,12 +360,57 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       )) {
         return;
       }
+      if (preserveSummary && _rootedPerson?.personId == personId) {
+        setState(() {
+          _rootedLoading = false;
+          _detailHydrationError = 'Не удалось загрузить подробности';
+        });
+        return;
+      }
       setState(() {
         _rootedLoading = false;
         _rootedPerson = null;
         _rootedError = 'Не удалось загрузить карточку человека';
       });
     }
+  }
+
+  PersonPresentation _keepLocalRoles(
+    PersonPresentation incoming,
+    int roleGeneration,
+  ) {
+    if (roleGeneration == _personRoleGeneration) {
+      return incoming;
+    }
+    final current = _rootedPerson;
+    if (current == null || current.personId != incoming.personId) {
+      return incoming;
+    }
+    return incoming.withRoleAssignments(current.roleAssignments);
+  }
+
+  Future<void> _applyRoleAssignment(PersonRoleAssignment assignment) async {
+    if (!_personDetailStillCurrent(assignment.personId)) {
+      return;
+    }
+    final person = _rootedPerson;
+    if (person == null || person.personId != assignment.personId) {
+      return;
+    }
+    _personRoleGeneration += 1;
+    final next = [...person.roleAssignments];
+    final index = next.indexWhere((item) => item.id == assignment.id);
+    if (index >= 0) {
+      next[index] = assignment;
+    } else {
+      next.add(assignment);
+    }
+    final updated = person.withRoleAssignments(next);
+    setState(() {
+      _rootedPerson = updated;
+      _rootedPersonId = assignment.personId;
+    });
+    widget.controller.patchPersonRoleAssignments(assignment.personId, next);
   }
 
   bool _rootedDetailResponseCurrent({
@@ -461,6 +540,10 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
 
   Future<void> _reconcilePersonWorkspace(_PersonReconcileTarget target) async {
     _personReconcileActive = true;
+    final roleGeneration = _personRoleGeneration;
+    final localRoles = _rootedPerson?.personId == target.personId
+        ? _rootedPerson!.roleAssignments
+        : null;
     try {
       final workspace = await widget.apiClient.getPeopleWorkspace(
         rootId: target.personId,
@@ -477,30 +560,47 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             !_personControllerRootedOn(target.personId)) {
           return;
         }
-        final person = widget.controller.personFor(target.personId);
+        var person = widget.controller.personFor(target.personId);
         if (person == null || !mounted) {
           return;
+        }
+        if (roleGeneration != _personRoleGeneration && localRoles != null) {
+          person = person.withRoleAssignments(localRoles);
+          widget.controller.patchPersonRoleAssignments(
+            person.personId,
+            localRoles,
+          );
+          person = widget.controller.personFor(person.personId) ?? person;
         }
         setState(() {
           _rootedPerson = person;
           _rootedPersonId = target.personId;
           _rootedPersonAuthoritative = true;
           _personTaskReconcileWarning = null;
+          _detailHydrationError = null;
         });
         return;
       }
       // Unrooted overview selection: refresh only the detail card, keep overview.
-      final match = _personFromWorkspace(workspace, target.personId);
+      var match = _personFromWorkspace(workspace, target.personId);
       if (match == null ||
           !_personReconcileResponseCurrent(target) ||
           _personControllerRootedOn(target.personId)) {
         return;
+      }
+      if (roleGeneration != _personRoleGeneration && localRoles != null) {
+        match = match.withRoleAssignments(localRoles);
+        widget.controller.patchPersonRoleAssignments(
+          match.personId,
+          localRoles,
+        );
       }
       setState(() {
         _rootedPerson = match;
         _rootedPersonId = target.personId;
         _rootedPersonAuthoritative = true;
         _personTaskReconcileWarning = null;
+        _detailHydrationError = null;
       });
     } catch (_) {
       if (!_personReconcileResponseCurrent(target)) {
@@ -1164,15 +1264,17 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   Widget _rootedPersonDetail(BuildContext context, String personId) {
-    if (_rootedLoading || _rootedPersonId != personId) {
-      return const Padding(
-        key: ValueKey('person-detail-loading'),
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    final person = _rootedPerson;
-    if (_rootedError != null || person == null) {
+    final person = _rootedPerson != null && _rootedPerson!.personId == personId
+        ? _rootedPerson
+        : null;
+    if (person == null) {
+      if (_rootedLoading || _rootedPersonId != personId) {
+        return const Padding(
+          key: ValueKey('person-detail-loading'),
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: CircularProgressIndicator()),
+        );
+      }
       return Column(
         key: const ValueKey('person-detail-error'),
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1186,46 +1288,67 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
         ],
       );
     }
-    return _PersonDetailSection(
-      person: person,
-      apiClient: widget.apiClient,
-      taskMutationBusy: _personTaskMutationBusy,
-      taskMutationError: _personTaskMutationError,
-      taskReconcileWarning: _personTaskReconcileWarning,
-      onTaskMutation: (action) => _mutatePersonTaskRole(personId, action),
-      onChanged: () async {
-        await widget.controller.refreshCurrentWorkspace();
-        await _loadRootedPerson(personId);
-      },
-      onRename: () => _renamePerson(person),
-      onMerged: (survivorId) async {
-        widget.controller.selectObject(survivorId);
-        await widget.controller.refreshCurrentWorkspace();
-        if (!mounted) {
-          return;
-        }
-        await _loadRootedPerson(survivorId);
-      },
-      onOpenTask: (taskId) async {
-        await widget.controller.setMode(GraphWorkspaceMode.tasks);
-        if (!mounted) {
-          return;
-        }
-        await widget.controller.reRoot(taskId);
-      },
-      onOpenFlow: (objectId) {
-        return openObjectDetail(
-          context,
-          objectId: objectId,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_detailHydrationError != null)
+          Column(
+            key: const ValueKey('person-detail-hydration-error'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Не удалось загрузить подробности · Повторить'),
+              TextButton(
+                key: const ValueKey('person-detail-hydration-retry'),
+                onPressed: () =>
+                    _loadRootedPerson(personId, preserveSummary: true),
+                child: const Text('Повторить'),
+              ),
+            ],
+          ),
+        _PersonDetailSection(
+          person: person,
+          heavyReady: _rootedPersonAuthoritative,
           apiClient: widget.apiClient,
-          authController: widget.authController,
-          captureController: widget.captureController,
-          assistantController: widget.assistantController,
-          onAskSecretary: widget.onAskSecretary,
-          onShowInGraph: widget.controller.reRoot,
-          bookmarkController: widget.bookmarkController,
-        );
-      },
+          taskMutationBusy: _personTaskMutationBusy,
+          taskMutationError: _personTaskMutationError,
+          taskReconcileWarning: _personTaskReconcileWarning,
+          onTaskMutation: (action) => _mutatePersonTaskRole(personId, action),
+          onRoleChanged: _applyRoleAssignment,
+          onChanged: () async {
+            await widget.controller.refreshCurrentWorkspace();
+            await _loadRootedPerson(personId, preserveSummary: true);
+          },
+          onRename: () => _renamePerson(person),
+          onMerged: (survivorId) async {
+            widget.controller.selectObject(survivorId);
+            await widget.controller.refreshCurrentWorkspace();
+            if (!mounted) {
+              return;
+            }
+            await _loadRootedPerson(survivorId);
+          },
+          onOpenTask: (taskId) async {
+            await widget.controller.setMode(GraphWorkspaceMode.tasks);
+            if (!mounted) {
+              return;
+            }
+            await widget.controller.reRoot(taskId);
+          },
+          onOpenFlow: (objectId) {
+            return openObjectDetail(
+              context,
+              objectId: objectId,
+              apiClient: widget.apiClient,
+              authController: widget.authController,
+              captureController: widget.captureController,
+              assistantController: widget.assistantController,
+              onAskSecretary: widget.onAskSecretary,
+              onShowInGraph: widget.controller.reRoot,
+              bookmarkController: widget.bookmarkController,
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -3034,11 +3157,13 @@ class _DetailSectionHeader extends StatelessWidget {
 class _PersonDetailSection extends StatelessWidget {
   const _PersonDetailSection({
     required this.person,
+    required this.heavyReady,
     required this.apiClient,
     required this.taskMutationBusy,
     required this.taskMutationError,
     required this.taskReconcileWarning,
     required this.onTaskMutation,
+    required this.onRoleChanged,
     required this.onChanged,
     required this.onRename,
     required this.onMerged,
@@ -3047,12 +3172,14 @@ class _PersonDetailSection extends StatelessWidget {
   });
 
   final PersonPresentation person;
+  final bool heavyReady;
   final SecretaryApiClient apiClient;
   final bool taskMutationBusy;
   final String? taskMutationError;
   final String? taskReconcileWarning;
   final Future<void> Function(Future<_ActorEdgeResult> Function() action)
   onTaskMutation;
+  final Future<void> Function(PersonRoleAssignment assignment) onRoleChanged;
   final Future<void> Function() onChanged;
   final Future<void> Function() onRename;
   final Future<void> Function(String survivorId) onMerged;
@@ -3174,7 +3301,7 @@ class _PersonDetailSection extends StatelessWidget {
         PersonRolesSection(
           person: person,
           apiClient: apiClient,
-          onChanged: onChanged,
+          onChanged: onRoleChanged,
         ),
         const SizedBox(height: 12),
         const _DetailSectionHeader(title: 'Участие в задачах'),
@@ -3201,7 +3328,12 @@ class _PersonDetailSection extends StatelessWidget {
             taskReconcileWarning!,
             key: const ValueKey('person-task-reconcile-warning'),
           ),
-        if (person.taskInvolvement.isEmpty)
+        if (!heavyReady && person.taskInvolvement.isEmpty)
+          const Text(
+            'Загрузка подробностей',
+            key: ValueKey('person-detail-task-loading'),
+          )
+        else if (person.taskInvolvement.isEmpty)
           const Text(
             'Нет участия в текущих задачах',
             key: ValueKey('person-task-empty'),
@@ -3218,7 +3350,12 @@ class _PersonDetailSection extends StatelessWidget {
           const Text('Показаны не все задачи'),
         const SizedBox(height: 8),
         const _DetailSectionHeader(title: 'Недавние сообщения'),
-        if (person.recentCommunications.isEmpty)
+        if (!heavyReady && person.recentCommunications.isEmpty)
+          const Text(
+            'Загрузка подробностей',
+            key: ValueKey('person-detail-flow-loading'),
+          )
+        else if (person.recentCommunications.isEmpty)
           const Text(
             'Нет недавних коммуникаций',
             key: ValueKey('person-flow-empty'),
@@ -3278,6 +3415,13 @@ class _PersonDetailSection extends StatelessWidget {
             ),
           );
         }),
+        if (!heavyReady && person.salience == null) ...[
+          const _DetailSectionHeader(title: 'Возможные контакты'),
+          const Text(
+            'Загрузка подробностей',
+            key: ValueKey('person-detail-candidates-loading'),
+          ),
+        ],
         if (person.salience != null &&
             (person.identityCandidates.isNotEmpty ||
                 person.identityCandidatesTruncated)) ...[
@@ -3825,6 +3969,11 @@ class _GraphNodeCard extends StatelessWidget {
         ? scheme.primaryContainer
         : object.kind == 'task'
         ? scheme.surfaceContainerHigh
+        : compact && object.kind == 'person'
+        ? contextCardColor(
+            scheme,
+            personContextVisual(person?.roleAssignments ?? const []),
+          )
         : scheme.surface;
 
     final card = Material(

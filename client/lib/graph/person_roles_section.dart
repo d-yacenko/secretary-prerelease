@@ -30,7 +30,7 @@ String? personRoleCardSummary(List<PersonRoleAssignment> roles) {
   return shown;
 }
 
-class PersonRolesSection extends StatelessWidget {
+class PersonRolesSection extends StatefulWidget {
   const PersonRolesSection({
     super.key,
     required this.person,
@@ -40,11 +40,40 @@ class PersonRolesSection extends StatelessWidget {
 
   final PersonPresentation person;
   final SecretaryApiClient apiClient;
-  final Future<void> Function() onChanged;
+  final Future<void> Function(PersonRoleAssignment assignment) onChanged;
+
+  @override
+  State<PersonRolesSection> createState() => _PersonRolesSectionState();
+}
+
+class _PersonRolesSectionState extends State<PersonRolesSection> {
+  String? _error;
+
+  Future<void> _retract(PersonRoleAssignment role) async {
+    try {
+      final updated = await widget.apiClient.retractPersonRole(
+        personId: widget.person.personId,
+        assignmentId: role.id,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = null);
+      await widget.onChanged(updated);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = 'Не удалось обновить роль');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final active = person.roleAssignments.where((item) => item.state == 'active').toList();
+    final person = widget.person;
+    final active = person.roleAssignments
+        .where((item) => item.state == 'active')
+        .toList();
     return Column(
       key: const ValueKey('person-roles-section'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -58,6 +87,8 @@ class PersonRolesSection extends StatelessWidget {
             child: const Text('Добавить роль'),
           ),
         ),
+        if (_error != null)
+          Text(_error!, key: const ValueKey('person-role-error')),
         if (active.isEmpty)
           const Text('Нет ролей', key: ValueKey('person-role-empty'))
         else
@@ -68,13 +99,7 @@ class PersonRolesSection extends StatelessWidget {
               title: Text(role.label),
               trailing: TextButton(
                 key: ValueKey('person-role-retract-${role.id}'),
-                onPressed: () async {
-                  await apiClient.retractPersonRole(
-                    personId: person.personId,
-                    assignmentId: role.id,
-                  );
-                  await onChanged();
-                },
+                onPressed: () => _retract(role),
                 child: const Text('Убрать'),
               ),
             ),
@@ -87,9 +112,9 @@ class PersonRolesSection extends StatelessWidget {
       context: context,
       builder: (dialogContext) {
         return _AddPersonRoleDialog(
-          personId: person.personId,
-          apiClient: apiClient,
-          onChanged: onChanged,
+          personId: widget.person.personId,
+          apiClient: widget.apiClient,
+          onChanged: widget.onChanged,
         );
       },
     );
@@ -105,7 +130,7 @@ class _AddPersonRoleDialog extends StatefulWidget {
 
   final String personId;
   final SecretaryApiClient apiClient;
-  final Future<void> Function() onChanged;
+  final Future<void> Function(PersonRoleAssignment assignment) onChanged;
 
   @override
   State<_AddPersonRoleDialog> createState() => _AddPersonRoleDialogState();
@@ -118,6 +143,7 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   String? _exactMatchTermId;
   int _searchGeneration = 0;
   bool _searchSettled = false;
+  String? _error;
 
   @override
   void initState() {
@@ -161,15 +187,23 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   }
 
   Future<void> _assign(String role) async {
-    await widget.apiClient.assignPersonRole(
-      personId: widget.personId,
-      role: role,
-      context: _contextText.text,
-    );
-    if (mounted) {
+    try {
+      final updated = await widget.apiClient.assignPersonRole(
+        personId: widget.personId,
+        role: role,
+        context: _contextText.text,
+      );
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop();
+      await widget.onChanged(updated);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _error = 'Не удалось обновить роль');
     }
-    await widget.onChanged();
   }
 
   @override
@@ -205,6 +239,8 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
               controller: _contextText,
               decoration: const InputDecoration(labelText: 'Контекст'),
             ),
+            if (_error != null)
+              Text(_error!, key: const ValueKey('person-role-error')),
           ],
         ),
       ),

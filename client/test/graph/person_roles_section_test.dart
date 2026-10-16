@@ -33,7 +33,10 @@ void main() {
     });
     expect(role.personId, 'p1');
     expect(role.label, 'Директор · Arenadata');
-    final term = PersonRoleTerm.fromJson({'id': 't1', 'display_text': 'Директор'});
+    final term = PersonRoleTerm.fromJson({
+      'id': 't1',
+      'display_text': 'Директор',
+    });
     expect(term.displayText, 'Директор');
     final search = PersonRoleTermSearch.fromJson({
       'terms': [
@@ -68,7 +71,9 @@ void main() {
     expect(person.roleAssignments.single.roleDisplayText, 'Директор');
   });
 
-  testWidgets('existing suggestion is selectable and a new role is explicit', (tester) async {
+  testWidgets('existing suggestion is selectable and a new role is explicit', (
+    tester,
+  ) async {
     final posts = <Map<String, dynamic>>[];
     final api = _api((request) async {
       if (request.url.path.endsWith('/graph/person-role-terms')) {
@@ -107,30 +112,47 @@ void main() {
       _harness(
         person: _person(),
         api: api,
-        onChanged: () async => refreshed += 1,
+        onChanged: (_) async => refreshed += 1,
       ),
     );
     expect(find.byKey(const ValueKey('person-role-empty')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'ген',
+    );
     await tester.pumpAndSettle();
     expect(find.text('генеральный директор'), findsOneWidget);
     expect(find.byKey(const ValueKey('person-role-create')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('person-role-suggestion-t-general')));
+    await tester.tap(
+      find.byKey(const ValueKey('person-role-suggestion-t-general')),
+    );
     await tester.pumpAndSettle();
     expect(posts.single['role'], 'генеральный директор');
     expect(refreshed, 1);
 
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'Директор',
+    );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-director')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-director')),
+      findsOneWidget,
+    );
 
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
-    await tester.enterText(find.byKey(const ValueKey('person-role-context')), 'МГУ');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-context')),
+      'МГУ',
+    );
     await tester.pumpAndSettle();
     expect(find.text('Создать роль «оппонент»'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('person-role-create')));
@@ -139,17 +161,27 @@ void main() {
     expect(posts.last['context'], 'МГУ');
   });
 
-  testWidgets('a pending query drops the previous create action', (tester) async {
+  testWidgets('a pending query drops the previous create action', (
+    tester,
+  ) async {
     final gates = <String, Completer<void>>{};
     final api = _searchApi(gates);
-    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-role-create')), findsOneWidget);
     gates['Директор'] = Completer<void>();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'Директор',
+    );
     await tester.pump();
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
     gates['Директор']!.complete();
@@ -157,46 +189,73 @@ void main() {
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
   });
 
-  testWidgets('a pending query does not invent create before the server answers', (tester) async {
-    final gates = <String, Completer<void>>{};
-    final api = _searchApi(gates);
-    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
-    await tester.tap(find.byKey(const ValueKey('person-role-add')));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
-    gates['оппонент'] = Completer<void>();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
-    await tester.pump();
-    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
-    gates['оппонент']!.complete();
-    await tester.pumpAndSettle();
-    expect(find.text('Создать роль «оппонент»'), findsOneWidget);
-  });
+  testWidgets(
+    'a pending query does not invent create before the server answers',
+    (tester) async {
+      final gates = <String, Completer<void>>{};
+      final api = _searchApi(gates);
+      await tester.pumpWidget(
+        _harness(person: _person(), api: api, onChanged: (_) async {}),
+      );
+      await tester.tap(find.byKey(const ValueKey('person-role-add')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('person-role-input')),
+        'Директор',
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+      gates['оппонент'] = Completer<void>();
+      await tester.enterText(
+        find.byKey(const ValueKey('person-role-input')),
+        'оппонент',
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+      gates['оппонент']!.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Создать роль «оппонент»'), findsOneWidget);
+    },
+  );
 
   testWidgets('pending query hides the previous suggestions', (tester) async {
     final gates = <String, Completer<void>>{};
     final api = _searchApi(gates);
-    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'ген',
+    );
     await tester.pumpAndSettle();
     expect(find.text('генеральный директор'), findsOneWidget);
     gates['оппонент'] = Completer<void>();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
     await tester.pump();
     expect(find.text('генеральный директор'), findsNothing);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-opponent')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-opponent')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
     gates['оппонент']!.complete();
     await tester.pumpAndSettle();
     expect(find.text('генеральный директор'), findsNothing);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-opponent')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-opponent')),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('stale search cannot flip a newer exact-match decision', (tester) async {
+  testWidgets('stale search cannot flip a newer exact-match decision', (
+    tester,
+  ) async {
     final gates = <String, Completer<void>>{};
     final api = _api((request) async {
       final query = request.url.queryParameters['q'] ?? '';
@@ -220,29 +279,51 @@ void main() {
           'exact_match_term_id': null,
         });
       }
-      return _json({'terms': <Map<String, String>>[], 'exact_match_term_id': null});
+      return _json({
+        'terms': <Map<String, String>>[],
+        'exact_match_term_id': null,
+      });
     });
-    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
     gates['ген'] = Completer<void>();
     gates['Директор'] = Completer<void>();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'ген',
+    );
     await tester.pump();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'Директор');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'Директор',
+    );
     await tester.pump();
     gates['Директор']!.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-director')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-director')),
+      findsOneWidget,
+    );
     gates['ген']!.complete();
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-director')), findsOneWidget);
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-director')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-general')),
+      findsNothing,
+    );
   });
 
-  testWidgets('a failed search does not restore the previous query', (tester) async {
+  testWidgets('a failed search does not restore the previous query', (
+    tester,
+  ) async {
     final api = _api((request) async {
       final query = request.url.queryParameters['q'] ?? '';
       if (query == 'ген') {
@@ -255,16 +336,30 @@ void main() {
       }
       return http.Response('{"detail":"down"}', 500);
     });
-    await tester.pumpWidget(_harness(person: _person(), api: api, onChanged: () async {}));
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
     await tester.tap(find.byKey(const ValueKey('person-role-add')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'ген');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'ген',
+    );
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-general')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('person-role-create')), findsOneWidget);
-    await tester.enterText(find.byKey(const ValueKey('person-role-input')), 'оппонент');
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('person-role-suggestion-t-general')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-general')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
   });
 
@@ -292,7 +387,7 @@ void main() {
           ],
         ),
         api: api,
-        onChanged: () async => refreshed += 1,
+        onChanged: (_) async => refreshed += 1,
       ),
     );
     expect(find.text('директор · Arenadata'), findsOneWidget);
@@ -304,7 +399,11 @@ void main() {
   });
 }
 
-PersonRoleAssignment _role({required String id, required String text, String? context}) {
+PersonRoleAssignment _role({
+  required String id,
+  required String text,
+  String? context,
+}) {
   return PersonRoleAssignment(
     id: id,
     personId: 'p1',
@@ -362,7 +461,10 @@ SecretaryApiClient _searchApi(Map<String, Completer<void>> gates) {
         'exact_match_term_id': null,
       });
     }
-    return _json({'terms': <Map<String, String>>[], 'exact_match_term_id': null});
+    return _json({
+      'terms': <Map<String, String>>[],
+      'exact_match_term_id': null,
+    });
   });
 }
 
@@ -383,11 +485,15 @@ http.Response _json(Object body) {
 Widget _harness({
   required PersonPresentation person,
   required SecretaryApiClient api,
-  required Future<void> Function() onChanged,
+  required Future<void> Function(PersonRoleAssignment assignment) onChanged,
 }) {
   return MaterialApp(
     home: Scaffold(
-      body: PersonRolesSection(person: person, apiClient: api, onChanged: onChanged),
+      body: PersonRolesSection(
+        person: person,
+        apiClient: api,
+        onChanged: onChanged,
+      ),
     ),
   );
 }
