@@ -4,8 +4,10 @@ import '../api/api_models.dart';
 
 /// Client-only visual identity for active Person role contexts.
 ///
-/// Nothing here is persisted. The same normalized context always maps to the
-/// same key and tint; related contexts share a family with a nearby shade.
+/// The mapping is a pure function of the normalized context. Nothing is
+/// persisted, and the same exact context keeps one color in every cluster.
+/// Related contexts share a family hue; [hueOffset] is a bounded exact-context
+/// shift inside that hue, at most ±[kContextHueOffsetDegrees].
 class PersonContextVisual {
   const PersonContextVisual({
     required this.exactKey,
@@ -13,6 +15,7 @@ class PersonContextVisual {
     required this.sortKey,
     required this.shade,
     required this.multiple,
+    this.hueOffset = 0,
   });
 
   const PersonContextVisual.none()
@@ -20,14 +23,23 @@ class PersonContextVisual {
       familyKey = null,
       sortKey = '',
       shade = 0,
-      multiple = false;
+      multiple = false,
+      hueOffset = 0;
 
   final String? exactKey;
   final String? familyKey;
   final String sortKey;
   final int shade;
   final bool multiple;
+  final double hueOffset;
 }
+
+/// Maximum exact-context hue shift away from the family base hue.
+const double kContextHueOffsetDegrees = 22;
+
+/// Minimum Euclidean RGB distance, in 0–1 channels, required between two
+/// related exact-context card colors. The HG6A shade step stays below this.
+const double kContextCardMinSeparation = 0.08;
 
 const _genericContextTokens = {
   'ао',
@@ -44,6 +56,7 @@ const _genericContextTokens = {
   'company',
   'gmbh',
   'group',
+  'гк',
   'inc',
   'llc',
   'ltd',
@@ -102,6 +115,7 @@ PersonContextVisual personContextVisual(List<PersonRoleAssignment> roles) {
       familyKey: family,
       sortKey: '${family ?? ''}\u0001$exact',
       shade: _stableHash(exact) % 5,
+      hueOffset: _exactHueOffset(exact),
       multiple: false,
     );
   }
@@ -120,18 +134,28 @@ Color contextCardColor(ColorScheme scheme, PersonContextVisual visual) {
   if (family == null || family.isEmpty) {
     return scheme.surface;
   }
-  final hue = (_stableHash(family) % 360).toDouble();
-  final shade = visual.shade;
-  final light = scheme.brightness == Brightness.dark
-      ? 0.42 + shade * 0.03
-      : 0.62 + shade * 0.03;
+  final baseHue = (_stableHash(family) % 360).toDouble();
+  final exact = visual.exactKey ?? family;
+  final hue = (baseHue + visual.hueOffset) % 360;
+  final saturation = 0.52 + _unit(exact, 2) * 0.28;
+  final lightness =
+      (scheme.brightness == Brightness.dark ? 0.46 : 0.56) +
+      (_unit(exact, 3) - 0.5) * 0.18;
   final tint = HSLColor.fromAHSL(
     1,
     hue,
-    0.42,
-    light.clamp(0.25, 0.86),
+    saturation.clamp(0, 1),
+    lightness.clamp(0.28, 0.78),
   ).toColor();
-  return Color.alphaBlend(tint.withValues(alpha: 0.34), scheme.surface);
+  return Color.alphaBlend(tint.withValues(alpha: 0.7), scheme.surface);
+}
+
+double _exactHueOffset(String exact) {
+  return (_unit(exact, 1) - 0.5) * 2 * kContextHueOffsetDegrees;
+}
+
+double _unit(String value, int salt) {
+  return (_stableHash('$salt:$value') % 1000) / 999;
 }
 
 int _stableHash(String value) {

@@ -307,15 +307,11 @@ Map<String, Offset> _packGravityCluster(
   final familyKeys = families.keys.toList()
     ..sort((a, b) {
       if (a.isEmpty != b.isEmpty) {
-        return a.isEmpty ? -1 : 1;
+        return a.isEmpty ? 1 : -1;
       }
       return a.compareTo(b);
     });
-  final contextFamilies = [
-    for (final key in familyKeys)
-      if (key.isNotEmpty) key,
-  ];
-  final placed = <String, Offset>{};
+  final ordered = <String>[];
   for (final family in familyKeys) {
     final ids = families[family]!..sort();
     final byExact = <String, List<String>>{};
@@ -325,21 +321,26 @@ Map<String, Offset> _packGravityCluster(
       (byExact[exact] ??= <String>[]).add(id);
     }
     final exactKeys = byExact.keys.toList()..sort();
-    final familyAttractor = family.isEmpty
-        ? Offset.zero
-        : _familyAttractor(
-            contextFamilies.indexOf(family),
-            contextFamilies.length,
-          );
-    for (var exactIndex = 0; exactIndex < exactKeys.length; exactIndex++) {
-      final attractor =
-          familyAttractor + Offset(exactIndex * 36, exactIndex * 12);
-      final group = byExact[exactKeys[exactIndex]]!..sort();
-      for (final id in group) {
-        placed[id] = _nearestFreeSlot(attractor, placed);
-      }
+    for (final exact in exactKeys) {
+      final group = byExact[exact]!..sort();
+      ordered.addAll(group);
     }
   }
+  final count = ordered.length;
+  final cols = count <= 1
+      ? 1
+      : count == 2
+      ? 2
+      : math.max(1, math.sqrt(count).ceil());
+  final rows = math.max(1, (count / cols).ceil());
+  final stepX =
+      kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap;
+  final stepY =
+      kPeopleLandscapeOverviewCardHeight + kPeopleLandscapeIntraClusterGap;
+  final placed = <String, Offset>{
+    for (var index = 0; index < ordered.length; index++)
+      ordered[index]: Offset((index ~/ rows) * stepX, (index % rows) * stepY),
+  };
   var sumX = 0.0;
   var sumY = 0.0;
   for (final topLeft in placed.values) {
@@ -351,56 +352,6 @@ Map<String, Offset> _packGravityCluster(
   return {
     for (final entry in placed.entries) entry.key: entry.value - centroid,
   };
-}
-
-Offset _familyAttractor(int index, int count) {
-  if (count <= 1) {
-    return Offset.zero;
-  }
-  final angle = index * (2 * math.pi / count);
-  return Offset(math.cos(angle) * 220, math.sin(angle) * 220);
-}
-
-Offset _nearestFreeSlot(Offset attractorCenter, Map<String, Offset> placed) {
-  const card = Size(
-    kPeopleLandscapeOverviewCardWidth,
-    kPeopleLandscapeOverviewCardHeight,
-  );
-  bool free(Offset topLeft) {
-    final probe = _cardRect(topLeft, card, 0);
-    for (final other in placed.values) {
-      final rect = _cardRect(other, card, 0);
-      if (probe.left < rect.right - 0.01 &&
-          probe.right > rect.left + 0.01 &&
-          probe.top < rect.bottom - 0.01 &&
-          probe.bottom > rect.top + 0.01) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  final origin = peopleMarkerTopLeft(attractorCenter);
-  if (free(origin)) {
-    return origin;
-  }
-  for (var ring = 1; ring <= 32; ring++) {
-    final radius =
-        ring *
-        (kPeopleLandscapeOverviewCardWidth + kPeopleLandscapeIntraClusterGap);
-    final slots = 8 * ring;
-    for (var slot = 0; slot < slots; slot++) {
-      final angle = slot * 2 * math.pi / slots;
-      final center =
-          attractorCenter +
-          Offset(math.cos(angle) * radius, math.sin(angle) * radius);
-      final topLeft = peopleMarkerTopLeft(center);
-      if (free(topLeft)) {
-        return topLeft;
-      }
-    }
-  }
-  throw StateError('no free local slot for person landscape');
 }
 
 double _occupiedRight(Rect? taskBounds, Map<String, Offset> anchoredPositions) {

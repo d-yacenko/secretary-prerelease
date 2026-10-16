@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personal_secretary/api/api_models.dart';
@@ -18,9 +20,17 @@ void main() {
       ]);
       final rubitech = personContextVisual([_role('t', 'Рубитех')]);
 
+      final sreShort = personContextVisual([_role('gk', 'SRE ГК Arenadata')]);
+      final trainingShort = personContextVisual([
+        _role('uc', 'УЦ ГК Arenadata'),
+      ]);
       expect(university.familyKey, 'arenadata');
       expect(sre.familyKey, university.familyKey);
       expect(campus.familyKey, university.familyKey);
+      expect(sreShort.familyKey, 'arenadata');
+      expect(trainingShort.familyKey, 'arenadata');
+      expect(sreShort.exactKey, isNot(campus.exactKey));
+      expect(trainingShort.exactKey, isNot(university.exactKey));
       expect(sre.exactKey, campus.exactKey);
       expect(university.exactKey, isNot(campus.exactKey));
       expect(university.shade, isNot(campus.shade));
@@ -41,6 +51,63 @@ void main() {
       );
       expect(contextCardColor(dark, campus), isNot(dark.surface));
       expect(contextCardColor(dark, campus), contextCardColor(dark, sre));
+      expect(
+        campus.hueOffset.abs(),
+        lessThanOrEqualTo(kContextHueOffsetDegrees),
+      );
+      expect(
+        university.hueOffset.abs(),
+        lessThanOrEqualTo(kContextHueOffsetDegrees),
+      );
+      expect(_hueDelta(campus, university, light), lessThan(40));
+      expect(_hueDelta(campus, university, dark), lessThan(40));
+      expect(
+        _rgbDistance(
+          contextCardColor(light, campus),
+          contextCardColor(light, university),
+        ),
+        greaterThanOrEqualTo(kContextCardMinSeparation),
+      );
+      expect(
+        _rgbDistance(
+          contextCardColor(dark, campus),
+          contextCardColor(dark, university),
+        ),
+        greaterThanOrEqualTo(kContextCardMinSeparation),
+      );
+    },
+  );
+
+  test(
+    'exact context color is global and ignores person, cluster, and order',
+    () {
+      final anchored = personContextVisual([
+        _role('person-a', 'SRE Arenadata'),
+      ]);
+      final otherCluster = personContextVisual([
+        _role('person-z', 'SRE Arenadata'),
+      ]);
+      final shelf = personContextVisual([
+        _role('person-shelf', '  sre   arenadata '),
+      ]);
+      final again = personContextVisual([
+        _role('person-z', 'Рубитех', id: 'other', state: 'retracted'),
+        _role('person-z', 'SRE Arenadata'),
+      ]);
+      final light = ThemeData.light().colorScheme;
+      expect(anchored.exactKey, otherCluster.exactKey);
+      expect(anchored.familyKey, shelf.familyKey);
+      expect(anchored.hueOffset, shelf.hueOffset);
+      expect(
+        contextCardColor(light, anchored),
+        contextCardColor(light, otherCluster),
+      );
+      expect(contextCardColor(light, anchored), contextCardColor(light, shelf));
+      expect(contextCardColor(light, anchored), contextCardColor(light, again));
+      expect(
+        contextCardColor(light, const PersonContextVisual.none()),
+        light.surface,
+      );
     },
   );
 
@@ -181,6 +248,78 @@ void main() {
     expect(_overlaps(after.positions), isFalse);
   });
 
+  test('thirteen mixed-context people stay inside a compact 4x4 envelope', () {
+    const base = Offset(240, 160);
+    final people = [
+      for (var index = 0; index < 2; index++)
+        _person(
+          'sre-$index',
+          anchors: const ['task'],
+          context: 'SRE Arenadata',
+        ),
+      for (var index = 0; index < 4; index++)
+        _person(
+          'uc-$index',
+          anchors: const ['task'],
+          context: 'УЦ группы компании Arenadata',
+        ),
+      for (var index = 0; index < 6; index++)
+        _person('plain-$index', anchors: const ['task']),
+      _person('other', anchors: const ['task'], context: 'Рубитех'),
+    ];
+    final forward = _project(people: people, taskCenters: const {'task': base});
+    final reversed = _project(
+      people: people.reversed.toList(),
+      taskCenters: const {'task': base},
+    );
+    final shuffled = _project(
+      people: [...people.sublist(6), ...people.sublist(0, 6)],
+      taskCenters: const {'task': base},
+    );
+    expect(forward.positions, reversed.positions);
+    expect(forward.positions, shuffled.positions);
+    expect(_center(forward.positions), offsetClose(base));
+    expect(_overlaps(forward.positions), isFalse);
+    final bounds = _bounds(forward.positions);
+    final envelopeWidth =
+        4 * kPeopleLandscapeOverviewCardWidth +
+        3 * kPeopleLandscapeIntraClusterGap;
+    final envelopeHeight =
+        4 * kPeopleLandscapeOverviewCardHeight +
+        3 * kPeopleLandscapeIntraClusterGap;
+    expect(bounds.width, lessThanOrEqualTo(envelopeWidth + 0.01));
+    expect(bounds.height, lessThanOrEqualTo(envelopeHeight + 0.01));
+
+    final sreGap = _distance(forward, 'sre-0', 'sre-1');
+    expect(
+      sreGap,
+      lessThanOrEqualTo(
+        kPeopleLandscapeOverviewCardHeight +
+            kPeopleLandscapeIntraClusterGap +
+            0.01,
+      ),
+    );
+    final ucBounds = _bounds({
+      for (final id in ['uc-0', 'uc-1', 'uc-2', 'uc-3'])
+        id: forward.positions[id]!,
+    });
+    expect(
+      ucBounds.width,
+      lessThanOrEqualTo(
+        2 * kPeopleLandscapeOverviewCardWidth +
+            kPeopleLandscapeIntraClusterGap +
+            0.01,
+      ),
+    );
+    final related = _groupDistance(
+      forward,
+      ['sre-0', 'sre-1'],
+      ['uc-0', 'uc-1', 'uc-2', 'uc-3'],
+    );
+    final unrelated = _groupDistance(forward, ['sre-0', 'sre-1'], ['other']);
+    expect(related, lessThan(unrelated));
+  });
+
   test('unanchored people form shelf sub-clusters by context', () {
     const task = Offset(40, 20);
     final overview = _project(
@@ -291,6 +430,48 @@ double _gap(Offset first, Offset second) {
   final left = first.dx <= second.dx ? first : second;
   final right = first.dx <= second.dx ? second : first;
   return right.dx - (left.dx + kPeopleLandscapeOverviewCardWidth);
+}
+
+double _rgbDistance(Color left, Color right) {
+  final dr = left.r - right.r;
+  final dg = left.g - right.g;
+  final db = left.b - right.b;
+  return math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+double _hueDelta(
+  PersonContextVisual left,
+  PersonContextVisual right,
+  ColorScheme scheme,
+) {
+  final a = HSLColor.fromColor(contextCardColor(scheme, left)).hue;
+  final b = HSLColor.fromColor(contextCardColor(scheme, right)).hue;
+  final delta = (a - b).abs();
+  return math.min(delta, 360 - delta);
+}
+
+Rect _bounds(Map<String, Offset> positions) {
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final topLeft in positions.values) {
+    minX = math.min(minX, topLeft.dx);
+    minY = math.min(minY, topLeft.dy);
+    maxX = math.max(maxX, topLeft.dx + kPeopleLandscapeOverviewCardWidth);
+    maxY = math.max(maxY, topLeft.dy + kPeopleLandscapeOverviewCardHeight);
+  }
+  return Rect.fromLTRB(minX, minY, maxX, maxY);
+}
+
+double _groupDistance(
+  PeopleLandscapeOverview overview,
+  List<String> left,
+  List<String> right,
+) {
+  final a = _center({for (final id in left) id: overview.positions[id]!});
+  final b = _center({for (final id in right) id: overview.positions[id]!});
+  return (a - b).distance;
 }
 
 double _distance(PeopleLandscapeOverview overview, String a, String b) {
