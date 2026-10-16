@@ -1,7 +1,42 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_error.dart';
 import '../api/api_models.dart';
 import '../api/secretary_api_client.dart';
+
+const personRoleUpdateFailed = 'Не удалось обновить роль';
+const personRoleSearchFailed = 'Не удалось загрузить роли';
+
+/// User-facing role failure text. API detail is kept only when it is a short
+/// sanitized message; stacks, SQL, and tokens stay hidden.
+String personRoleFailureMessage(Object error, {required String fallback}) {
+  if (error is! ApiException) {
+    return fallback;
+  }
+  final message = SecretaryApiClient.sanitizeErrorMessage(error.message).trim();
+  final lowered = message.toLowerCase();
+  if (message.isEmpty ||
+      message.length > 240 ||
+      message.contains('\n') ||
+      lowered.contains('traceback') ||
+      lowered.contains('select ') ||
+      lowered.contains('sqlalchemy') ||
+      lowered.contains('psycopg')) {
+    return fallback;
+  }
+  return message;
+}
+
+String _roleMutationError(Object error) {
+  final message = personRoleFailureMessage(
+    error,
+    fallback: personRoleUpdateFailed,
+  );
+  if (message == personRoleUpdateFailed) {
+    return personRoleUpdateFailed;
+  }
+  return '$personRoleUpdateFailed. $message';
+}
 
 String collapsePersonRoleText(String value) {
   return value.trim().replaceAll(RegExp(r'\s+'), ' ');
@@ -60,11 +95,11 @@ class _PersonRolesSectionState extends State<PersonRolesSection> {
       }
       setState(() => _error = null);
       await widget.onChanged(updated);
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      setState(() => _error = 'Не удалось обновить роль');
+      setState(() => _error = _roleMutationError(error));
     }
   }
 
@@ -143,6 +178,7 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
   String? _exactMatchTermId;
   int _searchGeneration = 0;
   bool _searchSettled = false;
+  bool _searchFailed = false;
   String? _error;
 
   @override
@@ -163,6 +199,8 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
       _terms = const [];
       _exactMatchTermId = null;
       _searchSettled = false;
+      _searchFailed = false;
+      _error = null;
     });
     return _search(value);
   }
@@ -178,11 +216,23 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
         _terms = next.terms;
         _exactMatchTermId = next.exactMatchTermId;
         _searchSettled = true;
+        _searchFailed = false;
+        _error = null;
       });
-    } on Object {
+    } catch (error) {
       if (!mounted || generation != _searchGeneration) {
         return;
       }
+      setState(() {
+        _terms = const [];
+        _exactMatchTermId = null;
+        _searchSettled = true;
+        _searchFailed = true;
+        _error = personRoleFailureMessage(
+          error,
+          fallback: personRoleSearchFailed,
+        );
+      });
     }
   }
 
@@ -198,11 +248,11 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
       }
       Navigator.of(context).pop();
       await widget.onChanged(updated);
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      setState(() => _error = 'Не удалось обновить роль');
+      setState(() => _error = _roleMutationError(error));
     }
   }
 
@@ -228,7 +278,16 @@ class _AddPersonRoleDialogState extends State<_AddPersonRoleDialog> {
                 title: Text(term.displayText),
                 onTap: () => _assign(term.displayText),
               ),
-            if (typed.isNotEmpty && _searchSettled && _exactMatchTermId == null)
+            if (typed.isNotEmpty && _searchSettled && _searchFailed)
+              TextButton(
+                key: const ValueKey('person-role-use'),
+                onPressed: () => _assign(_role.text),
+                child: Text('Использовать роль «${_role.text.trim()}»'),
+              ),
+            if (typed.isNotEmpty &&
+                _searchSettled &&
+                !_searchFailed &&
+                _exactMatchTermId == null)
               TextButton(
                 key: const ValueKey('person-role-create'),
                 onPressed: () => _assign(_role.text),

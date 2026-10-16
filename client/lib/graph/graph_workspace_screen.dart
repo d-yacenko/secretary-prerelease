@@ -112,6 +112,8 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   String? _detailHydrationError;
   bool _personReconcileActive = false;
   _PersonReconcileTarget? _personReconcilePending;
+  _PersonHydrationTicket? _activeHydration;
+  _PersonHydrationTicket? _pendingHydration;
   String? _trackedPersonId;
   final ScrollController _promotionScroll = ScrollController();
 
@@ -196,6 +198,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     }
     _trackedPersonId = id;
     if (id == null) {
+      _dropPendingHydration();
       _rootedPerson = null;
       _rootedPersonId = null;
       _rootedLoading = false;
@@ -216,6 +219,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
     _peopleInspectorOpen = true;
     _peopleInspectorCandidates = false;
     if (_adoptRootedControllerPerson(id)) {
+      _dropPendingHydration();
       return;
     }
     final overview = widget.controller.personFor(id);
@@ -229,6 +233,12 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
       _loadRootedPerson(id, preserveSummary: true);
       return;
     }
+    _rootedPerson = null;
+    _rootedPersonId = id;
+    _rootedLoading = true;
+    _rootedError = null;
+    _detailHydrationError = null;
+    _rootedPersonAuthoritative = false;
     _loadRootedPerson(id);
   }
 
@@ -273,6 +283,77 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
   }
 
   Future<void> _loadRootedPerson(
+    String personId, {
+    bool preserveVisible = false,
+    bool preserveSummary = false,
+    bool followUp = false,
+  }) {
+    final ticket = _PersonHydrationTicket(
+      personId: personId,
+      preserveSummary: preserveSummary,
+      preserveVisible: preserveVisible,
+    );
+    if (_activeHydration != null) {
+      final samePerson = _activeHydration!.personId == personId;
+      if (samePerson && !followUp) {
+        _dropPendingHydration();
+        ticket.done.complete();
+        return ticket.done.future;
+      }
+      _dropPendingHydration();
+      _pendingHydration = ticket;
+      return ticket.done.future;
+    }
+    unawaited(_executeHydration(ticket));
+    return ticket.done.future;
+  }
+
+  void _dropPendingHydration() {
+    final pending = _pendingHydration;
+    _pendingHydration = null;
+    if (pending != null && !pending.done.isCompleted) {
+      pending.done.complete();
+    }
+  }
+
+  Future<void> _executeHydration(_PersonHydrationTicket ticket) async {
+    _activeHydration = ticket;
+    try {
+      if (!mounted || _trackedPersonId != ticket.personId) {
+        return;
+      }
+      if (_adoptRootedControllerPerson(ticket.personId)) {
+        if (mounted) {
+          setState(() {});
+        }
+        return;
+      }
+      await _fetchRootedPerson(
+        ticket.personId,
+        preserveSummary: ticket.preserveSummary,
+        preserveVisible: ticket.preserveVisible,
+      );
+    } finally {
+      if (identical(_activeHydration, ticket)) {
+        _activeHydration = null;
+      }
+      if (!ticket.done.isCompleted) {
+        ticket.done.complete();
+      }
+      final pending = _pendingHydration;
+      _pendingHydration = null;
+      if (pending != null &&
+          (!mounted || _trackedPersonId != pending.personId)) {
+        if (!pending.done.isCompleted) {
+          pending.done.complete();
+        }
+      } else if (pending != null) {
+        unawaited(_executeHydration(pending));
+      }
+    }
+  }
+
+  Future<void> _fetchRootedPerson(
     String personId, {
     bool preserveVisible = false,
     bool preserveSummary = false,
@@ -1316,7 +1397,11 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
           onRoleChanged: _applyRoleAssignment,
           onChanged: () async {
             await widget.controller.refreshCurrentWorkspace();
-            await _loadRootedPerson(personId, preserveSummary: true);
+            await _loadRootedPerson(
+              personId,
+              preserveSummary: true,
+              followUp: true,
+            );
           },
           onRename: () => _renamePerson(person),
           onMerged: (survivorId) async {
@@ -1325,7 +1410,7 @@ class _GraphWorkspaceScreenState extends State<GraphWorkspaceScreen> {
             if (!mounted) {
               return;
             }
-            await _loadRootedPerson(survivorId);
+            await _loadRootedPerson(survivorId, followUp: true);
           },
           onOpenTask: (taskId) async {
             await widget.controller.setMode(GraphWorkspaceMode.tasks);
@@ -4813,6 +4898,19 @@ class _MergePersonDialogState extends State<_MergePersonDialog> {
       ],
     );
   }
+}
+
+class _PersonHydrationTicket {
+  _PersonHydrationTicket({
+    required this.personId,
+    required this.preserveSummary,
+    required this.preserveVisible,
+  });
+
+  final String personId;
+  final bool preserveSummary;
+  final bool preserveVisible;
+  final Completer<void> done = Completer<void>();
 }
 
 class _PersonReconcileTarget {

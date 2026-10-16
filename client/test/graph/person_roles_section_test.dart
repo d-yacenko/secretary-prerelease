@@ -363,6 +363,214 @@ void main() {
     expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
   });
 
+  testWidgets('failed role search keeps a typed fallback and the API detail', (
+    tester,
+  ) async {
+    final api = _api((request) async {
+      final query = request.url.queryParameters['q'] ?? '';
+      if (query == 'ген') {
+        return _json({
+          'terms': [
+            {'id': 't-general', 'display_text': 'генеральный директор'},
+          ],
+          'exact_match_term_id': null,
+        });
+      }
+      return http.Response(
+        jsonEncode({'detail': 'db down'}),
+        500,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'ген',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('генеральный директор'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('генеральный директор'), findsNothing);
+    expect(find.text('db down'), findsOneWidget);
+    expect(find.text('Использовать роль «оппонент»'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+  });
+
+  testWidgets('a pending search hides the typed-role fallback', (tester) async {
+    final gate = Completer<void>();
+    final api = _api((request) async {
+      final query = request.url.queryParameters['q'] ?? '';
+      if (query == 'оппонент') {
+        await gate.future;
+      }
+      return _json({
+        'terms': <Map<String, String>>[],
+        'exact_match_term_id': null,
+      });
+    });
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('person-role-use')), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Создать роль «оппонент»'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-use')), findsNothing);
+  });
+
+  testWidgets('a later successful search clears the failure and exact match', (
+    tester,
+  ) async {
+    final api = _api((request) async {
+      final query = request.url.queryParameters['q'] ?? '';
+      if (query == 'Директор') {
+        return _json({
+          'terms': [
+            {'id': 't-director', 'display_text': 'Директор'},
+          ],
+          'exact_match_term_id': 't-director',
+        });
+      }
+      return http.Response(
+        jsonEncode({'detail': 'db down'}),
+        500,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    await tester.pumpWidget(
+      _harness(person: _person(), api: api, onChanged: (_) async {}),
+    );
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('db down'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'Директор',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('db down'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('person-role-suggestion-t-director')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('person-role-create')), findsNothing);
+    expect(find.byKey(const ValueKey('person-role-use')), findsNothing);
+  });
+
+  testWidgets('failed assign keeps the typed role and shows the API detail', (
+    tester,
+  ) async {
+    var fail = true;
+    var patched = 0;
+    final api = _api((request) async {
+      if (request.url.path.endsWith('/graph/person-role-terms')) {
+        return _json({
+          'terms': <Map<String, String>>[],
+          'exact_match_term_id': null,
+        });
+      }
+      if (fail) {
+        return http.Response(
+          jsonEncode({'detail': 'pool timeout'}),
+          500,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return _json({
+        'id': 'a-new',
+        'person_id': 'p1',
+        'role_term_id': 't-new',
+        'role_display_text': 'оппонент',
+        'context': 'МГУ',
+        'origin': 'user',
+        'state': 'active',
+      });
+    });
+    await tester.pumpWidget(
+      _harness(
+        person: _person(
+          roles: [_role(id: 'a1', text: 'директор')],
+        ),
+        api: api,
+        onChanged: (_) async => patched += 1,
+      ),
+    );
+    expect(find.text('директор'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('person-role-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-input')),
+      'оппонент',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('person-role-context')),
+      'МГУ',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('person-role-create')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('pool timeout'), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-role-input')), findsOneWidget);
+    expect(find.text('оппонент'), findsWidgets);
+    expect(find.text('МГУ'), findsOneWidget);
+    expect(patched, 0);
+    expect(find.text('директор'), findsOneWidget);
+
+    fail = false;
+    await tester.tap(find.byKey(const ValueKey('person-role-create')));
+    await tester.pumpAndSettle();
+    expect(patched, 1);
+    expect(find.byKey(const ValueKey('person-role-input')), findsNothing);
+  });
+
+  testWidgets('failed retract keeps the role and shows the API detail', (
+    tester,
+  ) async {
+    final api = _api((request) async {
+      return http.Response(
+        jsonEncode({'detail': 'pool timeout'}),
+        500,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    var patched = 0;
+    await tester.pumpWidget(
+      _harness(
+        person: _person(
+          roles: [_role(id: 'a1', text: 'директор', context: 'Arenadata')],
+        ),
+        api: api,
+        onChanged: (_) async => patched += 1,
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('person-role-retract-a1')));
+    await tester.pumpAndSettle();
+    expect(find.text('директор · Arenadata'), findsOneWidget);
+    expect(find.textContaining('pool timeout'), findsOneWidget);
+    expect(patched, 0);
+  });
+
   testWidgets('retract refreshes and multiple roles render', (tester) async {
     final api = _api((request) async {
       expect(request.method, 'DELETE');

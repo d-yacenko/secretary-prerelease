@@ -235,6 +235,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('person-role-create')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('person-role-error')), findsOneWidget);
+      expect(find.textContaining('pool timeout'), findsOneWidget);
+      expect(find.byKey(const ValueKey('person-role-input')), findsOneWidget);
       expect(find.text('директор · Arenadata'), findsWidgets);
       expect(find.text('куратор · SRE Arenadata'), findsNothing);
 
@@ -357,6 +359,244 @@ void main() {
       expect(border.border!.top.color, scheme.primary);
     },
   );
+
+  testWidgets(
+    'rapid selection keeps one rooted hydration and the latest person',
+    (tester) async {
+      final gates = {
+        for (var index = 1; index <= 8; index++)
+          'person-$index': Completer<void>(),
+      };
+      final flight = _Flight();
+      final harness = await _openPeople(
+        tester,
+        rootedGate: gates,
+        onRootedFlight: flight.record,
+        people: [
+          for (var index = 1; index <= 8; index++)
+            _person('person-$index', 'П$index', role: 'р$index'),
+        ],
+      );
+      for (var index = 1; index <= 8; index++) {
+        harness.graph.selectObject('person-$index');
+        await tester.pump();
+      }
+
+      expect(flight.started, ['person-1']);
+      expect(flight.peak, 1);
+      expect(flight.inFlight, 1);
+      expect(harness.graph.selectedObjectId, 'person-8');
+      expect(find.byKey(const ValueKey('person-detail-loading')), findsNothing);
+    expect(find.text('П8'), findsWidgets);
+    expect(find.text('р8'), findsWidgets);
+      expect(find.byKey(const ValueKey('person-role-add')), findsOneWidget);
+
+      gates['person-1']!.complete();
+      await tester.pump();
+      await tester.pump();
+
+      expect(flight.started, ['person-1', 'person-8']);
+      expect(flight.inFlight, 1);
+      expect(flight.peak, 1);
+    expect(find.text('Задача П1'), findsNothing);
+    expect(find.text('П8'), findsWidgets);
+
+      gates['person-8']!.complete();
+      await tester.pumpAndSettle();
+      expect(flight.inFlight, 0);
+      expect(flight.started, ['person-1', 'person-8']);
+    expect(find.text('Задача П8'), findsOneWidget);
+    expect(find.text('Задача П1'), findsNothing);
+    expect(find.text('Письмо П8'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'returning to the active person does not start a second hydration',
+    (tester) async {
+      final gates = {
+        'person-a': Completer<void>(),
+        'person-b': Completer<void>(),
+      };
+      final flight = _Flight();
+      final harness = await _openPeople(
+        tester,
+        rootedGate: gates,
+        onRootedFlight: flight.record,
+        people: [
+          _person('person-a', 'Ада', role: 'директор'),
+          _person('person-b', 'Борис', role: 'студент'),
+        ],
+      );
+      harness.graph.selectObject('person-a');
+      await tester.pump();
+      harness.graph.selectObject('person-b');
+      await tester.pump();
+      harness.graph.selectObject('person-a');
+      await tester.pump();
+      expect(flight.started, ['person-a']);
+      expect(flight.inFlight, 1);
+
+      gates['person-a']!.complete();
+      await tester.pumpAndSettle();
+      expect(flight.started, ['person-a']);
+      expect(flight.inFlight, 0);
+      expect(find.text('Задача Ады'), findsOneWidget);
+      expect(find.text('Задача Бориса'), findsNothing);
+    },
+  );
+
+  testWidgets('a stale hydration failure does not mark the newer person', (
+    tester,
+  ) async {
+    final gates = {
+      'person-a': Completer<void>(),
+      'person-c': Completer<void>(),
+    };
+    final flight = _Flight();
+    final harness = await _openPeople(
+      tester,
+      rootedGate: gates,
+      onRootedFlight: flight.record,
+      failRootIds: {'person-a'},
+      people: [
+        _person('person-a', 'Ада', role: 'директор'),
+        _person('person-b', 'Борис', role: 'студент'),
+        _person('person-c', 'Вера', role: 'куратор'),
+      ],
+    );
+    harness.graph.selectObject('person-a');
+    await tester.pump();
+    harness.graph.selectObject('person-b');
+    await tester.pump();
+    harness.graph.selectObject('person-c');
+    await tester.pump();
+    expect(flight.started, ['person-a']);
+    expect(flight.inFlight, 1);
+
+    gates['person-a']!.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(flight.started, ['person-a', 'person-c']);
+    expect(
+      find.byKey(const ValueKey('person-detail-hydration-error')),
+      findsNothing,
+    );
+    expect(find.text('Вера'), findsWidgets);
+    expect(find.text('куратор'), findsWidgets);
+
+    gates['person-c']!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Задача Вера'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-detail-hydration-error')),
+      findsNothing,
+    );
+    expect(flight.started, ['person-a', 'person-c']);
+  });
+
+  testWidgets('hydration retry stays single-flight', (tester) async {
+    final flight = _Flight();
+    var failures = 1;
+    final gates = <String, Completer<void>>{};
+    await _openPeople(
+      tester,
+      onRootedFlight: flight.record,
+      rootedGate: gates,
+      failRooted: () {
+        if (failures > 0) {
+          failures -= 1;
+          return true;
+        }
+        return false;
+      },
+      people: [_person('person-a', 'Ада', role: 'директор')],
+    );
+    await tester.tap(find.byKey(const Key('graph_node_person-a')));
+    await tester.pumpAndSettle();
+    expect(flight.started, ['person-a']);
+    expect(flight.inFlight, 0);
+    expect(
+      find.byKey(const ValueKey('person-detail-hydration-error')),
+      findsOneWidget,
+    );
+
+    gates['person-a'] = Completer<void>();
+    await tester.tap(
+      find.byKey(const ValueKey('person-detail-hydration-retry')),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('person-detail-hydration-retry')),
+    );
+    await tester.pump();
+    expect(flight.started, ['person-a', 'person-a']);
+    expect(flight.inFlight, 1);
+    expect(flight.peak, 1);
+
+    gates['person-a']!.complete();
+    await tester.pumpAndSettle();
+    expect(flight.inFlight, 0);
+    expect(flight.started, ['person-a', 'person-a']);
+    expect(find.text('Задача Ады'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('person-detail-hydration-error')),
+      findsNothing,
+    );
+  });
+
+  testWidgets(
+    'a pending person already rooted on the controller is not fetched again',
+    (tester) async {
+      final gates = {
+        'person-a': Completer<void>(),
+        'person-b': Completer<void>(),
+      };
+      final flight = _Flight();
+      final harness = await _openPeople(
+        tester,
+        rootedGate: gates,
+        onRootedFlight: flight.record,
+        people: [
+          _person('person-a', 'Ада', role: 'директор'),
+          _person('person-b', 'Борис', role: 'студент'),
+        ],
+      );
+      harness.graph.selectObject('person-a');
+      await tester.pump();
+      harness.graph.selectObject('person-b');
+      await tester.pump();
+      expect(flight.started, ['person-a']);
+      harness.graph.rootId = 'person-b';
+
+      gates['person-a']!.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(flight.started, ['person-a']);
+      expect(flight.inFlight, 0);
+      expect(find.text('Задача Ады'), findsNothing);
+      expect(find.text('Борис'), findsWidgets);
+    },
+  );
+}
+
+class _Flight {
+  final started = <String>[];
+  var inFlight = 0;
+  var peak = 0;
+
+  void record(String rootId, {required bool active}) {
+    if (active) {
+      started.add(rootId);
+      inFlight += 1;
+      if (inFlight > peak) {
+        peak = inFlight;
+      }
+      return;
+    }
+    inFlight -= 1;
+  }
 }
 
 Future<GraphTestHarness> _openPeople(
@@ -364,8 +604,10 @@ Future<GraphTestHarness> _openPeople(
   required List<Map<String, dynamic>> people,
   Map<String, Completer<void>> rootedGate = const {},
   bool Function()? failRooted,
+  Set<String> failRootIds = const {},
   bool Function()? failAssign,
   void Function(String? rootId)? onWorkspace,
+  void Function(String rootId, {required bool active})? onRootedFlight,
   String? bookmarkId,
 }) async {
   tester.view.physicalSize = const Size(1280, 900);
@@ -429,12 +671,17 @@ Future<GraphTestHarness> _openPeople(
         final root = request.url.queryParameters['root_id'];
         onWorkspace?.call(root);
         if (root != null) {
-          final gate = rootedGate[root];
-          if (gate != null && !gate.isCompleted) {
-            await gate.future;
-          }
-          if (failRooted?.call() ?? false) {
-            return http.Response('{}', 500);
+          onRootedFlight?.call(root, active: true);
+          try {
+            final gate = rootedGate[root];
+            if (gate != null && !gate.isCompleted) {
+              await gate.future;
+            }
+            if (failRootIds.contains(root) || (failRooted?.call() ?? false)) {
+              return http.Response('{}', 500);
+            }
+          } finally {
+            onRootedFlight?.call(root, active: false);
           }
         }
         final visible = root == null
@@ -464,7 +711,11 @@ Future<GraphTestHarness> _openPeople(
       }
       if (request.method == 'POST' && request.url.path.contains('/roles')) {
         if (failAssign?.call() ?? false) {
-          return http.Response('{}', 500);
+          return http.Response(
+            jsonEncode({'detail': 'pool timeout'}),
+            500,
+            headers: {'content-type': 'application/json'},
+          );
         }
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         final personId =
@@ -549,6 +800,14 @@ Map<String, dynamic> _person(
   };
 }
 
+String _ruName(String title) {
+  return switch (title) {
+    'Борис' => 'Бориса',
+    'Ада' => 'Ады',
+    _ => title,
+  };
+}
+
 Map<String, dynamic> _rootedPerson(Map<String, dynamic> overview) {
   final id = overview['person_id'] as String;
   final title = overview['title'] as String;
@@ -557,7 +816,7 @@ Map<String, dynamic> _rootedPerson(Map<String, dynamic> overview) {
     'task_involvement': [
       {
         'task_id': 'task-$id',
-        'title': 'Задача ${title == 'Борис' ? 'Бориса' : 'Ады'}',
+        'title': 'Задача ${_ruName(title)}',
         'role': 'involves',
         'edge_state': 'confirmed',
         'edge_origin': 'user',
@@ -567,7 +826,7 @@ Map<String, dynamic> _rootedPerson(Map<String, dynamic> overview) {
       {
         'object_id': 'flow-$id',
         'kind': 'email',
-        'title': 'Письмо ${title == 'Борис' ? 'Бориса' : 'Ады'}',
+        'title': 'Письмо ${_ruName(title)}',
       },
     ],
   };
