@@ -27,7 +27,7 @@ Make the Person filling loop feel immediate and visually structured:
 1. a selected Person detail card becomes usable immediately from the already-loaded overview presentation while heavy rooted truth hydrates in the background;
 2. adding/removing a Person role/context updates the visible detail and People overview immediately from the authoritative mutation response, without a heavy workspace reload;
 3. compact People cards use a deterministic subtle context tint;
-4. within existing canonical Task geography, People are locally ordered/grouped by context so same/related contexts are visually adjacent;
+4. within existing canonical Task geography, People use a deterministic gravity-like local cluster packing so same/related contexts form compact visual groups around the same Task-derived center;
 5. no-context People keep the current default card appearance.
 
 Prefer a client-only implementation.
@@ -170,11 +170,11 @@ Create one deterministic combined visual signature/family fallback for that set,
 - text uses theme-derived contrast;
 - do not hard-code context text on compact tiles.
 
-### D. Context-aware local packing
+### D. Context-aware gravity-like local packing
 
 19. Preserve the HG5 global geography.
 
-Context is only a secondary **local** ordering signal.
+Context is only a secondary **local attraction** signal.
 
 Do not change:
 
@@ -186,18 +186,44 @@ Do not change:
 - canonical Task world bounds;
 - shared camera frame.
 
-20. For People that already share the same Task-anchor cluster in `projectPeopleLandscapeOverview`:
+20. Replace the current same-anchor rectangular grid behavior with one deterministic gravity-like local packing for People that already share the same exact Task-anchor set in `projectPeopleLandscapeOverview`.
 
-- order/pack members by context family, then exact context, then stable Person id;
-- same exact contexts should be contiguous;
-- related contexts in the same family should be adjacent where the existing packing permits;
-- no-context People should form one deterministic local bucket rather than being interleaved arbitrarily.
+This must NOT be a general physics engine and must NOT introduce animation or nondeterministic force simulation.
 
-Do not pull People across different Task-anchor clusters merely to improve context grouping.
+Preferred shape:
 
-21. Apply the same context ordering inside the unanchored shelf while keeping all of those People on the shelf.
+- the existing Task-derived Person cluster base remains the one global center;
+- derive local attractor groups from context visual families/exact contexts;
+- each attractor gets a small deterministic offset around that base;
+- each Person is placed in the nearest available non-overlapping slot to its attractor;
+- same exact contexts therefore collapse into compact micro-clusters;
+- related exact contexts in one family use nearby attractors;
+- unrelated families use more separated attractors;
+- no-context People use one neutral local attractor/bucket.
 
-22. Context changes from a successful role mutation should immediately recompute color and local packing without refitting/re-rooting the entire world.
+The exact algorithm may use deterministic rings/spiral candidate slots, bounded relaxation, or another simple bounded method. Do not add a third-party force-layout dependency.
+
+21. Preserve centering.
+
+After local packing, the aggregate same-anchor Person cluster must remain centered on its original Task-derived base within a small deterministic tolerance. Context must not translate the whole cluster away from the canonical anchor merely because one family has more members.
+
+The existing inter-cluster collision separation may still translate the whole already-packed cluster only as required to avoid overlap with another anchor cluster.
+
+22. Stability requirements:
+
+- identical input must yield identical positions;
+- input iteration order must not affect the result;
+- changing one Person's context may locally rearrange that same anchor cluster, but must not move unrelated anchor clusters unless existing overlap separation requires it;
+- no frame-to-frame jitter;
+- no simulation state is persisted.
+
+23. Unanchored shelf:
+
+Keep all unanchored People on the existing shelf, but use the same context-family idea to form compact local shelf sub-clusters rather than a single arbitrary id-ordered column when space permits.
+
+Do not move unanchored People into Task geography.
+
+24. Context changes from a successful role mutation should immediately recompute color and the affected local packing without refitting/re-rooting the entire world.
 
 ### E. Do not change rooted truth semantics yet
 
@@ -243,12 +269,15 @@ At minimum prove:
 17. Same normalized context on different People produces identical context visual key/tint.
 18. `УЦ группы компании Arenadata` and `SRE Arenadata` share a visual family and have nearby-but-distinct exact-context treatment.
 19. `Южный Федеральный Университет` and `Рубитех` are not assigned to the Arenadata family.
-20. Two Persons with the same anchor set and same context pack contiguously independent of input order.
-21. Related same-family contexts are adjacent ahead of unrelated/no-context buckets in the same anchor cluster.
-22. Context ordering does not change the anchor-cluster base centroid/canonical Task position.
-23. Unanchored People remain on the shelf while their shelf order becomes context-aware.
-24. Multiple-context Person behavior is deterministic and does not silently select one stored context as truth.
-25. Selection/conflict/bookmark visuals remain distinguishable on tinted cards.
+20. Same-context People sharing one anchor set form one compact local micro-cluster independent of input order.
+21. `УЦ группы компании Arenadata` and `SRE Arenadata` use nearby attractors inside one Arenadata family, while unrelated contexts use more separated attractors.
+22. The aggregate packed cluster remains centered on the original Task-derived base within deterministic tolerance.
+23. Cards never overlap, even when one context group dominates the cluster.
+24. Identical input produces identical positions and there is no frame-to-frame jitter.
+25. Changing one Person context only locally rearranges its same-anchor cluster; unrelated anchor clusters retain their positions unless existing collision separation requires movement.
+26. Unanchored People remain on the shelf and form deterministic context-aware shelf sub-clusters.
+27. Multiple-context Person behavior is deterministic and does not silently select one stored context as truth.
+28. Selection/conflict/bookmark visuals remain distinguishable on tinted cards.
 
 ### Regression suites
 
